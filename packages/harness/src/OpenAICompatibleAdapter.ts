@@ -26,6 +26,11 @@ interface ToolCallAccumulator {
   args: string;
 }
 
+interface ByteReader {
+  read(): Promise<{ done: boolean; value?: Uint8Array }>;
+  cancel(): Promise<void>;
+}
+
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const MAX_ATTEMPTS = 2;
 
@@ -105,7 +110,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     response: Response,
     signal?: AbortSignal,
   ): Promise<ModelTurn> {
-    const reader = response.body!.getReader();
+    const reader = response.body!.getReader() as unknown as ByteReader;
     const decoder = new TextDecoder();
     let buffer = "";
     let text = "";
@@ -211,6 +216,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       reasoning: reasoning || undefined,
       toolCalls: materializeToolCalls(toolCalls),
       usage,
+      streamed: true,
     };
   }
 

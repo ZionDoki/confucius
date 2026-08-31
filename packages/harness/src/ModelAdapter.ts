@@ -15,6 +15,8 @@ export interface ModelTurn {
   reasoning?: string;
   toolCalls?: ModelToolCall[];
   usage?: ModelUsage;
+  /** True when the adapter already delivered text/reasoning incrementally. */
+  streamed?: boolean;
 }
 
 export interface ModelMessage {

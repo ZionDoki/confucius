@@ -10,6 +10,7 @@ import { openAndInspectWorkspace } from "../ui/workspaceWindow";
 import { READ_ONLY_TOOL_NAMES, TOOL_DEFINITIONS } from "@confucius/zotero-tools";
 import type { AgentHost } from "../host/AgentHost";
 import { getPref } from "../../utils/prefs";
+import pkg from "../../../package.json";
 
 type HttpResult = [number, string, string];
 
@@ -53,20 +54,34 @@ function header(options: EndpointOptions | undefined, name: string): string {
   return found ? String(headers[found]) : "";
 }
 
+function timingSafeEqual(a: string, b: string): boolean {
+  // Localhost threat model: guard trivially leaked comparisons rather than
+  // nanosecond timing attacks. Equal length first, then XOR-fold.
+  if (a.length !== b.length) {
+    return false;
+  }
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 function isAuthorized(options?: EndpointOptions): boolean {
-  const expected = getPref("pairingToken");
+  const expected = String(getPref("pairingToken") || "");
   if (!expected) {
     return false;
   }
   const bearer = header(options, "authorization").replace(/^Bearer\s+/i, "");
-  const queryToken =
-    options?.query?.token || options?.searchParams?.get("token") || "";
   const data =
     options?.data && typeof options.data === "object"
       ? (options.data as { token?: string })
       : {};
-  const provided = bearer || queryToken || data.token || "";
-  return provided === expected;
+  const provided = bearer || String(data.token || "");
+  if (!provided) {
+    return false;
+  }
+  return timingSafeEqual(provided, expected);
 }
 
 function parseData(options?: EndpointOptions): Record<string, unknown> {
@@ -124,7 +139,14 @@ export function registerHttpBridge(host: AgentHost): void {
     supportedMethods: ["GET"],
     permitBookmarklet: true,
     allowRequestsFromUnsafeWebContent: true,
-    init: async (_options) => json(200, await openAndInspectWorkspace()),
+    init: async (options) => {
+      // Opening the workspace window is a privileged action; any web page
+      // can reach this endpoint, so it must prove possession of the token.
+      if (!isAuthorized(options)) {
+        return json(401, { error: "unauthorized" });
+      }
+      return json(200, await openAndInspectWorkspace());
+    },
   });
 
   registerPath(CONFUCIUS_PAIR_PATH, {
@@ -213,7 +235,7 @@ export function registerHttpBridge(host: AgentHost): void {
           id,
           result: {
             protocolVersion: "2024-11-05",
-            serverInfo: { name: "confucius-zotero", version: "0.1.0" },
+            serverInfo: { name: "confucius-zotero", version: pkg.version },
             capabilities: { tools: {} },
           },
         });
@@ -238,11 +260,27 @@ export function registerHttpBridge(host: AgentHost): void {
           return json(200, {
             jsonrpc: "2.0",
             id,
-            error: { message: "MCP profile is read-only" },
+            result: {
+              content: [{ type: "text", text: "MCP profile is read-only" }],
+              isError: true,
+            },
           });
         }
         const result = await host.tools.execute(name, params.arguments ?? {});
-        return json(200, { jsonrpc: "2.0", id, result });
+        // MCP tools/call must answer with content blocks, not a raw ToolResult.
+        return json(200, {
+          jsonrpc: "2.0",
+          id,
+          result: {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(result.ok ? result.data : result, null, 2),
+              },
+            ],
+            isError: !result.ok,
+          },
+        });
       }
       return json(200, {
         jsonrpc: "2.0",

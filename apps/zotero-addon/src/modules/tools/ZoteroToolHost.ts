@@ -1,5 +1,7 @@
 import type { ToolErrorCode, ToolResult } from "@confucius/protocol";
 import {
+  collectMatches,
+  compileSafeRegex,
   findSection,
   parseSections,
   requireItemRef,
@@ -853,24 +855,17 @@ export class ZoteroToolHost {
       return fail(toolName, "unavailable", "No indexed PDF text");
     }
     const query = String(args.query ?? args.pattern ?? "");
-    let regex: RegExp;
-    try {
-      regex =
-        toolName === "search_with_regex"
-          ? new RegExp(query, "gi")
-          : new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
-    } catch {
-      return fail(toolName, "invalid_args", "Invalid pattern");
+    const compiled =
+      toolName === "search_with_regex"
+        ? compileSafeRegex(query, text)
+        : compileSafeRegex(
+            query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+            text,
+          );
+    if (!compiled.ok) {
+      return fail(toolName, "invalid_args", compiled.reason);
     }
-    const hits: Array<{ index: number; snippet: string }> = [];
-    let match: RegExpExecArray | null;
-    while ((match = regex.exec(text)) && hits.length < 20) {
-      const index = match.index ?? 0;
-      hits.push({
-        index,
-        snippet: text.slice(Math.max(0, index - 80), index + 160),
-      });
-    }
+    const hits = collectMatches(compiled.regex, compiled.subject, 20);
     return ok(toolName, { libraryID: ref.libraryID, key: ref.key, query, hits });
   }
 

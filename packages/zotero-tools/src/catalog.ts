@@ -10,6 +10,8 @@ import {
   BROWSER_TOOLS,
   LIBRARY_READ_TOOLS,
   LIBRARY_WRITE_TOOLS,
+  MEMORY_READ_TOOLS,
+  MEMORY_WRITE_TOOLS,
   PAPER_READ_TOOLS,
   PAPER_WRITE_TOOLS,
 } from "@confucius/protocol";
@@ -200,6 +202,39 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   def("browser.extract_pdf", "PDF URL on the active tab, if any.", {}),
   def("browser.extract_readable_text", "Readable text snapshot from the active tab.", {}),
   def("browser.import_current_page", "Import the active tab identifier via add_item (still requires approval).", {}),
+  def("memory_search", "Search long-term memory for relevant prior knowledge about the user.", {
+    query: { type: "string", description: "What to look for" },
+    type: {
+      type: "string",
+      enum: ["preference", "fact", "project", "paper", "procedure", "insight"],
+    },
+    tags: { type: "array", items: { type: "string" } },
+    limit: { type: "integer" },
+  }, ["query"]),
+  def("memory_list", "List recent long-term memories, optionally by type.", {
+    type: {
+      type: "string",
+      enum: ["preference", "fact", "project", "paper", "procedure", "insight"],
+    },
+    limit: { type: "integer" },
+  }),
+  def("memory_save", "Save a durable memory about the user. Requires approval.", {
+    content: { type: "string" },
+    type: {
+      type: "string",
+      enum: ["preference", "fact", "project", "paper", "procedure", "insight"],
+    },
+    title: { type: "string" },
+    tags: { type: "array", items: { type: "string" } },
+  }, ["content"]),
+  def("memory_update", "Revise an existing memory by id. Requires approval.", {
+    id: { type: "string" },
+    content: { type: "string" },
+    title: { type: "string" },
+  }, ["id", "content"]),
+  def("memory_delete", "Delete a memory by id. Requires approval.", {
+    id: { type: "string" },
+  }, ["id"]),
 ];
 
 function meta(
@@ -238,14 +273,22 @@ for (const name of BROWSER_TOOLS) {
     name === "browser.import_current_page",
   );
 }
+for (const name of MEMORY_READ_TOOLS) {
+  TOOL_META[name] = meta(name, "memory.read", "parallel_safe", false);
+}
+for (const name of MEMORY_WRITE_TOOLS) {
+  TOOL_META[name] = meta(name, "memory.write", "serial", true);
+}
 
 export const WRITE_TOOL_NAMES = new Set<string>([
   ...LIBRARY_WRITE_TOOLS,
   ...PAPER_WRITE_TOOLS,
+  ...MEMORY_WRITE_TOOLS,
   "browser.import_current_page",
 ]);
 
 export const READ_ONLY_TOOL_NAMES = new Set<string>([
   ...LIBRARY_READ_TOOLS,
   ...PAPER_READ_TOOLS,
+  ...MEMORY_READ_TOOLS,
 ]);

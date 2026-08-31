@@ -11,3 +11,5 @@ export {
   splitPages,
 } from "./paperText";
 export type { PaperPages, PaperSection } from "./paperText";
+export { collectMatches, compileSafeRegex } from "./safeRegex";
+export type { SafeRegexResult } from "./safeRegex";

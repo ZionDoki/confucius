@@ -4,7 +4,7 @@ import type {
   ToolResult,
 } from "@confucius/protocol";
 import { BudgetAccountant } from "./BudgetAccountant";
-import type { MemoryCheckpointStore } from "./CheckpointStore";
+import type { TurnCheckpoint } from "./CheckpointStore";
 import { splitBatches, type ScheduledCall } from "./ConcurrencyScheduler";
 import type { MemoryEventLog } from "./EventLog";
 import type { Clock, IdFactory } from "./ids";
@@ -13,6 +13,10 @@ import type { PermissionGate } from "./PermissionGate";
 import { validateArgs } from "./SchemaValidate";
 import type { ToolProvider } from "./ToolProvider";
 import { truncateToolResult } from "./truncate";
+
+export interface CheckpointStore {
+  save(checkpoint: TurnCheckpoint): void;
+}
 
 export interface TurnLoopInput {
   session: SessionRecord;
@@ -39,7 +43,7 @@ export interface TurnLoopDeps {
   permissions: PermissionGate;
   budget: BudgetAccountant;
   events: MemoryEventLog;
-  checkpoints: MemoryCheckpointStore;
+  checkpoints: CheckpointStore;
   ids: IdFactory;
   now: Clock;
   systemPrompt?: string;
@@ -84,12 +88,14 @@ export class TurnLoop {
           input.signal,
         );
 
-        if (modelTurn.reasoning) {
+        if (modelTurn.reasoning && !modelTurn.streamed) {
           this.emit(input, "reasoning_delta", { text: modelTurn.reasoning });
         }
         if (modelTurn.text) {
           delivered += modelTurn.text;
-          this.emit(input, "text_delta", { text: modelTurn.text });
+          if (!modelTurn.streamed) {
+            this.emit(input, "text_delta", { text: modelTurn.text });
+          }
         }
 
         const toolCalls = modelTurn.toolCalls ?? [];

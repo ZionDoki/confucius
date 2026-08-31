@@ -45,6 +45,21 @@ export function bindPrefsWindow(win: Window): void {
   bind("confucius-pref-model", "model");
   bind("confucius-pref-maxTokens", "maxTokens", true);
   bind("confucius-pref-mcpServersJson", "mcpServersJson");
+  const bindCheck = (
+    id: string,
+    key: Parameters<typeof getPref>[0],
+  ) => {
+    const el = doc.getElementById(id) as HTMLInputElement | null;
+    if (!el) {
+      return;
+    }
+    el.checked = getPref(key) !== false;
+    el.addEventListener("change", () => {
+      setPref(key, el.checked as never);
+    });
+  };
+  bindCheck("confucius-pref-streamResponses", "streamResponses");
+  bindCheck("confucius-pref-memoryAutoExtract", "memoryAutoExtract");
   const token = doc.getElementById(
     "confucius-pref-pairingToken",
   ) as HTMLInputElement | null;

@@ -15,6 +15,9 @@ declare namespace _ZoteroTypes {
       "model": string;
       "maxTokens": number;
       "mcpServersJson": string;
+      "streamResponses": boolean;
+      "memoryAutoExtract": boolean;
+      "alwaysAllowedTools": string;
     };
   }
 }
