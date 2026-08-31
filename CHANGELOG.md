@@ -52,6 +52,12 @@ First production release.
   MCP endpoint returns spec-compliant content blocks with `isError`.
 - Model adapter: 429/5xx retry with backoff, usage accounting, tolerant
   tool-call argument parsing for both streaming and buffered responses.
+- Ollama native support: a base URL ending in `/api/chat` (Ollama's own
+  wire format) is auto-detected and spoken directly — NDJSON streaming,
+  `message.thinking` mapped to reasoning deltas, object-valued tool
+  arguments, and `prompt_eval_count`/`eval_count` usage counters. Verified
+  end to end with `qwen3.8-27b` (tools + thinking): `npm run test:live`.
+- Token usage is normalized across OpenAI snake_case and Ollama counters.
 
 ### Housekeeping
 

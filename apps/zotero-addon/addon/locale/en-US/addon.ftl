@@ -13,6 +13,7 @@ confucius-workspace-no-sessions = No sessions yet.
 confucius-workspace-empty-timeline = Describe a research task to start.
 confucius-workspace-empty-review = Write actions wait here for approval.
 confucius-workspace-connecting = Connecting
+confucius-workspace-sending = Sending…
 confucius-workspace-host-zotero = Zotero
 confucius-workspace-host-bridged = Chrome bridge
 confucius-workspace-no-skill = No skill

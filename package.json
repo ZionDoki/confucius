@@ -15,6 +15,7 @@
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run sync-skills --silent && npm test --workspaces --if-present",
     "verify": "npm run sync-skills:check && npm run versions:check && npm run typecheck && npm test",
+    "test:live": "node --import tsx scripts/live-e2e.mjs",
     "sync-skills": "node scripts/sync-skills.mjs",
     "sync-skills:check": "node scripts/sync-skills.mjs --check",
     "versions:check": "node scripts/check-versions.mjs",

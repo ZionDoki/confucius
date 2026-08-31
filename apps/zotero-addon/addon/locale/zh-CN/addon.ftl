@@ -13,6 +13,7 @@ confucius-workspace-no-sessions = 还没有会话。
 confucius-workspace-empty-timeline = 输入一项研究任务开始。
 confucius-workspace-empty-review = 写入操作会在这里等待确认。
 confucius-workspace-connecting = 正在连接
+confucius-workspace-sending = 正在发送…
 confucius-workspace-host-zotero = Zotero
 confucius-workspace-host-bridged = Chrome 桥
 confucius-workspace-no-skill = 不使用技能

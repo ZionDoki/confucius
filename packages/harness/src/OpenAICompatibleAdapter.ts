@@ -1,10 +1,13 @@
 import type {
   ModelAdapter,
+  ModelMessage,
   ModelRequest,
   ModelTurn,
   ModelToolCall,
   ModelUsage,
 } from "./ModelAdapter";
+
+export type ApiStyle = "openai" | "ollama";
 
 export interface OpenAICompatibleConfig {
   apiKey: string;
@@ -13,6 +16,13 @@ export interface OpenAICompatibleConfig {
   maxTokens?: number;
   /** Stream tokens as they arrive instead of waiting for the full response. */
   stream?: boolean;
+  /**
+   * Wire format. "openai" POSTs {baseUrl}/chat/completions with SSE
+   * streaming; "ollama" speaks Ollama's native /api/chat (NDJSON streaming,
+   * message.thinking, object-valued tool arguments). Auto-detected from a
+   * baseUrl whose path ends with /api/chat.
+   */
+  apiStyle?: ApiStyle;
   /** Called incrementally while streaming (also works for reasoning). */
   onTextDelta?: (text: string) => void;
   onReasoningDelta?: (text: string) => void;
@@ -34,8 +44,21 @@ interface ByteReader {
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const MAX_ATTEMPTS = 2;
 
+export function detectApiStyle(baseUrl: string): ApiStyle {
+  try {
+    const path = new URL(baseUrl).pathname.replace(/\/+$/, "");
+    return path.endsWith("/api/chat") ? "ollama" : "openai";
+  } catch {
+    return "openai";
+  }
+}
+
 export class OpenAICompatibleAdapter implements ModelAdapter {
-  constructor(private readonly config: OpenAICompatibleConfig) {}
+  private readonly style: ApiStyle;
+
+  constructor(private readonly config: OpenAICompatibleConfig) {
+    this.style = config.apiStyle ?? detectApiStyle(config.baseUrl);
+  }
 
   async complete(request: ModelRequest, signal?: AbortSignal): Promise<ModelTurn> {
     const response = await this.fetchWithRetry(request, signal);
@@ -48,12 +71,20 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     const contentType = headerValue(response, "content-type");
     if (
       this.config.stream !== false &&
-      contentType.includes("text/event-stream") &&
-      response.body
+      response.body &&
+      (this.style === "ollama"
+        ? contentType.includes("application/x-ndjson") ||
+          contentType.includes("application/json")
+        : contentType.includes("text/event-stream"))
     ) {
-      return this.readStream(response, signal);
+      return this.style === "ollama"
+        ? this.readOllamaStream(response, signal)
+        : this.readStream(response, signal);
     }
-    return this.parseJsonResponse(await response.text());
+    const text = await response.text();
+    return this.style === "ollama"
+      ? this.parseOllamaResponse(text)
+      : this.parseJsonResponse(text);
   }
 
   private async fetchWithRetry(
@@ -61,8 +92,41 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     signal?: AbortSignal,
   ): Promise<Response> {
     const fetchImpl = this.config.fetchImpl ?? fetch;
-    const url = joinUrl(this.config.baseUrl, "/chat/completions");
+    const url =
+      this.style === "ollama"
+        ? this.config.baseUrl
+        : joinUrl(this.config.baseUrl, "/chat/completions");
     const stream = this.config.stream !== false;
+    const body: Record<string, unknown> =
+      this.style === "ollama"
+        ? this.buildOllamaBody(request, stream)
+        : this.buildOpenAIBody(request, stream);
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const response = await fetchImpl(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.config.apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal,
+      });
+      if (response.ok || !RETRYABLE_STATUS.has(response.status)) {
+        return response;
+      }
+      await response.text().catch(() => "");
+      if (attempt < MAX_ATTEMPTS && !signal?.aborted) {
+        await delay(800 * attempt, signal);
+      }
+    }
+    throw new Error("Model request failed after retries");
+  }
+
+  private buildOpenAIBody(
+    request: ModelRequest,
+    stream: boolean,
+  ): Record<string, unknown> {
     const body: Record<string, unknown> = {
       model: this.config.model,
       messages: request.messages.map(toOpenAIMessage),
@@ -84,26 +148,32 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         },
       }));
     }
+    return body;
+  }
 
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      const response = await fetchImpl(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.config.apiKey}`,
-        },
-        body: JSON.stringify(body),
-        signal,
-      });
-      if (response.ok || !RETRYABLE_STATUS.has(response.status)) {
-        return response;
-      }
-      await response.text().catch(() => "");
-      if (attempt < MAX_ATTEMPTS && !signal?.aborted) {
-        await delay(800 * attempt, signal);
-      }
+  private buildOllamaBody(
+    request: ModelRequest,
+    stream: boolean,
+  ): Record<string, unknown> {
+    const body: Record<string, unknown> = {
+      model: this.config.model,
+      messages: toOllamaMessages(request.messages),
+      stream,
+    };
+    if (this.config.maxTokens && this.config.maxTokens > 0) {
+      body.options = { num_predict: this.config.maxTokens };
     }
-    throw new Error("Model request failed after retries");
+    if (request.tools && request.tools.length > 0) {
+      body.tools = request.tools.map((tool) => ({
+        type: "function",
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.inputSchema,
+        },
+      }));
+    }
+    return body;
   }
 
   private async readStream(
@@ -145,7 +215,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       }
       sawData = true;
       if (payload.usage) {
-        usage = payload.usage;
+        usage = normalizeUsage(payload.usage);
       }
       const delta = payload.choices?.[0]?.delta;
       if (!delta) {
@@ -220,6 +290,101 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     };
   }
 
+  /**
+   * Ollama native streaming: newline-delimited JSON where every chunk
+   * carries an incremental message piece and the final chunk sets done.
+   */
+  private async readOllamaStream(
+    response: Response,
+    signal?: AbortSignal,
+  ): Promise<ModelTurn> {
+    const reader = response.body!.getReader() as unknown as ByteReader;
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let text = "";
+    let thinking = "";
+    let toolCalls: ModelToolCall[] | undefined;
+    let usage: ModelUsage | undefined;
+    let sawData = false;
+
+    const handleLine = (line: string) => {
+      if (!line.trim()) {
+        return;
+      }
+      let chunk: {
+        message?: {
+          content?: string;
+          thinking?: string;
+          tool_calls?: Array<{
+            function?: { name?: string; arguments?: unknown };
+          }>;
+        };
+        done?: boolean;
+        prompt_eval_count?: number;
+        eval_count?: number;
+      };
+      try {
+        chunk = JSON.parse(line);
+      } catch {
+        return;
+      }
+      sawData = true;
+      if (chunk.message?.thinking) {
+        thinking += chunk.message.thinking;
+        this.config.onReasoningDelta?.(chunk.message.thinking);
+      }
+      if (chunk.message?.content) {
+        text += chunk.message.content;
+        this.config.onTextDelta?.(chunk.message.content);
+      }
+      if (chunk.message?.tool_calls?.length) {
+        toolCalls = mapOllamaToolCalls(chunk.message.tool_calls);
+      }
+      if (chunk.done) {
+        usage = {
+          promptTokens: chunk.prompt_eval_count,
+          completionTokens: chunk.eval_count,
+          totalTokens:
+            (chunk.prompt_eval_count ?? 0) + (chunk.eval_count ?? 0),
+        };
+      }    };
+
+    try {
+      for (;;) {
+        if (signal?.aborted) {
+          await reader.cancel().catch(() => undefined);
+          throw new DOMException("Aborted", "AbortError");
+        }
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          handleLine(line);
+        }
+      }
+      handleLine(buffer);
+    } catch (error) {
+      if (!sawData) {
+        throw error;
+      }
+    }
+
+    if (usage) {
+      this.config.onUsage?.(usage);
+    }
+    return {
+      text: text || undefined,
+      reasoning: thinking || undefined,
+      toolCalls,
+      usage,
+      streamed: true,
+    };
+  }
+
   private parseJsonResponse(text: string): ModelTurn {
     const payload = JSON.parse(text) as {
       choices?: Array<{
@@ -260,16 +425,114 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       });
     }
     if (payload.usage) {
-      this.config.onUsage?.(payload.usage);
+      this.config.onUsage?.(normalizeUsage(payload.usage));
     }
 
     return {
       text: message.content ?? undefined,
       reasoning: message.reasoning_content ?? message.reasoning ?? undefined,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-      usage: payload.usage ?? undefined,
+      usage: payload.usage ? normalizeUsage(payload.usage) : undefined,
     };
   }
+
+  /** Ollama native non-streaming: {message: {content, thinking, tool_calls}}. */
+  private parseOllamaResponse(text: string): ModelTurn {
+    const payload = JSON.parse(text) as {
+      message?: {
+        content?: string;
+        thinking?: string;
+        tool_calls?: Array<{
+          function?: { name?: string; arguments?: unknown };
+        }>;
+      };
+      prompt_eval_count?: number;
+      eval_count?: number;
+    };
+    const message = payload.message;
+    if (!message) {
+      throw new Error("Ollama response missing message");
+    }
+    const usage: ModelUsage | undefined = payload.eval_count
+      ? {
+          promptTokens: payload.prompt_eval_count,
+          completionTokens: payload.eval_count,
+          totalTokens:
+            (payload.prompt_eval_count ?? 0) + (payload.eval_count ?? 0),
+        }
+      : undefined;
+    if (usage) {
+      this.config.onUsage?.(usage);
+    }
+    return {
+      text: message.content || undefined,
+      reasoning: message.thinking || undefined,
+      toolCalls: message.tool_calls?.length
+        ? mapOllamaToolCalls(message.tool_calls)
+        : undefined,
+      usage,
+    };
+  }
+}
+
+/** Map usage from OpenAI snake_case, camelCase, or Ollama eval counters. */
+function normalizeUsage(raw: ModelUsage | Record<string, unknown>): ModelUsage {
+  const source = raw as Record<string, unknown>;
+  const read = (...keys: string[]): number | undefined => {
+    for (const key of keys) {
+      const value = Number(source[key]);
+      if (Number.isFinite(value) && value >= 0) {
+        return value;
+      }
+    }
+    return undefined;
+  };
+  const promptTokens = read(
+    "prompt_tokens",
+    "promptTokens",
+    "prompt_eval_count",
+  );
+  const completionTokens = read(
+    "completion_tokens",
+    "completionTokens",
+    "eval_count",
+  );
+  const totalTokens =
+    read("total_tokens", "totalTokens") ??
+    (promptTokens ?? 0) + (completionTokens ?? 0);
+  return { promptTokens, completionTokens, totalTokens };
+}
+
+function mapOllamaToolCalls(
+  calls: Array<{ function?: { name?: string; arguments?: unknown } }>,
+): ModelToolCall[] {
+  const mapped: ModelToolCall[] = [];
+  let index = 0;
+  for (const call of calls) {
+    if (!call.function?.name) {
+      continue;
+    }
+    let args: Record<string, unknown> = {};
+    if (typeof call.function.arguments === "string") {
+      try {
+        args = JSON.parse(call.function.arguments) as Record<string, unknown>;
+      } catch {
+        args = { _raw: call.function.arguments };
+      }
+    } else if (
+      call.function.arguments &&
+      typeof call.function.arguments === "object"
+    ) {
+      args = call.function.arguments as Record<string, unknown>;
+    }
+    mapped.push({
+      id: `call_${index + 1}`,
+      name: call.function.name,
+      args,
+    });
+    index += 1;
+  }
+  return mapped;
 }
 
 function materializeToolCalls(
@@ -325,7 +588,7 @@ function joinUrl(base: string, path: string): string {
   return `${base.replace(/\/+$/, "")}${path}`;
 }
 
-function toOpenAIMessage(message: ModelRequest["messages"][number]) {
+function toOpenAIMessage(message: ModelMessage) {
   if (message.role === "tool") {
     return {
       role: "tool",
@@ -351,4 +614,40 @@ function toOpenAIMessage(message: ModelRequest["messages"][number]) {
     role: message.role,
     content: message.content,
   };
+}
+
+/**
+ * Ollama native messages: tool results are role:"tool" with a tool_name, so
+ * resolve each toolCallId against the preceding assistant message's calls.
+ */
+function toOllamaMessages(messages: ModelMessage[]): Array<Record<string, unknown>> {
+  const callNames = new Map<string, string>();
+  return messages.map((message) => {
+    if (message.role === "assistant" && message.toolCalls?.length) {
+      for (const call of message.toolCalls) {
+        callNames.set(call.id, call.name);
+      }
+      return {
+        role: "assistant",
+        content: message.content || "",
+        tool_calls: message.toolCalls.map((call) => ({
+          id: call.id,
+          function: {
+            name: call.name,
+            // Ollama native expects arguments as a JSON object, not a string.
+            arguments: call.args ?? {},
+          },
+        })),
+      };
+    }
+    if (message.role === "tool") {
+      return {
+        role: "tool",
+        content: message.content,
+        tool_call_id: message.toolCallId,
+        tool_name: callNames.get(message.toolCallId ?? "") ?? "tool",
+      };
+    }
+    return { role: message.role, content: message.content };
+  });
 }

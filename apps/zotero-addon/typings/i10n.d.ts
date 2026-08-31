@@ -18,6 +18,7 @@ export type FluentMessageId =
   | 'confucius-workspace-no-skill'
   | 'confucius-workspace-review'
   | 'confucius-workspace-send'
+  | 'confucius-workspace-sending'
   | 'confucius-workspace-sessions'
   | 'confucius-workspace-status-idle'
   | 'confucius-workspace-stop'

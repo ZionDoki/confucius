@@ -106,9 +106,9 @@ describe("OpenAICompatibleAdapter streaming", () => {
     assert.equal(turn.toolCalls?.[0]?.name, "search_items");
     assert.deepEqual(turn.toolCalls?.[0]?.args, { query: "x" });
     assert.deepEqual(usageSeen, {
-      prompt_tokens: 10,
-      completion_tokens: 5,
-      total_tokens: 15,
+      promptTokens: 10,
+      completionTokens: 5,
+      totalTokens: 15,
     });
   });
 

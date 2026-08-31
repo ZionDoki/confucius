@@ -228,6 +228,9 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
     approvals: [] as ApprovalRow[],
     memories: [] as MemoryRow[],
     mode: "agent" as "agent" | "plan",
+    pendingUserText: "",
+    sendError: "",
+    sending: false,
   };
 
   const topbar = el(doc, "div", {
@@ -319,7 +322,7 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
   columns.appendChild(timelinePane);
   columns.appendChild(reviewPane);
 
-  const composer = el(doc, "div", {
+  const composer = el(doc, "form", {
     display: "flex",
     alignItems: "center",
     gap: "8px",
@@ -353,6 +356,7 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
     },
   ) as HTMLInputElement;
   const sendBtn = button(doc, "confucius-send", getString("workspace-send"));
+  sendBtn.setAttribute("type", "submit");
   const stopBtn = button(doc, "confucius-stop", getString("workspace-stop"));
   composer.appendChild(prompt);
   composer.appendChild(sendBtn);
@@ -462,7 +466,30 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
           : getString("workspace-timeline"),
       ),
     );
-    if (!state.events.length) {
+    if (state.pendingUserText) {
+      const pending = el(doc, "div", {
+        border: "1px solid #cfd8d3",
+        borderRadius: "8px",
+        padding: "8px 10px",
+        marginBottom: "8px",
+        background: "#eef4ef",
+      });
+      pending.textContent = state.pendingUserText;
+      timelinePane.appendChild(pending);
+    }
+    if (state.sendError) {
+      const err = el(doc, "div", {
+        border: "1px solid #e8b4b0",
+        borderRadius: "8px",
+        padding: "8px 10px",
+        marginBottom: "8px",
+        background: "#fff4f2",
+        color: "#7c2d12",
+      });
+      err.textContent = state.sendError;
+      timelinePane.appendChild(err);
+    }
+    if (!state.events.length && !state.pendingUserText && !state.sendError) {
       timelinePane.appendChild(
         muted(doc, getString("workspace-empty-timeline")),
       );
@@ -671,25 +698,59 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
 
   async function sendPrompt(): Promise<void> {
     const text = prompt.value.trim();
-    if (!text) {
+    if (!text || state.sending) {
       return;
     }
-    if (!state.sessionId) {
-      const created = (await rpc("session/new", {
-        title: text.slice(0, 72),
-      })) as SessionRow;
-      state.sessionId = created.id;
-    }
-    if (state.skillSlug) {
-      await rpc("skill/activate", {
+    state.sending = true;
+    state.sendError = "";
+    state.pendingUserText = text;
+    sendBtn.setAttribute("disabled", "true");
+    status.style.color = "#8a5a12";
+    status.textContent = getString("workspace-sending");
+    try {
+      if (!state.sessionId) {
+        const created = (await rpc("session/new", {
+          title: text.slice(0, 72),
+        })) as SessionRow;
+        state.sessionId = created.id;
+        state.events = [];
+        state.lastEventId = null;
+      }
+      if (skillSelect.value && skillSelect.value !== state.skillSlug) {
+        state.skillSlug = skillSelect.value;
+      }
+      if (state.skillSlug) {
+        await rpc("skill/activate", {
+          sessionId: state.sessionId,
+          slug: state.skillSlug,
+        });
+      }
+      prompt.value = "";
+      await refreshSessions();
+      renderLists();
+      await rpc("session/prompt", { sessionId: state.sessionId, text });
+      state.pendingUserText = "";
+      await refreshSessions();
+      const bundle = (await rpc("session/events", {
         sessionId: state.sessionId,
-        slug: state.skillSlug,
-      });
+      })) as { events?: ConfuciusEvent[] };
+      state.events = bundle.events || [];
+      if (state.events.length) {
+        state.lastEventId = state.events[state.events.length - 1].id;
+      }
+      collectApprovals();
+      renderLists();
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : String(error);
+      state.sendError = message;
+      status.style.color = "#b42318";
+      status.textContent = message;
+      renderLists();
+    } finally {
+      state.sending = false;
+      sendBtn.removeAttribute("disabled");
     }
-    prompt.value = "";
-    await rpc("session/prompt", { sessionId: state.sessionId, text });
-    await refreshSessions();
-    renderLists();
   }
 
   async function resolveApproval(
@@ -732,6 +793,7 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
           }
           skillSelect.appendChild(option);
         }
+        skillSelect.value = state.skillSlug;
       }
       await refreshSessions();
       await refreshMemories();
@@ -795,7 +857,12 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
       });
     })();
   });
-  sendBtn.addEventListener("click", () => {
+  composer.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void sendPrompt();
+  });
+  sendBtn.addEventListener("click", (event) => {
+    event.preventDefault();
     void sendPrompt();
   });
   stopBtn.addEventListener("click", () => {
@@ -805,6 +872,7 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
   });
   prompt.addEventListener("keydown", (event) => {
     if ((event as KeyboardEvent).key === "Enter") {
+      event.preventDefault();
       void sendPrompt();
     }
   });

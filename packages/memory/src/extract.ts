@@ -19,13 +19,19 @@ const SYSTEM_PROMPT = [
   "",
   "Known memory types: preference, fact, project, paper, procedure, insight.",
   "",
-  "Reply with ONLY a JSON array (no prose, no code fence). Each element is one of:",
+  "Rules:",
+  "- When the user explicitly asks you to remember something, ALWAYS emit an add op",
+  "  (or update if an existing memory covers it). Never reply [] in that case.",
+  "- One op per distinct fact; keep content to one or two sentences.",
+  "- Reply with ONLY a JSON array (no prose, no code fence).",
+  "",
+  "Each element is one of:",
   '- {"op":"add","type":"preference","title":"short label","content":"one or two sentences","tags":["optional"],"confidence":0.0-1.0}',
   '- {"op":"update","id":"mem_x","content":"revised text","title":"optional new title","tags":["optional"]}',
   '- {"op":"delete","id":"mem_x"}',
   "",
   "Use update when a listed existing memory is contradicted or should be refined;",
-  "never invent ids. When in doubt, add nothing: reply [].",
+  "never invent ids. Otherwise, when in doubt, reply [].",
 ].join("\n");
 
 export function buildExtractionMessages(input: {

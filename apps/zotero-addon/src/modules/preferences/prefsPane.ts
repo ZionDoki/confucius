@@ -32,13 +32,16 @@ export function bindPrefsWindow(win: Window): void {
       return;
     }
     el.value = String(getPref(key) ?? "");
-    el.addEventListener("change", () => {
+    const persist = () => {
       if (numeric) {
         setPref(key, Number(el.value) || 0);
       } else {
         setPref(key, el.value as never);
       }
-    });
+    };
+    el.addEventListener("change", persist);
+    el.addEventListener("input", persist);
+    el.addEventListener("blur", persist);
   };
   bind("confucius-pref-baseUrl", "baseUrl");
   bind("confucius-pref-apiKey", "apiKey");
