@@ -2,11 +2,16 @@ import type {
   ApprovalResolution,
   ConfuciusEvent,
   ConfuciusHealthResponse,
+  ModelConfigView,
   SessionContext,
   SessionMode,
   SessionRecord,
 } from "@confucius/protocol";
-import { RPC_METHODS, buildHealthResponse } from "@confucius/protocol";
+import {
+  RPC_METHODS,
+  buildHealthResponse,
+  validateConfigPatch,
+} from "@confucius/protocol";
 import type { MemoryType } from "@confucius/memory";
 import { buildExtractionMessages, parseExtractionResponse } from "@confucius/memory";
 import {
@@ -223,9 +228,51 @@ export class AgentHost {
         return this.memoryRpcSave(params);
       case RPC_METHODS.memoryDelete:
         return this.memoryRpcDelete(params);
+      case RPC_METHODS.configGet:
+        return this.configGet();
+      case RPC_METHODS.configSet:
+        return this.configSet(params);
       default:
         throw new Error(`Unknown method: ${method}`);
     }
+  }
+
+  configGet(): ModelConfigView {
+    return {
+      baseUrl: String(getPref("baseUrl") || ""),
+      apiKey: String(getPref("apiKey") || ""),
+      model: String(getPref("model") || ""),
+      maxTokens: Number(getPref("maxTokens")) || 0,
+      streamResponses: getPref("streamResponses") !== false,
+      memoryAutoExtract: getPref("memoryAutoExtract") !== false,
+      hasApiKey: String(getPref("apiKey") || "").length > 0,
+    };
+  }
+
+  private configSet(params: Record<string, unknown>): ModelConfigView {
+    const validation = validateConfigPatch(params);
+    if (!validation.ok) {
+      throw new Error(validation.errors.join("; "));
+    }
+    if (params.baseUrl !== undefined) {
+      setPref("baseUrl", validation.value.baseUrl);
+    }
+    if (params.apiKey !== undefined) {
+      setPref("apiKey", validation.value.apiKey);
+    }
+    if (params.model !== undefined && validation.value.model !== "") {
+      setPref("model", validation.value.model);
+    }
+    if (params.maxTokens !== undefined) {
+      setPref("maxTokens", validation.value.maxTokens);
+    }
+    if (typeof params.streamResponses === "boolean") {
+      setPref("streamResponses", params.streamResponses);
+    }
+    if (typeof params.memoryAutoExtract === "boolean") {
+      setPref("memoryAutoExtract", params.memoryAutoExtract);
+    }
+    return this.configGet();
   }
 
   private sessionNew(params: Record<string, unknown>): SessionRecord {
@@ -430,7 +477,9 @@ export class AgentHost {
     const baseUrl = String(getPref("baseUrl") || "https://api.openai.com/v1");
     const model = String(getPref("model") || "gpt-4o-mini");
     if (!apiKey) {
-      throw new Error("Set an API key in Confucius preferences first.");
+      throw new Error(
+        "Model not configured — click the ⚙ Settings button to set Base URL, API key, and model.",
+      );
     }
 
     state.abort?.abort();

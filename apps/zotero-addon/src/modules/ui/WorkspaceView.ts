@@ -39,6 +39,16 @@ type MemoryRow = {
   tags?: string[];
 };
 
+type ModelConfig = {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  maxTokens: number;
+  streamResponses: boolean;
+  memoryAutoExtract: boolean;
+  hasApiKey: boolean;
+};
+
 type TimelineItem =
   | { kind: "event"; event: ConfuciusEvent }
   | { kind: "text"; text: string }
@@ -231,6 +241,7 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
     pendingUserText: "",
     sendError: "",
     sending: false,
+    config: null as ModelConfig | null,
   };
 
   const topbar = el(doc, "div", {
@@ -263,6 +274,22 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
   const modeBtn = button(doc, "confucius-mode", "Agent");
   modeBtn.style.background = "#6b645b";
   modeBtn.style.border = "1px solid #57514a";
+  const settingsBtn = el(
+    doc,
+    "button",
+    {
+      background: "#6b645b",
+      color: "#f6f3ec",
+      border: "1px solid #57514a",
+      borderRadius: "6px",
+      padding: "6px 12px",
+      cursor: "pointer",
+      minHeight: "32px",
+      font: "inherit",
+    },
+    { id: "confucius-settings", type: "button", title: "Model settings" },
+  );
+  settingsBtn.textContent = "⚙";
   const skillSelect = el(
     doc,
     "select",
@@ -284,6 +311,7 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
   topbar.appendChild(status);
   topbar.appendChild(newSessionBtn);
   topbar.appendChild(modeBtn);
+  topbar.appendChild(settingsBtn);
   topbar.appendChild(skillSelect);
 
   const columns = el(doc, "div", {
@@ -466,6 +494,23 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
           : getString("workspace-timeline"),
       ),
     );
+    if (state.config && !state.config.hasApiKey) {
+      const banner = el(doc, "div", {
+        border: "1px solid #e8c37a",
+        borderRadius: "8px",
+        padding: "10px 12px",
+        marginBottom: "8px",
+        background: "#fff8e8",
+        color: "#7c5a12",
+      });
+      const bannerText = el(doc, "div", { marginBottom: "6px" });
+      bannerText.textContent = getString("workspace-config-banner");
+      const configure = button(doc, "confucius-configure", getString("workspace-configure"));
+      configure.addEventListener("click", () => openSettings());
+      banner.appendChild(bannerText);
+      banner.appendChild(configure);
+      timelinePane.appendChild(banner);
+    }
     if (state.pendingUserText) {
       const pending = el(doc, "div", {
         border: "1px solid #cfd8d3",
@@ -701,6 +746,12 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
     if (!text || state.sending) {
       return;
     }
+    if (state.config && !state.config.hasApiKey) {
+      state.sendError = getString("workspace-config-banner");
+      renderLists();
+      openSettings();
+      return;
+    }
     state.sending = true;
     state.sendError = "";
     state.pendingUserText = text;
@@ -763,6 +814,166 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
     renderLists();
   }
 
+  async function refreshConfig(): Promise<void> {
+    try {
+      state.config = (await rpc("config/get", {})) as ModelConfig;
+    } catch {
+      state.config = null;
+    }
+  }
+
+  function openSettings(): void {
+    const existing = doc.getElementById("confucius-settings-overlay");
+    if (existing) {
+      existing.remove();
+      return;
+    }
+    const config = state.config;
+    const overlay = el(
+      doc,
+      "div",
+      {
+        position: "fixed",
+        inset: "0px",
+        background: "rgba(28, 25, 23, 0.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: "1000",
+      },
+      { id: "confucius-settings-overlay" },
+    );
+    const panel = el(doc, "div", {
+      background: "#ffffff",
+      borderRadius: "10px",
+      padding: "18px 20px",
+      width: "440px",
+      maxWidth: "90vw",
+      maxHeight: "85vh",
+      overflow: "auto",
+      boxSizing: "border-box",
+      font: '13px/1.5 "Segoe UI", "SF Pro Text", sans-serif',
+      color: "#1c1917",
+    });
+    const title = el(doc, "div", {
+      fontWeight: "700",
+      fontSize: "15px",
+      marginBottom: "12px",
+    });
+    title.textContent = getString("workspace-settings");
+    panel.appendChild(title);
+
+    const field = (
+      label: string,
+      id: string,
+      value: string,
+      type = "text",
+    ) => {
+      const row = el(doc, "div", { marginBottom: "10px" });
+      const name = el(doc, "label", {
+        display: "block",
+        fontSize: "11px",
+        color: "#6b645b",
+        marginBottom: "3px",
+      });
+      name.textContent = label;
+      const input = el(
+        doc,
+        "input",
+        {
+          display: "block",
+          width: "100%",
+          boxSizing: "border-box",
+          height: "32px",
+          border: "1px solid #c4bdb3",
+          borderRadius: "6px",
+          padding: "0 8px",
+          font: "inherit",
+        },
+        { id, type, value },
+      ) as HTMLInputElement;
+      row.appendChild(name);
+      row.appendChild(input);
+      panel.appendChild(row);
+      return input;
+    };
+
+    field("Base URL (OpenAI-compatible /chat/completions, or Ollama /api/chat)", "confucius-cfg-baseUrl", config?.baseUrl ?? "");
+    field("API key (ignored by local Ollama)", "confucius-cfg-apiKey", config?.apiKey ?? "", "password");
+    field("Model", "confucius-cfg-model", config?.model ?? "");
+    field("Max tokens (0 = provider default)", "confucius-cfg-maxTokens", String(config?.maxTokens ?? 0), "number");
+
+    const check = (label: string, id: string, checked: boolean) => {
+      const row = el(doc, "div", { marginBottom: "8px" });
+      const input = el(
+        doc,
+        "input",
+        { marginRight: "6px" },
+        { id, type: "checkbox" },
+      ) as HTMLInputElement;
+      input.checked = checked;
+      const text = doc.createElementNS(HTML_NS, "label") as HTMLElement;
+      text.textContent = label;
+      row.appendChild(input);
+      row.appendChild(text);
+      panel.appendChild(row);
+      return input;
+    };
+    const stream = check("Stream model output live", "confucius-cfg-stream", config?.streamResponses !== false);
+    const extract = check("Extract memories after each turn", "confucius-cfg-memory", config?.memoryAutoExtract !== false);
+
+    const errorLine = el(doc, "div", {
+      color: "#b42318",
+      minHeight: "18px",
+      marginBottom: "8px",
+    });
+    panel.appendChild(errorLine);
+
+    const actions = el(doc, "div", { display: "flex", gap: "8px" });
+    const save = button(doc, "confucius-cfg-save", getString("workspace-settings-save"));
+    const cancel = button(doc, "confucius-cfg-cancel", getString("workspace-settings-cancel"));
+    cancel.style.background = "#6b645b";
+    cancel.style.border = "1px solid #57514a";
+    actions.appendChild(save);
+    actions.appendChild(cancel);
+    panel.appendChild(actions);
+    overlay.appendChild(panel);
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) {
+        overlay.remove();
+      }
+    });
+    cancel.addEventListener("click", () => overlay.remove());
+    save.addEventListener("click", () => {
+      void (async () => {
+        errorLine.textContent = "";
+        try {
+          const value = (id: string) =>
+            (doc.getElementById(id) as HTMLInputElement | null)?.value ?? "";
+          const next = (await rpc("config/set", {
+            baseUrl: value("confucius-cfg-baseUrl"),
+            apiKey: value("confucius-cfg-apiKey"),
+            model: value("confucius-cfg-model"),
+            maxTokens: Number(value("confucius-cfg-maxTokens")) || 0,
+            streamResponses: stream.checked,
+            memoryAutoExtract: extract.checked,
+          })) as ModelConfig;
+          state.config = next;
+          state.sendError = "";
+          overlay.remove();
+          renderLists();
+        } catch (error) {
+          errorLine.textContent =
+            error instanceof Error ? error.message : String(error);
+        }
+      })();
+    });
+    const host = doc.body ?? doc.documentElement;
+    if (host) {
+      host.appendChild(overlay);
+    }
+  }
+
   async function refreshMemories(): Promise<void> {
     try {
       const listed = (await rpc("memory/list", { limit: 8 })) as {
@@ -776,6 +987,10 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
 
   async function poll(): Promise<void> {
     try {
+      if (!state.config) {
+        await refreshConfig();
+        renderLists();
+      }
       if (!state.skills.length) {
         const listed = (await rpc("skill/list", {})) as {
           skills?: ConfuciusSkill[];
@@ -843,6 +1058,9 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
       await refreshSessions();
       renderLists();
     })();
+  });
+  settingsBtn.addEventListener("click", () => {
+    void refreshConfig().then(() => openSettings());
   });
   modeBtn.addEventListener("click", () => {
     void (async () => {

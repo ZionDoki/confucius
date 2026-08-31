@@ -32,7 +32,13 @@ async function onStartup() {
   registerHttpBridge(host);
   // @ts-expect-error runtime host for workspace + Chrome.
   Zotero.Confucius = host;
-  await registerPreferencePane();
+  try {
+    await registerPreferencePane();
+  } catch (error) {
+    // A failed pane registration must not take down startup; the workspace
+    // settings dialog covers configuration without it.
+    ztoolkit.log("[Confucius] preference pane registration failed", error);
+  }
 
   for (const win of Zotero.getMainWindows()) {
     await onMainWindowLoad(win);

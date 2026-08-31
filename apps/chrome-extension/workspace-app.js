@@ -61,6 +61,10 @@
       approvals: [],
       memories: [],
       mode: "agent",
+      config: null,
+      sendError: "",
+      sending: false,
+      settingsOpen: false,
     };
 
     async function rpc(method, params) {
@@ -108,6 +112,7 @@
         <button id="mode" type="button" class="secondary">${escapeHtml(
           state.mode === "plan" ? "Plan" : "Agent",
         )}</button>
+        <button id="settings" type="button" class="secondary" title="Model settings">⚙</button>
         <select id="skill">
           <option value="">${escapeHtml(t("noSkill", "No skill"))}</option>
           ${state.skills
@@ -140,6 +145,17 @@
       </aside>
       <main class="pane">
         <div class="pane-label">${escapeHtml(t("timeline", "Timeline"))}${session ? " · " + escapeHtml(session.title) : ""}</div>
+        ${
+          state.config && !state.config.hasApiKey
+            ? `<div class="event config-banner">${escapeHtml(
+                t(
+                  "configBanner",
+                  "Model not configured. Set Base URL, API key, and model to start.",
+                ),
+              )} <button id="configure" type="button">Configure now</button></div>`
+            : ""
+        }
+        ${state.sendError ? `<div class="event send-error">${escapeHtml(state.sendError)}</div>` : ""}
         ${
           coalesceTimeline(state.events)
             .map((item) => renderTimelineItem(item))
@@ -189,6 +205,7 @@
           )}</p>`
         }
       </aside>
+      ${settingsOverlayHtml()}
       <footer class="composer">
         <input id="prompt" placeholder="${escapeHtml(
           t("placeholder", "Describe a research task…"),
@@ -410,20 +427,145 @@
     async function sendPrompt() {
       const input = root.querySelector("#prompt");
       const text = input && input.value ? input.value.trim() : "";
-      if (!text) return;
-      if (!state.sessionId) {
-        const created = await rpc("session/new", { title: text.slice(0, 72) });
-        state.sessionId = created.id;
+      if (!text || state.sending) return;
+      if (state.config && !state.config.hasApiKey) {
+        state.sendError = t(
+          "configBanner",
+          "Model not configured. Set Base URL, API key, and model to start.",
+        );
+        render();
+        openSettings();
+        return;
       }
-      if (state.skillSlug) {
-        await rpc("skill/activate", {
-          sessionId: state.sessionId,
-          slug: state.skillSlug,
-        });
+      state.sending = true;
+      state.sendError = "";
+      try {
+        if (!state.sessionId) {
+          const created = await rpc("session/new", { title: text.slice(0, 72) });
+          state.sessionId = created.id;
+        }
+        if (state.skillSlug) {
+          await rpc("skill/activate", {
+            sessionId: state.sessionId,
+            slug: state.skillSlug,
+          });
+        }
+        if (input) input.value = "";
+        await rpc("session/prompt", { sessionId: state.sessionId, text });
+        await refreshSessions();
+      } catch (error) {
+        state.sendError = (error && error.message) || "send failed";
+      } finally {
+        state.sending = false;
+        render();
       }
-      if (input) input.value = "";
-      await rpc("session/prompt", { sessionId: state.sessionId, text });
-      await refreshSessions();
+    }
+
+    function settingsOverlayHtml() {
+      if (!state.settingsOpen) return "";
+      const config = state.config || {};
+      return `
+      <div id="settings-overlay" class="settings-overlay">
+        <div class="settings-panel">
+          <strong>${escapeHtml(t("settingsTitle", "Model settings"))}</strong>
+          <label>Base URL (OpenAI-compatible /chat/completions, or Ollama /api/chat)
+            <input id="cfg-baseUrl" type="text" value="${escapeHtml(config.baseUrl || "")}" />
+          </label>
+          <label>API key (ignored by local Ollama)
+            <input id="cfg-apiKey" type="password" value="${escapeHtml(config.apiKey || "")}" />
+          </label>
+          <label>Model
+            <input id="cfg-model" type="text" value="${escapeHtml(config.model || "")}" />
+          </label>
+          <label>Max tokens (0 = provider default)
+            <input id="cfg-maxTokens" type="number" value="${escapeHtml(String(config.maxTokens == null ? 0 : config.maxTokens))}" />
+          </label>
+          <label class="check">
+            <input id="cfg-stream" type="checkbox" ${config.streamResponses !== false ? "checked" : ""} />
+            Stream model output live
+          </label>
+          <label class="check">
+            <input id="cfg-memory" type="checkbox" ${config.memoryAutoExtract !== false ? "checked" : ""} />
+            Extract memories after each turn
+          </label>
+          <div id="cfg-error" class="send-error"></div>
+          <div class="settings-actions">
+            <button id="cfg-save" type="button">Save</button>
+            <button id="cfg-cancel" type="button" class="secondary">Cancel</button>
+          </div>
+        </div>
+      </div>`;
+    }
+
+    function openSettings() {
+      state.settingsOpen = true;
+      render();
+    }
+
+    function bindSettings() {
+      const open = root.querySelector("#settings");
+      if (open) {
+        open.onclick = async () => {
+          await refreshConfig();
+          state.settingsOpen = !state.settingsOpen;
+          render();
+        };
+      }
+      const configure = root.querySelector("#configure");
+      if (configure) {
+        configure.onclick = openSettings;
+      }
+      const overlay = root.querySelector("#settings-overlay");
+      if (!overlay) return;
+      overlay.onclick = (event) => {
+        if (event.target === overlay) {
+          state.settingsOpen = false;
+          render();
+        }
+      };
+      const cancel = root.querySelector("#cfg-cancel");
+      if (cancel) {
+        cancel.onclick = () => {
+          state.settingsOpen = false;
+          render();
+        };
+      }
+      const save = root.querySelector("#cfg-save");
+      if (save) {
+        save.onclick = async () => {
+          const errorLine = root.querySelector("#cfg-error");
+          if (errorLine) errorLine.textContent = "";
+          try {
+            const value = (id) =>
+              (root.querySelector("#" + id) || {}).value || "";
+            state.config = await rpc("config/set", {
+              baseUrl: value("cfg-baseUrl"),
+              apiKey: value("cfg-apiKey"),
+              model: value("cfg-model"),
+              maxTokens: Number(value("cfg-maxTokens")) || 0,
+              streamResponses: (root.querySelector("#cfg-stream") || {})
+                .checked === true,
+              memoryAutoExtract: (root.querySelector("#cfg-memory") || {})
+                .checked === true,
+            });
+            state.sendError = "";
+            state.settingsOpen = false;
+            render();
+          } catch (error) {
+            if (errorLine) {
+              errorLine.textContent = (error && error.message) || "save failed";
+            }
+          }
+        };
+      }
+    }
+
+    async function refreshConfig() {
+      try {
+        state.config = await rpc("config/get", {});
+      } catch {
+        state.config = null;
+      }
     }
 
     async function resolveApproval(id, verdict, scope) {
@@ -453,6 +595,9 @@
 
     async function poll() {
       try {
+        if (!state.config) {
+          await refreshConfig();
+        }
         if (!state.skills.length) {
           const listed = await rpc("skill/list", {});
           state.skills = listed.skills || [];
@@ -486,11 +631,14 @@
           state.skills.length,
           state.memories.map((memory) => memory.id).join(","),
           state.mode,
+          state.config ? (state.config.hasApiKey ? "cfg1" : "cfg0") : "cfg-",
+          state.sendError,
         ].join(":");
-        if (signature !== lastSignature) {
+        if (signature !== lastSignature && !state.settingsOpen) {
           lastSignature = signature;
           render();
         }
+        bindSettings();
         const conn = document.getElementById("conn");
         if (conn) {
           conn.className = "status ok";

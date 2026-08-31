@@ -206,3 +206,81 @@ button.unstyled {
 button.danger {
   color: #e08a7a;
 }
+
+/* Settings overlay and send/config errors */
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 14, 12, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.settings-panel {
+  background: #1c2420;
+  border: 1px solid #3d5248;
+  border-radius: 10px;
+  padding: 16px 18px;
+  width: 420px;
+  max-width: 92vw;
+  max-height: 85vh;
+  overflow: auto;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-panel strong {
+  font-size: 15px;
+}
+
+.settings-panel label {
+  display: block;
+  font-size: 12px;
+  color: #9db5a8;
+}
+
+.settings-panel label.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-panel input[type="text"],
+.settings-panel input[type="password"],
+.settings-panel input[type="number"] {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  height: 30px;
+  margin-top: 3px;
+  border: 1px solid #3d5248;
+  border-radius: 6px;
+  background: #141b17;
+  color: #f4efe6;
+  padding: 0 8px;
+  font: inherit;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.event.config-banner {
+  border-color: #d4b46a;
+  background: #2a2416;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.event.send-error {
+  border-color: #e08a7a;
+  background: #2a1a17;
+  color: #e08a7a;
+}

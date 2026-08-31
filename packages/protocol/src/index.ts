@@ -74,8 +74,10 @@ export type {
   PlanStep,
 } from "./events";
 
-export { RPC_METHODS } from "./rpc";
+export { RPC_METHODS, validateConfigPatch } from "./rpc";
 export type {
+  ConfigSetParams,
+  ConfigValidation,
   JsonRpcError,
   JsonRpcRequest,
   JsonRpcResponse,
@@ -84,6 +86,7 @@ export type {
   MemoryListParams,
   MemorySaveParams,
   MemorySearchParams,
+  ModelConfigView,
   RpcMethod,
   SessionIdParams,
   SessionListResult,
