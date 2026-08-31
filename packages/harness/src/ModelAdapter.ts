@@ -4,10 +4,17 @@ export interface ModelToolCall {
   args: Record<string, unknown>;
 }
 
+export interface ModelUsage {
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+}
+
 export interface ModelTurn {
   text?: string;
   reasoning?: string;
   toolCalls?: ModelToolCall[];
+  usage?: ModelUsage;
 }
 
 export interface ModelMessage {

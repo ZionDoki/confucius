@@ -32,12 +32,17 @@ export const RPC_METHODS = {
   sessionList: "session/list",
   sessionPrompt: "session/prompt",
   sessionAbort: "session/abort",
+  sessionDelete: "session/delete",
   sessionSetMode: "session/setMode",
   sessionSetContext: "session/setContext",
   sessionEvents: "session/events",
   approvalResolve: "approval/resolve",
   skillList: "skill/list",
   skillActivate: "skill/activate",
+  memoryList: "memory/list",
+  memorySearch: "memory/search",
+  memorySave: "memory/save",
+  memoryDelete: "memory/delete",
 } as const;
 
 export type RpcMethod = (typeof RPC_METHODS)[keyof typeof RPC_METHODS];
@@ -79,4 +84,27 @@ export interface SessionEventsParams {
 export interface SkillActivateParams {
   sessionId: string;
   slug: string | null;
+}
+
+export interface MemoryListParams {
+  type?: string;
+  limit?: number;
+}
+
+export interface MemorySearchParams {
+  query: string;
+  type?: string;
+  tags?: string[];
+  limit?: number;
+}
+
+export interface MemorySaveParams {
+  content: string;
+  type?: string;
+  title?: string;
+  tags?: string[];
+}
+
+export interface MemoryDeleteParams {
+  id: string;
 }

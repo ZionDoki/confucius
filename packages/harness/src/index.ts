@@ -1,5 +1,11 @@
 export { BudgetAccountant } from "./BudgetAccountant";
 export type { BudgetLimits } from "./BudgetAccountant";
+export {
+  compactHistory,
+  estimateChars,
+  needsCompaction,
+} from "./ConversationMemory";
+export type { CompactionResult } from "./ConversationMemory";
 export { MemoryCheckpointStore } from "./CheckpointStore";
 export type { TurnCheckpoint } from "./CheckpointStore";
 export {
@@ -27,6 +33,7 @@ export type {
   ModelRequest,
   ModelToolCall,
   ModelTurn,
+  ModelUsage,
 } from "./ModelAdapter";
 export { PermissionGate } from "./PermissionGate";
 export { normalizeResult, normalizeThrown } from "./ResultNormalizer";

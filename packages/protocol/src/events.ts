@@ -17,6 +17,7 @@ export type ConfuciusEventType =
   | "reasoning_delta"
   | "citation"
   | "context_updated"
+  | "memory_updated"
   | "turn_completed"
   | "turn_failed"
   | "turn_aborted";
@@ -81,6 +82,12 @@ type EventPayloads = {
   reasoning_delta: { text: string };
   citation: { citation: Citation };
   context_updated: { context: SessionContext };
+  memory_updated: {
+    op: "add" | "update" | "delete";
+    id: string;
+    title?: string;
+    total: number;
+  };
   turn_completed: { phase: TurnPhase };
   turn_failed: { message: string };
   turn_aborted: { reason: string };

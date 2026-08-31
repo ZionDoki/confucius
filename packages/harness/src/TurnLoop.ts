@@ -18,12 +18,19 @@ export interface TurnLoopInput {
   session: SessionRecord;
   turnId: string;
   userText: string;
+  /**
+   * Prior conversation for this session, WITHOUT the system message.
+   * Replayed before the new user text so turns build on each other.
+   */
+  history?: ModelMessage[];
   signal?: AbortSignal;
 }
 
 export interface TurnLoopResult {
   phase: "done" | "failed" | "aborted";
   text: string;
+  /** Final conversation of this turn (system prompt excluded) for persistence. */
+  messages: ModelMessage[];
 }
 
 export interface TurnLoopDeps {
@@ -47,6 +54,7 @@ export class TurnLoop {
         role: "system",
         content: this.deps.systemPrompt ?? "You are Confucius, a research agent.",
       },
+      ...(input.history ?? []),
       { role: "user", content: input.userText },
     ];
 
@@ -55,11 +63,19 @@ export class TurnLoop {
 
     let delivered = "";
 
+    const resultOf = (
+      phase: TurnLoopResult["phase"],
+    ): TurnLoopResult => ({
+      phase,
+      text: delivered,
+      messages: messages.slice(1),
+    });
+
     try {
       while (this.deps.budget.canStartIteration()) {
         if (input.signal?.aborted) {
           this.emit(input, "turn_aborted", { reason: "signal" });
-          return { phase: "aborted", text: delivered };
+          return resultOf("aborted");
         }
 
         this.deps.budget.recordIteration();
@@ -86,27 +102,27 @@ export class TurnLoop {
         if (toolCalls.length === 0) {
           this.emit(input, "turn_completed", { phase: "done" });
           this.checkpoint(input.turnId, this.deps.budget.iterationsUsed, messages);
-          return { phase: "done", text: delivered };
+          return resultOf("done");
         }
 
         const executed = await this.executeTools(input, toolCalls, messages);
         if (executed === "aborted") {
           this.emit(input, "turn_aborted", { reason: "signal" });
-          return { phase: "aborted", text: delivered };
+          return resultOf("aborted");
         }
         this.checkpoint(input.turnId, this.deps.budget.iterationsUsed, messages);
       }
 
       this.emit(input, "turn_completed", { phase: "done" });
-      return { phase: "done", text: delivered };
+      return resultOf("done");
     } catch (error) {
       if (isAbortError(error)) {
         this.emit(input, "turn_aborted", { reason: "signal" });
-        return { phase: "aborted", text: delivered };
+        return resultOf("aborted");
       }
       const message = error instanceof Error ? error.message : String(error);
       this.emit(input, "turn_failed", { message });
-      return { phase: "failed", text: delivered };
+      return resultOf("failed");
     }
   }
 

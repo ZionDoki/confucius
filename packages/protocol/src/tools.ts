@@ -62,25 +62,42 @@ export const BROWSER_TOOLS = [
   "browser.import_current_page",
 ] as const;
 
+export const MEMORY_READ_TOOLS = [
+  "memory_search",
+  "memory_list",
+] as const;
+
+export const MEMORY_WRITE_TOOLS = [
+  "memory_save",
+  "memory_update",
+  "memory_delete",
+] as const;
+
 export type LibraryReadTool = (typeof LIBRARY_READ_TOOLS)[number];
 export type LibraryWriteTool = (typeof LIBRARY_WRITE_TOOLS)[number];
 export type PaperReadTool = (typeof PAPER_READ_TOOLS)[number];
 export type PaperWriteTool = (typeof PAPER_WRITE_TOOLS)[number];
 export type BrowserTool = (typeof BROWSER_TOOLS)[number];
+export type MemoryReadTool = (typeof MEMORY_READ_TOOLS)[number];
+export type MemoryWriteTool = (typeof MEMORY_WRITE_TOOLS)[number];
 
 export type BuiltinToolName =
   | LibraryReadTool
   | LibraryWriteTool
   | PaperReadTool
   | PaperWriteTool
-  | BrowserTool;
+  | BrowserTool
+  | MemoryReadTool
+  | MemoryWriteTool;
 
 export type ToolCatalog =
   | "library.read"
   | "library.write"
   | "paper.read"
   | "paper.write"
-  | "browser";
+  | "browser"
+  | "memory.read"
+  | "memory.write";
 
 export type ToolConcurrency = "parallel_safe" | "serial";
 
