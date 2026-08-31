@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run sync-skills:check
+      - run: npm run versions:check
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Package Chrome extension
+        run: npm run package:chrome
+      - uses: actions/upload-artifact@v4
+        with:
+          name: confucius-chrome-node${{ matrix.node }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run package:chrome
+      - name: Build Zotero xpi
+        run: npm run build --workspace @confucius/zotero-addon
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            apps/zotero-addon/.scaffold/build/confucius.xpi
+            dist/confucius-chrome-*.zip
