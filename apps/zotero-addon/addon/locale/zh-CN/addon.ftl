@@ -16,3 +16,5 @@ confucius-workspace-connecting = 正在连接
 confucius-workspace-host-zotero = Zotero
 confucius-workspace-host-bridged = Chrome 桥
 confucius-workspace-no-skill = 不使用技能
+confucius-workspace-memory = 记忆
+confucius-workspace-no-memory = 还没有记忆。

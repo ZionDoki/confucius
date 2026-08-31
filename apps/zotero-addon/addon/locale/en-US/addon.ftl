@@ -16,3 +16,5 @@ confucius-workspace-connecting = Connecting
 confucius-workspace-host-zotero = Zotero
 confucius-workspace-host-bridged = Chrome bridge
 confucius-workspace-no-skill = No skill
+confucius-workspace-memory = Memory
+confucius-workspace-no-memory = No memories yet.

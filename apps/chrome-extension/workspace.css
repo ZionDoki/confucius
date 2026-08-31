@@ -150,3 +150,59 @@ pre {
 .status.err {
   color: #e08a7a;
 }
+
+/* Memory cards, streaming text, and session row affordances */
+.event.assistant {
+  border-color: #35594a;
+  background: #182a22;
+  white-space: pre-wrap;
+}
+
+.event.reasoning {
+  border-style: dashed;
+  color: #9db5a8;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.event.memory {
+  border-color: #2a3b33;
+  background: #151c18;
+}
+
+.event.memory .memory-title {
+  font-size: 11px;
+  color: #8fbf7a;
+  font-weight: 700;
+}
+
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.session-row .session {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.secondary {
+  background: #22302a;
+  border-color: #3d5248;
+}
+
+button.unstyled {
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 0 4px;
+}
+
+button.danger {
+  color: #e08a7a;
+}

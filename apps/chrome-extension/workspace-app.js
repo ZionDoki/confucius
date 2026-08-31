@@ -59,6 +59,8 @@
       skills: [],
       skillSlug: "",
       approvals: [],
+      memories: [],
+      mode: "agent",
     };
 
     async function rpc(method, params) {
@@ -103,6 +105,9 @@
         <button id="new-session" type="button">${escapeHtml(
           t("newSession", "New session"),
         )}</button>
+        <button id="mode" type="button" class="secondary">${escapeHtml(
+          state.mode === "plan" ? "Plan" : "Agent",
+        )}</button>
         <select id="skill">
           <option value="">${escapeHtml(t("noSkill", "No skill"))}</option>
           ${state.skills
@@ -121,9 +126,13 @@
           state.sessions
             .map(
               (item) =>
-                `<div class="session ${item.id === state.sessionId ? "active" : ""}" data-id="${escapeHtml(
+                `<div class="session-row"><div class="session ${
+                  item.id === state.sessionId ? "active" : ""
+                }" data-id="${escapeHtml(item.id)}">${escapeHtml(
+                  item.title || item.id,
+                )}</div><button class="unstyled danger" data-delete="${escapeHtml(
                   item.id,
-                )}">${escapeHtml(item.title || item.id)}</div>`,
+                )}" title="Delete session" type="button">✕</button></div>`,
             )
             .join("") ||
           `<p class="muted">${escapeHtml(t("noSessions", "No sessions yet."))}</p>`
@@ -132,7 +141,9 @@
       <main class="pane">
         <div class="pane-label">${escapeHtml(t("timeline", "Timeline"))}${session ? " · " + escapeHtml(session.title) : ""}</div>
         ${
-          state.events.map((event) => renderEvent(event)).join("") ||
+          coalesceTimeline(state.events)
+            .map((item) => renderTimelineItem(item))
+            .join("") ||
           `<p class="muted">${escapeHtml(
             t("emptyTimeline", "Describe a research task to start."),
           )}</p>`
@@ -148,12 +159,33 @@
               <div>${escapeHtml(item.toolName)}</div>
               <pre>${escapeHtml(JSON.stringify(item.args, null, 2))}</pre>
               <button data-allow="${escapeHtml(item.id)}" type="button">Allow</button>
+              <button data-always="${escapeHtml(item.id)}" type="button" class="secondary">Always</button>
               <button data-deny="${escapeHtml(item.id)}" type="button">Deny</button>
             </div>`,
             )
             .join("") ||
           `<p class="muted">${escapeHtml(
             t("emptyReview", "Write actions wait here for approval."),
+          )}</p>`
+        }
+        <div class="pane-label">${escapeHtml(t("memory", "Memory"))}</div>
+        ${
+          state.memories
+            .map(
+              (memory) => `
+            <div class="event memory">
+              <div class="memory-title">[${escapeHtml(memory.type)}] ${escapeHtml(
+                memory.title,
+              )}</div>
+              <div>${escapeHtml(memory.content)}</div>
+              <button class="unstyled danger" data-forget="${escapeHtml(
+                memory.id,
+              )}" type="button">forget</button>
+            </div>`,
+            )
+            .join("") ||
+          `<p class="muted">${escapeHtml(
+            t("noMemory", "No memories yet."),
           )}</p>`
         }
       </aside>
@@ -171,8 +203,23 @@
         newSession.onclick = async () => {
           const created = await rpc("session/new", { title: "Untitled" });
           state.sessionId = created.id;
+          state.events = [];
+          state.lastEventId = null;
+          state.mode = "agent";
           await refreshSessions();
           render();
+        };
+      }
+      const modeBtn = root.querySelector("#mode");
+      if (modeBtn) {
+        modeBtn.onclick = async () => {
+          if (!state.sessionId) return;
+          state.mode = state.mode === "plan" ? "agent" : "plan";
+          render();
+          await rpc("session/setMode", {
+            sessionId: state.sessionId,
+            mode: state.mode,
+          });
         };
       }
       const send = root.querySelector("#send");
@@ -204,24 +251,102 @@
       root.querySelectorAll(".session").forEach((node) => {
         node.onclick = async () => {
           state.sessionId = node.getAttribute("data-id");
+          state.lastEventId = null;
           const loaded = await rpc("session/load", { sessionId: state.sessionId });
           state.skillSlug = loaded.skillSlug || state.skillSlug;
+          state.mode = loaded.mode === "plan" ? "plan" : "agent";
           const bundle = await rpc("session/events", {
             sessionId: state.sessionId,
           });
           state.events = bundle.events || [];
+          if (state.events.length) {
+            state.lastEventId = state.events[state.events.length - 1].id;
+          }
           collectApprovals();
+          render();
+        };
+      });
+      root.querySelectorAll("[data-delete]").forEach((node) => {
+        node.onclick = async (event) => {
+          event.stopPropagation();
+          const id = node.getAttribute("data-delete");
+          await rpc("session/delete", { sessionId: id });
+          if (state.sessionId === id) {
+            state.sessionId = null;
+            state.events = [];
+            state.lastEventId = null;
+          }
+          await refreshSessions();
           render();
         };
       });
       root.querySelectorAll("[data-allow]").forEach((node) => {
         node.onclick = () =>
-          resolveApproval(node.getAttribute("data-allow"), "allow");
+          resolveApproval(node.getAttribute("data-allow"), "allow", "once");
+      });
+      root.querySelectorAll("[data-always]").forEach((node) => {
+        node.onclick = () =>
+          resolveApproval(node.getAttribute("data-always"), "allow", "always");
       });
       root.querySelectorAll("[data-deny]").forEach((node) => {
         node.onclick = () =>
-          resolveApproval(node.getAttribute("data-deny"), "deny");
+          resolveApproval(node.getAttribute("data-deny"), "deny", "once");
       });
+      root.querySelectorAll("[data-forget]").forEach((node) => {
+        node.onclick = async () => {
+          await rpc("memory/delete", { id: node.getAttribute("data-forget") });
+          await refreshMemories();
+          render();
+        };
+      });
+    }
+
+    function coalesceTimeline(events) {
+      const items = [];
+      let text = "";
+      let reasoning = "";
+      const flush = () => {
+        if (reasoning) {
+          items.push({ kind: "reasoning", text: reasoning });
+          reasoning = "";
+        }
+        if (text) {
+          items.push({ kind: "text", text });
+          text = "";
+        }
+      };
+      for (const event of events) {
+        if (event.type === "text_delta") {
+          text += event.payload.text;
+          continue;
+        }
+        if (event.type === "reasoning_delta") {
+          if (text) {
+            items.push({ kind: "text", text });
+            text = "";
+          }
+          reasoning += event.payload.text;
+          continue;
+        }
+        flush();
+        items.push({ kind: "event", event });
+      }
+      flush();
+      return items;
+    }
+
+    function renderTimelineItem(item) {
+      if (item.kind === "text") {
+        return `<div class="event assistant"><div>${escapeHtml(
+          item.text,
+        )}</div></div>`;
+      }
+      if (item.kind === "reasoning") {
+        return `<div class="event reasoning"><div>${escapeHtml(
+          item.text,
+        )}</div></div>`;
+      }
+      return renderEvent(item.event);
     }
 
     function renderEvent(event) {
@@ -248,13 +373,18 @@
           ),
         )}</pre></div>`;
       }
-      if (event.type === "text_delta") {
-        return `<div class="event"><div>${escapeHtml(event.payload.text)}</div></div>`;
+      if (event.type === "memory_updated") {
+        return `<div class="event memory">memory ${escapeHtml(
+          event.payload.op,
+        )}${event.payload.title ? ": " + escapeHtml(event.payload.title) : ""}</div>`;
       }
       if (event.type === "turn_failed") {
         return `<div class="event"><strong>Failed</strong> ${escapeHtml(
           event.payload.message,
         )}</div>`;
+      }
+      if (event.type === "turn_aborted") {
+        return `<div class="event"><strong>Stopped</strong></div>`;
       }
       if (event.type === "approval_required") {
         return `<div class="event approval">Needs approval: ${escapeHtml(
@@ -296,8 +426,8 @@
       await refreshSessions();
     }
 
-    async function resolveApproval(id, verdict) {
-      await rpc("approval/resolve", { id, verdict, scope: "once" });
+    async function resolveApproval(id, verdict, scope) {
+      await rpc("approval/resolve", { id, verdict, scope: scope || "once" });
       collectApprovals();
       render();
     }
@@ -310,6 +440,15 @@
       }
     }
 
+    async function refreshMemories() {
+      try {
+        const listed = await rpc("memory/list", { limit: 8 });
+        state.memories = listed.memories || [];
+      } catch {
+        state.memories = [];
+      }
+    }
+
     let lastSignature = "";
 
     async function poll() {
@@ -319,6 +458,7 @@
           state.skills = listed.skills || [];
         }
         await refreshSessions();
+        await refreshMemories();
         if (state.sessionId) {
           const bundle = await rpc("session/events", {
             sessionId: state.sessionId,
@@ -334,6 +474,9 @@
             state.lastEventId = state.events[state.events.length - 1].id;
           }
           collectApprovals();
+          if (incoming.some((event) => event.type === "memory_updated")) {
+            await refreshMemories();
+          }
         }
         const signature = [
           state.sessionId,
@@ -341,6 +484,8 @@
           state.approvals.length,
           state.sessions.length,
           state.skills.length,
+          state.memories.map((memory) => memory.id).join(","),
+          state.mode,
         ].join(":");
         if (signature !== lastSignature) {
           lastSignature = signature;

@@ -1,6 +1,21 @@
 {
   "id": "write-approval",
+  "description": "A write tool asks for approval; the user allows once and the write executes exactly once.",
   "userText": "Make a collection named RLHF",
+  "maxIterations": 8,
+  "approval": "allow",
+  "modelScript": [
+    {
+      "toolCalls": [
+        {
+          "id": "call_1",
+          "name": "create_collection",
+          "args": { "name": "RLHF" }
+        }
+      ]
+    },
+    { "text": "Created the RLHF collection." }
+  ],
   "expectedEventTypes": [
     "turn_started",
     "tool_requested",

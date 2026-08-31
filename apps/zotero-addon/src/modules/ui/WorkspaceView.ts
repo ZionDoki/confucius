@@ -31,6 +31,19 @@ type ApprovalRow = {
   args: Record<string, unknown>;
 };
 
+type MemoryRow = {
+  id: string;
+  type: string;
+  title: string;
+  content: string;
+  tags?: string[];
+};
+
+type TimelineItem =
+  | { kind: "event"; event: ConfuciusEvent }
+  | { kind: "text"; text: string }
+  | { kind: "reasoning"; text: string };
+
 type Styles = Record<string, string>;
 
 function el(
@@ -213,6 +226,8 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
     skills: [] as ConfuciusSkill[],
     skillSlug: "",
     approvals: [] as ApprovalRow[],
+    memories: [] as MemoryRow[],
+    mode: "agent" as "agent" | "plan",
   };
 
   const topbar = el(doc, "div", {
@@ -242,6 +257,9 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
     "confucius-new-session",
     getString("workspace-new-session"),
   );
+  const modeBtn = button(doc, "confucius-mode", "Agent");
+  modeBtn.style.background = "#6b645b";
+  modeBtn.style.border = "1px solid #57514a";
   const skillSelect = el(
     doc,
     "select",
@@ -262,6 +280,7 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
   topbar.appendChild(brand);
   topbar.appendChild(status);
   topbar.appendChild(newSessionBtn);
+  topbar.appendChild(modeBtn);
   topbar.appendChild(skillSelect);
 
   const columns = el(doc, "div", {
@@ -361,28 +380,74 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
     } else {
       for (const item of state.sessions) {
         const row = el(doc, "div", {
+          display: "flex",
+          alignItems: "center",
+          gap: "4px",
           padding: "8px",
           borderRadius: "6px",
           cursor: "pointer",
           background: item.id === state.sessionId ? "#e4ddd0" : "transparent",
         });
-        row.textContent = item.title || item.id;
+        const label = el(doc, "div", {
+          flex: "1 1 auto",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        });
+        label.textContent = item.title || item.id;
+        const del = el(
+          doc,
+          "button",
+          {
+            flex: "0 0 auto",
+            border: "none",
+            background: "transparent",
+            color: "#b42318",
+            cursor: "pointer",
+            font: "inherit",
+            padding: "0 4px",
+          },
+          { type: "button", title: "Delete session" },
+        );
+        del.textContent = "✕";
+        del.addEventListener("click", (event) => {
+          event.stopPropagation();
+          void (async () => {
+            await rpc("session/delete", { sessionId: item.id });
+            if (state.sessionId === item.id) {
+              state.sessionId = null;
+              state.events = [];
+              state.lastEventId = null;
+            }
+            await refreshSessions();
+            renderLists();
+          })();
+        });
         row.addEventListener("click", () => {
           void (async () => {
             state.sessionId = item.id;
+            state.lastEventId = null;
             const loaded = (await rpc("session/load", {
               sessionId: item.id,
-            })) as { skillSlug?: string };
+            })) as { skillSlug?: string; mode?: string };
             state.skillSlug = loaded.skillSlug || state.skillSlug;
+            state.mode = loaded.mode === "plan" ? "plan" : "agent";
+            syncModeButton();
             skillSelect.value = state.skillSlug;
             const bundle = (await rpc("session/events", {
               sessionId: item.id,
             })) as { events?: ConfuciusEvent[] };
             state.events = bundle.events || [];
+            if (state.events.length) {
+              state.lastEventId =
+                state.events[state.events.length - 1].id;
+            }
             collectApprovals();
             renderLists();
           })();
         });
+        row.appendChild(label);
+        row.appendChild(del);
         sessionPane.appendChild(row);
       }
     }
@@ -402,9 +467,35 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
         muted(doc, getString("workspace-empty-timeline")),
       );
     } else {
-      for (const event of state.events) {
-        const card = renderEvent(doc, event);
-        if (card) {
+      for (const item of coalesceTimeline(state.events)) {
+        if (item.kind === "event") {
+          const card = renderEvent(doc, item.event);
+          if (card) {
+            timelinePane.appendChild(card);
+          }
+        } else if (item.kind === "text") {
+          const card = el(doc, "div", {
+            border: "1px solid #cfd8d3",
+            borderRadius: "8px",
+            padding: "8px 10px",
+            marginBottom: "8px",
+            background: "#f2f7f4",
+            whiteSpace: "pre-wrap",
+          });
+          card.textContent = item.text;
+          timelinePane.appendChild(card);
+        } else {
+          const card = el(doc, "div", {
+            border: "1px dashed #d7d0c4",
+            borderRadius: "8px",
+            padding: "8px 10px",
+            marginBottom: "8px",
+            background: "#faf8f4",
+            color: "#6b645b",
+            fontSize: "12px",
+            whiteSpace: "pre-wrap",
+          });
+          card.textContent = item.text;
           timelinePane.appendChild(card);
         }
       }
@@ -430,21 +521,124 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
           fontSize: "11px",
         });
         pre.textContent = JSON.stringify(item.args, null, 2);
+        const actions = el(doc, "div", {
+          display: "flex",
+          gap: "6px",
+          marginTop: "6px",
+        });
         const allow = button(doc, "", "Allow");
+        const always = button(doc, "", "Always");
+        always.style.background = "#6b645b";
+        always.style.border = "1px solid #57514a";
         const deny = button(doc, "", "Deny");
+        deny.style.background = "#8a5a12";
+        deny.style.border = "1px solid #6f470e";
         allow.addEventListener("click", () => {
-          void resolveApproval(item.id, "allow");
+          void resolveApproval(item.id, "allow", "once");
+        });
+        always.addEventListener("click", () => {
+          void resolveApproval(item.id, "allow", "always");
         });
         deny.addEventListener("click", () => {
-          void resolveApproval(item.id, "deny");
+          void resolveApproval(item.id, "deny", "once");
         });
+        actions.appendChild(allow);
+        actions.appendChild(always);
+        actions.appendChild(deny);
         card.appendChild(name);
         card.appendChild(pre);
-        card.appendChild(allow);
-        card.appendChild(deny);
+        card.appendChild(actions);
         reviewPane.appendChild(card);
       }
     }
+
+    reviewPane.appendChild(paneLabel(doc, getString("workspace-memory")));
+    if (!state.memories.length) {
+      reviewPane.appendChild(muted(doc, getString("workspace-no-memory")));
+    } else {
+      for (const memory of state.memories) {
+        const card = el(doc, "div", {
+          border: "1px solid #d7d0c4",
+          borderRadius: "8px",
+          padding: "6px 8px",
+          marginBottom: "6px",
+          background: "#ffffff",
+        });
+        const title = el(doc, "div", {
+          fontSize: "11px",
+          color: "#2f5d45",
+          fontWeight: "700",
+        });
+        title.textContent = `[${memory.type}] ${memory.title}`;
+        const body = el(doc, "div", { fontSize: "12px" });
+        body.textContent = memory.content;
+        const del = el(
+          doc,
+          "button",
+          {
+            border: "none",
+            background: "transparent",
+            color: "#b42318",
+            cursor: "pointer",
+            font: "inherit",
+            fontSize: "11px",
+            padding: "0",
+          },
+          { type: "button" },
+        );
+        del.textContent = "forget";
+        del.addEventListener("click", () => {
+          void (async () => {
+            await rpc("memory/delete", { id: memory.id });
+            await refreshMemories();
+            renderLists();
+          })();
+        });
+        card.appendChild(title);
+        card.appendChild(body);
+        card.appendChild(del);
+        reviewPane.appendChild(card);
+      }
+    }
+  }
+
+  function syncModeButton(): void {
+    modeBtn.textContent = state.mode === "plan" ? "Plan" : "Agent";
+  }
+
+  /** Merge runs of stream deltas into single cards to keep the timeline readable. */
+  function coalesceTimeline(events: ConfuciusEvent[]): TimelineItem[] {
+    const items: TimelineItem[] = [];
+    let text = "";
+    let reasoning = "";
+    const flush = () => {
+      if (reasoning) {
+        items.push({ kind: "reasoning", text: reasoning });
+        reasoning = "";
+      }
+      if (text) {
+        items.push({ kind: "text", text });
+        text = "";
+      }
+    };
+    for (const event of events) {
+      if (event.type === "text_delta") {
+        text += event.payload.text;
+        continue;
+      }
+      if (event.type === "reasoning_delta") {
+        if (text) {
+          items.push({ kind: "text", text });
+          text = "";
+        }
+        reasoning += event.payload.text;
+        continue;
+      }
+      flush();
+      items.push({ kind: "event", event });
+    }
+    flush();
+    return items;
   }
 
   function collectApprovals(): void {
@@ -498,10 +692,25 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
     renderLists();
   }
 
-  async function resolveApproval(id: string, verdict: "allow" | "deny") {
-    await rpc("approval/resolve", { id, verdict, scope: "once" });
+  async function resolveApproval(
+    id: string,
+    verdict: "allow" | "deny",
+    scope: "once" | "always",
+  ) {
+    await rpc("approval/resolve", { id, verdict, scope });
     collectApprovals();
     renderLists();
+  }
+
+  async function refreshMemories(): Promise<void> {
+    try {
+      const listed = (await rpc("memory/list", { limit: 8 })) as {
+        memories?: MemoryRow[];
+      };
+      state.memories = listed.memories ?? [];
+    } catch {
+      state.memories = [];
+    }
   }
 
   async function poll(): Promise<void> {
@@ -525,6 +734,7 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
         }
       }
       await refreshSessions();
+      await refreshMemories();
       if (state.sessionId) {
         const bundle = (await rpc("session/events", {
           sessionId: state.sessionId,
@@ -540,6 +750,13 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
           state.lastEventId = state.events[state.events.length - 1].id;
         }
         collectApprovals();
+        if (
+          incoming.some(
+            (event) => event.type === "memory_updated",
+          )
+        ) {
+          await refreshMemories();
+        }
       }
       renderLists();
       status.style.color = "#2f5d45";
@@ -557,8 +774,25 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
         title: "Untitled",
       })) as SessionRow;
       state.sessionId = created.id;
+      state.events = [];
+      state.lastEventId = null;
+      state.mode = "agent";
+      syncModeButton();
       await refreshSessions();
       renderLists();
+    })();
+  });
+  modeBtn.addEventListener("click", () => {
+    void (async () => {
+      if (!state.sessionId) {
+        return;
+      }
+      state.mode = state.mode === "plan" ? "agent" : "plan";
+      syncModeButton();
+      await rpc("session/setMode", {
+        sessionId: state.sessionId,
+        mode: state.mode,
+      });
     })();
   });
   sendBtn.addEventListener("click", () => {
@@ -638,12 +872,20 @@ function renderEvent(doc: Document, event: ConfuciusEvent): HTMLElement | null {
     card.appendChild(pre);
     return card;
   }
-  if (event.type === "text_delta") {
-    card.textContent = event.payload.text;
+  if (event.type === "memory_updated") {
+    const title = el(doc, "div", { fontWeight: "700", color: "#2f5d45" });
+    title.textContent = `memory ${event.payload.op}${event.payload.title ? `: ${event.payload.title}` : ""}`;
+    card.style.borderColor = "#cfd8d3";
+    card.appendChild(title);
     return card;
   }
   if (event.type === "turn_failed") {
     card.textContent = `Failed ${event.payload.message}`;
+    return card;
+  }
+  if (event.type === "turn_aborted") {
+    card.textContent = "Stopped";
+    card.style.color = "#8a5a12";
     return card;
   }
   if (event.type === "approval_required") {

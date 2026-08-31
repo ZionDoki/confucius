@@ -13,7 +13,10 @@
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run sync-skills --silent && npm test --workspaces --if-present",
+    "sync-skills": "node scripts/sync-skills.mjs",
+    "sync-skills:check": "node scripts/sync-skills.mjs --check",
+    "package:chrome": "node scripts/package-chrome.mjs"
   },
   "engines": {
     "node": ">=20"

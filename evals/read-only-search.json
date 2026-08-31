@@ -1,6 +1,20 @@
 {
   "id": "read-only-search",
+  "description": "A read-only tool call flows tool_requested -> tool_result, then the model delivers text.",
   "userText": "Find transformer papers",
+  "maxIterations": 8,
+  "modelScript": [
+    {
+      "toolCalls": [
+        {
+          "id": "call_1",
+          "name": "search_items",
+          "args": { "query": "transformer" }
+        }
+      ]
+    },
+    { "text": "Found 3 transformer papers." }
+  ],
   "expectedEventTypes": [
     "turn_started",
     "tool_requested",

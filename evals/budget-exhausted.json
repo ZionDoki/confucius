@@ -1,7 +1,20 @@
 {
   "id": "budget-exhausted",
+  "description": "The loop stops making model calls after maxIterations but still completes the turn cleanly.",
   "userText": "Keep searching",
   "maxIterations": 2,
+  "modelScript": [
+    {
+      "toolCalls": [
+        { "id": "call_1", "name": "search_items", "args": { "query": "a" } }
+      ]
+    },
+    {
+      "toolCalls": [
+        { "id": "call_2", "name": "search_items", "args": { "query": "b" } }
+      ]
+    }
+  ],
   "expectedToolRequests": 2,
   "expectedLastEvent": "turn_completed"
 }
