@@ -1,0 +1,14 @@
+node_modules/
+dist/
+build/
+.scaffold/
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+*.xpi
+*.log
+.env
+.env.*
+!.env.example
+apps/chrome-extension/dist/
+apps/zotero-addon/.scaffold/

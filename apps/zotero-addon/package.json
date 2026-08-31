@@ -1,0 +1,50 @@
+{
+  "name": "@confucius/zotero-addon",
+  "version": "0.1.0",
+  "description": "Confucius for Zotero — native research agent host",
+  "config": {
+    "addonName": "Confucius",
+    "addonID": "confucius@zotero.plugin",
+    "addonRef": "confucius",
+    "addonInstance": "Confucius",
+    "prefsPrefix": "extensions.zotero.confucius"
+  },
+  "author": "Confucius contributors",
+  "homepage": "https://github.com/confucius-agent/confucius",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/confucius-agent/confucius.git"
+  },
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "start": "zotero-plugin serve",
+    "build": "zotero-plugin build && tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.mjs",
+    "lint": "prettier --check . && eslint .",
+    "lint:fix": "prettier --write . && eslint . --fix"
+  },
+  "dependencies": {
+    "@confucius/harness": "*",
+    "@confucius/mcp-client": "*",
+    "@confucius/protocol": "*",
+    "@confucius/skill-format": "*",
+    "@confucius/zotero-tools": "*",
+    "zotero-plugin-toolkit": "^5.1.0-beta.13"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "@zotero-plugin/eslint-config": "^0.6.7",
+    "eslint": "^9.39.2",
+    "prettier": "^3.7.4",
+    "typescript": "^5.9.3",
+    "zotero-plugin-scaffold": "^0.8.5",
+    "zotero-types": "^4.1.0-beta.4"
+  },
+  "prettier": {
+    "printWidth": 80,
+    "tabWidth": 2,
+    "endOfLine": "lf"
+  }
+}

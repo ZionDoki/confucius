@@ -1,0 +1,6 @@
+.scaffold/
+build/
+node_modules/
+*.xpi
+*.tsbuildinfo
+.env

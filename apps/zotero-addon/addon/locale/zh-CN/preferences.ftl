@@ -1,0 +1,11 @@
+pref-title = Confucius
+pref-help = 挂在 Zotero 上的科研 Agent。
+pref-model-title = 模型
+pref-model-help = OpenAI 兼容 Chat Completions。DeepSeek、OpenRouter、本地代理只要支持 tools 即可。
+pref-base-url = Base URL
+pref-api-key = API key
+pref-model = 模型
+pref-max-tokens = 最大 tokens（0 表示用服务商默认）
+pref-bridge-title = Chrome 桥
+pref-bridge-help = 把配对令牌粘贴到 Confucius Chrome 侧栏。仅 127.0.0.1 且带令牌的请求会成功。
+pref-mcp-json = 额外 MCP 服务器 JSON（可选）

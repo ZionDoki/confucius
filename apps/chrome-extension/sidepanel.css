@@ -1,0 +1,115 @@
+:root {
+  color-scheme: dark;
+  --bg: #141c18;
+  --bg-2: #101612;
+  --line: #2a3b33;
+  --text: #f4efe6;
+  --muted: #9db5a8;
+  --ok: #8fbf7a;
+  --wait: #d4b46a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.45 "Segoe UI", "SF Pro Text", sans-serif;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.top {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: #1f3a2e
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><path fill='%23F4EFE6' d='M7 9h8c2.2 0 3.5 1.2 3.5 3.2V24c-1.6-1.1-3.2-1.6-3.2-1.6H7V9z'/><path fill='%23D9C7A3' d='M25 9h-8c-2.2 0-3.5 1.2-3.5 3.2V24c1.6-1.1 3.2-1.6 3.2-1.6H25V9z'/></svg>")
+    center / 20px no-repeat;
+}
+
+h1 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+h2 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.status {
+  margin: 2px 0 0;
+  font-size: 12px;
+}
+
+.status.waiting {
+  color: var(--wait);
+}
+
+.status.connected {
+  color: var(--ok);
+}
+
+.layout {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.col {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.muted {
+  margin: 0;
+  color: var(--muted);
+}
+
+code {
+  font-size: 11px;
+  color: var(--text);
+}
+
+.composer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-2);
+}
+
+.composer input {
+  width: 100%;
+  height: 40px;
+  border: 1px solid #3d5248;
+  border-radius: 8px;
+  background: #1b2621;
+  color: var(--text);
+  padding: 0 12px;
+}
+
+.composer input:disabled {
+  opacity: 0.55;
+}

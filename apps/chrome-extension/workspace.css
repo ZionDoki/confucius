@@ -1,0 +1,152 @@
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #1c2420;
+  color: #f4efe6;
+  font: 13px/1.45 "Segoe UI", "SF Pro Text", sans-serif;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr) 280px;
+  grid-template-rows: 52px minmax(0, 1fr) 72px;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  background: #1c2420;
+  color: #f4efe6;
+}
+
+.topbar {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 14px;
+  border-bottom: 1px solid #2a3b33;
+  background: #151c18;
+}
+
+.topbar strong {
+  font-size: 15px;
+  letter-spacing: 0.02em;
+}
+
+.topbar button,
+.review button,
+.composer button,
+.event button {
+  background: #2a4a3a;
+  color: #f4efe6;
+  border: 1px solid #3d5248;
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.topbar select {
+  height: 32px;
+  min-width: 160px;
+  border: 1px solid #3d5248;
+  border-radius: 6px;
+  background: #1b2621;
+  color: #f4efe6;
+  padding: 0 8px;
+}
+
+.pane {
+  padding: 14px;
+  overflow: auto;
+  border-right: 1px solid #2a3b33;
+  background: #1c2420;
+}
+
+.pane-review {
+  border-right: none;
+  border-left: 1px solid #2a3b33;
+  background: #181f1b;
+}
+
+.pane-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9db5a8;
+  margin-bottom: 10px;
+}
+
+.session {
+  padding: 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.session.active,
+.session:hover {
+  background: #24322c;
+}
+
+.event {
+  border: 1px solid #2a3b33;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  background: #151c18;
+}
+
+.event.tool {
+  border-color: #3d5248;
+}
+
+.event.approval {
+  border-color: #d4b46a;
+}
+
+.muted {
+  color: #9db5a8;
+}
+
+pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: #c9d6cf;
+}
+
+.composer {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 12px 16px;
+  border-top: 1px solid #2a3b33;
+  background: #151c18;
+}
+
+.composer input,
+.composer select {
+  flex: 1;
+  height: 40px;
+  border: 1px solid #3d5248;
+  border-radius: 8px;
+  background: #1b2621;
+  color: #f4efe6;
+  padding: 0 12px;
+}
+
+.status.ok {
+  color: #8fbf7a;
+}
+
+.status.wait {
+  color: #d4b46a;
+}
+
+.status.err {
+  color: #e08a7a;
+}

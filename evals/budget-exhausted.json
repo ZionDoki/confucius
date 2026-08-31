@@ -1,0 +1,7 @@
+{
+  "id": "budget-exhausted",
+  "userText": "Keep searching",
+  "maxIterations": 2,
+  "expectedToolRequests": 2,
+  "expectedLastEvent": "turn_completed"
+}

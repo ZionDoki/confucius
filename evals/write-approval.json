@@ -1,0 +1,13 @@
+{
+  "id": "write-approval",
+  "userText": "Make a collection named RLHF",
+  "expectedEventTypes": [
+    "turn_started",
+    "tool_requested",
+    "approval_required",
+    "approval_resolved",
+    "tool_result",
+    "text_delta",
+    "turn_completed"
+  ]
+}

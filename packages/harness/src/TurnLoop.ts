@@ -1,0 +1,251 @@
+import type {
+  ConfuciusEvent,
+  SessionRecord,
+  ToolResult,
+} from "@confucius/protocol";
+import { BudgetAccountant } from "./BudgetAccountant";
+import type { MemoryCheckpointStore } from "./CheckpointStore";
+import { splitBatches, type ScheduledCall } from "./ConcurrencyScheduler";
+import type { MemoryEventLog } from "./EventLog";
+import type { Clock, IdFactory } from "./ids";
+import type { ModelAdapter, ModelMessage, ModelToolCall } from "./ModelAdapter";
+import type { PermissionGate } from "./PermissionGate";
+import { validateArgs } from "./SchemaValidate";
+import type { ToolProvider } from "./ToolProvider";
+import { truncateToolResult } from "./truncate";
+
+export interface TurnLoopInput {
+  session: SessionRecord;
+  turnId: string;
+  userText: string;
+  signal?: AbortSignal;
+}
+
+export interface TurnLoopResult {
+  phase: "done" | "failed" | "aborted";
+  text: string;
+}
+
+export interface TurnLoopDeps {
+  model: ModelAdapter;
+  tools: ToolProvider;
+  permissions: PermissionGate;
+  budget: BudgetAccountant;
+  events: MemoryEventLog;
+  checkpoints: MemoryCheckpointStore;
+  ids: IdFactory;
+  now: Clock;
+  systemPrompt?: string;
+}
+
+export class TurnLoop {
+  constructor(private readonly deps: TurnLoopDeps) {}
+
+  async run(input: TurnLoopInput): Promise<TurnLoopResult> {
+    const messages: ModelMessage[] = [
+      {
+        role: "system",
+        content: this.deps.systemPrompt ?? "You are Confucius, a research agent.",
+      },
+      { role: "user", content: input.userText },
+    ];
+
+    this.emit(input, "turn_started", { userText: input.userText });
+    this.checkpoint(input.turnId, 0, messages);
+
+    let delivered = "";
+
+    try {
+      while (this.deps.budget.canStartIteration()) {
+        if (input.signal?.aborted) {
+          this.emit(input, "turn_aborted", { reason: "signal" });
+          return { phase: "aborted", text: delivered };
+        }
+
+        this.deps.budget.recordIteration();
+        const modelTurn = await this.deps.model.complete(
+          { messages, tools: this.deps.tools.listTools() },
+          input.signal,
+        );
+
+        if (modelTurn.reasoning) {
+          this.emit(input, "reasoning_delta", { text: modelTurn.reasoning });
+        }
+        if (modelTurn.text) {
+          delivered += modelTurn.text;
+          this.emit(input, "text_delta", { text: modelTurn.text });
+        }
+
+        const toolCalls = modelTurn.toolCalls ?? [];
+        messages.push({
+          role: "assistant",
+          content: modelTurn.text ?? "",
+          toolCalls,
+        });
+
+        if (toolCalls.length === 0) {
+          this.emit(input, "turn_completed", { phase: "done" });
+          this.checkpoint(input.turnId, this.deps.budget.iterationsUsed, messages);
+          return { phase: "done", text: delivered };
+        }
+
+        const executed = await this.executeTools(input, toolCalls, messages);
+        if (executed === "aborted") {
+          this.emit(input, "turn_aborted", { reason: "signal" });
+          return { phase: "aborted", text: delivered };
+        }
+        this.checkpoint(input.turnId, this.deps.budget.iterationsUsed, messages);
+      }
+
+      this.emit(input, "turn_completed", { phase: "done" });
+      return { phase: "done", text: delivered };
+    } catch (error) {
+      if (isAbortError(error)) {
+        this.emit(input, "turn_aborted", { reason: "signal" });
+        return { phase: "aborted", text: delivered };
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      this.emit(input, "turn_failed", { message });
+      return { phase: "failed", text: delivered };
+    }
+  }
+
+  private async executeTools(
+    input: TurnLoopInput,
+    toolCalls: ModelToolCall[],
+    messages: ModelMessage[],
+  ): Promise<"ok" | "aborted"> {
+    const allowed: ScheduledCall[] = [];
+
+    for (const call of toolCalls) {
+      this.emit(input, "tool_requested", {
+        callId: call.id,
+        toolName: call.name,
+        args: call.args,
+      });
+
+      if (!this.deps.budget.canRunTools(1)) {
+        const result: ToolResult = {
+          ok: false,
+          toolName: call.name,
+          code: "unavailable",
+          message: "Tool budget exhausted",
+        };
+        this.emit(input, "tool_result", { callId: call.id, result });
+        messages.push({
+          role: "tool",
+          content: JSON.stringify(result),
+          toolCallId: call.id,
+        });
+        continue;
+      }
+
+      const decision = await this.deps.permissions.decide({
+        sessionId: input.session.id,
+        turnId: input.turnId,
+        toolName: call.name,
+        args: call.args,
+      });
+
+      if (decision.request) {
+        this.emit(input, "approval_required", { request: decision.request });
+      }
+      if (decision.resolution) {
+        this.emit(input, "approval_resolved", {
+          resolution: decision.resolution,
+        });
+      }
+      if (decision.verdict === "deny") {
+        const result: ToolResult = {
+          ok: false,
+          toolName: call.name,
+          code: "permission_denied",
+          message: "Tool call denied",
+        };
+        this.emit(input, "tool_result", { callId: call.id, result });
+        messages.push({
+          role: "tool",
+          content: JSON.stringify(result),
+          toolCallId: call.id,
+        });
+        continue;
+      }
+
+      const schema = this.deps.tools.getSchema(call.name);
+      const invalid = validateArgs(call.name, schema, call.args);
+      if (invalid) {
+        this.emit(input, "tool_result", { callId: call.id, result: invalid });
+        messages.push({
+          role: "tool",
+          content: JSON.stringify(invalid),
+          toolCallId: call.id,
+        });
+        continue;
+      }
+
+      this.deps.budget.recordToolCalls(1);
+      allowed.push({
+        callId: call.id,
+        toolName: call.name,
+        args: call.args,
+      });
+    }
+
+    const batches = splitBatches(allowed, (name) => this.deps.tools.getMeta(name));
+    for (const batch of batches) {
+      if (input.signal?.aborted) {
+        return "aborted";
+      }
+      const results = await Promise.all(
+        batch.map(async (call) => {
+          const result = truncateToolResult(
+            await this.deps.tools.call(
+              call.toolName,
+              call.args,
+              input.signal,
+            ),
+          );
+          return { call, result };
+        }),
+      );
+      for (const { call, result } of results) {
+        this.emit(input, "tool_result", { callId: call.callId, result });
+        messages.push({
+          role: "tool",
+          content: JSON.stringify(result),
+          toolCallId: call.callId,
+        });
+      }
+    }
+
+    return "ok";
+  }
+
+  private checkpoint(turnId: string, iteration: number, messages: ModelMessage[]) {
+    this.deps.checkpoints.save({
+      turnId,
+      iteration,
+      messages: structuredClone(messages),
+    });
+  }
+
+  private emit<T extends ConfuciusEvent["type"]>(
+    input: TurnLoopInput,
+    type: T,
+    payload: Extract<ConfuciusEvent, { type: T }>["payload"],
+  ): void {
+    const event = {
+      id: this.deps.ids(),
+      sessionId: input.session.id,
+      turnId: input.turnId,
+      type,
+      ts: this.deps.now(),
+      payload,
+    } as ConfuciusEvent;
+    this.deps.events.append(event);
+  }
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}

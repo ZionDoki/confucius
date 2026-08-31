@@ -1,0 +1,267 @@
+import {
+  CONFUCIUS_EVENTS_PATH,
+  CONFUCIUS_HEALTH_PATH,
+  CONFUCIUS_MCP_PATH,
+  CONFUCIUS_PAIR_PATH,
+  CONFUCIUS_RPC_PATH,
+  CONFUCIUS_WORKSPACE_PROBE_PATH,
+} from "@confucius/protocol";
+import { openAndInspectWorkspace } from "../ui/workspaceWindow";
+import { READ_ONLY_TOOL_NAMES, TOOL_DEFINITIONS } from "@confucius/zotero-tools";
+import type { AgentHost } from "../host/AgentHost";
+import { getPref } from "../../utils/prefs";
+
+type HttpResult = [number, string, string];
+
+interface EndpointOptions {
+  method?: string;
+  pathname?: string;
+  query?: Record<string, string>;
+  searchParams?: URLSearchParams;
+  data?: unknown;
+  headers?: Record<string, string>;
+}
+
+interface ZoteroHttpEndpoint {
+  supportedMethods: string[];
+  supportedDataTypes?: string | string[];
+  permitBookmarklet?: boolean;
+  allowRequestsFromUnsafeWebContent?: boolean;
+  init: (options: EndpointOptions) => HttpResult | Promise<HttpResult>;
+}
+
+type EndpointCtor = new () => ZoteroHttpEndpoint;
+
+function getEndpointMap(): Record<string, EndpointCtor> | null {
+  const server = (
+    Zotero as unknown as {
+      Server?: { Endpoints?: Record<string, EndpointCtor> };
+    }
+  ).Server;
+  return server?.Endpoints ?? null;
+}
+
+function json(status: number, body: unknown): HttpResult {
+  return [status, "application/json", JSON.stringify(body)];
+}
+
+function header(options: EndpointOptions | undefined, name: string): string {
+  const headers = options?.headers ?? {};
+  const found = Object.keys(headers).find(
+    (key) => key.toLowerCase() === name.toLowerCase(),
+  );
+  return found ? String(headers[found]) : "";
+}
+
+function isAuthorized(options?: EndpointOptions): boolean {
+  const expected = getPref("pairingToken");
+  if (!expected) {
+    return false;
+  }
+  const bearer = header(options, "authorization").replace(/^Bearer\s+/i, "");
+  const queryToken =
+    options?.query?.token || options?.searchParams?.get("token") || "";
+  const data =
+    options?.data && typeof options.data === "object"
+      ? (options.data as { token?: string })
+      : {};
+  const provided = bearer || queryToken || data.token || "";
+  return provided === expected;
+}
+
+function parseData(options?: EndpointOptions): Record<string, unknown> {
+  const data = options?.data;
+  if (!data) {
+    return {};
+  }
+  if (typeof data === "string") {
+    try {
+      return JSON.parse(data) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }
+  if (typeof data === "object") {
+    return data as Record<string, unknown>;
+  }
+  return {};
+}
+
+function registerPath(path: string, proto: ZoteroHttpEndpoint): void {
+  const endpoints = getEndpointMap();
+  if (!endpoints) {
+    ztoolkit.log("[Confucius] Zotero.Server.Endpoints unavailable");
+    return;
+  }
+  function Endpoint(this: ZoteroHttpEndpoint) {}
+  Endpoint.prototype = proto;
+  endpoints[path] = Endpoint as unknown as EndpointCtor;
+}
+
+function unregisterPath(path: string): void {
+  const endpoints = getEndpointMap();
+  if (endpoints) {
+    delete endpoints[path];
+  }
+}
+
+const JSON_TYPES = [
+  "application/json",
+  "application/x-www-form-urlencoded",
+  "multipart/form-data",
+  "text/plain",
+];
+
+export function registerHttpBridge(host: AgentHost): void {
+  registerPath(CONFUCIUS_HEALTH_PATH, {
+    supportedMethods: ["GET"],
+    permitBookmarklet: true,
+    allowRequestsFromUnsafeWebContent: true,
+    init: (_options) => json(200, host.health()),
+  });
+
+  registerPath(CONFUCIUS_WORKSPACE_PROBE_PATH, {
+    supportedMethods: ["GET"],
+    permitBookmarklet: true,
+    allowRequestsFromUnsafeWebContent: true,
+    init: async (_options) => json(200, await openAndInspectWorkspace()),
+  });
+
+  registerPath(CONFUCIUS_PAIR_PATH, {
+    supportedMethods: ["POST"],
+    supportedDataTypes: JSON_TYPES,
+    permitBookmarklet: true,
+    allowRequestsFromUnsafeWebContent: true,
+    init: async (options) => {
+      if (!isAuthorized(options)) {
+        return json(401, { error: "unauthorized" });
+      }
+      return json(200, { ok: true, token: getPref("pairingToken") });
+    },
+  });
+
+  registerPath(CONFUCIUS_RPC_PATH, {
+    supportedMethods: ["POST"],
+    supportedDataTypes: JSON_TYPES,
+    permitBookmarklet: true,
+    allowRequestsFromUnsafeWebContent: true,
+    init: async (options) => {
+      if (!isAuthorized(options)) {
+        return json(401, { error: "unauthorized" });
+      }
+      const body = parseData(options);
+      const id = body.id ?? 1;
+      try {
+        const result = await host.rpc(
+          String(body.method ?? ""),
+          (body.params as Record<string, unknown>) ?? {},
+        );
+        return json(200, { jsonrpc: "2.0", id, result });
+      } catch (error) {
+        return json(200, {
+          jsonrpc: "2.0",
+          id,
+          error: {
+            code: -32000,
+            message: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
+    },
+  });
+
+  registerPath(CONFUCIUS_EVENTS_PATH, {
+    supportedMethods: ["GET"],
+    permitBookmarklet: true,
+    allowRequestsFromUnsafeWebContent: true,
+    init: async (options) => {
+      if (!isAuthorized(options)) {
+        return json(401, { error: "unauthorized" });
+      }
+      const sessionId =
+        options?.query?.sessionId ||
+        options?.searchParams?.get("sessionId") ||
+        "";
+      const afterId =
+        options?.query?.afterId || options?.searchParams?.get("afterId") || "";
+      try {
+        const result = await host.rpc("session/events", { sessionId, afterId });
+        return json(200, result);
+      } catch (error) {
+        return json(400, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+  });
+
+  registerPath(CONFUCIUS_MCP_PATH, {
+    supportedMethods: ["GET", "POST"],
+    supportedDataTypes: JSON_TYPES,
+    permitBookmarklet: true,
+    allowRequestsFromUnsafeWebContent: true,
+    init: async (options) => {
+      if (!isAuthorized(options)) {
+        return json(401, { error: "unauthorized" });
+      }
+      const body = parseData(options);
+      const method = String(body.method ?? options?.query?.method ?? "tools/list");
+      const id = body.id ?? 1;
+      if (method === "initialize") {
+        return json(200, {
+          jsonrpc: "2.0",
+          id,
+          result: {
+            protocolVersion: "2024-11-05",
+            serverInfo: { name: "confucius-zotero", version: "0.1.0" },
+            capabilities: { tools: {} },
+          },
+        });
+      }
+      if (method === "tools/list") {
+        const tools = TOOL_DEFINITIONS.filter((tool) =>
+          READ_ONLY_TOOL_NAMES.has(tool.name as never),
+        ).map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+        }));
+        return json(200, { jsonrpc: "2.0", id, result: { tools } });
+      }
+      if (method === "tools/call") {
+        const params = (body.params ?? {}) as {
+          name?: string;
+          arguments?: Record<string, unknown>;
+        };
+        const name = String(params.name ?? "");
+        if (!READ_ONLY_TOOL_NAMES.has(name as never)) {
+          return json(200, {
+            jsonrpc: "2.0",
+            id,
+            error: { message: "MCP profile is read-only" },
+          });
+        }
+        const result = await host.tools.execute(name, params.arguments ?? {});
+        return json(200, { jsonrpc: "2.0", id, result });
+      }
+      return json(200, {
+        jsonrpc: "2.0",
+        id,
+        error: { message: `Unknown MCP method ${method}` },
+      });
+    },
+  });
+}
+
+export function unregisterHttpBridge(): void {
+  for (const path of [
+    CONFUCIUS_HEALTH_PATH,
+    CONFUCIUS_PAIR_PATH,
+    CONFUCIUS_RPC_PATH,
+    CONFUCIUS_EVENTS_PATH,
+    CONFUCIUS_MCP_PATH,
+    CONFUCIUS_WORKSPACE_PROBE_PATH,
+  ]) {
+    unregisterPath(path);
+  }
+}

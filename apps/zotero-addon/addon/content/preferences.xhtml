@@ -1,0 +1,24 @@
+<linkset>
+  <html:link rel="localization" href="__addonRef__-preferences.ftl" />
+</linkset>
+<vbox onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })">
+  <groupbox>
+    <label><html:h2 data-l10n-id="pref-model-title"></html:h2></label>
+    <html:p data-l10n-id="pref-model-help"></html:p>
+    <label data-l10n-id="pref-base-url" />
+    <html:input id="confucius-pref-baseUrl" type="text" width="400" />
+    <label data-l10n-id="pref-api-key" />
+    <html:input id="confucius-pref-apiKey" type="password" width="400" />
+    <label data-l10n-id="pref-model" />
+    <html:input id="confucius-pref-model" type="text" width="400" />
+    <label data-l10n-id="pref-max-tokens" />
+    <html:input id="confucius-pref-maxTokens" type="number" width="120" />
+  </groupbox>
+  <groupbox>
+    <label><html:h2 data-l10n-id="pref-bridge-title"></html:h2></label>
+    <html:p data-l10n-id="pref-bridge-help"></html:p>
+    <html:input id="confucius-pref-pairingToken" type="text" readonly="true" width="400" />
+    <label data-l10n-id="pref-mcp-json" />
+    <html:textarea id="confucius-pref-mcpServersJson" rows="4" cols="60"></html:textarea>
+  </groupbox>
+</vbox>

@@ -1,0 +1,11 @@
+{
+  "id": "read-only-search",
+  "userText": "Find transformer papers",
+  "expectedEventTypes": [
+    "turn_started",
+    "tool_requested",
+    "tool_result",
+    "text_delta",
+    "turn_completed"
+  ]
+}

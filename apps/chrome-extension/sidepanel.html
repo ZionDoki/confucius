@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Confucius</title>
+    <link rel="stylesheet" href="workspace.css" />
+    <style>
+      html, body { margin: 0; height: 100%; background: #141c18; }
+      .pair {
+        display: flex;
+        gap: 8px;
+        padding: 8px 12px;
+        border-bottom: 1px solid #2a3b33;
+      }
+      .pair input {
+        flex: 1;
+        height: 32px;
+        border-radius: 6px;
+        border: 1px solid #3d5248;
+        background: #1b2621;
+        color: #f4efe6;
+        padding: 0 8px;
+      }
+      .pair button {
+        background: #1f3a2e;
+        color: #f4efe6;
+        border: 1px solid #3d5248;
+        border-radius: 6px;
+        padding: 0 10px;
+      }
+      .workspace { height: calc(100vh - 48px); }
+    </style>
+  </head>
+  <body>
+    <div class="pair">
+      <input id="token" placeholder="Pairing token from Zotero Confucius prefs" />
+      <button id="pair">Pair</button>
+      <button id="push-tab">This tab</button>
+    </div>
+    <div id="confucius-root" class="workspace"></div>
+    <script src="workspace-app.js"></script>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>
