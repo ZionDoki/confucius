@@ -9,3 +9,5 @@ pref("mcpServersJson", "");
 pref("streamResponses", true);
 pref("memoryAutoExtract", true);
 pref("alwaysAllowedTools", "[]");
+pref("reasoningEffort", "auto");
+pref("contextWindowTokens", 32768);

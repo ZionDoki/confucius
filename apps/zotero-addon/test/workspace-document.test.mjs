@@ -81,3 +81,30 @@ test("workspace exposes in-window model settings and config RPC wiring", () => {
   assert.equal(host.includes("configGet"), true);
   assert.equal(host.includes("validateConfigPatch"), true);
 });
+
+test("composer has plus menu, slash commands, context ring, single send/stop", () => {
+  const view = readFileSync(
+    join(root, "src/modules/ui/WorkspaceView.ts"),
+    "utf8",
+  );
+  const chrome = readFileSync(
+    join(root, "..", "chrome-extension", "workspace-app.js"),
+    "utf8",
+  );
+  for (const source of [view, chrome]) {
+    // Mode/skills/permission/model live in the composer affordances now.
+    assert.equal(source.includes("slashCommands"), true);
+    assert.equal(source.includes("session/setPermissions"), true);
+    assert.equal(source.includes("session/compact"), true);
+    assert.equal(source.includes("session/context"), true);
+    assert.equal(source.includes("reasoningEffort"), true);
+    assert.equal(source.includes("contextWindowTokens"), true);
+  }
+  // Topbar no longer owns the mode/skill widgets.
+  assert.equal(view.includes('id: "confucius-plus"'), true);
+  assert.equal(view.includes('id: "confucius-context-ring"'), true);
+  assert.equal(view.includes('id: "confucius-slash-menu"'), true);
+  // One button swaps between send and stop.
+  assert.equal(view.includes("updateRunningUI"), true);
+  assert.equal(chrome.includes("updateSendStopButtons"), true);
+});

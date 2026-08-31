@@ -489,6 +489,19 @@ async function main() {
       assert(turn.usage || usage, "no usage captured");
     });
 
+    await test(`[${base.name}] reasoning effort levels are accepted`, async () => {
+      const off = makeAdapter(base.url, { stream: false, reasoningEffort: "off" });
+      const turnOff = await off.complete({
+        messages: [{ role: "user", content: "Reply with: ok" }],
+      });
+      assert(turnOff.text !== undefined, "effort=off produced no text");
+      const low = makeAdapter(base.url, { stream: false, reasoningEffort: "low" });
+      const turnLow = await low.complete({
+        messages: [{ role: "user", content: "Reply with: ok" }],
+      });
+      assert(turnLow.text !== undefined, "effort=low produced no text");
+    });
+
     await test(`[${base.name}] library search + paper sections (read path)`, async () => {
       const capture = withToolCapture();
       const events = new MemoryEventLog();

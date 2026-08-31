@@ -65,6 +65,11 @@
       sendError: "",
       sending: false,
       settingsOpen: false,
+      running: false,
+      permission: "ask",
+      contextStats: null,
+      slash: { open: false, items: [], index: 0 },
+      plusOpen: false,
     };
 
     async function rpc(method, params) {
@@ -108,9 +113,6 @@
         )}</span>
         <button id="new-session" type="button">${escapeHtml(
           t("newSession", "New session"),
-        )}</button>
-        <button id="mode" type="button" class="secondary">${escapeHtml(
-          state.mode === "plan" ? "Plan" : "Agent",
         )}</button>
         <button id="settings" type="button" class="secondary" title="Model settings">⚙</button>
         <select id="skill">
@@ -206,12 +208,25 @@
         }
       </aside>
       ${settingsOverlayHtml()}
+      ${slashMenuHtml()}
+      ${plusMenuHtml()}
       <footer class="composer">
+        <button id="plus" type="button" class="plus" title="Mode, skills, model">+</button>
         <input id="prompt" placeholder="${escapeHtml(
-          t("placeholder", "Describe a research task…"),
+          t("placeholder", "Describe a research task… (type / for commands)"),
         )}" />
+        <div id="context-ring" class="context-ring" title="Context usage — click to compact">
+          <svg width="30" height="30" viewBox="0 0 30 30">
+            <circle cx="15" cy="15" r="12" fill="none" stroke="#3d5248" stroke-width="3" />
+            <circle id="context-arc" cx="15" cy="15" r="12" fill="none" stroke="#8fbf7a"
+              stroke-width="3" stroke-linecap="round"
+              stroke-dasharray="0 75.4" transform="rotate(-90 15 15)" />
+            <text id="context-label" x="15" y="16" text-anchor="middle"
+              dominant-baseline="middle" font-size="9" fill="#f4efe6">0%</text>
+          </svg>
+        </div>
         <button id="send" type="button">${escapeHtml(t("send", "Send"))}</button>
-        <button id="stop" type="button">${escapeHtml(t("stop", "Stop"))}</button>
+        <button id="stop" type="button" style="display:none">${escapeHtml(t("stop", "Stop"))}</button>
       </footer>
     `;
 
@@ -243,16 +258,47 @@
       if (send) send.onclick = sendPrompt;
       const prompt = root.querySelector("#prompt");
       if (prompt) {
+        prompt.addEventListener("input", (event) =>
+          updateSlashMenu(event.target.value),
+        );
         prompt.addEventListener("keydown", (event) => {
-          if (event.key === "Enter") sendPrompt();
+          if (state.slash.open && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+            event.preventDefault();
+            const delta = event.key === "ArrowDown" ? 1 : -1;
+            const count = state.slash.items.length;
+            state.slash.index = (state.slash.index + delta + count) % count;
+            render();
+            return;
+          }
+          if (event.key === "Escape" && state.slash.open) {
+            event.preventDefault();
+            state.slash = { open: false, items: [], index: 0 };
+            render();
+            return;
+          }
+          if (event.key === "Enter") {
+            event.preventDefault();
+            if (state.slash.open) {
+              runSlashSelection();
+              return;
+            }
+            sendPrompt();
+          }
         });
       }
       const stop = root.querySelector("#stop");
       if (stop) {
-        stop.onclick = () => {
-          if (state.sessionId) rpc("session/abort", { sessionId: state.sessionId });
+        stop.onclick = async () => {
+          if (state.sessionId) {
+            await rpc("session/abort", { sessionId: state.sessionId });
+            state.running = false;
+            updateSendStopButtons();
+          }
         };
       }
+      bindComposer();
+      updateContextRing();
+      updateSendStopButtons();
       const skill = root.querySelector("#skill");
       if (skill) {
         skill.onchange = async (event) => {
@@ -272,6 +318,11 @@
           const loaded = await rpc("session/load", { sessionId: state.sessionId });
           state.skillSlug = loaded.skillSlug || state.skillSlug;
           state.mode = loaded.mode === "plan" ? "plan" : "agent";
+          state.permission =
+            loaded.permissionMode === "auto_allow" ||
+            loaded.permissionMode === "deny"
+              ? loaded.permissionMode
+              : "ask";
           const bundle = await rpc("session/events", {
             sessionId: state.sessionId,
           });
@@ -428,6 +479,10 @@
       const input = root.querySelector("#prompt");
       const text = input && input.value ? input.value.trim() : "";
       if (!text || state.sending) return;
+      if (state.slash.open) {
+        runSlashSelection();
+        return;
+      }
       if (state.config && !state.config.hasApiKey) {
         state.sendError = t(
           "configBanner",
@@ -452,12 +507,255 @@
         }
         if (input) input.value = "";
         await rpc("session/prompt", { sessionId: state.sessionId, text });
+        state.running = true;
+        updateSendStopButtons();
         await refreshSessions();
       } catch (error) {
         state.sendError = (error && error.message) || "send failed";
       } finally {
         state.sending = false;
         render();
+      }
+    }
+
+    function slashCommands() {
+      const commands = [
+        { label: "/agent", description: t("cmdAgent", "Switch to Agent mode"), run: () => applyMode("agent") },
+        { label: "/plan", description: t("cmdPlan", "Switch to Plan mode (read-only)"), run: () => applyMode("plan") },
+        { label: "/ask", description: t("cmdAsk", "Ask before every write"), run: () => applyPermission("ask") },
+        { label: "/auto", description: t("cmdAuto", "Full auto — allow all tool writes"), run: () => applyPermission("auto_allow") },
+        { label: "/deny-writes", description: t("cmdDeny", "Deny all tool writes"), run: () => applyPermission("deny") },
+        { label: "/model", description: t("cmdModel", "Open model settings"), run: () => openSettings() },
+        { label: "/compact", description: t("cmdCompact", "Compact the conversation now"), run: () => compactNow() },
+      ];
+      for (const skill of state.skills) {
+        commands.push({
+          label: "/" + skill.slug,
+          description: skill.name,
+          run: () => applySkill(skill.slug),
+        });
+      }
+      return commands;
+    }
+
+    function slashMenuHtml() {
+      if (!state.slash.open) return "";
+      const rows = state.slash.items
+        .map(
+          (command, index) => `
+          <div class="slash-row ${index === state.slash.index ? "active" : ""}" data-slash="${index}">
+            <span class="slash-label">${escapeHtml(command.label)}</span>
+            <span class="slash-hint">${escapeHtml(command.description)}</span>
+          </div>`,
+        )
+        .join("");
+      return `<div id="slash-menu" class="slash-menu">${rows}</div>`;
+    }
+
+    function plusMenuHtml() {
+      if (!state.plusOpen) return "";
+      const option = (label, active, attr, value) => `
+        <div class="plus-option ${active ? "active" : ""}" data-plus="${escapeHtml(attr)}" data-value="${escapeHtml(value)}">
+          <span>${escapeHtml(label)}</span>${active ? '<span class="plus-mark">✓</span>' : ""}
+        </div>`;
+      const skillRows = state.skills
+        .map((skill) =>
+          option(skill.name, state.skillSlug === skill.slug, "skill", skill.slug),
+        )
+        .join("");
+      return `
+      <div id="plus-menu" class="plus-menu">
+        <div class="plus-section">${escapeHtml(t("mode", "Mode"))}</div>
+        ${option("Agent", state.mode === "agent", "mode", "agent")}
+        ${option("Plan (read-only)", state.mode === "plan", "mode", "plan")}
+        <div class="plus-section">${escapeHtml(t("permissions", "Permissions"))}</div>
+        ${option(t("permAsk", "Ask before writes"), state.permission === "ask", "perm", "ask")}
+        ${option(t("permAuto", "Full auto"), state.permission === "auto_allow", "perm", "auto_allow")}
+        ${option(t("permDeny", "Deny writes"), state.permission === "deny", "perm", "deny")}
+        <div class="plus-section">${escapeHtml(t("noSkill", "No skill"))}</div>
+        ${option(t("skillNone", "No skill"), state.skillSlug === "", "skill", "")}
+        ${skillRows}
+        <div class="plus-section">${escapeHtml(t("model", "Model"))}</div>
+        <div class="plus-model">
+          <span class="plus-model-name">${escapeHtml((state.config && state.config.model) || "—")}</span>
+          <select id="plus-effort">
+            ${["auto", "off", "low", "medium", "high"]
+              .map(
+                (effort) =>
+                  `<option value="${effort}" ${state.config && state.config.reasoningEffort === effort ? "selected" : ""}>${effort}</option>`,
+              )
+              .join("")}
+          </select>
+          <button id="plus-settings" type="button" class="secondary">⚙</button>
+        </div>
+      </div>`;
+    }
+
+    function applyMode(mode) {
+      state.mode = mode;
+      state.plusOpen = false;
+      render();
+      if (state.sessionId) {
+        rpc("session/setMode", { sessionId: state.sessionId, mode });
+      }
+    }
+
+    function applyPermission(mode) {
+      state.permission = mode;
+      state.plusOpen = false;
+      render();
+      if (state.sessionId) {
+        rpc("session/setPermissions", {
+          sessionId: state.sessionId,
+          permissionMode: mode,
+        });
+      }
+    }
+
+    function applySkill(slug) {
+      state.skillSlug = state.skillSlug === slug ? "" : slug;
+      state.plusOpen = false;
+      render();
+      if (state.sessionId) {
+        rpc("skill/activate", {
+          sessionId: state.sessionId,
+          slug: state.skillSlug || null,
+        });
+      }
+    }
+
+    async function compactNow() {
+      if (!state.sessionId) return;
+      try {
+        state.contextStats = await rpc("session/compact", {
+          sessionId: state.sessionId,
+        });
+        render();
+      } catch (error) {
+        state.sendError = (error && error.message) || "compact failed";
+        render();
+      }
+    }
+
+    function updateSlashMenu(value) {
+      if (!value.startsWith("/")) {
+        state.slash = { open: false, items: [], index: 0 };
+        if (!state.plusOpen) render();
+        return;
+      }
+      const query = value.slice(1).toLowerCase();
+      const items = slashCommands().filter((command) =>
+        command.label.slice(1).toLowerCase().includes(query),
+      );
+      state.slash = items.length
+        ? { open: true, items, index: 0 }
+        : { open: false, items: [], index: 0 };
+      render();
+      bindComposer();
+    }
+
+    function runSlashSelection() {
+      const command = state.slash.items[state.slash.index];
+      state.slash = { open: false, items: [], index: 0 };
+      const input = root.querySelector("#prompt");
+      if (input) input.value = "";
+      render();
+      if (command) command.run();
+    }
+
+    function updateContextRing() {
+      const arc = root.querySelector("#context-arc");
+      const label = root.querySelector("#context-label");
+      const ring = root.querySelector("#context-ring");
+      const stats = state.contextStats;
+      if (!arc || !label || !stats) return;
+      const percent = Math.max(0, Math.min(100, stats.percent));
+      const circumference = 2 * Math.PI * 12;
+      arc.setAttribute(
+        "stroke-dasharray",
+        (percent / 100) * circumference + " " + circumference,
+      );
+      arc.setAttribute(
+        "stroke",
+        percent >= 90 ? "#e08a7a" : percent >= 70 ? "#d4b46a" : "#8fbf7a",
+      );
+      label.textContent = Math.round(percent) + "%";
+      const fmt = (v) => (v >= 1000 ? (v / 1000).toFixed(1) + "k" : String(v));
+      ring.title =
+        fmt(stats.tokensEstimate) + " / " + fmt(stats.contextWindowTokens) +
+        " tokens — click to compact";
+    }
+
+    function updateSendStopButtons() {
+      const send = root.querySelector("#send");
+      const stop = root.querySelector("#stop");
+      const working = state.running || state.sending;
+      if (send) send.style.display = working ? "none" : "";
+      if (stop) stop.style.display = working ? "" : "none";
+    }
+
+    function isRunningFromEvents(events) {
+      let running = false;
+      for (const event of events) {
+        if (event.type === "turn_started") running = true;
+        else if (
+          event.type === "turn_completed" ||
+          event.type === "turn_failed" ||
+          event.type === "turn_aborted"
+        ) {
+          running = false;
+        }
+      }
+      return running;
+    }
+
+    function bindComposer() {
+      const plus = root.querySelector("#plus");
+      if (plus) {
+        plus.onclick = () => {
+          state.plusOpen = !state.plusOpen;
+          state.slash = { open: false, items: [], index: 0 };
+          render();
+        };
+      }
+      const ring = root.querySelector("#context-ring");
+      if (ring) {
+        ring.onclick = () => compactNow();
+      }
+      root.querySelectorAll(".slash-row").forEach((row) => {
+        row.onclick = () => {
+          state.slash.index = Number(row.getAttribute("data-slash"));
+          runSlashSelection();
+        };
+      });
+      root.querySelectorAll(".plus-option").forEach((row) => {
+        row.onclick = () => {
+          const attr = row.getAttribute("data-plus");
+          const value = row.getAttribute("data-value");
+          if (attr === "mode") applyMode(value);
+          else if (attr === "perm") applyPermission(value);
+          else if (attr === "skill") applySkill(value);
+        };
+      });
+      const effort = root.querySelector("#plus-effort");
+      if (effort) {
+        effort.onchange = async () => {
+          try {
+            state.config = await rpc("config/set", {
+              reasoningEffort: effort.value,
+            });
+          } catch {
+            /* keep old value */
+          }
+        };
+      }
+      const plusSettings = root.querySelector("#plus-settings");
+      if (plusSettings) {
+        plusSettings.onclick = async () => {
+          state.plusOpen = false;
+          await refreshConfig();
+          openSettings();
+        };
       }
     }
 
@@ -479,6 +777,19 @@
           </label>
           <label>Max tokens (0 = provider default)
             <input id="cfg-maxTokens" type="number" value="${escapeHtml(String(config.maxTokens == null ? 0 : config.maxTokens))}" />
+          </label>
+          <label>Context window (tokens, for the usage ring and compaction)
+            <input id="cfg-contextWindow" type="number" value="${escapeHtml(String(config.contextWindowTokens == null ? 32768 : config.contextWindowTokens))}" />
+          </label>
+          <label>Thinking effort
+            <select id="cfg-effort">
+              ${["auto", "off", "low", "medium", "high"]
+                .map(
+                  (effort) =>
+                    `<option value="${effort}" ${config.reasoningEffort === effort ? "selected" : ""}>${effort}</option>`,
+                )
+                .join("")}
+            </select>
           </label>
           <label class="check">
             <input id="cfg-stream" type="checkbox" ${config.streamResponses !== false ? "checked" : ""} />
@@ -543,6 +854,8 @@
               apiKey: value("cfg-apiKey"),
               model: value("cfg-model"),
               maxTokens: Number(value("cfg-maxTokens")) || 0,
+              contextWindowTokens: Number(value("cfg-contextWindow")) || 32768,
+              reasoningEffort: (root.querySelector("#cfg-effort") || {}).value || "auto",
               streamResponses: (root.querySelector("#cfg-stream") || {})
                 .checked === true,
               memoryAutoExtract: (root.querySelector("#cfg-memory") || {})
@@ -622,6 +935,14 @@
           if (incoming.some((event) => event.type === "memory_updated")) {
             await refreshMemories();
           }
+          state.running = isRunningFromEvents(state.events);
+          try {
+            state.contextStats = await rpc("session/context", {
+              sessionId: state.sessionId,
+            });
+          } catch {
+            /* cosmetic */
+          }
         }
         const signature = [
           state.sessionId,
@@ -633,6 +954,10 @@
           state.mode,
           state.config ? (state.config.hasApiKey ? "cfg1" : "cfg0") : "cfg-",
           state.sendError,
+          state.running ? "run1" : "run0",
+          state.permission,
+          state.contextStats ? state.contextStats.percent : "-",
+          state.plusOpen ? "plus1" : "plus0",
         ].join(":");
         if (signature !== lastSignature && !state.settingsOpen) {
           lastSignature = signature;

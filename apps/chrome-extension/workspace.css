@@ -284,3 +284,130 @@ button.danger {
   background: #2a1a17;
   color: #e08a7a;
 }
+
+/* Composer plus menu, slash menu, context ring */
+.composer .plus {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  background: #22302a;
+  border: 1px solid #3d5248;
+  border-radius: 8px;
+  color: #f4efe6;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.context-ring {
+  position: relative;
+  flex: 0 0 auto;
+  cursor: pointer;
+  margin: 0 2px;
+}
+
+.slash-menu,
+.plus-menu {
+  position: fixed;
+  bottom: 84px;
+  background: #1c2420;
+  border: 1px solid #3d5248;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  overflow: auto;
+  z-index: 800;
+}
+
+.slash-menu {
+  left: 64px;
+  right: 220px;
+  max-height: 260px;
+}
+
+.plus-menu {
+  left: 16px;
+  width: 300px;
+  max-height: 420px;
+  padding: 8px 10px;
+}
+
+.slash-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+
+.slash-row.active {
+  background: #24322c;
+}
+
+.slash-label {
+  font-weight: 600;
+}
+
+.slash-hint {
+  color: #9db5a8;
+  font-size: 12px;
+}
+
+.plus-section {
+  font-size: 11px;
+  color: #9db5a8;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin: 8px 0 4px;
+}
+
+.plus-option {
+  display: flex;
+  justify-content: space-between;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.plus-option.active {
+  background: #24322c;
+}
+
+.plus-mark {
+  color: #8fbf7a;
+  font-weight: 700;
+}
+
+.plus-model {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.plus-model-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plus-model select {
+  height: 28px;
+  border: 1px solid #3d5248;
+  border-radius: 6px;
+  background: #141b17;
+  color: #f4efe6;
+  font: inherit;
+}
+
+.settings-panel select {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  height: 30px;
+  margin-top: 3px;
+  border: 1px solid #3d5248;
+  border-radius: 6px;
+  background: #141b17;
+  color: #f4efe6;
+  padding: 0 6px;
+  font: inherit;
+}

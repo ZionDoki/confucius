@@ -45,6 +45,9 @@ export const RPC_METHODS = {
   memoryDelete: "memory/delete",
   configGet: "config/get",
   configSet: "config/set",
+  sessionSetPermissions: "session/setPermissions",
+  sessionCompact: "session/compact",
+  sessionContext: "session/context",
 } as const;
 
 export type RpcMethod = (typeof RPC_METHODS)[keyof typeof RPC_METHODS];
@@ -111,6 +114,23 @@ export interface MemoryDeleteParams {
   id: string;
 }
 
+export type ReasoningEffort = "auto" | "off" | "low" | "medium" | "high";
+
+export const REASONING_EFFORTS: readonly ReasoningEffort[] = [
+  "auto",
+  "off",
+  "low",
+  "medium",
+  "high",
+];
+
+export function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return (
+    typeof value === "string" &&
+    (REASONING_EFFORTS as readonly string[]).includes(value)
+  );
+}
+
 export interface ModelConfigView {
   baseUrl: string;
   apiKey: string;
@@ -118,6 +138,10 @@ export interface ModelConfigView {
   maxTokens: number;
   streamResponses: boolean;
   memoryAutoExtract: boolean;
+  /** "auto" leaves the server default; "off" disables thinking where the API allows it. */
+  reasoningEffort: ReasoningEffort;
+  /** Context window in tokens, used for the composer usage ring and compaction target. */
+  contextWindowTokens: number;
   /** Convenience flag for UIs: true when a non-empty API key is set. */
   hasApiKey: boolean;
 }
@@ -129,6 +153,26 @@ export interface ConfigSetParams {
   maxTokens?: number;
   streamResponses?: boolean;
   memoryAutoExtract?: boolean;
+  reasoningEffort?: ReasoningEffort;
+  contextWindowTokens?: number;
+}
+
+export interface SessionContextStats {
+  sessionId: string;
+  /** Characters of persisted conversation history. */
+  chars: number;
+  messages: number;
+  /** Rough token estimate (chars / 4). */
+  tokensEstimate: number;
+  /** Compaction threshold in chars actually used by the host. */
+  maxChars: number;
+  contextWindowTokens: number;
+  percent: number;
+}
+
+export interface SessionSetPermissionsParams {
+  sessionId: string;
+  permissionMode: "ask" | "auto_allow" | "deny";
 }
 
 export type ConfigValidation =
@@ -160,14 +204,34 @@ export function validateConfigPatch(
     errors.push("Model must not be empty");
   }
   const apiKey = patch.apiKey === undefined ? undefined : String(patch.apiKey).trim();
-  const maxTokensRaw = patch.maxTokens;
-  let maxTokens: number | undefined;
+  let maxTokensRaw = patch.maxTokens;
   if (maxTokensRaw !== undefined) {
-    maxTokens = Number(maxTokensRaw);
-    if (!Number.isInteger(maxTokens) || maxTokens < 0) {
+    const parsed = Number(maxTokensRaw);
+    if (!Number.isInteger(parsed) || parsed < 0) {
       errors.push("Max tokens must be an integer >= 0");
-      maxTokens = undefined;
+      maxTokensRaw = undefined;
     }
+  }
+  const maxTokens = maxTokensRaw === undefined ? undefined : (Number(maxTokensRaw) as number);
+  const contextWindowRaw = patch.contextWindowTokens;
+  let contextWindowTokens: number | undefined;
+  if (contextWindowRaw !== undefined) {
+    contextWindowTokens = Number(contextWindowRaw);
+    if (
+      !Number.isInteger(contextWindowTokens) ||
+      contextWindowTokens < 1000 ||
+      contextWindowTokens > 10_000_000
+    ) {
+      errors.push("Context window must be an integer between 1000 and 10000000 tokens");
+      contextWindowTokens = undefined;
+    }
+  }
+  const reasoningEffortRaw = patch.reasoningEffort;
+  if (
+    reasoningEffortRaw !== undefined &&
+    !isReasoningEffort(reasoningEffortRaw)
+  ) {
+    errors.push("Reasoning effort must be one of auto, off, low, medium, high");
   }
   if (errors.length > 0) {
     return { ok: false, errors };

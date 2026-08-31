@@ -4,12 +4,14 @@ import type {
   ConfuciusHealthResponse,
   ModelConfigView,
   SessionContext,
+  SessionContextStats,
   SessionMode,
   SessionRecord,
 } from "@confucius/protocol";
 import {
   RPC_METHODS,
   buildHealthResponse,
+  isReasoningEffort,
   validateConfigPatch,
 } from "@confucius/protocol";
 import type { MemoryType } from "@confucius/memory";
@@ -42,7 +44,6 @@ import { ZoteroToolProvider } from "./ZoteroToolProvider";
 
 const MAX_SESSIONS = 60;
 const MAX_EVENTS_PER_SESSION = 400;
-const MAX_HISTORY_CHARS = 80_000;
 const MEMORY_INJECT_LIMIT = 6;
 
 interface SessionState {
@@ -232,6 +233,12 @@ export class AgentHost {
         return this.configGet();
       case RPC_METHODS.configSet:
         return this.configSet(params);
+      case RPC_METHODS.sessionSetPermissions:
+        return this.sessionSetPermissions(params);
+      case RPC_METHODS.sessionContext:
+        return this.sessionContext(String(params.sessionId ?? ""));
+      case RPC_METHODS.sessionCompact:
+        return this.sessionCompact(String(params.sessionId ?? ""));
       default:
         throw new Error(`Unknown method: ${method}`);
     }
@@ -245,6 +252,12 @@ export class AgentHost {
       maxTokens: Number(getPref("maxTokens")) || 0,
       streamResponses: getPref("streamResponses") !== false,
       memoryAutoExtract: getPref("memoryAutoExtract") !== false,
+      reasoningEffort: (() => {
+        const effort = String(getPref("reasoningEffort") || "auto");
+        return isReasoningEffort(effort) ? effort : "auto";
+      })(),
+      contextWindowTokens:
+        Number(getPref("contextWindowTokens")) || 32_768,
       hasApiKey: String(getPref("apiKey") || "").length > 0,
     };
   }
@@ -272,7 +285,88 @@ export class AgentHost {
     if (typeof params.memoryAutoExtract === "boolean") {
       setPref("memoryAutoExtract", params.memoryAutoExtract);
     }
+    if (
+      params.reasoningEffort !== undefined &&
+      isReasoningEffort(params.reasoningEffort)
+    ) {
+      setPref("reasoningEffort", params.reasoningEffort);
+    }
+    if (
+      params.contextWindowTokens !== undefined &&
+      Number.isInteger(params.contextWindowTokens) &&
+      (params.contextWindowTokens as number) >= 1000
+    ) {
+      setPref("contextWindowTokens", params.contextWindowTokens as number);
+    }
     return this.configGet();
+  }
+
+  private sessionSetPermissions(params: Record<string, unknown>) {
+    const state = this.requireSession(String(params.sessionId ?? ""));
+    const mode = params.permissionMode;
+    if (mode !== "ask" && mode !== "auto_allow" && mode !== "deny") {
+      throw new Error("permissionMode must be ask, auto_allow, or deny");
+    }
+    state.record.permissionMode = mode;
+    state.record.updatedAt = Date.now();
+    this.persistSoon();
+    return { sessionId: state.record.id, permissionMode: mode };
+  }
+
+  private contextWindowTokens(): number {
+    return Number(getPref("contextWindowTokens")) || 32_768;
+  }
+
+  private maxHistoryChars(): number {
+    return Math.min(80_000, Math.floor(this.contextWindowTokens() * 3));
+  }
+
+  private sessionContext(sessionId: string): SessionContextStats {
+    const state = this.requireSession(sessionId);
+    const chars = estimateChars(state.messages);
+    const windowTokens = this.contextWindowTokens();
+    const tokensEstimate = Math.ceil(chars / 4);
+    return {
+      sessionId,
+      chars,
+      messages: state.messages.length,
+      tokensEstimate,
+      maxChars: this.maxHistoryChars(),
+      contextWindowTokens: windowTokens,
+      percent: Math.min(
+        100,
+        Math.round((tokensEstimate / windowTokens) * 100),
+      ),
+    };
+  }
+
+  /** Compact the session's history now; returns fresh context stats. */
+  private async sessionCompact(
+    sessionId: string,
+  ): Promise<SessionContextStats> {
+    const state = this.requireSession(sessionId);
+    const apiKey = String(getPref("apiKey") || "");
+    if (!apiKey) {
+      throw new Error(
+        "Model not configured — click the ⚙ Settings button first.",
+      );
+    }
+    const effortRaw = String(getPref("reasoningEffort") || "auto");
+    const adapter = new OpenAICompatibleAdapter({
+      apiKey,
+      baseUrl: String(getPref("baseUrl") || ""),
+      model: String(getPref("model") || ""),
+      maxTokens: Number(getPref("maxTokens") || 0) || undefined,
+      stream: false,
+      reasoningEffort: isReasoningEffort(effortRaw) ? effortRaw : "auto",
+    });
+    const maxChars = this.maxHistoryChars();
+    const result = await compactHistory(adapter, state.messages, maxChars);
+    if (result.compacted) {
+      state.messages = result.messages;
+      this.persistSoon();
+    }
+    return this.sessionContext(sessionId);
   }
 
   private sessionNew(params: Record<string, unknown>): SessionRecord {
@@ -531,12 +625,14 @@ export class AgentHost {
     };
 
     const streamEnabled = getPref("streamResponses") !== false;
+    const effortRaw = String(getPref("reasoningEffort") || "auto");
     const adapter = new OpenAICompatibleAdapter({
       apiKey,
       baseUrl,
       model,
       maxTokens: Number(getPref("maxTokens") || 0) || undefined,
       stream: streamEnabled,
+      reasoningEffort: isReasoningEffort(effortRaw) ? effortRaw : "auto",
       onTextDelta: (delta) => emit("text_delta", { text: delta }),
       onReasoningDelta: (delta) => emit("reasoning_delta", { text: delta }),
     });
@@ -561,7 +657,14 @@ export class AgentHost {
           if (!gated) {
             return "auto_allow";
           }
-          return state.sessionGrants.has(toolName) || alwaysAllowed.has(toolName)
+          if (state.record.permissionMode === "deny") {
+            return "deny";
+          }
+          if (state.record.permissionMode === "auto_allow") {
+            return "auto_allow";
+          }
+          return state.sessionGrants.has(toolName) ||
+            alwaysAllowed.has(toolName)
             ? "auto_allow"
             : "ask";
         },
@@ -632,11 +735,11 @@ export class AgentHost {
       state.messages = result.messages;
     }
     try {
-      if (estimateChars(state.messages) > MAX_HISTORY_CHARS) {
+      if (estimateChars(state.messages) > this.maxHistoryChars()) {
         const compacted = await compactHistory(
           quietAdapter,
           state.messages,
-          MAX_HISTORY_CHARS,
+          this.maxHistoryChars(),
         );
         if (compacted.compacted) {
           state.messages = compacted.messages;

@@ -18,6 +18,8 @@ declare namespace _ZoteroTypes {
       "streamResponses": boolean;
       "memoryAutoExtract": boolean;
       "alwaysAllowedTools": string;
+      "reasoningEffort": string;
+      "contextWindowTokens": number;
     };
   }
 }

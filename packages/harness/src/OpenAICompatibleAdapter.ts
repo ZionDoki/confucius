@@ -7,6 +7,8 @@ import type {
   ModelUsage,
 } from "./ModelAdapter";
 
+import type { ReasoningEffort } from "@confucius/protocol";
+
 export type ApiStyle = "openai" | "ollama";
 
 export interface OpenAICompatibleConfig {
@@ -23,6 +25,12 @@ export interface OpenAICompatibleConfig {
    * baseUrl whose path ends with /api/chat.
    */
   apiStyle?: ApiStyle;
+  /**
+   * Thinking budget. "auto" sends nothing (server default); "off" maps to
+   * Ollama think:false (OpenAI has no off switch, so it is omitted there);
+   * low/medium/high map to reasoning_effort / think respectively.
+   */
+  reasoningEffort?: ReasoningEffort;
   /** Called incrementally while streaming (also works for reasoning). */
   onTextDelta?: (text: string) => void;
   onReasoningDelta?: (text: string) => void;
@@ -138,6 +146,10 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     if (this.config.maxTokens && this.config.maxTokens > 0) {
       body.max_tokens = this.config.maxTokens;
     }
+    const effort = this.config.reasoningEffort;
+    if (effort && effort !== "auto" && effort !== "off") {
+      body.reasoning_effort = effort;
+    }
     if (request.tools && request.tools.length > 0) {
       body.tools = request.tools.map((tool) => ({
         type: "function",
@@ -162,6 +174,10 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     };
     if (this.config.maxTokens && this.config.maxTokens > 0) {
       body.options = { num_predict: this.config.maxTokens };
+    }
+    const effort = this.config.reasoningEffort;
+    if (effort && effort !== "auto") {
+      body.think = effort === "off" ? false : effort;
     }
     if (request.tools && request.tools.length > 0) {
       body.tools = request.tools.map((tool) => ({

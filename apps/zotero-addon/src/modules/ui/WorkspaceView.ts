@@ -46,6 +46,8 @@ type ModelConfig = {
   maxTokens: number;
   streamResponses: boolean;
   memoryAutoExtract: boolean;
+  reasoningEffort: "auto" | "off" | "low" | "medium" | "high";
+  contextWindowTokens: number;
   hasApiKey: boolean;
 };
 
@@ -132,6 +134,81 @@ function button(doc: Document, id: string, label: string): HTMLElement {
   );
   node.textContent = label;
   return node;
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/**
+ * Circular context-usage indicator for the composer. update() takes a 0..100
+ * fill and a tooltip label like "8.2k / 32k tokens".
+ */
+function buildContextRing(doc: Document): {
+  node: HTMLElement;
+  update: (percent: number, label: string) => void;
+} {
+  const size = 30;
+  const stroke = 3;
+  const radius = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const node = el(
+    doc,
+    "div",
+    {
+      position: "relative",
+      width: `${size}px`,
+      height: `${size}px`,
+      flex: "0 0 auto",
+      cursor: "pointer",
+      margin: "0 2px",
+    },
+    { id: "confucius-context-ring", title: "Context usage — click to compact" },
+  ) as HTMLElement;
+  const svg = doc.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("width", String(size));
+  svg.setAttribute("height", String(size));
+  const bg = doc.createElementNS(SVG_NS, "circle");
+  bg.setAttribute("cx", String(size / 2));
+  bg.setAttribute("cy", String(size / 2));
+  bg.setAttribute("r", String(radius));
+  bg.setAttribute("fill", "none");
+  bg.setAttribute("stroke", "#c4bdb3");
+  bg.setAttribute("stroke-width", String(stroke));
+  const fg = doc.createElementNS(SVG_NS, "circle");
+  fg.setAttribute("cx", String(size / 2));
+  fg.setAttribute("cy", String(size / 2));
+  fg.setAttribute("r", String(radius));
+  fg.setAttribute("fill", "none");
+  fg.setAttribute("stroke", "#2f5d45");
+  fg.setAttribute("stroke-width", String(stroke));
+  fg.setAttribute("stroke-linecap", "round");
+  fg.setAttribute("transform", `rotate(-90 ${size / 2} ${size / 2})`);
+  const text = doc.createElementNS(SVG_NS, "text");
+  text.setAttribute("x", "50%");
+  text.setAttribute("y", "54%");
+  text.setAttribute("text-anchor", "middle");
+  text.setAttribute("dominant-baseline", "middle");
+  text.setAttribute("font-size", "9");
+  text.setAttribute("fill", "#1c1917");
+  text.textContent = "0%";
+  svg.appendChild(bg);
+  svg.appendChild(fg);
+  svg.appendChild(text);
+  node.appendChild(svg);
+
+  const update = (percent: number, label: string) => {
+    const clamped = Math.max(0, Math.min(100, percent));
+    fg.setAttribute(
+      "stroke-dasharray",
+      `${(clamped / 100) * circumference} ${circumference}`,
+    );
+    fg.setAttribute(
+      "stroke",
+      clamped >= 90 ? "#b42318" : clamped >= 70 ? "#c07f0a" : "#2f5d45",
+    );
+    text.textContent = `${Math.round(clamped)}%`;
+    node.setAttribute("title", `${label} — click to compact`);
+  };
+  return { node, update };
 }
 
 function requireDocument(root: HTMLElement): Document {
@@ -242,6 +319,15 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
     sendError: "",
     sending: false,
     config: null as ModelConfig | null,
+    running: false,
+    permission: "ask" as "ask" | "auto_allow" | "deny",
+    contextStats: null as
+      | {
+          tokensEstimate: number;
+          contextWindowTokens: number;
+          percent: number;
+        }
+      | null,
   };
 
   const topbar = el(doc, "div", {
@@ -272,8 +358,7 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
     getString("workspace-new-session"),
   );
   const modeBtn = button(doc, "confucius-mode", "Agent");
-  modeBtn.style.background = "#6b645b";
-  modeBtn.style.border = "1px solid #57514a";
+  modeBtn.style.display = "none";
   const settingsBtn = el(
     doc,
     "button",
@@ -290,29 +375,10 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
     { id: "confucius-settings", type: "button", title: "Model settings" },
   );
   settingsBtn.textContent = "⚙";
-  const skillSelect = el(
-    doc,
-    "select",
-    {
-      minWidth: "180px",
-      height: "32px",
-      border: "1px solid #c4bdb3",
-      borderRadius: "6px",
-      background: "#ffffff",
-      color: "#1c1917",
-      padding: "0 8px",
-    },
-    { id: "confucius-skill" },
-  ) as HTMLSelectElement;
-  const emptySkill = el(doc, "option", undefined, { value: "" });
-  emptySkill.textContent = getString("workspace-no-skill");
-  skillSelect.appendChild(emptySkill);
   topbar.appendChild(brand);
   topbar.appendChild(status);
   topbar.appendChild(newSessionBtn);
-  topbar.appendChild(modeBtn);
   topbar.appendChild(settingsBtn);
-  topbar.appendChild(skillSelect);
 
   const columns = el(doc, "div", {
     display: "flex",
@@ -386,7 +452,34 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
   const sendBtn = button(doc, "confucius-send", getString("workspace-send"));
   sendBtn.setAttribute("type", "submit");
   const stopBtn = button(doc, "confucius-stop", getString("workspace-stop"));
+  stopBtn.style.display = "none";
+  stopBtn.style.background = "#8a5a12";
+  stopBtn.style.border = "1px solid #6f470e";
+
+  const plusBtn = el(
+    doc,
+    "button",
+    {
+      flex: "0 0 auto",
+      background: "#6b645b",
+      color: "#f6f3ec",
+      border: "1px solid #57514a",
+      borderRadius: "6px",
+      width: "40px",
+      height: "40px",
+      cursor: "pointer",
+      font: "inherit",
+      fontSize: "18px",
+    },
+    { id: "confucius-plus", type: "button", title: "Mode, skills, model" },
+  );
+  plusBtn.textContent = "+";
+
+  const contextRing = buildContextRing(doc);
+
+  composer.appendChild(plusBtn);
   composer.appendChild(prompt);
+  composer.appendChild(contextRing.node);
   composer.appendChild(sendBtn);
   composer.appendChild(stopBtn);
 
@@ -464,8 +557,15 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
             })) as { skillSlug?: string; mode?: string };
             state.skillSlug = loaded.skillSlug || state.skillSlug;
             state.mode = loaded.mode === "plan" ? "plan" : "agent";
+            state.permission =
+              (loaded as { permissionMode?: string }).permissionMode ===
+              "auto_allow"
+                ? "auto_allow"
+                : (loaded as { permissionMode?: string }).permissionMode ===
+                    "deny"
+                  ? "deny"
+                  : "ask";
             syncModeButton();
-            skillSelect.value = state.skillSlug;
             const bundle = (await rpc("session/events", {
               sessionId: item.id,
             })) as { events?: ConfuciusEvent[] };
@@ -767,9 +867,6 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
         state.events = [];
         state.lastEventId = null;
       }
-      if (skillSelect.value && skillSelect.value !== state.skillSlug) {
-        state.skillSlug = skillSelect.value;
-      }
       if (state.skillSlug) {
         await rpc("skill/activate", {
           sessionId: state.sessionId,
@@ -781,6 +878,8 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
       renderLists();
       await rpc("session/prompt", { sessionId: state.sessionId, text });
       state.pendingUserText = "";
+      state.running = true;
+      updateRunningUI();
       await refreshSessions();
       const bundle = (await rpc("session/events", {
         sessionId: state.sessionId,
@@ -801,6 +900,7 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
     } finally {
       state.sending = false;
       sendBtn.removeAttribute("disabled");
+      updateRunningUI();
     }
   }
 
@@ -919,6 +1019,39 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
       panel.appendChild(row);
       return input;
     };
+    field("Context window (tokens, for the usage ring and compaction)", "confucius-cfg-contextWindowTokens", String(config?.contextWindowTokens ?? 32768), "number");
+    const effortRow = el(doc, "div", { marginBottom: "10px" });
+    const effortLabel = el(doc, "label", {
+      display: "block",
+      fontSize: "11px",
+      color: "#6b645b",
+      marginBottom: "3px",
+    });
+    effortLabel.textContent = "Thinking effort";
+    const effortSelect = el(
+      doc,
+      "select",
+      {
+        display: "block",
+        width: "100%",
+        boxSizing: "border-box",
+        height: "32px",
+        border: "1px solid #c4bdb3",
+        borderRadius: "6px",
+        background: "#ffffff",
+        font: "inherit",
+      },
+      { id: "confucius-cfg-effort" },
+    ) as HTMLSelectElement;
+    for (const effort of ["auto", "off", "low", "medium", "high"]) {
+      const option_ = el(doc, "option", undefined, { value: effort });
+      option_.textContent = effort;
+      effortSelect.appendChild(option_);
+    }
+    effortSelect.value = config?.reasoningEffort ?? "auto";
+    effortRow.appendChild(effortLabel);
+    effortRow.appendChild(effortSelect);
+    panel.appendChild(effortRow);
     const stream = check("Stream model output live", "confucius-cfg-stream", config?.streamResponses !== false);
     const extract = check("Extract memories after each turn", "confucius-cfg-memory", config?.memoryAutoExtract !== false);
 
@@ -955,6 +1088,9 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
             apiKey: value("confucius-cfg-apiKey"),
             model: value("confucius-cfg-model"),
             maxTokens: Number(value("confucius-cfg-maxTokens")) || 0,
+            contextWindowTokens:
+              Number(value("confucius-cfg-contextWindowTokens")) || 32768,
+            reasoningEffort: effortSelect.value,
             streamResponses: stream.checked,
             memoryAutoExtract: extract.checked,
           })) as ModelConfig;
@@ -985,6 +1121,401 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
     }
   }
 
+
+  interface SlashCommand {
+    label: string;
+    description: string;
+    run: () => void | Promise<void>;
+  }
+
+  const slashState = {
+    open: false,
+    items: [] as SlashCommand[],
+    index: 0,
+  };
+
+  function slashCommands(): SlashCommand[] {
+    const commands: SlashCommand[] = [
+      {
+        label: "/agent",
+        description: getString("workspace-cmd-agent"),
+        run: () => applyMode("agent"),
+      },
+      {
+        label: "/plan",
+        description: getString("workspace-cmd-plan"),
+        run: () => applyMode("plan"),
+      },
+      {
+        label: "/ask",
+        description: getString("workspace-cmd-ask"),
+        run: () => applyPermission("ask"),
+      },
+      {
+        label: "/auto",
+        description: getString("workspace-cmd-auto"),
+        run: () => applyPermission("auto_allow"),
+      },
+      {
+        label: "/deny-writes",
+        description: getString("workspace-cmd-deny"),
+        run: () => applyPermission("deny"),
+      },
+      {
+        label: "/model",
+        description: getString("workspace-cmd-model"),
+        run: () => void refreshConfig().then(() => openSettings()),
+      },
+      {
+        label: "/compact",
+        description: getString("workspace-cmd-compact"),
+        run: () => void compactNow(),
+      },
+    ];
+    for (const skill of state.skills) {
+      commands.push({
+        label: `/${skill.slug}`,
+        description: skill.name,
+        run: () => applySkill(skill.slug),
+      });
+    }
+    return commands;
+  }
+
+  function applyMode(mode: "agent" | "plan"): void {
+    state.mode = mode;
+    syncModeButton();
+    if (state.sessionId) {
+      void rpc("session/setMode", { sessionId: state.sessionId, mode });
+    }
+  }
+
+  function applyPermission(mode: "ask" | "auto_allow" | "deny"): void {
+    state.permission = mode;
+    if (state.sessionId) {
+      void rpc("session/setPermissions", {
+        sessionId: state.sessionId,
+        permissionMode: mode,
+      });
+    }
+  }
+
+  function applySkill(slug: string): void {
+    state.skillSlug = state.skillSlug === slug ? "" : slug;
+    if (state.sessionId) {
+      void rpc("skill/activate", {
+        sessionId: state.sessionId,
+        slug: state.skillSlug || null,
+      });
+    }
+  }
+
+  async function compactNow(): Promise<void> {
+    if (!state.sessionId) {
+      return;
+    }
+    try {
+      status.style.color = "#8a5a12";
+      status.textContent = getString("workspace-compacting");
+      const stats = (await rpc("session/compact", {
+        sessionId: state.sessionId,
+      })) as { percent: number; tokensEstimate: number; contextWindowTokens: number };
+      state.contextStats = stats;
+      contextRing.update(stats.percent, ringLabel(stats));
+    } catch (error) {
+      status.style.color = "#b42318";
+      status.textContent =
+        error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  function ringLabel(stats: {
+    tokensEstimate: number;
+    contextWindowTokens: number;
+  }): string {
+    return `${fmtTokens(stats.tokensEstimate)} / ${fmtTokens(stats.contextWindowTokens)} tokens`;
+  }
+
+  function fmtTokens(value: number): string {
+    return value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(value);
+  }
+
+  function updateSlashMenu(value: string): void {
+    if (!value.startsWith("/")) {
+      closeSlashMenu();
+      return;
+    }
+    const query = value.slice(1).toLowerCase();
+    slashState.items = slashCommands().filter((command) =>
+      command.label.slice(1).toLowerCase().includes(query),
+    );
+    if (slashState.items.length === 0) {
+      closeSlashMenu();
+      return;
+    }
+    slashState.open = true;
+    slashState.index = 0;
+    renderSlashMenu();
+  }
+
+  function closeSlashMenu(): void {
+    slashState.open = false;
+    slashState.items = [];
+    doc.getElementById("confucius-slash-menu")?.remove();
+  }
+
+  function renderSlashMenu(): void {
+    doc.getElementById("confucius-slash-menu")?.remove();
+    if (!slashState.open) {
+      return;
+    }
+    const menu = el(
+      doc,
+      "div",
+      {
+        position: "absolute",
+        left: "60px",
+        right: "220px",
+        bottom: "76px",
+        background: "#ffffff",
+        border: "1px solid #c4bdb3",
+        borderRadius: "8px",
+        boxShadow: "0 6px 18px rgba(28,25,23,0.18)",
+        maxHeight: "260px",
+        overflow: "auto",
+        zIndex: "900",
+      },
+      { id: "confucius-slash-menu" },
+    );
+    slashState.items.forEach((command, index) => {
+      const row = el(doc, "div", {
+        display: "flex",
+        justifyContent: "space-between",
+        gap: "12px",
+        padding: "7px 10px",
+        cursor: "pointer",
+        background: index === slashState.index ? "#e4ddd0" : "transparent",
+      });
+      const label = el(doc, "span", { fontWeight: "600" });
+      label.textContent = command.label;
+      const hint = el(doc, "span", { color: "#6b645b", fontSize: "12px" });
+      hint.textContent = command.description;
+      row.appendChild(label);
+      row.appendChild(hint);
+      row.addEventListener("click", () => {
+        slashState.index = index;
+        runSlashSelection();
+      });
+      menu.appendChild(row);
+    });
+    (doc.body ?? doc.documentElement)?.appendChild(menu);
+  }
+
+  function runSlashSelection(): void {
+    const command = slashState.items[slashState.index];
+    closeSlashMenu();
+    prompt.value = "";
+    if (command) {
+      void command.run();
+    }
+  }
+
+  function togglePlusMenu(): void {
+    const existing = doc.getElementById("confucius-plus-menu");
+    if (existing) {
+      existing.remove();
+      return;
+    }
+    const menu = el(
+      doc,
+      "div",
+      {
+        position: "absolute",
+        left: "14px",
+        bottom: "76px",
+        width: "300px",
+        background: "#ffffff",
+        border: "1px solid #c4bdb3",
+        borderRadius: "8px",
+        boxShadow: "0 6px 18px rgba(28,25,23,0.18)",
+        padding: "10px 12px",
+        zIndex: "900",
+      },
+      { id: "confucius-plus-menu" },
+    );
+
+    const section = (title: string) => {
+      const label = el(doc, "div", {
+        fontSize: "11px",
+        color: "#6b645b",
+        margin: "8px 0 4px",
+        textTransform: "uppercase" as const,
+        letterSpacing: "0.08em",
+      });
+      label.textContent = title;
+      menu.appendChild(label);
+    };
+    const option = (
+      label: string,
+      active: boolean,
+      onClick: () => void,
+    ) => {
+      const row = el(doc, "div", {
+        padding: "5px 8px",
+        borderRadius: "6px",
+        cursor: "pointer",
+        display: "flex",
+        justifyContent: "space-between",
+        background: active ? "#e4ddd0" : "transparent",
+      });
+      const text = el(doc, "span");
+      text.textContent = label;
+      row.appendChild(text);
+      if (active) {
+        const mark = el(doc, "span", { color: "#2f5d45", fontWeight: "700" });
+        mark.textContent = "✓";
+        row.appendChild(mark);
+      }
+      row.addEventListener("click", onClick);
+      menu.appendChild(row);
+    };
+
+    section(getString("workspace-mode"));
+    option("Agent", state.mode === "agent", () => {
+      applyMode("agent");
+      togglePlusMenu();
+    });
+    option("Plan (read-only)", state.mode === "plan", () => {
+      applyMode("plan");
+      togglePlusMenu();
+    });
+
+    section(getString("workspace-permissions"));
+    option(
+      getString("workspace-perm-ask"),
+      state.permission === "ask",
+      () => {
+        applyPermission("ask");
+        togglePlusMenu();
+      },
+    );
+    option(
+      getString("workspace-perm-auto"),
+      state.permission === "auto_allow",
+      () => {
+        applyPermission("auto_allow");
+        togglePlusMenu();
+      },
+    );
+    option(
+      getString("workspace-perm-deny"),
+      state.permission === "deny",
+      () => {
+        applyPermission("deny");
+        togglePlusMenu();
+      },
+    );
+
+    section(getString("workspace-no-skill"));
+    option(getString("workspace-skill-none"), state.skillSlug === "", () => {
+      applySkill("");
+      togglePlusMenu();
+    });
+    for (const skill of state.skills) {
+      option(
+        skill.name,
+        state.skillSlug === skill.slug,
+        () => {
+          applySkill(skill.slug);
+          togglePlusMenu();
+        },
+      );
+    }
+
+    section(getString("workspace-model"));
+    const modelRow = el(doc, "div", {
+      display: "flex",
+      gap: "6px",
+      alignItems: "center",
+    });
+    const modelName = el(doc, "span", {
+      flex: "1 1 auto",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+    });
+    modelName.textContent = state.config?.model || "—";
+    const effortSelect = el(
+      doc,
+      "select",
+      {
+        height: "28px",
+        border: "1px solid #c4bdb3",
+        borderRadius: "6px",
+        background: "#ffffff",
+        font: "inherit",
+      },
+      { id: "confucius-effort" },
+    ) as HTMLSelectElement;
+    for (const effort of ["auto", "off", "low", "medium", "high"]) {
+      const option_ = el(doc, "option", undefined, { value: effort });
+      option_.textContent = effort;
+      effortSelect.appendChild(option_);
+    }
+    effortSelect.value = state.config?.reasoningEffort ?? "auto";
+    effortSelect.addEventListener("change", () => {
+      void (async () => {
+        try {
+          state.config = (await rpc("config/set", {
+            reasoningEffort: effortSelect.value,
+          })) as ModelConfig;
+        } catch {
+          /* keep old value */
+        }
+      })();
+    });
+    const modelBtn = button(doc, "", "⚙");
+    modelBtn.style.minHeight = "28px";
+    modelBtn.style.padding = "2px 8px";
+    modelBtn.addEventListener("click", () => {
+      menu.remove();
+      void refreshConfig().then(() => openSettings());
+    });
+    modelRow.appendChild(modelName);
+    modelRow.appendChild(effortSelect);
+    modelRow.appendChild(modelBtn);
+    menu.appendChild(modelRow);
+
+    menu.addEventListener("click", (event) => {
+      if (event.target === menu) {
+        menu.remove();
+      }
+    });
+    (doc.body ?? doc.documentElement)?.appendChild(menu);
+  }
+
+  function isRunningFromEvents(events: ConfuciusEvent[]): boolean {
+    let running = false;
+    for (const event of events) {
+      if (event.type === "turn_started") {
+        running = true;
+      } else if (
+        event.type === "turn_completed" ||
+        event.type === "turn_failed" ||
+        event.type === "turn_aborted"
+      ) {
+        running = false;
+      }
+    }
+    return running;
+  }
+
+  function updateRunningUI(): void {
+    const working = state.running || state.sending;
+    sendBtn.style.display = working ? "none" : "";
+    stopBtn.style.display = working ? "" : "none";
+  }
+
   async function poll(): Promise<void> {
     try {
       if (!state.config) {
@@ -996,19 +1527,6 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
           skills?: ConfuciusSkill[];
         };
         state.skills = listed.skills || [];
-        skillSelect.textContent = "";
-        const none = el(doc, "option", undefined, { value: "" });
-        none.textContent = getString("workspace-no-skill");
-        skillSelect.appendChild(none);
-        for (const skill of state.skills) {
-          const option = el(doc, "option", undefined, { value: skill.slug });
-          option.textContent = skill.name;
-          if (skill.slug === state.skillSlug) {
-            option.setAttribute("selected", "true");
-          }
-          skillSelect.appendChild(option);
-        }
-        skillSelect.value = state.skillSlug;
       }
       await refreshSessions();
       await refreshMemories();
@@ -1033,6 +1551,24 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
           )
         ) {
           await refreshMemories();
+        }
+        const wasRunning = state.running;
+        state.running = isRunningFromEvents(state.events);
+        if (wasRunning !== state.running) {
+          updateRunningUI();
+        }
+        try {
+          const stats = (await rpc("session/context", {
+            sessionId: state.sessionId,
+          })) as {
+            tokensEstimate: number;
+            contextWindowTokens: number;
+            percent: number;
+          };
+          state.contextStats = stats;
+          contextRing.update(stats.percent, ringLabel(stats));
+        } catch {
+          /* stats are cosmetic */
         }
       }
       renderLists();
@@ -1062,21 +1598,12 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
   settingsBtn.addEventListener("click", () => {
     void refreshConfig().then(() => openSettings());
   });
-  modeBtn.addEventListener("click", () => {
-    void (async () => {
-      if (!state.sessionId) {
-        return;
-      }
-      state.mode = state.mode === "plan" ? "agent" : "plan";
-      syncModeButton();
-      await rpc("session/setMode", {
-        sessionId: state.sessionId,
-        mode: state.mode,
-      });
-    })();
-  });
   composer.addEventListener("submit", (event) => {
     event.preventDefault();
+    if (slashState.open) {
+      runSlashSelection();
+      return;
+    }
     void sendPrompt();
   });
   sendBtn.addEventListener("click", (event) => {
@@ -1085,22 +1612,37 @@ function bindWorkspace(root: HTMLElement, host: WorkspaceHost | null): void {
   });
   stopBtn.addEventListener("click", () => {
     if (state.sessionId) {
-      void rpc("session/abort", { sessionId: state.sessionId });
-    }
-  });
-  prompt.addEventListener("keydown", (event) => {
-    if ((event as KeyboardEvent).key === "Enter") {
-      event.preventDefault();
-      void sendPrompt();
-    }
-  });
-  skillSelect.addEventListener("change", () => {
-    state.skillSlug = skillSelect.value;
-    if (state.sessionId) {
-      void rpc("skill/activate", {
-        sessionId: state.sessionId,
-        slug: state.skillSlug || null,
+      void rpc("session/abort", { sessionId: state.sessionId }).then(() => {
+        state.running = false;
+        updateRunningUI();
       });
+    }
+  });
+  plusBtn.addEventListener("click", () => togglePlusMenu());
+  contextRing.node.addEventListener("click", () => void compactNow());
+  prompt.addEventListener("input", () => updateSlashMenu(prompt.value));
+  prompt.addEventListener("keydown", (event) => {
+    const key = (event as KeyboardEvent).key;
+    if (slashState.open && (key === "ArrowDown" || key === "ArrowUp")) {
+      event.preventDefault();
+      slashState.index +=
+        key === "ArrowDown" ? 1 : -1 + slashState.items.length * 2;
+      slashState.index %= slashState.items.length;
+      renderSlashMenu();
+      return;
+    }
+    if (key === "Escape" && slashState.open) {
+      event.preventDefault();
+      closeSlashMenu();
+      return;
+    }
+    if (key === "Enter") {
+      event.preventDefault();
+      if (slashState.open) {
+        runSlashSelection();
+        return;
+      }
+      void sendPrompt();
     }
   });
 

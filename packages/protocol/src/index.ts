@@ -75,6 +75,7 @@ export type {
 } from "./events";
 
 export { RPC_METHODS, validateConfigPatch } from "./rpc";
+export { isReasoningEffort, REASONING_EFFORTS } from "./rpc";
 export type {
   ConfigSetParams,
   ConfigValidation,
@@ -87,13 +88,16 @@ export type {
   MemorySaveParams,
   MemorySearchParams,
   ModelConfigView,
+  ReasoningEffort,
   RpcMethod,
+  SessionContextStats,
   SessionIdParams,
   SessionListResult,
   SessionNewParams,
   SessionPromptParams,
   SessionSetContextParams,
   SessionSetModeParams,
+  SessionSetPermissionsParams,
   SessionEventsParams,
   SkillActivateParams,
 } from "./rpc";
