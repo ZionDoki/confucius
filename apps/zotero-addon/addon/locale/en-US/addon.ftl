@@ -65,6 +65,7 @@ confucius-workspace-ctx-open = Open in reader
 confucius-workspace-ctx-remove = Remove selection context
 confucius-workspace-locate = ⌖ Locate
 confucius-workspace-note-propose = Write note
+confucius-workspace-approval-params = Parameters
 confucius-itemmenu-deep-read = Confucius · Deep-read this paper
 confucius-itemmenu-triage = Confucius · Triage selected
 confucius-reader-entry-tooltip = Open the Confucius workspace

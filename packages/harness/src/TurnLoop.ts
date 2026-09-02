@@ -49,6 +49,14 @@ export interface TurnLoopDeps {
   ids: IdFactory;
   now: Clock;
   systemPrompt?: string;
+  /**
+   * Optional host-side one-liner naming the object a tool call acts on;
+   * stamped onto approval_required requests for the UI's default view.
+   */
+  describeCall?: (
+    toolName: string,
+    args: Record<string, unknown>,
+  ) => string | undefined;
 }
 
 export class TurnLoop {
@@ -188,6 +196,9 @@ export class TurnLoop {
         toolName: call.name,
         args: call.args,
         onRequest: (request) => {
+          request.summary =
+            this.deps.describeCall?.(request.toolName, request.args) ??
+            request.summary;
           this.emit(input, "approval_required", { request });
         },
       });

@@ -182,6 +182,42 @@ test("pending approvals render as timeline cards", () => {
   assert.equal(view.includes("reviewPane"), false);
 });
 
+test("approval cards show tool + object summary, args behind a toggle", () => {
+  const view = readFileSync(
+    join(root, "src/modules/ui/WorkspaceView.ts"),
+    "utf8",
+  );
+  const host = readFileSync(
+    join(root, "src/modules/host/AgentHost.ts"),
+    "utf8",
+  );
+  const summary = readFileSync(
+    join(root, "src/modules/tools/approvalSummary.ts"),
+    "utf8",
+  );
+  const enFtl = readFileSync(
+    join(root, "addon/locale/en-US/addon.ftl"),
+    "utf8",
+  );
+  const zhFtl = readFileSync(
+    join(root, "addon/locale/zh-CN/addon.ftl"),
+    "utf8",
+  );
+
+  // The card renders the summary line and hides raw args by default.
+  assert.equal(view.includes("item.summary"), true);
+  assert.equal(view.includes('getString("workspace-approval-params")'), true);
+  assert.equal(view.includes("paramsOpen = false"), true);
+  assert.equal(view.includes("paramsToggle.nextSibling"), true);
+
+  // The host stamps a human summary (resolved titles, not bare keys).
+  assert.equal(host.includes("describeApprovalCall"), true);
+  assert.equal(host.includes("describeCall: this.describeApprovalCall"), true);
+  assert.equal(summary.includes("describeCallForApproval"), true);
+  assert.equal(enFtl.includes("confucius-workspace-approval-params"), true);
+  assert.equal(zhFtl.includes("confucius-workspace-approval-params"), true);
+});
+
 test("permission changes are committed before prompts and gate auto memory", () => {
   const view = readFileSync(
     join(root, "src/modules/ui/WorkspaceView.ts"),

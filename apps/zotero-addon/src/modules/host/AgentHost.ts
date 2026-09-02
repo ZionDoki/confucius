@@ -87,6 +87,10 @@ import {
   findPdf,
   liveReaderContext,
 } from "../tools/ZoteroToolHost";
+import {
+  describeCallForApproval,
+  type SummaryItemLike,
+} from "../tools/approvalSummary";
 import { McpToolProvider } from "./McpToolProvider";
 import {
   ConfuciusMemoryToolProvider,
@@ -789,6 +793,45 @@ export class AgentHost {
     return { ok: true };
   }
 
+  /**
+   * Approval summaries: resolve the item a call acts on into a display
+   * title so the card reads "tool + object" instead of raw JSON or keys.
+   */
+  private readonly describeApprovalCall = (
+    toolName: string,
+    args: Record<string, unknown>,
+  ): string | undefined =>
+    describeCallForApproval(toolName, args, (libraryID, key) =>
+      this.summaryTitle(libraryID, key),
+    );
+
+  private summaryTitle(libraryID: number, key: string): SummaryItemLike | null {
+    try {
+      const item = Zotero.Items.getByLibraryAndKey(libraryID, key);
+      if (!item) {
+        return null;
+      }
+      if (item.isAttachment?.() || item.isNote?.()) {
+        const parent = item.parentItemID
+          ? (Zotero.Items.get(item.parentItemID) as Zotero.Item | false)
+          : false;
+        const parentTitle = parent ? parent.getDisplayTitle?.() || "" : "";
+        const suffix = item.isAttachment?.()
+          ? item.attachmentContentType === "application/pdf"
+            ? " · PDF"
+            : " · attachment"
+          : " · note";
+        if (parentTitle) {
+          return { title: `${parentTitle}${suffix}` };
+        }
+      }
+      const title = item.getDisplayTitle?.() || item.getField?.("title") || "";
+      return title ? { title } : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** Entry points (item menu) queue a skill; the workspace poll consumes it. */
   queueLaunch(skillSlug: string): void {
     this.pendingLaunch = { skillSlug };
@@ -880,6 +923,7 @@ export class AgentHost {
       args,
       riskLevel: "write",
       createdAt: Date.now(),
+      summary: this.describeApprovalCall("propose_note", args),
     };
     this.emitSessionEvent(state, request.turnId, "approval_required", {
       request,
@@ -1230,6 +1274,7 @@ export class AgentHost {
       const loop = new TurnLoop({
         model: adapter,
         tools,
+        describeCall: this.describeApprovalCall,
         permissions: new PermissionGate({
           ids,
           now,

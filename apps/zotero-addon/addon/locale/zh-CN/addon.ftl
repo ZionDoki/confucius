@@ -65,6 +65,7 @@ confucius-workspace-ctx-open = 在阅读器中打开
 confucius-workspace-ctx-remove = 移除选区上下文
 confucius-workspace-locate = ⌖ 定位
 confucius-workspace-note-propose = 写入笔记
+confucius-workspace-approval-params = 参数
 confucius-itemmenu-deep-read = Confucius · 深读此文
 confucius-itemmenu-triage = Confucius · 整理所选
 confucius-reader-entry-tooltip = 打开 Confucius 工作区

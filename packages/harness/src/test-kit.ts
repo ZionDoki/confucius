@@ -35,6 +35,7 @@ export function createHarness(options: {
   maxToolCalls?: number;
   modeFor?: (toolName: string) => PermissionMode;
   resolve?: ConstructorParameters<typeof PermissionGate>[0]["resolve"];
+  describeCall?: ConstructorParameters<typeof TurnLoop>[0]["describeCall"];
 }) {
   const ids = createIdFactory("id");
   const now = createClock(1000);
@@ -108,6 +109,7 @@ export function createHarness(options: {
   const loop = new TurnLoop({
     model,
     tools,
+    describeCall: options.describeCall,
     permissions,
     budget,
     events,

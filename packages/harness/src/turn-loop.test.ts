@@ -48,6 +48,46 @@ describe("TurnLoop", () => {
     }
   });
 
+  it("stamps the host summary onto approval requests", async () => {
+    const { loop, events } = createHarness({
+      script: [
+        {
+          toolCalls: [
+            {
+              id: "call_create",
+              name: "create_collection",
+              args: { name: "RLHF" },
+            },
+          ],
+        },
+        { text: "Created." },
+      ],
+      describeCall: (toolName, args) =>
+        toolName === "create_collection"
+          ? `collection:${String(args.name)}`
+          : undefined,
+      resolve: (request) => ({
+        id: request.id,
+        verdict: "allow",
+        scope: "once",
+      }),
+    });
+
+    await loop.run({
+      session: session(),
+      turnId: "turn_summary",
+      userText: "Make a collection named RLHF",
+    });
+
+    const approval = events.events.find(
+      (event) => event.type === "approval_required",
+    );
+    assert.equal(approval?.type, "approval_required");
+    if (approval?.type === "approval_required") {
+      assert.equal(approval.payload.request.summary, "collection:RLHF");
+    }
+  });
+
   it("asks before a write and records structured deny", async () => {
     const { loop, events } = createHarness({
       script: [

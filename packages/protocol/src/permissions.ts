@@ -14,6 +14,12 @@ export interface ApprovalRequest {
   args: Record<string, unknown>;
   riskLevel: ToolRiskLevel;
   createdAt: number;
+  /**
+   * Host-side human-readable one-liner naming the object the call acts on
+   * (a title, query, or name — not raw JSON or a bare item key). The
+   * approval card shows this by default; raw args stay behind a toggle.
+   */
+  summary?: string;
 }
 
 export interface ApprovalResolution {

@@ -49,6 +49,7 @@ type ApprovalRow = {
   id: string;
   toolName: string;
   args: Record<string, unknown>;
+  summary?: string;
 };
 
 type MemoryRow = {
@@ -2828,11 +2829,19 @@ function bindWorkspace(
       color: "#b05c2e",
     });
     name.textContent = item.toolName;
-    const pre = el(targetDoc, "pre", {
-      whiteSpace: "pre-wrap",
-      fontSize: "11px",
-    });
-    pre.textContent = JSON.stringify(item.args, null, 2);
+    // Default view: the tool plus the object it acts on. Raw args stay
+    // behind the params toggle below.
+    if (item.summary) {
+      const summary = el(targetDoc, "div", {
+        color: "#33302a",
+        fontSize: "0.95em",
+        lineHeight: "1.45",
+        margin: "2px 0 0",
+        overflowWrap: "anywhere",
+      });
+      summary.textContent = item.summary;
+      card.appendChild(summary);
+    }
     const actions = el(targetDoc, "div", {
       display: "flex",
       gap: "6px",
@@ -2866,7 +2875,38 @@ function bindWorkspace(
         }),
       );
     }
-    card.appendChild(pre);
+    const paramsToggle = button(
+      targetDoc,
+      "",
+      `${getString("workspace-approval-params")} ▸`,
+    );
+    paramsToggle.style.background = "transparent";
+    paramsToggle.style.border = "none";
+    paramsToggle.style.color = "#8a857c";
+    paramsToggle.style.fontSize = "11px";
+    paramsToggle.style.padding = "2px 0";
+    paramsToggle.style.marginTop = "4px";
+    paramsToggle.style.display = "block";
+    let paramsOpen = false;
+    let paramsPre: HTMLElement | null = null;
+    paramsToggle.addEventListener("click", () => {
+      paramsOpen = !paramsOpen;
+      paramsToggle.textContent = `${getString("workspace-approval-params")} ${
+        paramsOpen ? "▾" : "▸"
+      }`;
+      if (paramsOpen && !paramsPre) {
+        paramsPre = el(targetDoc, "pre", {
+          whiteSpace: "pre-wrap",
+          fontSize: "11px",
+          margin: "2px 0 0",
+        });
+        paramsPre.textContent = JSON.stringify(item.args, null, 2);
+        card.insertBefore(paramsPre, paramsToggle.nextSibling);
+      } else if (paramsPre) {
+        paramsPre.style.display = paramsOpen ? "" : "none";
+      }
+    });
+    card.appendChild(paramsToggle);
     card.appendChild(actions);
     return card;
   }
@@ -3105,6 +3145,7 @@ function bindWorkspace(
           id: request.id,
           toolName: request.toolName,
           args: request.args,
+          summary: request.summary,
         });
       }
       if (event.type === "approval_resolved") {
