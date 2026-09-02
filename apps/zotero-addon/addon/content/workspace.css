@@ -5,11 +5,12 @@ body {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: #1c2420;
-  color: #f4efe6;
+  background: #faf9f6;
+  color: #33302a;
   font:
-    13px/1.45 "Segoe UI",
-    "SF Pro Text",
+    13px/1.45 Inter,
+    "Segoe UI",
+    system-ui,
     sans-serif;
 }
 
@@ -20,8 +21,8 @@ body {
   width: 100%;
   height: 100%;
   box-sizing: border-box;
-  background: #1c2420;
-  color: #f4efe6;
+  background: #faf9f6;
+  color: #33302a;
 }
 
 .topbar {
@@ -30,23 +31,23 @@ body {
   gap: 12px;
   align-items: center;
   padding: 8px 14px;
-  border-bottom: 1px solid #2a3b33;
-  background: #151c18;
+  border-bottom: 1px solid #ddd8cc;
+  background: #faf9f6;
 }
 
 .topbar strong {
   font-size: 15px;
-  letter-spacing: 0.02em;
+  letter-spacing: -0.02em;
 }
 
 .topbar button,
 .review button,
 .composer button,
 .event button {
-  background: #2a4a3a;
-  color: #f4efe6;
-  border: 1px solid #3d5248;
-  border-radius: 6px;
+  background: #ffffff;
+  color: #33302a;
+  border: 1px solid #ddd8cc;
+  border-radius: 8px;
   padding: 6px 10px;
   cursor: pointer;
 }
@@ -54,63 +55,68 @@ body {
 .topbar select {
   height: 32px;
   min-width: 160px;
-  border: 1px solid #3d5248;
-  border-radius: 6px;
-  background: #1b2621;
-  color: #f4efe6;
+  border: 1px solid #ddd8cc;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #33302a;
   padding: 0 8px;
 }
 
 .pane {
   padding: 14px;
   overflow: auto;
-  border-right: 1px solid #2a3b33;
-  background: #1c2420;
+  border-right: 1px solid #e5e1d8;
+  background: #faf9f6;
 }
 
 .pane-review {
   border-right: none;
-  border-left: 1px solid #2a3b33;
-  background: #181f1b;
+  border-left: 1px solid #e5e1d8;
+  background: #f5f3ee;
 }
 
 .pane-label {
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #9db5a8;
+  color: #8a857c;
   margin-bottom: 10px;
 }
 
 .session {
   padding: 8px;
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
 }
 
-.session.active,
-.session:hover {
-  background: #24322c;
+.session.active {
+  background: #33302a;
+  color: #faf9f6;
+}
+
+.session:hover:not(.active) {
+  background: #efece4;
 }
 
 .event {
-  border: 1px solid #2a3b33;
+  border: 1px solid #e5e1d8;
   border-radius: 8px;
   padding: 8px 10px;
   margin-bottom: 8px;
-  background: #151c18;
+  background: #ffffff;
 }
 
 .event.tool {
-  border-color: #3d5248;
+  border-color: #ddd8cc;
+  background: #f5f3ee;
 }
 
 .event.approval {
-  border-color: #d4b46a;
+  border-color: #b05c2e;
 }
 
 .muted {
-  color: #9db5a8;
+  color: #8a857c;
 }
 
 pre {
@@ -118,7 +124,7 @@ pre {
   word-break: break-word;
   margin: 6px 0 0;
   font-size: 11px;
-  color: #c9d6cf;
+  color: #555046;
 }
 
 .composer {
@@ -127,29 +133,41 @@ pre {
   gap: 8px;
   align-items: center;
   padding: 12px 16px;
-  border-top: 1px solid #2a3b33;
-  background: #151c18;
+  border-top: 1px solid #ddd8cc;
+  background: #faf9f6;
 }
 
 .composer input,
 .composer select {
   flex: 1;
   height: 40px;
-  border: 1px solid #3d5248;
+  border: 1px solid #ddd8cc;
   border-radius: 8px;
-  background: #1b2621;
-  color: #f4efe6;
+  background: #ffffff;
+  color: #33302a;
   padding: 0 12px;
 }
 
 .status.ok {
-  color: #8fbf7a;
+  color: #5f8a5a;
 }
 
 .status.wait {
-  color: #d4b46a;
+  color: #8c6a3f;
 }
 
 .status.err {
-  color: #e08a7a;
+  color: #b3452f;
+}
+
+.confucius-kb-md-preview {
+  border: 1px solid #e7e3da;
+  border-radius: 8px;
+  background: #fbfaf7;
+  padding: 10px 12px;
+  margin-top: 6px;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 0.95em;
+  line-height: 1.5;
 }
