@@ -34,6 +34,20 @@ describe("renderMarkdownHtml", () => {
     assert.match(html, /\*\*nope\*\*/);
     assert.equal(html.includes("tui-math"), false);
   });
+
+  it("renders zotero links and blocks dangerous schemes", () => {
+    const html = renderMarkdownHtml(
+      "Read [paper](zotero://select/library/items/ABC123) and " +
+        "[ann](zotero://open-pdf/library/items/PDF9KEY?annotation=ANN1KEY) " +
+        "and [bad](javascript:alert(1)).",
+    );
+    assert.match(html, /href="zotero:\/\/select\/library\/items\/ABC123"/);
+    assert.match(
+      html,
+      /href="zotero:\/\/open-pdf\/library\/items\/PDF9KEY\?annotation=ANN1KEY"/,
+    );
+    assert.equal(/<a href="javascript:/.test(html), false);
+  });
 });
 
 describe("escapeHtml", () => {

@@ -8,7 +8,7 @@ export function escapeHtml(value: string): string {
 }
 
 function isSafeHref(href: string): boolean {
-  return /^(https?:|mailto:|#)/i.test(href.trim());
+  return /^(https?:|mailto:|zotero:|#)/i.test(href.trim());
 }
 
 type MathSlot = { tex: string; display: boolean };
