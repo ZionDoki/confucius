@@ -412,3 +412,74 @@ test("reading loop: reader entry, locate links and write-back navigation", () =>
   assert.equal(enFtl.includes("confucius-workspace-locate"), true);
   assert.equal(zhFtl.includes("confucius-workspace-locate"), true);
 });
+
+test("triage entry and knowledge output: item menu, launch queue, propose_note", () => {
+  const itemMenu = readFileSync(
+    join(root, "src/modules/ui/itemMenu.ts"),
+    "utf8",
+  );
+  const hooks = readFileSync(join(root, "src/hooks.ts"), "utf8");
+  const host = readFileSync(
+    join(root, "src/modules/host/AgentHost.ts"),
+    "utf8",
+  );
+  const tools = readFileSync(
+    join(root, "src/modules/tools/ZoteroToolHost.ts"),
+    "utf8",
+  );
+  const catalog = readFileSync(
+    join(root, "../../packages/zotero-tools/src/catalog.ts"),
+    "utf8",
+  );
+  const view = readFileSync(
+    join(root, "src/modules/ui/WorkspaceView.ts"),
+    "utf8",
+  );
+  const rpc = readFileSync(
+    join(root, "../../packages/protocol/src/rpc.ts"),
+    "utf8",
+  );
+  const enFtl = readFileSync(
+    join(root, "addon/locale/en-US/addon.ftl"),
+    "utf8",
+  );
+  const zhFtl = readFileSync(
+    join(root, "addon/locale/zh-CN/addon.ftl"),
+    "utf8",
+  );
+
+  // Slice 2: two #zotero-itemmenu entries gated on selection shape + PDF.
+  assert.equal(itemMenu.includes('"zotero-itemmenu"'), true);
+  assert.equal(itemMenu.includes("paper-deep-reading"), true);
+  assert.equal(itemMenu.includes("library-triage"), true);
+  assert.equal(itemMenu.includes("queueLaunch"), true);
+  assert.equal(itemMenu.includes("popupshowing"), true);
+  assert.equal(itemMenu.includes("items.length < 2"), true);
+  assert.equal(hooks.includes("registerItemMenu(win)"), true);
+  assert.equal(hooks.includes("unregisterItemMenu(win)"), true);
+  assert.equal(enFtl.includes("confucius-itemmenu-deep-read"), true);
+  assert.equal(zhFtl.includes("confucius-itemmenu-triage"), true);
+
+  // Skill launch queue is one-shot: consumed then cleared by the poll.
+  assert.equal(host.includes("queueLaunch(skillSlug: string)"), true);
+  assert.equal(host.includes("this.pendingLaunch = null"), true);
+  assert.equal(rpc.includes('launchConsume: "workspace/launch-consume"'), true);
+  assert.equal(view.includes('"workspace/launch-consume"'), true);
+
+  // Slice 3: propose_note approval pipeline and the timeline write-note button.
+  assert.equal(catalog.includes('"propose_note"'), true);
+  assert.equal(tools.includes('"propose_note"'), true);
+  assert.equal(
+    tools.includes("markdownToNoteHtml(`# ${title}\\n\\n${markdown}`)"),
+    true,
+  );
+  assert.equal(host.includes("noteProposeFromSession"), true);
+  assert.equal(
+    rpc.includes('noteProposeFromSession: "note/propose-from-session"'),
+    true,
+  );
+  assert.equal(view.includes('rpc("note/propose-from-session"'), true);
+  assert.equal(view.includes('getString("workspace-note-propose")'), true);
+  assert.equal(enFtl.includes("confucius-workspace-note-propose"), true);
+  assert.equal(zhFtl.includes("confucius-workspace-note-propose"), true);
+});

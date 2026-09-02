@@ -14,6 +14,7 @@ import {
   registerReaderEntry,
   unregisterReaderEntry,
 } from "./modules/ui/readerEntry";
+import { registerItemMenu, unregisterItemMenu } from "./modules/ui/itemMenu";
 import {
   closeWorkspaceSidebar,
   closeWorkspaceWindow,
@@ -69,10 +70,16 @@ async function onMainWindowLoad(win: Window): Promise<void> {
   } catch (error) {
     ztoolkit.log("[Confucius] toolbar registration failed", error);
   }
+  try {
+    registerItemMenu(win);
+  } catch (error) {
+    ztoolkit.log("[Confucius] item menu registration failed", error);
+  }
 }
 
 async function onMainWindowUnload(win: Window): Promise<void> {
   unregisterToolbarButton(win);
+  unregisterItemMenu(win);
   closeWorkspaceSidebar(win);
 }
 

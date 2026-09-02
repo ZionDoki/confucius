@@ -668,15 +668,14 @@ function noteHtml(content: string): string {
  */
 export function markdownToNoteHtml(markdown: string): string {
   const escape = (text: string) =>
-    text
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
+    text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const inline = (text: string) =>
     escape(text)
       .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
       .replace(/`([^`]+)`/g, "<code>$1</code>");
-  const lines = String(markdown ?? "").replace(/\r\n/g, "\n").split("\n");
+  const lines = String(markdown ?? "")
+    .replace(/\r\n/g, "\n")
+    .split("\n");
   const out: string[] = [];
   let list: "ul" | "ol" | null = null;
   let code: string[] | null = null;
@@ -1501,7 +1500,9 @@ export class ZoteroToolHost {
    * Parent falls back from an explicit ref to the reader's item to the
    * library-pane selection; otherwise the note stays standalone.
    */
-  private async proposeNote(args: Record<string, unknown>): Promise<ToolResult> {
+  private async proposeNote(
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
     const title = String(args.title ?? "").trim();
     const markdown = String(args.markdown ?? "").trim();
     if (!title || !markdown) {
