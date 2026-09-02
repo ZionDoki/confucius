@@ -172,9 +172,7 @@ async function importDoiFromCsl(
   return item;
 }
 
-export async function findPdf(
-  item: Zotero.Item,
-): Promise<Zotero.Item | null> {
+export async function findPdf(item: Zotero.Item): Promise<Zotero.Item | null> {
   if (
     item.isAttachment?.() &&
     item.attachmentContentType === "application/pdf"
@@ -333,8 +331,7 @@ export function liveReaderContext(): {
     const view = reader._internalReader?._primaryView;
     const currentPage = (
       view?._iframeWindow?.PDFViewerApplication as
-        | { pdfViewer?: { currentPageNumber?: number } }
-        | undefined
+        { pdfViewer?: { currentPageNumber?: number } } | undefined
     )?.pdfViewer?.currentPageNumber;
     const pageIndex = typeof currentPage === "number" ? currentPage - 1 : null;
     const pageLabel =
@@ -1800,15 +1797,14 @@ export class ZoteroToolHost {
     this.proposals.set(id, highlights);
     const item = getItem(ref.libraryID, ref.key);
     const pdf = item ? await findPdf(item) : null;
-    const firstPage = highlights.find(
-      (highlight) => Number.isInteger(Number(highlight.page)),
+    const firstPage = highlights.find((highlight) =>
+      Number.isInteger(Number(highlight.page)),
     )?.page;
     return ok("propose_highlights", {
       libraryID: ref.libraryID,
       key: ref.key,
       attachmentKey: pdf?.key,
-      pageIndex:
-        firstPage === undefined ? undefined : Number(firstPage) - 1,
+      pageIndex: firstPage === undefined ? undefined : Number(firstPage) - 1,
       count: highlights.length,
       highlights,
       persisted: false,

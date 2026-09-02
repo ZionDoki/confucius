@@ -20,10 +20,7 @@ import {
   type LiveContextResult,
 } from "@confucius/protocol";
 import { durableExcerpt } from "@confucius/memory";
-import {
-  slashMenuToken,
-  type ConfuciusSkill,
-} from "@confucius/skill-format";
+import { slashMenuToken, type ConfuciusSkill } from "@confucius/skill-format";
 import { renderToString as katexRender } from "katex";
 import { getString } from "../../utils/locale";
 
@@ -512,23 +509,23 @@ function locateFromData(data: unknown): LocateTarget | null {
   }
   const record = data as Record<string, unknown>;
   const attachmentKey =
-    typeof record.attachmentKey === "string"
-      ? record.attachmentKey.trim()
-      : "";
+    typeof record.attachmentKey === "string" ? record.attachmentKey.trim() : "";
   const key =
     attachmentKey || (typeof record.key === "string" ? record.key.trim() : "");
   if (!key) {
     return null;
   }
   const annotationKey =
-    typeof record.annotationKey === "string"
-      ? record.annotationKey.trim()
-      : "";
+    typeof record.annotationKey === "string" ? record.annotationKey.trim() : "";
   let pageIndex: number | undefined;
-  if (typeof record.pageIndex === "number" && Number.isInteger(record.pageIndex)) {
+  if (
+    typeof record.pageIndex === "number" &&
+    Number.isInteger(record.pageIndex)
+  ) {
     pageIndex = record.pageIndex;
   } else {
-    const position = record.position as { pageIndex?: unknown } | null | undefined;
+    const position = record.position as
+      { pageIndex?: unknown } | null | undefined;
     if (
       position &&
       typeof position === "object" &&
@@ -2754,7 +2751,10 @@ function bindWorkspace(
     root.style.fontSize = `${size}px`;
   }
 
-  function selectionKey(sel: { text: string; pageIndex: number | null }): string {
+  function selectionKey(sel: {
+    text: string;
+    pageIndex: number | null;
+  }): string {
     return `${sel.pageIndex ?? -1}|${sel.text}`;
   }
 
