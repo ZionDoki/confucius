@@ -91,14 +91,16 @@ async function focusOpenPdf(
     }
     return { ok: true };
   }
+  // Zotero.Reader.open(itemID, location, options) takes the location object
+  // directly; wrapping it ({ location }) silently drops the navigation.
   await (
     Zotero.Reader as unknown as {
       open: (
         itemID: number,
-        options?: { location?: Record<string, unknown> },
+        location?: Record<string, unknown>,
       ) => Promise<unknown>;
     }
-  ).open(attachment.id, location ? { location } : {});
+  ).open(attachment.id, location ?? undefined);
   return { ok: true };
 }
 

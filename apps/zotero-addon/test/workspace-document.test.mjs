@@ -483,3 +483,65 @@ test("triage entry and knowledge output: item menu, launch queue, propose_note",
   assert.equal(enFtl.includes("confucius-workspace-note-propose"), true);
   assert.equal(zhFtl.includes("confucius-workspace-note-propose"), true);
 });
+
+test("zotero uri links render as underlined anchors and navigate on click", () => {
+  const view = readFileSync(
+    join(root, "src/modules/ui/WorkspaceView.ts"),
+    "utf8",
+  );
+  const navigatorSource = readFileSync(
+    join(root, "src/modules/ui/linkNavigator.ts"),
+    "utf8",
+  );
+  const addonSource = readFileSync(join(root, "src/addon.ts"), "utf8");
+  const host = readFileSync(
+    join(root, "src/modules/host/AgentHost.ts"),
+    "utf8",
+  );
+  const tools = readFileSync(
+    join(root, "src/modules/tools/ZoteroToolHost.ts"),
+    "utf8",
+  );
+  const catalog = readFileSync(
+    join(root, "../../packages/zotero-tools/src/catalog.ts"),
+    "utf8",
+  );
+  const css = readFileSync(join(root, "addon/content/workspace.css"), "utf8");
+
+  // Answers render markdown (fillAnswerHtml) and anchors get prominent
+  // underlined styling inside the workspace root.
+  assert.equal(view.includes("fillAnswerHtml(row, text)"), true);
+  assert.equal(view.includes(".confucius-workspace-root a {"), true);
+  assert.equal(view.includes("text-decoration: underline"), true);
+
+  // Root-level click delegation hands anchors to the host's openLink.
+  assert.equal(view.includes('closest?.("a")'), true);
+  assert.equal(view.includes("boundHost.openLink(href)"), true);
+  assert.equal(addonSource.includes("openLink(href: string)"), true);
+
+  // Zotero.Reader.open(itemID, location, options) takes the location object
+  // directly — wrapping it in { location } silently drops navigation.
+  assert.equal(navigatorSource.includes("open(attachment.id, location"), true);
+  assert.equal(
+    navigatorSource.includes("open(attachment.id, location ? { location }"),
+    false,
+  );
+  assert.equal(
+    navigatorSource.includes("{ annotationID: uri.annotationKey }"),
+    true,
+  );
+  assert.equal(navigatorSource.includes("{ pageIndex: uri.page - 1 }"), true);
+
+  // Items, PDFs, annotations AND notes all carry linkable zoteroUri fields.
+  assert.equal(tools.includes("zoteroUri: buildSelectUri(item.key"), true);
+  assert.equal(tools.includes("zoteroUri: buildOpenPdfUri(pdf.key"), true);
+  assert.equal(
+    tools.includes("zoteroUri: buildSelectUri(\n              note.key"),
+    true,
+  );
+  assert.equal(host.includes("when mentioning a paper, a note,"), true);
+  assert.equal(catalog.includes("Each note carries a zoteroUri"), true);
+
+  // Knowledge-base markdown preview shares the same anchor styling.
+  assert.equal(css.includes(".confucius-kb-md-preview"), true);
+});

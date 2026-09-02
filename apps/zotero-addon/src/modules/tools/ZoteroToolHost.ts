@@ -1027,6 +1027,10 @@ export class ZoteroToolHost {
         ? {
             libraryID: note.libraryID,
             key: note.key,
+            zoteroUri: buildSelectUri(
+              note.key,
+              groupIDForLibrary(note.libraryID),
+            ),
             preview: (note.getNote?.() || "")
               .replace(/<[^>]+>/g, " ")
               .trim()
@@ -1049,6 +1053,7 @@ export class ZoteroToolHost {
     return ok("get_note_content", {
       libraryID: item.libraryID,
       key: item.key,
+      zoteroUri: buildSelectUri(item.key, groupIDForLibrary(item.libraryID)),
       html: (item.getNote?.() || "").slice(0, MAX_NOTE),
     });
   }

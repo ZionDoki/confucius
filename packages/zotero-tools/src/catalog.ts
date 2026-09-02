@@ -84,7 +84,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   ),
   def(
     "search_notes",
-    "Search note bodies.",
+    "Search note bodies. Results carry a zoteroUri for clickable linking.",
     {
       query: { type: "string" },
       libraryID: { type: "integer" },
@@ -109,13 +109,15 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     "libraryID",
     "key",
   ]),
-  def("get_item_notes", "List child notes of an item.", itemRef, [
-    "libraryID",
-    "key",
-  ]),
+  def(
+    "get_item_notes",
+    "List child notes of an item. Each note carries a zoteroUri.",
+    itemRef,
+    ["libraryID", "key"],
+  ),
   def(
     "get_note_content",
-    "Read a note. libraryID and key of the note.",
+    "Read a note. libraryID and key of the note; the result carries a zoteroUri.",
     itemRef,
     ["libraryID", "key"],
   ),
@@ -367,10 +369,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     "get_annotations",
     "List annotations as JSON. Each annotation carries a zoteroUri linking into the PDF.",
     itemRef,
-    [
-      "libraryID",
-      "key",
-    ],
+    ["libraryID", "key"],
   ),
   def("get_pdf_selection", "Current PDF reader selection, if any.", itemRef),
   def("get_paper_metadata", "Title, authors, year, DOI for a paper.", itemRef, [
