@@ -155,8 +155,13 @@ export class TurnLoop {
     const allowed: ScheduledCall[] = [];
 
     for (const call of toolCalls) {
+      // Model backends such as Ollama restart tool-call ids every round
+      // (call_1, call_2, call_1, ...), which would collide across rounds and
+      // fold several calls into one timeline entry. Emit host-unique event
+      // ids; the model-facing message pairing below keeps the original id.
+      const eventId = this.deps.ids();
       this.emit(input, "tool_requested", {
-        callId: call.id,
+        callId: eventId,
         toolName: call.name,
         args: call.args,
       });
@@ -168,7 +173,7 @@ export class TurnLoop {
           code: "unavailable",
           message: "Tool budget exhausted",
         };
-        this.emit(input, "tool_result", { callId: call.id, result });
+        this.emit(input, "tool_result", { callId: eventId, result });
         messages.push({
           role: "tool",
           content: JSON.stringify(result),
@@ -199,7 +204,7 @@ export class TurnLoop {
           code: "permission_denied",
           message: "Tool call denied",
         };
-        this.emit(input, "tool_result", { callId: call.id, result });
+        this.emit(input, "tool_result", { callId: eventId, result });
         messages.push({
           role: "tool",
           content: JSON.stringify(result),
@@ -211,7 +216,7 @@ export class TurnLoop {
       const schema = this.deps.tools.getSchema(call.name);
       const invalid = validateArgs(call.name, schema, call.args);
       if (invalid) {
-        this.emit(input, "tool_result", { callId: call.id, result: invalid });
+        this.emit(input, "tool_result", { callId: eventId, result: invalid });
         messages.push({
           role: "tool",
           content: JSON.stringify(invalid),
@@ -222,7 +227,8 @@ export class TurnLoop {
 
       this.deps.budget.recordToolCalls(1);
       allowed.push({
-        callId: call.id,
+        callId: eventId,
+        modelCallId: call.id,
         toolName: call.name,
         args: call.args,
       });
@@ -248,7 +254,7 @@ export class TurnLoop {
         messages.push({
           role: "tool",
           content: JSON.stringify(result),
-          toolCallId: call.callId,
+          toolCallId: call.modelCallId ?? call.callId,
         });
       }
     }

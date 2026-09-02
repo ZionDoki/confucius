@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { ApprovalResolution } from "@confucius/protocol";
+import type { ApprovalResolution, TimelineBlock } from "@confucius/protocol";
+import { coalesceTimeline } from "@confucius/protocol";
 import { createHarness, session } from "./test-kit";
 import { MemoryToolProvider } from "./MemoryToolProvider";
 import { assertParallelSafeInvariant } from "./ConcurrencyScheduler";
@@ -124,9 +125,7 @@ describe("TurnLoop", () => {
   });
 
   it("publishes approval_required before waiting for an interactive decision", async () => {
-    let releaseApproval:
-      | ((resolution: ApprovalResolution) => void)
-      | undefined;
+    let releaseApproval: ((resolution: ApprovalResolution) => void) | undefined;
     let requestId = "";
     const { loop, events } = createHarness({
       script: [
@@ -318,5 +317,76 @@ describe("tool invariants", () => {
         () => ({}),
       );
     });
+  });
+
+  it("keeps tool events independent when the model restarts call ids", async () => {
+    // Ollama-style backends emit call_1, call_2, then restart at call_1 on
+    // the next model round. Colliding event ids would merge fold state and
+    // attach later results to the first timeline tool block.
+    const { loop, events } = createHarness({
+      script: [
+        {
+          toolCalls: [
+            { id: "call_1", name: "search_items", args: { query: "alpha" } },
+          ],
+        },
+        {
+          toolCalls: [
+            { id: "call_1", name: "search_items", args: { query: "beta" } },
+          ],
+        },
+        { text: "searched twice" },
+      ],
+    });
+
+    const result = await loop.run({
+      session: session(),
+      turnId: "turn_restarted_ids",
+      userText: "search twice",
+    });
+
+    assert.equal(result.phase, "done");
+    const requested = events.events.filter(
+      (event) => event.type === "tool_requested",
+    );
+    const toolResults = events.events.filter(
+      (event) => event.type === "tool_result",
+    );
+    const callId = (event: (typeof events.events)[number]) =>
+      event.type === "tool_requested" || event.type === "tool_result"
+        ? event.payload.callId
+        : "";
+    assert.equal(requested.length, 2);
+    assert.equal(toolResults.length, 2);
+    assert.notEqual(callId(requested[0]), callId(requested[1]));
+    assert.equal(callId(requested[0]), callId(toolResults[0]));
+    assert.equal(callId(requested[1]), callId(toolResults[1]));
+
+    // Model-facing message pairing keeps the original (repeated) ids.
+    const toolMessages = result.messages.filter(
+      (message) => message.role === "tool",
+    );
+    assert.equal(toolMessages.length, 2);
+    assert.equal(toolMessages[0].toolCallId, "call_1");
+    assert.equal(toolMessages[1].toolCallId, "call_1");
+
+    // The timeline folds both rounds into one block but keeps results apart.
+    const blocks = coalesceTimeline(events.events);
+    const toolsBlocks = blocks.filter(
+      (block) => block.kind === "tools",
+    ) as Extract<TimelineBlock, { kind: "tools" }>[];
+    assert.equal(toolsBlocks.length, 1);
+    const calls = toolsBlocks[0].calls;
+    assert.equal(calls.length, 2);
+    assert.ok(calls[0].result?.ok);
+    assert.ok(calls[1].result?.ok);
+    assert.deepEqual(
+      calls[0].result && calls[0].result.ok ? calls[0].result.data : null,
+      { items: [{ title: "hit:alpha" }] },
+    );
+    assert.deepEqual(
+      calls[1].result && calls[1].result.ok ? calls[1].result.data : null,
+      { items: [{ title: "hit:beta" }] },
+    );
   });
 });

@@ -2,6 +2,12 @@ import type { ToolRuntimeMeta } from "@confucius/protocol";
 
 export interface ScheduledCall {
   callId: string;
+  /**
+   * Original model-side tool-call id for assistant/tool message pairing.
+   * Model backends (e.g. Ollama) restart ids every round, so `callId` above
+   * is the host-unique id used for events instead.
+   */
+  modelCallId?: string;
   toolName: string;
   args: Record<string, unknown>;
 }
