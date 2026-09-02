@@ -17,6 +17,7 @@ import {
   type TimelineToolCall,
   type MindMapNode,
   type UiFont,
+  type LaunchConsumeResult,
   type LiveContextResult,
 } from "@confucius/protocol";
 import { durableExcerpt } from "@confucius/memory";
@@ -120,11 +121,6 @@ const UI_FONT_STACKS: Record<UiFont, string> = {
   serif: 'Georgia, "Times New Roman", "Songti SC", SimSun, serif',
   mono: '"Cascadia Mono", ui-monospace, Consolas, "Courier New", monospace',
 };
-
-const DEFAULT_REVIEW_WIDTH = 260;
-
-/** Review pane width survives sidebar/window switches within the same run. */
-let rememberedReviewWidth = DEFAULT_REVIEW_WIDTH;
 
 function configReady(config: ModelConfig | null): boolean {
   if (!config) {
@@ -1114,6 +1110,7 @@ function bindWorkspace(
   const toolsOpen = new Set<string>();
   const toolOpen = new Set<string>();
   let endpointMenuOpen = false;
+  let newApprovalsArrived = false;
   type EndpointSubmenu =
     { kind: "models"; endpointId: string } | { kind: "effort" };
   let endpointSubmenu: EndpointSubmenu | null = null;
@@ -1217,25 +1214,6 @@ function bindWorkspace(
   sessionsToggle.textContent = getString("workspace-toggle-sessions");
   sessionsToggle.setAttribute("aria-label", sessionsToggle.textContent);
   sessionsToggle.setAttribute("aria-pressed", "false");
-  const reviewToggle = el(
-    doc,
-    "button",
-    {
-      background: "#f0ece3",
-      color: "#33302a",
-      border: "1px solid #ddd8cc",
-      borderRadius: "8px",
-      padding: "6px 10px",
-      cursor: "pointer",
-      minHeight: "32px",
-      font: "inherit",
-      display: compact ? "inline-flex" : "none",
-    },
-    { id: "confucius-toggle-review", type: "button" },
-  );
-  reviewToggle.textContent = getString("workspace-toggle-review");
-  reviewToggle.setAttribute("aria-label", reviewToggle.textContent);
-  reviewToggle.setAttribute("aria-pressed", "false");
   const topbarActions = el(doc, "div", {
     display: "flex",
     alignItems: "center",
@@ -1247,7 +1225,6 @@ function bindWorkspace(
   topbarActions.className = "confucius-topbar-actions";
   topbarActions.appendChild(newSessionBtn);
   topbarActions.appendChild(sessionsToggle);
-  topbarActions.appendChild(reviewToggle);
   topbarActions.appendChild(knowledgeBtn);
   topbarActions.appendChild(layoutBtn);
   topbarActions.appendChild(settingsBtn);
@@ -1263,7 +1240,6 @@ function bindWorkspace(
   });
   columns.className = "confucius-columns";
   let showSessions = !compact;
-  let showReview = !compact;
   const sessionPane = el(doc, "div", {
     width: compact ? "160px" : "220px",
     minWidth: compact ? "140px" : "180px",
@@ -1284,74 +1260,8 @@ function bindWorkspace(
     boxSizing: "border-box",
   });
   timelinePane.className = "confucius-pane confucius-timeline-pane";
-  const reviewPane = el(doc, "div", {
-    width: compact ? "180px" : `${rememberedReviewWidth}px`,
-    minWidth: compact ? "140px" : "200px",
-    padding: "14px",
-    overflow: "auto",
-    borderLeft: "1px solid #e5e1d8",
-    background: "#faf9f6",
-    boxSizing: "border-box",
-    display: showReview ? "block" : "none",
-  });
-  reviewPane.className = "confucius-pane confucius-review-pane";
-  const reviewGrip = el(
-    doc,
-    "div",
-    {
-      width: "6px",
-      minWidth: "6px",
-      flex: "0 0 auto",
-      cursor: "col-resize",
-      background: "transparent",
-      display: showReview && !compact ? "block" : "none",
-      transition: "background 120ms ease",
-    },
-    {
-      id: "confucius-review-grip",
-      role: "separator",
-      title: getString("workspace-review-grip"),
-    },
-  );
-  reviewGrip.setAttribute("aria-orientation", "vertical");
-  reviewGrip.addEventListener("mouseenter", () => {
-    reviewGrip.style.background = "#e5e1d8";
-  });
-  reviewGrip.addEventListener("mouseleave", () => {
-    reviewGrip.style.background = "transparent";
-  });
-  reviewGrip.addEventListener("dblclick", () => {
-    rememberedReviewWidth = DEFAULT_REVIEW_WIDTH;
-    reviewPane.style.width = `${DEFAULT_REVIEW_WIDTH}px`;
-  });
-  reviewGrip.addEventListener("pointerdown", (event) => {
-    if (auxiliaryOverlay) {
-      return;
-    }
-    event.preventDefault();
-    const dragWin = doc.defaultView;
-    const startX = (event as PointerEvent).clientX;
-    const startWidth = reviewPane.getBoundingClientRect().width;
-    const onMove = (move: PointerEvent) => {
-      const maxW = Math.max(240, Math.floor((responsiveWidth || 800) * 0.6));
-      const next = Math.min(
-        maxW,
-        Math.max(200, startWidth + (startX - move.clientX)),
-      );
-      rememberedReviewWidth = next;
-      reviewPane.style.width = `${next}px`;
-    };
-    const onUp = () => {
-      dragWin?.removeEventListener("pointermove", onMove);
-      dragWin?.removeEventListener("pointerup", onUp);
-    };
-    dragWin?.addEventListener("pointermove", onMove);
-    dragWin?.addEventListener("pointerup", onUp);
-  });
   columns.appendChild(sessionPane);
   columns.appendChild(timelinePane);
-  columns.appendChild(reviewGrip);
-  columns.appendChild(reviewPane);
 
   const composer = el(doc, "form", {
     display: "flex",
@@ -1500,7 +1410,6 @@ function bindWorkspace(
   root.appendChild(composer);
 
   const sessionsLabel = getString("workspace-toggle-sessions");
-  const reviewLabel = getString("workspace-toggle-review");
   const sendLabel = getString("workspace-send");
   const stopLabel = getString("workspace-stop");
   let auxiliaryOverlay = compact;
@@ -1516,27 +1425,20 @@ function bindWorkspace(
 
   function syncAuxiliaryPanes(): void {
     sessionsToggle.style.display = auxiliaryOverlay ? "inline-flex" : "none";
-    reviewToggle.style.display = auxiliaryOverlay ? "inline-flex" : "none";
     paintToggle(sessionsToggle, auxiliaryOverlay && showSessions);
-    paintToggle(reviewToggle, auxiliaryOverlay && showReview);
 
     if (!auxiliaryOverlay) {
-      for (const pane of [sessionPane, reviewPane]) {
-        pane.style.position = "static";
-        pane.style.top = "";
-        pane.style.right = "";
-        pane.style.bottom = "";
-        pane.style.left = "";
-        pane.style.zIndex = "";
-        pane.style.maxWidth = "";
-        pane.style.boxShadow = "none";
-        pane.style.display = "block";
-      }
+      sessionPane.style.position = "static";
+      sessionPane.style.top = "";
+      sessionPane.style.right = "";
+      sessionPane.style.bottom = "";
+      sessionPane.style.left = "";
+      sessionPane.style.zIndex = "";
+      sessionPane.style.maxWidth = "";
+      sessionPane.style.boxShadow = "none";
+      sessionPane.style.display = "block";
       sessionPane.style.width = "220px";
       sessionPane.style.minWidth = "180px";
-      reviewPane.style.width = `${rememberedReviewWidth}px`;
-      reviewPane.style.minWidth = "200px";
-      reviewGrip.style.display = showReview ? "block" : "none";
       return;
     }
 
@@ -1554,20 +1456,6 @@ function bindWorkspace(
       boxShadow: "8px 0 24px rgba(28, 25, 23, 0.18)",
       display: showSessions ? "block" : "none",
     });
-    Object.assign(reviewPane.style, {
-      position: "absolute",
-      top: "0px",
-      right: "0px",
-      bottom: "0px",
-      left: "auto",
-      zIndex: "20",
-      width: `${drawerWidth}px`,
-      minWidth: "0px",
-      maxWidth: "100%",
-      boxShadow: "-8px 0 24px rgba(28, 25, 23, 0.18)",
-      display: showReview ? "block" : "none",
-    });
-    reviewGrip.style.display = "none";
   }
 
   function applyResponsiveLayout(): void {
@@ -1583,7 +1471,6 @@ function bindWorkspace(
     auxiliaryOverlay = compact || measured < 760;
     if (auxiliaryOverlay && !previousOverlay) {
       showSessions = false;
-      showReview = false;
     }
     root.setAttribute("data-confucius-density", density);
 
@@ -1608,7 +1495,7 @@ function bindWorkspace(
       marginLeft: stacked ? "0px" : "auto",
       gap: stacked ? "4px" : "8px",
     });
-    for (const action of [newSessionBtn, sessionsToggle, reviewToggle]) {
+    for (const action of [newSessionBtn, sessionsToggle]) {
       Object.assign(action.style, {
         minWidth: "0px",
         maxWidth: "100%",
@@ -1622,7 +1509,6 @@ function bindWorkspace(
     }
     newSessionBtn.textContent = narrow ? "+" : newSessionLabel;
     sessionsToggle.textContent = narrow ? "☰" : sessionsLabel;
-    reviewToggle.textContent = narrow ? "✓" : reviewLabel;
 
     const stackedComposer = measured < 620;
     const tinyComposer = measured < 250;
@@ -1713,7 +1599,6 @@ function bindWorkspace(
     stopBtn.textContent = stackedComposer ? "■" : stopLabel;
     timelinePane.style.padding = stacked ? "10px" : "14px";
     sessionPane.style.padding = stacked ? "10px" : "14px";
-    reviewPane.style.padding = stacked ? "10px" : "14px";
     syncAuxiliaryPanes();
   }
 
@@ -1769,6 +1654,7 @@ function bindWorkspace(
     knowledgeUi.loading = true;
     knowledgeUi.error = "";
     renderKnowledgeWindow();
+    void refreshMemories().then(() => renderKnowledgeWindow());
     try {
       await refreshKnowledgeBases(knowledgeUi.baseId);
     } catch (error) {
@@ -1956,6 +1842,65 @@ function bindWorkspace(
       }
     });
     pane.appendChild(list);
+
+    pane.appendChild(sectionLabel(getString("workspace-memory")));
+    if (state.logCount > 0) {
+      pane.appendChild(
+        muted(doc, `${state.logCount} ${getString("workspace-session-logs")}`),
+      );
+    }
+    if (!state.memories.length) {
+      pane.appendChild(muted(doc, getString("workspace-no-memory")));
+    }
+    for (const memory of state.memories) {
+      const card = el(doc, "div", {
+        border: "1px solid #e5e1d8",
+        borderRadius: "8px",
+        padding: "6px 8px",
+        marginBottom: "6px",
+        background: "#ffffff",
+      });
+      const memoryTitle = el(doc, "div", {
+        fontSize: "11px",
+        color: "#33302a",
+        fontWeight: "700",
+      });
+      const tags = memory.tags ?? [];
+      const pinned = tags.includes("confucius:pinned");
+      const fromLog = tags.includes("promoted-from-log");
+      memoryTitle.textContent = `${pinned ? "★ " : ""}[${memory.type}] ${durableExcerpt(memory.title)}${
+        fromLog ? ` · ${getString("workspace-memory-from-log")}` : ""
+      }`;
+      const memoryBody = el(doc, "div", { fontSize: "12px" });
+      fillAnswerHtml(memoryBody, durableExcerpt(memory.content));
+      const del = el(
+        doc,
+        "button",
+        {
+          border: "none",
+          background: "transparent",
+          color: "#b3452f",
+          cursor: "pointer",
+          font: "inherit",
+          fontSize: "11px",
+          padding: "0",
+        },
+        { type: "button" },
+      );
+      del.textContent = "forget";
+      del.addEventListener("click", () => {
+        void (async () => {
+          await rpc("memory/delete", { id: memory.id });
+          await refreshMemories();
+          renderKnowledgeWindow();
+          renderLists();
+        })();
+      });
+      card.appendChild(memoryTitle);
+      card.appendChild(memoryBody);
+      card.appendChild(del);
+      pane.appendChild(card);
+    }
     return pane;
   }
 
@@ -2864,6 +2809,68 @@ function bindWorkspace(
     }
   }
 
+  function renderApprovalCard(
+    targetDoc: Document,
+    item: ApprovalRow,
+  ): HTMLElement {
+    const card = el(targetDoc, "div", {
+      border: "1px solid #b05c2e",
+      borderRadius: "8px",
+      padding: "8px 10px",
+      marginBottom: "8px",
+      background: "#f5f3ee",
+    });
+    const name = el(targetDoc, "div", {
+      fontFamily: "ui-monospace, Consolas, monospace",
+      fontSize: "11px",
+      fontWeight: "600",
+      letterSpacing: "0.04em",
+      color: "#b05c2e",
+    });
+    name.textContent = item.toolName;
+    const pre = el(targetDoc, "pre", {
+      whiteSpace: "pre-wrap",
+      fontSize: "11px",
+    });
+    pre.textContent = JSON.stringify(item.args, null, 2);
+    const actions = el(targetDoc, "div", {
+      display: "flex",
+      gap: "6px",
+      marginTop: "6px",
+    });
+    const allow = button(targetDoc, "", "Allow", "primary");
+    const always = button(targetDoc, "", "Always");
+    const deny = button(targetDoc, "", "Deny");
+    deny.style.background = "#ffffff";
+    deny.style.border = "1px solid #b3452f";
+    deny.style.color = "#b3452f";
+    allow.addEventListener("click", () => {
+      void resolveApproval(item.id, "allow", "once");
+    });
+    always.addEventListener("click", () => {
+      void resolveApproval(item.id, "allow", "always");
+    });
+    deny.addEventListener("click", () => {
+      void resolveApproval(item.id, "deny", "once");
+    });
+    actions.appendChild(allow);
+    actions.appendChild(always);
+    actions.appendChild(deny);
+    card.appendChild(name);
+    const approvalLocate = locateFromApproval(item.toolName, item.args);
+    if (approvalLocate) {
+      card.appendChild(
+        locateLink(targetDoc, approvalLocate, {
+          display: "block",
+          margin: "4px 0 0",
+        }),
+      );
+    }
+    card.appendChild(pre);
+    card.appendChild(actions);
+    return card;
+  }
+
   function renderLists(): void {
     applyAppearance();
     renderContextBar();
@@ -2977,7 +2984,13 @@ function bindWorkspace(
     const savedTimelineScroll = timelinePane.scrollTop;
     timelinePane.textContent = "";
     const session = state.sessions.find((item) => item.id === state.sessionId);
-    timelinePane.appendChild(
+    const timelineHead = el(doc, "div", {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: "8px",
+    });
+    timelineHead.appendChild(
       paneLabel(
         doc,
         session
@@ -2985,6 +2998,22 @@ function bindWorkspace(
           : getString("workspace-timeline"),
       ),
     );
+    if (session) {
+      const noteBtn = button(doc, "", getString("workspace-note-propose"));
+      noteBtn.style.fontSize = "11px";
+      noteBtn.addEventListener("click", () => {
+        if (!state.sessionId) {
+          return;
+        }
+        void rpc("note/propose-from-session", {
+          sessionId: state.sessionId,
+        }).catch(() => {
+          /* outcome shows up as an approval card or an error banner */
+        });
+      });
+      timelineHead.appendChild(noteBtn);
+    }
+    timelinePane.appendChild(timelineHead);
     if (state.config && !configReady(state.config)) {
       const banner = el(doc, "div", {
         border: "1px solid #d9b36a",
@@ -3026,136 +3055,17 @@ function bindWorkspace(
         }
       });
     }
+    for (const item of state.approvals) {
+      timelinePane.appendChild(renderApprovalCard(doc, item));
+    }
     if (state.sending || turnAwaitingReply(state.events)) {
       timelinePane.appendChild(renderWaiting(doc));
     }
-    timelinePane.scrollTop = followTimeline
-      ? timelinePane.scrollHeight
-      : savedTimelineScroll;
-
-    reviewPane.textContent = "";
-    reviewPane.appendChild(paneLabel(doc, getString("workspace-review")));
-    if (!state.approvals.length) {
-      reviewPane.appendChild(muted(doc, getString("workspace-empty-review")));
-    } else {
-      for (const item of state.approvals) {
-        const card = el(doc, "div", {
-          border: "1px solid #b05c2e",
-          borderRadius: "8px",
-          padding: "8px 10px",
-          marginBottom: "8px",
-          background: "#f5f3ee",
-        });
-        const name = el(doc, "div", {
-          fontFamily: "ui-monospace, Consolas, monospace",
-          fontSize: "11px",
-          fontWeight: "600",
-          letterSpacing: "0.04em",
-          color: "#b05c2e",
-        });
-        name.textContent = item.toolName;
-        const pre = el(doc, "pre", {
-          whiteSpace: "pre-wrap",
-          fontSize: "11px",
-        });
-        pre.textContent = JSON.stringify(item.args, null, 2);
-        const actions = el(doc, "div", {
-          display: "flex",
-          gap: "6px",
-          marginTop: "6px",
-        });
-        const allow = button(doc, "", "Allow", "primary");
-        const always = button(doc, "", "Always");
-        const deny = button(doc, "", "Deny");
-        deny.style.background = "#ffffff";
-        deny.style.border = "1px solid #b3452f";
-        deny.style.color = "#b3452f";
-        allow.addEventListener("click", () => {
-          void resolveApproval(item.id, "allow", "once");
-        });
-        always.addEventListener("click", () => {
-          void resolveApproval(item.id, "allow", "always");
-        });
-        deny.addEventListener("click", () => {
-          void resolveApproval(item.id, "deny", "once");
-        });
-        actions.appendChild(allow);
-        actions.appendChild(always);
-        actions.appendChild(deny);
-        card.appendChild(name);
-        const approvalLocate = locateFromApproval(item.toolName, item.args);
-        if (approvalLocate) {
-          card.appendChild(
-            locateLink(doc, approvalLocate, {
-              display: "block",
-              margin: "4px 0 0",
-            }),
-          );
-        }
-        card.appendChild(pre);
-        card.appendChild(actions);
-        reviewPane.appendChild(card);
-      }
-    }
-
-    reviewPane.appendChild(paneLabel(doc, getString("workspace-memory")));
-    if (state.logCount > 0) {
-      reviewPane.appendChild(
-        muted(doc, `${state.logCount} ${getString("workspace-session-logs")}`),
-      );
-    }
-    if (!state.memories.length) {
-      reviewPane.appendChild(muted(doc, getString("workspace-no-memory")));
-    } else {
-      for (const memory of state.memories) {
-        const card = el(doc, "div", {
-          border: "1px solid #e5e1d8",
-          borderRadius: "8px",
-          padding: "6px 8px",
-          marginBottom: "6px",
-          background: "#ffffff",
-        });
-        const title = el(doc, "div", {
-          fontSize: "11px",
-          color: "#33302a",
-          fontWeight: "700",
-        });
-        const tags = memory.tags ?? [];
-        const pinned = tags.includes("confucius:pinned");
-        const fromLog = tags.includes("promoted-from-log");
-        title.textContent = `${pinned ? "★ " : ""}[${memory.type}] ${durableExcerpt(memory.title)}${
-          fromLog ? ` · ${getString("workspace-memory-from-log")}` : ""
-        }`;
-        const body = el(doc, "div", { fontSize: "12px" });
-        fillAnswerHtml(body, durableExcerpt(memory.content));
-        const del = el(
-          doc,
-          "button",
-          {
-            border: "none",
-            background: "transparent",
-            color: "#b3452f",
-            cursor: "pointer",
-            font: "inherit",
-            fontSize: "11px",
-            padding: "0",
-          },
-          { type: "button" },
-        );
-        del.textContent = "forget";
-        del.addEventListener("click", () => {
-          void (async () => {
-            await rpc("memory/delete", { id: memory.id });
-            await refreshMemories();
-            renderLists();
-          })();
-        });
-        card.appendChild(title);
-        card.appendChild(body);
-        card.appendChild(del);
-        reviewPane.appendChild(card);
-      }
-    }
+    timelinePane.scrollTop =
+      followTimeline || newApprovalsArrived
+        ? timelinePane.scrollHeight
+        : savedTimelineScroll;
+    newApprovalsArrived = false;
   }
 
   function syncModeButton(): void {
@@ -3203,11 +3113,7 @@ function bindWorkspace(
     }
     state.approvals = [...open.values()];
     if (!hadPendingApprovals && state.approvals.length > 0) {
-      showReview = true;
-      if (auxiliaryOverlay) {
-        showSessions = false;
-      }
-      syncAuxiliaryPanes();
+      newApprovalsArrived = true;
     }
   }
 
@@ -4978,6 +4884,19 @@ function bindWorkspace(
       } catch {
         /* live context is cosmetic */
       }
+      try {
+        // Entry points (item menu) queue a skill; prefill it as a /slug.
+        const launch = (await rpc(
+          "workspace/launch-consume",
+          {},
+        )) as LaunchConsumeResult;
+        if (launch.skillSlug) {
+          prompt.value = `/${launch.skillSlug} `;
+          prompt.focus();
+        }
+      } catch {
+        /* launch queue is cosmetic */
+      }
       if (state.sessionId) {
         const polledSessionId = state.sessionId;
         const requestedCursor = state.lastEventId;
@@ -5096,16 +5015,6 @@ function bindWorkspace(
   });
   sessionsToggle.addEventListener("click", () => {
     showSessions = !showSessions;
-    if (showSessions) {
-      showReview = false;
-    }
-    syncAuxiliaryPanes();
-  });
-  reviewToggle.addEventListener("click", () => {
-    showReview = !showReview;
-    if (showReview) {
-      showSessions = false;
-    }
     syncAuxiliaryPanes();
   });
   endpointBtn.addEventListener("click", (event) => {

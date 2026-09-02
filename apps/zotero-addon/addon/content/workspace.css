@@ -41,7 +41,6 @@ body {
 }
 
 .topbar button,
-.review button,
 .composer button,
 .event button {
   background: #ffffff;
@@ -67,12 +66,6 @@ body {
   overflow: auto;
   border-right: 1px solid #e5e1d8;
   background: #faf9f6;
-}
-
-.pane-review {
-  border-right: none;
-  border-left: 1px solid #e5e1d8;
-  background: #f5f3ee;
 }
 
 .pane-label {
