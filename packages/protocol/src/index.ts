@@ -4,10 +4,8 @@ export {
   CONFUCIUS_HTTP_PREFIX,
   CONFUCIUS_LOOPBACK_ORIGIN,
   CONFUCIUS_MCP_PATH,
-  CONFUCIUS_PAIR_PATH,
   CONFUCIUS_PROTOCOL_VERSION,
   CONFUCIUS_RPC_PATH,
-  CONFUCIUS_WORKSPACE_PROBE_PATH,
   buildHealthResponse,
   isConfuciusHealthResponse,
 } from "./http";
@@ -26,7 +24,6 @@ export type {
 } from "./permissions";
 
 export {
-  BROWSER_TOOLS,
   LIBRARY_READ_TOOLS,
   LIBRARY_WRITE_TOOLS,
   MEMORY_READ_TOOLS,
@@ -36,7 +33,6 @@ export {
   mcpToolName,
 } from "./tools";
 export type {
-  BrowserTool,
   BuiltinToolName,
   JsonSchemaObject,
   LibraryReadTool,
@@ -56,7 +52,6 @@ export type {
 } from "./tools";
 
 export type {
-  BrowserTabContext,
   SessionContext,
   SessionMode,
   SessionRecord,
@@ -80,6 +75,16 @@ export {
   toolsSummary,
 } from "./timeline";
 export { escapeHtml, renderMarkdownHtml } from "./markdown";
+export {
+  buildOpenPdfUri,
+  buildSelectUri,
+  parseZoteroUri,
+} from "./zoteroUri";
+export type {
+  ZoteroOpenPdfUri,
+  ZoteroSelectUri,
+  ZoteroUri,
+} from "./zoteroUri";
 export { countMindMapNodes, parseMindMapOutline } from "./mindmap";
 export type { MindMapNode } from "./mindmap";
 export type {
@@ -92,11 +97,18 @@ export { RPC_METHODS, validateConfigPatch } from "./rpc";
 export {
   DEFAULT_MAX_ITERATIONS,
   DEFAULT_MAX_TOOL_CALLS,
+  DEFAULT_UI_FONT,
+  DEFAULT_UI_FONT_SIZE,
   MAX_MAX_ITERATIONS,
   MAX_MAX_TOOL_CALLS,
+  MAX_UI_FONT_SIZE,
+  MIN_UI_FONT_SIZE,
+  UI_FONTS,
   clampMaxIterations,
   clampMaxToolCalls,
+  clampUiFontSize,
   isReasoningEffort,
+  isUiFont,
   REASONING_EFFORTS,
 } from "./rpc";
 export {
@@ -126,6 +138,10 @@ export type {
   JsonRpcRequest,
   JsonRpcResponse,
   JsonRpcSuccess,
+  LiveContextItem,
+  LiveContextReader,
+  LiveContextResult,
+  LiveContextSelection,
   MemoryDeleteParams,
   MemoryListParams,
   MemorySaveParams,
@@ -142,6 +158,8 @@ export type {
   LogsReadParams,
   LogsSearchParams,
   ModelConfigView,
+  PromptContextOptions,
+  ReaderOpenParams,
   ReasoningEffort,
   RpcMethod,
   SessionContextStats,
@@ -154,4 +172,5 @@ export type {
   SessionSetPermissionsParams,
   SessionEventsParams,
   SkillActivateParams,
+  UiFont,
 } from "./rpc";
