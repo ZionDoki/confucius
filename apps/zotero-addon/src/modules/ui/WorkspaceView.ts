@@ -29,8 +29,12 @@ import { getString } from "../../utils/locale";
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 
+const linkHosts = new WeakMap<HTMLElement, WorkspaceHost | null>();
+const linkListeners = new WeakSet<HTMLElement>();
+
 export interface WorkspaceHost {
   rpc(method: string, params?: Record<string, unknown>): Promise<unknown>;
+  openLink?(href: string): Promise<{ ok: boolean; message?: string }>;
 }
 
 export type WorkspaceLayout = "window" | "sidebar";
@@ -488,6 +492,86 @@ function formatToolResult(call: TimelineToolCall): string {
     return JSON.stringify(call.result.data, null, 2).slice(0, 4000);
   }
   return JSON.stringify(call.result, null, 2).slice(0, 4000);
+}
+
+type LocateTarget = {
+  libraryID?: number;
+  key: string;
+  pageIndex?: number;
+  annotationKey?: string;
+};
+
+/**
+ * Pull a jump target out of a tool result payload: anything that names an
+ * attachment (attachmentKey/key) plus a way to land on a spot in it
+ * (pageIndex, position.pageIndex or annotationKey).
+ */
+function locateFromData(data: unknown): LocateTarget | null {
+  if (!data || typeof data !== "object") {
+    return null;
+  }
+  const record = data as Record<string, unknown>;
+  const attachmentKey =
+    typeof record.attachmentKey === "string"
+      ? record.attachmentKey.trim()
+      : "";
+  const key =
+    attachmentKey || (typeof record.key === "string" ? record.key.trim() : "");
+  if (!key) {
+    return null;
+  }
+  const annotationKey =
+    typeof record.annotationKey === "string"
+      ? record.annotationKey.trim()
+      : "";
+  let pageIndex: number | undefined;
+  if (typeof record.pageIndex === "number" && Number.isInteger(record.pageIndex)) {
+    pageIndex = record.pageIndex;
+  } else {
+    const position = record.position as { pageIndex?: unknown } | null | undefined;
+    if (
+      position &&
+      typeof position === "object" &&
+      typeof position.pageIndex === "number"
+    ) {
+      pageIndex = position.pageIndex;
+    }
+  }
+  if (!annotationKey && pageIndex === undefined) {
+    return null;
+  }
+  return {
+    libraryID:
+      typeof record.libraryID === "number" ? record.libraryID : undefined,
+    key,
+    pageIndex,
+    annotationKey: annotationKey || undefined,
+  };
+}
+
+/** Approval cards only carry args; derive a jump target for write-back tools. */
+function locateFromApproval(
+  toolName: string,
+  args: Record<string, unknown>,
+): LocateTarget | null {
+  if (toolName !== "commit_annotations" && toolName !== "propose_highlights") {
+    return null;
+  }
+  const key = typeof args.key === "string" ? args.key.trim() : "";
+  if (!key) {
+    return null;
+  }
+  const highlights = Array.isArray(args.highlights)
+    ? (args.highlights as Array<{ page?: unknown }>)
+    : [];
+  const firstPage = highlights
+    .map((highlight) => Number(highlight?.page))
+    .find((page) => Number.isInteger(page) && page > 0);
+  return {
+    libraryID: typeof args.libraryID === "number" ? args.libraryID : undefined,
+    key,
+    pageIndex: firstPage === undefined ? undefined : firstPage - 1,
+  };
 }
 
 function applyFill(node: HTMLElement, compact = false): void {
@@ -976,6 +1060,26 @@ function bindWorkspace(
   root.classList.add("confucius-workspace-root");
   ensureTuiStyles(doc);
   applyFill(root, compact);
+
+  linkHosts.set(root, host);
+  if (!linkListeners.has(root)) {
+    linkListeners.add(root);
+    root.addEventListener("click", (event) => {
+      const anchor = (event.target as HTMLElement | null)?.closest?.("a");
+      const href = anchor?.getAttribute("href") || "";
+      const boundHost = linkHosts.get(root);
+      if (!href || href.startsWith("#") || !boundHost?.openLink) {
+        return;
+      }
+      event.preventDefault();
+      void boundHost.openLink(href).then((result) => {
+        if (!result.ok && result.message) {
+          status.style.color = "#b3452f";
+          status.textContent = result.message;
+        }
+      });
+    });
+  }
 
   const state = {
     sessions: [] as SessionRow[],
@@ -2264,6 +2368,20 @@ function bindWorkspace(
     content.addEventListener("input", paintPreview);
     mindWorkspace.appendChild(contentField);
     mindWorkspace.appendChild(preview);
+    const mdPreview = el(doc, "div");
+    mdPreview.className = "confucius-kb-md-preview";
+    const previewCaption = el(doc, "div");
+    previewCaption.className = "confucius-kb-section-label";
+    previewCaption.textContent = getString("workspace-knowledge-preview");
+    const paintMarkdownPreview = () => {
+      const hidden = selectedKind === "mindmap" || !content.value.trim();
+      previewCaption.style.display = hidden ? "none" : "";
+      mdPreview.style.display = hidden ? "none" : "";
+      if (!hidden) {
+        fillAnswerHtml(mdPreview, content.value);
+      }
+    };
+    content.addEventListener("input", paintMarkdownPreview);
     const syncKind = () => {
       const isPaper = selectedKind === "paper";
       const isMindMap = selectedKind === "mindmap";
@@ -2272,8 +2390,11 @@ function bindWorkspace(
       contentField.style.display = "grid";
       preview.style.display = isMindMap ? "block" : "none";
       if (isMindMap) paintPreview();
+      paintMarkdownPreview();
     };
     wrap.appendChild(mindWorkspace);
+    wrap.appendChild(previewCaption);
+    wrap.appendChild(mdPreview);
     syncKind();
 
     const actions = el(doc, "div");
@@ -2478,6 +2599,42 @@ function bindWorkspace(
     return wrap;
   }
 
+  function locateLink(
+    targetDoc: Document,
+    target: LocateTarget,
+    extraStyle?: Record<string, string>,
+  ): HTMLElement {
+    const link = el(
+      targetDoc,
+      "button",
+      {
+        border: "none",
+        background: "transparent",
+        color: "#b3452f",
+        cursor: "pointer",
+        font: "inherit",
+        fontSize: "0.85em",
+        padding: "0",
+        ...(extraStyle || {}),
+      },
+      { type: "button" },
+    );
+    link.textContent = getString("workspace-locate");
+    link.title = getString("workspace-ctx-open");
+    link.addEventListener("click", (event) => {
+      event.stopPropagation();
+      void rpc("reader/open", {
+        libraryID: target.libraryID,
+        key: target.key,
+        pageIndex: target.pageIndex,
+        annotationKey: target.annotationKey,
+      }).catch(() => {
+        /* locate is cosmetic */
+      });
+    });
+    return link;
+  }
+
   function renderTools(
     targetDoc: Document,
     calls: TimelineToolCall[],
@@ -2541,6 +2698,18 @@ function bindWorkspace(
           });
           result.textContent = formatToolResult(call);
           wrap.appendChild(result);
+          const locate =
+            call.result && call.result.ok
+              ? locateFromData(call.result.data)
+              : null;
+          if (locate) {
+            wrap.appendChild(
+              locateLink(targetDoc, locate, {
+                display: "block",
+                margin: "0 0 6px 24px",
+              }),
+            );
+          }
         }
       }
     }
@@ -2914,6 +3083,15 @@ function bindWorkspace(
         actions.appendChild(always);
         actions.appendChild(deny);
         card.appendChild(name);
+        const approvalLocate = locateFromApproval(item.toolName, item.args);
+        if (approvalLocate) {
+          card.appendChild(
+            locateLink(doc, approvalLocate, {
+              display: "block",
+              margin: "4px 0 0",
+            }),
+          );
+        }
         card.appendChild(pre);
         card.appendChild(actions);
         reviewPane.appendChild(card);
@@ -2949,7 +3127,7 @@ function bindWorkspace(
           fromLog ? ` · ${getString("workspace-memory-from-log")}` : ""
         }`;
         const body = el(doc, "div", { fontSize: "12px" });
-        body.textContent = durableExcerpt(memory.content);
+        fillAnswerHtml(body, durableExcerpt(memory.content));
         const del = el(
           doc,
           "button",
