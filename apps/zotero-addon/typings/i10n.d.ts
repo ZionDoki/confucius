@@ -9,6 +9,7 @@ export type FluentMessageId =
   | 'confucius-reader-ask'
   | 'confucius-reader-entry-tooltip'
   | 'confucius-toolbar-tooltip'
+  | 'confucius-workspace-approval-params'
   | 'confucius-workspace-cmd-agent'
   | 'confucius-workspace-cmd-ask'
   | 'confucius-workspace-cmd-auto'
