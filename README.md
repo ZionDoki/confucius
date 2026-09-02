@@ -1,8 +1,8 @@
 # Confucius
 
-Native research agent for Zotero, plus a Chrome side panel that shares the same session.
+Native research agent for Zotero.
 
-Confucius is a sibling of Paper Chat. The agent loop runs inside Zotero. The Chrome extension is a client and a browser-context source.
+Confucius is a sibling of Paper Chat. The agent loop runs inside Zotero.
 
 ## What it does
 
@@ -20,8 +20,6 @@ Confucius is a sibling of Paper Chat. The agent loop runs inside Zotero. The Chr
 
 ## Install
 
-### Zotero addon
-
 ```bash
 git clone https://github.com/ZionDoki/confucius.git
 cd confucius
@@ -35,17 +33,9 @@ For development: `npm start` in `apps/zotero-addon` (needs a local Zotero 7+ bin
 
 Then: Settings → Confucius → set **Base URL** and **Model**. Add an **API key**
 for hosted OpenAI-compatible endpoints; local Ollama does not require one.
-Copy the pairing token.
+Copy the pairing token if you want to call the local MCP or HTTP API.
 
 Open the workspace from the Confucius toolbar button.
-
-### Chrome extension
-
-1. `chrome://extensions` → Load unpacked → `apps/chrome-extension`
-2. Open the side panel, paste the pairing token, click Pair
-3. On any readable web page, click **This tab** to push its identifiers and
-   text into the session (Chrome internal and other restricted pages are not
-   accessible)
 
 ## Persistent memory
 
@@ -65,7 +55,7 @@ Relevant memories are injected into the system prompt automatically, and the age
 Every session also writes an append-only markdown log under `<Zotero data>/confucius/logs/`. In-context compaction never deletes those files. The agent searches them with `conversation_log_search`; a hook on every log/memory tool call counts retrievals. Excerpts hit several times become durable memories, and memories hit often enough are pinned so they stay in the prompt. Compaction itself is sized from the active endpoint's context window (reserving system prompt, tools, and output tokens) rather than a fixed character cap.
 
 Research knowledge bases use the same auditable Markdown store. Open the tree
-icon in either workspace to create a topic, search and filter its entries, edit
+icon in the workspace to create a topic, search and filter its entries, edit
 paper links and notes, or maintain a collapsible mind map from Markdown
 headings and indented lists. The agent queries these topics before writing so
 continuing research stays connected instead of becoming duplicate summaries.
@@ -80,17 +70,15 @@ packages/skill-format SKILL.md frontmatter parser
 packages/mcp-client   MCP-over-HTTP client
 packages/zotero-tools tool catalog + paper text/regex utilities
 apps/zotero-addon     the production host (Zotero 7+)
-apps/chrome-extension side panel client + browser context source
 skills/               skill definitions (source of truth, bundled at build)
 evals/                golden traces, executed as tests
-scripts/              sync-skills, version check, packaging
+scripts/              sync-skills, version check
 ```
 
 ```bash
 npm test        # unit tests + eval traces (also syncs generated skills)
 npm run verify  # drift + version checks + typecheck + tests
 npm run build   # all workspaces; xpi lands in apps/zotero-addon/.scaffold/build
-npm run package:chrome  # dist/confucius-chrome-<version>.zip
 ```
 
 ## Security notes

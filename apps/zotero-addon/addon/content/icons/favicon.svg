@@ -1,6 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Confucius">
-  <rect width="32" height="32" rx="8" fill="#1F3A2E"/>
-  <path fill="#F4EFE6" d="M7 9h8c2.2 0 3.5 1.2 3.5 3.2V24c-1.6-1.1-3.2-1.6-3.2-1.6H7V9z"/>
-  <path fill="#D9C7A3" d="M25 9h-8c-2.2 0-3.5 1.2-3.5 3.2V24c1.6-1.1 3.2-1.6 3.2-1.6H25V9z"/>
-  <rect x="15.25" y="9" width="1.5" height="15" fill="#1F3A2E"/>
+  <rect width="32" height="32" rx="8" fill="#8a5a3b"/>
+  <path d="M25 10.5 A11.5 11.5 0 1 0 25 21.5" fill="none" stroke="#faf9f6" stroke-width="3.4"/>
+  <rect x="22" y="14.6" width="6" height="2.8" fill="#33302a"/>
 </svg>

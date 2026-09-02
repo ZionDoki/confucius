@@ -14,7 +14,6 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
-  BROWSER_TOOLS,
   LIBRARY_READ_TOOLS,
   LIBRARY_WRITE_TOOLS,
   MEMORY_READ_TOOLS,
@@ -42,7 +41,6 @@ const ALL_TOOLS = [
   ...LIBRARY_WRITE_TOOLS,
   ...PAPER_READ_TOOLS,
   ...PAPER_WRITE_TOOLS,
-  ...BROWSER_TOOLS,
   ...MEMORY_READ_TOOLS,
   ...MEMORY_WRITE_TOOLS,
 ];
@@ -52,9 +50,9 @@ const READ_ONLY_TOOLS = [
   ...MEMORY_READ_TOOLS,
 ];
 
-if (ALL_TOOLS.length !== 62 || new Set(ALL_TOOLS).size !== 62) {
+if (ALL_TOOLS.length !== 57 || new Set(ALL_TOOLS).size !== 57) {
   throw new Error(
-    `Expected 62 unique built-in tools, found ${ALL_TOOLS.length}`,
+    `Expected 57 unique built-in tools, found ${ALL_TOOLS.length}`,
   );
 }
 
@@ -985,58 +983,6 @@ async function main() {
       );
     }
 
-    await rpc("session/setContext", {
-      sessionId,
-      context: {
-        browserTab: {
-          tabId: 4242,
-          url: "https://example.org/confucius-e2e",
-          title: `${runId} Browser Fixture`,
-          identifiers: {
-            doi: "10.1145/1327452.1327492",
-            arxiv: "2401.12345",
-            pmid: "12345678",
-            pdfUrl: `${MOCK_ORIGIN}/fixture.pdf`,
-          },
-          readableText: `${runId} readable browser text WEB-TEXT-3434`,
-        },
-      },
-    });
-    await exercise(
-      "browser.get_active_tab",
-      {},
-      {
-        validate: (data) =>
-          includesText(data.title, runId) || "active tab title mismatch",
-      },
-    );
-    await exercise(
-      "browser.extract_identifiers",
-      {},
-      {
-        validate: (data) =>
-          includesText(data, "10.1145/1327452.1327492") ||
-          "DOI extraction mismatch",
-      },
-    );
-    await exercise(
-      "browser.extract_pdf",
-      {},
-      {
-        validate: (data) =>
-          data.pdfUrl === `${MOCK_ORIGIN}/fixture.pdf` ||
-          "PDF URL extraction mismatch",
-      },
-    );
-    await exercise(
-      "browser.extract_readable_text",
-      {},
-      {
-        validate: (data) =>
-          includesText(data.text, "WEB-TEXT-3434") || "readable text mismatch",
-      },
-    );
-
     outcome = await exercise(
       "memory_save",
       {
@@ -1267,16 +1213,6 @@ async function main() {
       {
         validate: (data) =>
           (data.items || []).length > 0 || "identifier lookup returned no item",
-        blockedCodes: ["unavailable", "timeout", "internal", "not_found"],
-        timeoutMs: 180_000,
-      },
-    );
-    await exercise(
-      "browser.import_current_page",
-      { libraryID: 1, collectionKey },
-      {
-        validate: (data) =>
-          (data.items || []).length > 0 || "browser import returned no item",
         blockedCodes: ["unavailable", "timeout", "internal", "not_found"],
         timeoutMs: 180_000,
       },

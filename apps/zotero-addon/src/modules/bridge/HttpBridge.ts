@@ -2,11 +2,8 @@ import {
   CONFUCIUS_EVENTS_PATH,
   CONFUCIUS_HEALTH_PATH,
   CONFUCIUS_MCP_PATH,
-  CONFUCIUS_PAIR_PATH,
   CONFUCIUS_RPC_PATH,
-  CONFUCIUS_WORKSPACE_PROBE_PATH,
 } from "@confucius/protocol";
-import { openAndInspectWorkspace } from "../ui/workspaceWindow";
 import {
   READ_ONLY_TOOL_NAMES,
   TOOL_DEFINITIONS,
@@ -136,33 +133,6 @@ export function registerHttpBridge(host: AgentHost): void {
     permitBookmarklet: true,
     allowRequestsFromUnsafeWebContent: true,
     init: (_options) => json(200, host.health()),
-  });
-
-  registerPath(CONFUCIUS_WORKSPACE_PROBE_PATH, {
-    supportedMethods: ["GET"],
-    permitBookmarklet: true,
-    allowRequestsFromUnsafeWebContent: true,
-    init: async (options) => {
-      // Opening the workspace window is a privileged action; any web page
-      // can reach this endpoint, so it must prove possession of the token.
-      if (!isAuthorized(options)) {
-        return json(401, { error: "unauthorized" });
-      }
-      return json(200, await openAndInspectWorkspace());
-    },
-  });
-
-  registerPath(CONFUCIUS_PAIR_PATH, {
-    supportedMethods: ["POST"],
-    supportedDataTypes: JSON_TYPES,
-    permitBookmarklet: true,
-    allowRequestsFromUnsafeWebContent: true,
-    init: async (options) => {
-      if (!isAuthorized(options)) {
-        return json(401, { error: "unauthorized" });
-      }
-      return json(200, { ok: true, token: getPref("pairingToken") });
-    },
   });
 
   registerPath(CONFUCIUS_RPC_PATH, {
@@ -302,11 +272,9 @@ export function registerHttpBridge(host: AgentHost): void {
 export function unregisterHttpBridge(): void {
   for (const path of [
     CONFUCIUS_HEALTH_PATH,
-    CONFUCIUS_PAIR_PATH,
     CONFUCIUS_RPC_PATH,
     CONFUCIUS_EVENTS_PATH,
     CONFUCIUS_MCP_PATH,
-    CONFUCIUS_WORKSPACE_PROBE_PATH,
   ]) {
     unregisterPath(path);
   }

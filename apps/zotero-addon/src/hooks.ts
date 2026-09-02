@@ -11,6 +11,10 @@ import {
   unregisterToolbarButton,
 } from "./modules/ui/toolbar";
 import {
+  registerReaderEntry,
+  unregisterReaderEntry,
+} from "./modules/ui/readerEntry";
+import {
   closeWorkspaceSidebar,
   closeWorkspaceWindow,
 } from "./modules/ui/workspaceWindow";
@@ -33,6 +37,11 @@ async function onStartup() {
   ensurePairingToken();
   await host.start();
   registerHttpBridge(host);
+  try {
+    registerReaderEntry();
+  } catch (error) {
+    ztoolkit.log("[Confucius] reader entry registration failed", error);
+  }
   try {
     await registerPreferencePane();
   } catch (error) {
@@ -69,6 +78,7 @@ async function onMainWindowUnload(win: Window): Promise<void> {
 
 function onShutdown(): void {
   closeWorkspaceWindow();
+  unregisterReaderEntry();
   unregisterHttpBridge();
   addon.data.alive = false;
   // @ts-expect-error Plugin instance is removed on shutdown.

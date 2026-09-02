@@ -267,6 +267,17 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     ["content"],
   ),
   def(
+    "propose_note",
+    "Write a research note into the library from Markdown. The draft is shown to the user for approval before anything is saved. Omit libraryID/key to attach the note under the reader's item or the selected item; without either it becomes a standalone note.",
+    {
+      title: { type: "string" },
+      markdown: { type: "string" },
+      libraryID: { type: "integer" },
+      parentKey: { type: "string" },
+    },
+    ["title", "markdown"],
+  ),
+  def(
     "append_to_note",
     "Append HTML/text to an existing note.",
     {

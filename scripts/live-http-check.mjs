@@ -21,19 +21,6 @@ assert.equal(health.body.ok, true);
 assert.equal(health.body.name, "confucius");
 console.log("health", health.body);
 
-const probe = await getJson("/confucius/v1/workspace-probe");
-assert.equal(probe.status, 200, `probe HTTP ${probe.status}: ${probe.text}`);
-console.log("workspace-probe", probe.body);
-assert.equal(probe.body.open, true, "workspace window did not open");
-assert.equal(probe.body.hasRoot, true, "workspace root missing");
-assert.equal(probe.body.hasPrompt, true, "prompt input missing");
-assert.equal(probe.body.hasSend, true, "send button missing");
-assert.equal(
-  String(probe.body.promptTag).toLowerCase(),
-  "input",
-  `prompt tag was ${probe.body.promptTag}`,
-);
-
 const rpc = await fetch(`${origin}/confucius/v1/rpc`, {
   method: "POST",
   headers: { "Content-Type": "application/json" },

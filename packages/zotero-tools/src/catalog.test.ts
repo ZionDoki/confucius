@@ -51,3 +51,14 @@ test("knowledge-base tools are typed, approval-gated, and use mind-map kinds", (
   assert.equal(TOOL_META.knowledge_base_search.concurrency, "parallel_safe");
   assert.equal(TOOL_META.knowledge_base_save_entry.mutatesState, true);
 });
+
+test("catalog has no Chrome browser tools", () => {
+  assert.equal(
+    TOOL_DEFINITIONS.some((tool) => tool.name.startsWith("browser.")),
+    false,
+  );
+  assert.equal(
+    Object.keys(TOOL_META).some((name) => name.startsWith("browser.")),
+    false,
+  );
+});

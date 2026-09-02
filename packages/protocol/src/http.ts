@@ -10,10 +10,6 @@ export const CONFUCIUS_EVENTS_PATH = `${CONFUCIUS_HTTP_PREFIX}/events`;
 
 export const CONFUCIUS_MCP_PATH = `${CONFUCIUS_HTTP_PREFIX}/mcp`;
 
-export const CONFUCIUS_PAIR_PATH = `${CONFUCIUS_HTTP_PREFIX}/pair`;
-
-export const CONFUCIUS_WORKSPACE_PROBE_PATH = `${CONFUCIUS_HTTP_PREFIX}/workspace-probe`;
-
 export const CONFUCIUS_LOOPBACK_ORIGIN = "http://127.0.0.1:23119";
 
 export interface ConfuciusHealthResponse {

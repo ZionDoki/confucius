@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Fail (exit 1) unless every workspace package and the Chrome manifest carry
-// the root package's version. Run via `npm run versions:check` in CI.
+// Fail (exit 1) unless every workspace package carries the root package's
+// version. Run via `npm run versions:check` in CI.
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,8 +18,6 @@ const targets = [
   "packages/skill-format/package.json",
   "packages/zotero-tools/package.json",
   "apps/zotero-addon/package.json",
-  "apps/chrome-extension/package.json",
-  "apps/chrome-extension/manifest.json",
   "package-lock.json",
 ];
 

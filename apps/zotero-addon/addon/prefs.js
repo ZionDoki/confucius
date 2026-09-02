@@ -17,3 +17,5 @@ pref("maxToolCalls", 96);
 pref("alwaysAllowedTools", "[]");
 pref("reasoningEffort", "auto");
 pref("contextWindowTokens", 32768);
+pref("uiFont", "sans");
+pref("uiFontSize", 13);

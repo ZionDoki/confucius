@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Skills
+
+- Skills are injected with Agent Skills progressive disclosure: the system
+  prompt always lists name, description, and triggers; the full `SKILL.md`
+  body is loaded when the user types `/slug` or the agent calls the `skill`
+  tool.
+- Activating a skill no longer replaces the tool list with `allowed-tools`
+  (which dropped memory, knowledge-base, and MCP tools). Preferred tools
+  stay documented; the rest remain available.
+- Skills moved out of the + menu. Type `/` in the composer to pick one with
+  arrow keys or the mouse. Extra text after `/slug` is passed through as the
+  prompt.
+
+### Breaking
+
+- Removed the Confucius Chrome extension, browser-tab tools, and the
+  `/pair` / `/workspace-probe` HTTP endpoints. Confucius is Zotero-only.
+  The local MCP/HTTP API and pairing token remain for MCP clients.
+
 ## 0.1.2 — 2026-09-02
 
 ### Memory, logs, and context

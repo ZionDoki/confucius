@@ -29,7 +29,7 @@ export class McpToolProvider implements ToolProvider {
     }
     return {
       name: name as ToolRuntimeMeta["name"],
-      catalog: "browser",
+      catalog: "mcp",
       concurrency: "serial",
       mutatesState: false,
     };

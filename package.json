@@ -2,7 +2,7 @@
   "name": "confucius",
   "version": "0.1.2",
   "private": true,
-  "description": "Native research agent for Zotero, with a Chrome bridge",
+  "description": "Native research agent for Zotero",
   "license": "AGPL-3.0-or-later",
   "workspaces": [
     "packages/*",
@@ -13,24 +13,19 @@
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
-    "test": "npm run sync-skills --silent && npm run sync-chrome-markdown --silent && npm test --workspaces --if-present",
-    "verify": "npm run sync-skills:check && npm run sync-chrome-markdown:check && npm run versions:check && npm run typecheck && npm test",
+    "test": "npm run sync-skills --silent && npm test --workspaces --if-present",
+    "verify": "npm run sync-skills:check && npm run versions:check && npm run typecheck && npm test",
     "test:live": "node --import tsx scripts/live-e2e.mjs",
     "test:live:approval": "node scripts/live-approval.mjs",
     "test:live:zotero-tools": "node --import tsx scripts/live-zotero-tools.mjs",
     "sync-skills": "node scripts/sync-skills.mjs",
     "sync-skills:check": "node scripts/sync-skills.mjs --check",
-    "sync-chrome-markdown": "node scripts/sync-chrome-markdown.mjs",
-    "sync-chrome-markdown:check": "node scripts/sync-chrome-markdown.mjs --check",
-    "versions:check": "node scripts/check-versions.mjs",
-    "package:chrome": "node scripts/package-chrome.mjs"
+    "versions:check": "node scripts/check-versions.mjs"
   },
   "engines": {
     "node": ">=22.8"
   },
   "devDependencies": {
-    "adm-zip": "^0.6.0",
-    "esbuild": "^0.28.2",
     "prettier": "^3.7.4",
     "typescript": "^5.9.3"
   },

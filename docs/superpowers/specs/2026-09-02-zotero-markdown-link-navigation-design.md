@@ -104,6 +104,24 @@ location = annotationKey ? { annotationID } : page ? { pageIndex: page - 1 } : n
   文献/标注链接，验证：聚焦已开标签、新开、标注定位、外部链接系统浏览器、
   知识库/记忆面板渲染可点。
 
+## §9 审批内联化与待确认面板移除（后补需求）
+
+- 待审批项不再放右侧面板，而是作为卡片渲染在时间线（消息栏）底部，
+  紧跟最后一条消息；Allow/Always/Deny 行为不变。
+- 用户确认后 `approval_resolved` 事件驱动重渲染，卡片自然消失；
+  新审批到达时时间线自动滚动到卡片可见。
+- `reviewPane` 整体移除：面板、宽度拖拽（`reviewGrip`、
+  `rememberedReviewWidth`）、顶栏切换按钮（`reviewToggle`）、侧栏抽屉分支、
+  `showReview` 状态与自动弹出逻辑全部删除。
+- 记忆管理（列表 + forget）迁移到「研究记忆」知识库窗口：主题栏底部新增
+  「长期记忆」区，内容经 markdown 渲染，链接可点（复用 §4/§5 渲染层）。
+- 本地化清理：删除 `workspace-toggle-review`、`workspace-review`、
+  `workspace-empty-review`、`workspace-review-grip`；记忆相关文案保留给记忆页面。
+- 测试同步：`workspace-document.test.mjs` 中两个断言旧面板的用例改写为
+  断言时间线卡片与移除后的状态。
+- 验收：Computer Use 下验证卡片出现/消失、面板不复存在、记忆页面管理可用、
+  侧栏与窗口两种布局无回归。
+
 ## 假设
 
 - `zotero://` 链接只在插件自有界面消费；Zotero 原生笔记编辑器本来就支持

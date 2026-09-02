@@ -30,6 +30,7 @@ export const LIBRARY_WRITE_TOOLS = [
   "create_note",
   "append_to_note",
   "update_note",
+  "propose_note",
   "attach_file",
 ] as const;
 
@@ -52,14 +53,6 @@ export const PAPER_WRITE_TOOLS = [
   "commit_annotations",
   "update_annotation_comment",
   "delete_annotation",
-] as const;
-
-export const BROWSER_TOOLS = [
-  "browser.get_active_tab",
-  "browser.extract_identifiers",
-  "browser.extract_pdf",
-  "browser.extract_readable_text",
-  "browser.import_current_page",
 ] as const;
 
 export const MEMORY_READ_TOOLS = [
@@ -85,7 +78,6 @@ export type LibraryReadTool = (typeof LIBRARY_READ_TOOLS)[number];
 export type LibraryWriteTool = (typeof LIBRARY_WRITE_TOOLS)[number];
 export type PaperReadTool = (typeof PAPER_READ_TOOLS)[number];
 export type PaperWriteTool = (typeof PAPER_WRITE_TOOLS)[number];
-export type BrowserTool = (typeof BROWSER_TOOLS)[number];
 export type MemoryReadTool = (typeof MEMORY_READ_TOOLS)[number];
 export type MemoryWriteTool = (typeof MEMORY_WRITE_TOOLS)[number];
 
@@ -94,7 +86,6 @@ export type BuiltinToolName =
   | LibraryWriteTool
   | PaperReadTool
   | PaperWriteTool
-  | BrowserTool
   | MemoryReadTool
   | MemoryWriteTool;
 
@@ -103,9 +94,10 @@ export type ToolCatalog =
   | "library.write"
   | "paper.read"
   | "paper.write"
-  | "browser"
   | "memory.read"
-  | "memory.write";
+  | "memory.write"
+  | "mcp"
+  | "agent";
 
 export type ToolConcurrency = "parallel_safe" | "serial";
 

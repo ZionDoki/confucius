@@ -1,7 +1,9 @@
 import type {
+  ApprovalRequest,
   ApprovalResolution,
   ConfuciusEvent,
   ConfuciusHealthResponse,
+  LaunchConsumeResult,
   LiveContextResult,
   ModelConfigView,
   PromptContextOptions,
@@ -9,6 +11,8 @@ import type {
   SessionContextStats,
   SessionMode,
   SessionRecord,
+  ToolFailure,
+  ToolSuccess,
 } from "@confucius/protocol";
 import {
   RPC_METHODS,
@@ -132,6 +136,8 @@ export class AgentHost {
   private readonly promotion = new MemoryPromotion(this.memory, this.logs);
   private readonly sessions = new Map<string, SessionState>();
   private readonly pendingApprovals = new Map<string, PendingApproval>();
+  /** One-shot queue for entry points (item menu); consumed by the poll. */
+  private pendingLaunch: { skillSlug: string } | null = null;
   private mcpProviders: McpToolProvider[] = [];
   private listeners = new Set<(event: ConfuciusEvent) => void>();
   private persistTimer: number | null = null;
@@ -398,6 +404,10 @@ export class AgentHost {
         return this.liveContext();
       case RPC_METHODS.readerOpen:
         return this.readerOpen(params);
+      case RPC_METHODS.launchConsume:
+        return this.launchConsume();
+      case RPC_METHODS.noteProposeFromSession:
+        return this.noteProposeFromSession(params);
       case RPC_METHODS.logsList:
         return this.logsRpcList(params);
       case RPC_METHODS.logsSearch:
@@ -777,6 +787,130 @@ export class AgentHost {
     this.pendingApprovals.delete(resolution.id);
     pending.resolve(resolution);
     return { ok: true };
+  }
+
+  /** Entry points (item menu) queue a skill; the workspace poll consumes it. */
+  queueLaunch(skillSlug: string): void {
+    this.pendingLaunch = { skillSlug };
+  }
+
+  private launchConsume(): LaunchConsumeResult {
+    const pending = this.pendingLaunch;
+    this.pendingLaunch = null;
+    return { skillSlug: pending?.skillSlug ?? null };
+  }
+
+  private emitSessionEvent(
+    state: SessionState,
+    turnId: string,
+    type: ConfuciusEvent["type"],
+    payload: ConfuciusEvent["payload"],
+  ): void {
+    const event = {
+      id: this.ids(),
+      sessionId: state.record.id,
+      turnId,
+      type,
+      ts: Date.now(),
+      payload,
+    } as ConfuciusEvent;
+    state.events.push(event);
+    if (state.events.length > MAX_EVENTS_PER_SESSION) {
+      state.events = state.events.slice(-MAX_EVENTS_PER_SESSION);
+    }
+    state.record.updatedAt = Date.now();
+    this.persistSoon();
+    for (const listener of this.listeners) {
+      listener(event);
+    }
+  }
+
+  private async executeTool(
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    const provider = new ZoteroToolProvider(this.tools);
+    return provider.call(name, args);
+  }
+
+  /**
+   * Review-pane "write note" entry: assemble the session's answers into a
+   * Markdown draft and surface it as a propose_note approval card. The write
+   * only happens after the user allows the card.
+   */
+  private noteProposeFromSession(params: Record<string, unknown>) {
+    const sessionId = String(params.sessionId ?? "");
+    const state = this.requireSession(sessionId);
+    const turns = new Map<string, string[]>();
+    const order: string[] = [];
+    for (const event of state.events) {
+      if (event.type !== "text_delta") {
+        continue;
+      }
+      const text = (event.payload as { text?: string }).text ?? "";
+      if (!text) {
+        continue;
+      }
+      const turnId = event.turnId ?? "";
+      let bucket = turns.get(turnId);
+      if (!bucket) {
+        bucket = [];
+        turns.set(turnId, bucket);
+        order.push(turnId);
+      }
+      bucket.push(text);
+    }
+    const answers = order
+      .map((turnId) => (turns.get(turnId) || []).join("").trim())
+      .filter(Boolean);
+    if (!answers.length) {
+      throw new Error("Session has no answers to write into a note yet");
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const sessionTitle = state.record.title || "Untitled";
+    const args = {
+      title: `Confucius · ${sessionTitle} · ${today}`,
+      markdown: answers.join("\n\n---\n\n"),
+    };
+    const request: ApprovalRequest = {
+      id: this.ids(),
+      sessionId,
+      turnId: `note_${this.ids()}`,
+      toolName: "propose_note",
+      args,
+      riskLevel: "write",
+      createdAt: Date.now(),
+    };
+    this.emitSessionEvent(state, request.turnId, "approval_required", {
+      request,
+    });
+    void new Promise<ApprovalResolution>((resolve) => {
+      this.pendingApprovals.set(request.id, {
+        resolve,
+        sessionId,
+        toolName: "propose_note",
+      });
+    }).then(async (resolution) => {
+      this.emitSessionEvent(state, request.turnId, "approval_resolved", {
+        resolution,
+      });
+      if (resolution.verdict !== "allow") {
+        return;
+      }
+      try {
+        const result = await this.executeTool(
+          "propose_note",
+          resolution.editedArgs ?? args,
+        );
+        this.emitSessionEvent(state, request.turnId, "tool_result", {
+          callId: request.id,
+          result: result as ToolSuccess<unknown> | ToolFailure,
+        });
+      } catch (error) {
+        ztoolkit.log("[Confucius] note write failed", error);
+      }
+    });
+    return { id: request.id };
   }
 
   private async memoryRpcList(params: Record<string, unknown>) {

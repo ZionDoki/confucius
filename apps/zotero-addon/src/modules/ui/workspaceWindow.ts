@@ -2,11 +2,9 @@ import { config } from "../../../package.json";
 import { isWindowAlive } from "../../utils/window";
 import { getPref, setPref } from "../../utils/prefs";
 import {
-  inspectWorkspace,
   mountWorkspace,
   unmountWorkspace,
   type WorkspaceHost,
-  type WorkspaceInspect,
   type WorkspaceLayout,
 } from "./WorkspaceView";
 import {
@@ -23,13 +21,6 @@ const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 720;
 
 const sidebarCleanups = new WeakMap<HTMLElement, () => void>();
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    const win = Zotero.getMainWindow();
-    win.setTimeout(resolve, ms);
-  });
-}
 
 function getHost(): WorkspaceHost | null {
   const plugin = Zotero as typeof Zotero & {
@@ -337,7 +328,7 @@ export function openWorkspaceSidebar(win?: Window): Window | undefined {
     width: "5px",
     flex: "0 0 5px",
     cursor: "col-resize",
-    background: "#d7d0c4",
+    background: "#e5e1d8",
     alignSelf: "stretch",
   });
 
@@ -354,8 +345,8 @@ export function openWorkspaceSidebar(win?: Window): Window | undefined {
     overflow: "hidden",
     zIndex: "6",
     boxSizing: "border-box",
-    borderLeft: "1px solid #d7d0c4",
-    background: "#f6f3ec",
+    borderLeft: "1px solid #e5e1d8",
+    background: "#f5f3ee",
   });
 
   const root = doc.createElementNS(HTML_NS, "div") as HTMLElement;
@@ -417,37 +408,4 @@ export function closeWorkspaceWindow(): void {
   for (const main of mainWindows()) {
     closeWorkspaceSidebar(main);
   }
-}
-
-export async function openAndInspectWorkspace(): Promise<WorkspaceInspect> {
-  const win = openWorkspace();
-  if (!win) {
-    return {
-      open: false,
-      title: "",
-      hasRoot: false,
-      hasPrompt: false,
-      hasSend: false,
-      promptTag: "",
-      promptType: "",
-      childCount: 0,
-      visibleText: "",
-    };
-  }
-  const layout: WorkspaceLayout = win.document.getElementById(SIDEBAR_ID)
-    ? "sidebar"
-    : "window";
-  for (const ms of [0, 50, 150, 400]) {
-    await delay(ms);
-    try {
-      bootWorkspace(win, undefined, layout);
-    } catch (error) {
-      ztoolkit.log("[Confucius] workspace inspect mount failed", error);
-    }
-    const info = inspectWorkspace(win);
-    if (info.hasPrompt && info.hasSend) {
-      return info;
-    }
-  }
-  return inspectWorkspace(win);
 }

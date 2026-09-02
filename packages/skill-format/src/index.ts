@@ -1,12 +1,16 @@
-export interface ConfuciusSkill {
-  slug: string;
-  name: string;
-  description: string;
-  allowedTools: string[];
-  triggers: string[];
-  body: string;
-  path: string;
-}
+export type { ConfuciusSkill } from "./types";
+export {
+  DEFAULT_SKILL_USER_TEXT,
+  RESERVED_SLASH_COMMANDS,
+  SKILL_TOOL_NAME,
+  formatInvokedUserText,
+  formatSkillPromptSection,
+  parseSkillInvocation,
+  slashMenuToken,
+} from "./inject";
+export type { SkillInvocation } from "./inject";
+
+import type { ConfuciusSkill } from "./types";
 
 export function parseSkillMarkdown(
   slug: string,

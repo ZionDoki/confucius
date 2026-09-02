@@ -58,6 +58,10 @@ export const RPC_METHODS = {
   sessionSetPermissions: "session/setPermissions",
   sessionCompact: "session/compact",
   sessionContext: "session/context",
+  contextLive: "context/live",
+  readerOpen: "reader/open",
+  launchConsume: "workspace/launch-consume",
+  noteProposeFromSession: "note/propose-from-session",
   logsList: "logs/list",
   logsSearch: "logs/search",
   logsRead: "logs/read",
@@ -74,6 +78,56 @@ export interface SessionNewParams {
 export interface SessionPromptParams {
   sessionId: string;
   text: string;
+  context?: PromptContextOptions;
+}
+
+export interface PromptContextOptions {
+  suppressSelection?: boolean;
+}
+
+export interface LiveContextReader {
+  libraryID: number;
+  attachmentKey: string;
+  parentKey: string | null;
+  title: string;
+  pageLabel: string | null;
+  pageIndex: number | null;
+}
+
+export interface LiveContextSelection {
+  text: string;
+  preview: string;
+  pageLabel: string | null;
+  pageIndex: number | null;
+}
+
+export interface LiveContextItem {
+  libraryID: number;
+  key: string;
+  title: string;
+}
+
+export interface LiveContextResult {
+  reader: LiveContextReader | null;
+  selection: LiveContextSelection | null;
+  items: LiveContextItem[];
+  collection: string | null;
+}
+
+export interface ReaderOpenParams {
+  libraryID: number;
+  key: string;
+  pageIndex?: number;
+  annotationKey?: string;
+}
+
+/** One-shot queue from entry points (item menu) consumed by the workspace poll. */
+export interface LaunchConsumeResult {
+  skillSlug: string | null;
+}
+
+export interface NoteProposeFromSessionParams {
+  sessionId: string;
 }
 
 export interface SessionIdParams {
@@ -213,6 +267,29 @@ export function clampMaxToolCalls(value: unknown): number {
   return Math.min(parsed, MAX_MAX_TOOL_CALLS);
 }
 
+export type UiFont = "sans" | "serif" | "mono";
+
+export const UI_FONTS: readonly UiFont[] = ["sans", "serif", "mono"];
+
+export function isUiFont(value: unknown): value is UiFont {
+  return (
+    typeof value === "string" && (UI_FONTS as readonly string[]).includes(value)
+  );
+}
+
+export const DEFAULT_UI_FONT: UiFont = "sans";
+export const DEFAULT_UI_FONT_SIZE = 13;
+export const MIN_UI_FONT_SIZE = 12;
+export const MAX_UI_FONT_SIZE = 18;
+
+export function clampUiFontSize(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_UI_FONT_SIZE;
+  }
+  return Math.min(MAX_UI_FONT_SIZE, Math.max(MIN_UI_FONT_SIZE, Math.round(parsed)));
+}
+
 export interface ModelConfigView {
   baseUrl: string;
   apiKey: string;
@@ -234,6 +311,10 @@ export interface ModelConfigView {
   maxIterations: number;
   /** Tool calls per user prompt. Global, not per endpoint. */
   maxToolCalls: number;
+  /** Workspace UI font family preset. */
+  uiFont?: UiFont;
+  /** Workspace UI base font size in px (12-18). */
+  uiFontSize?: number;
 }
 
 export interface ConfigSetParams {
@@ -255,6 +336,10 @@ export interface ConfigSetParams {
   maxIterations?: number;
   /** Tool calls per user prompt. Applies to every endpoint. */
   maxToolCalls?: number;
+  /** Workspace UI font family preset. */
+  uiFont?: UiFont;
+  /** Workspace UI base font size in px (12-18). */
+  uiFontSize?: number;
 }
 
 export interface ConfigListModelsParams {

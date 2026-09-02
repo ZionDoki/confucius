@@ -13,16 +13,9 @@ export type TurnPhase =
   | "failed"
   | "aborted";
 
-export interface BrowserTabContext {
-  tabId: number;
-  url: string;
-  title: string;
-}
-
 export interface SessionContext {
   item?: ItemRef;
   collection?: CollectionRef;
-  browserTab?: BrowserTabContext;
 }
 
 export interface SessionRecord {

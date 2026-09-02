@@ -26,6 +26,8 @@ declare namespace _ZoteroTypes {
       "alwaysAllowedTools": string;
       "reasoningEffort": string;
       "contextWindowTokens": number;
+      "uiFont": string;
+      "uiFontSize": number;
     };
   }
 }

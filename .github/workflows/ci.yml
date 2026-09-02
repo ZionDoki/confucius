@@ -20,18 +20,15 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run sync-skills:check
-      - run: npm run sync-chrome-markdown:check
       - run: npm run versions:check
       - run: npm run typecheck
       - run: npm test
       - run: npm run lint
       - run: npm run build
-      - name: Package Chrome extension
-        run: npm run package:chrome
       - uses: actions/upload-artifact@v4
         with:
-          name: confucius-chrome-node${{ matrix.node }}
-          path: dist/*.zip
+          name: confucius-xpi-node${{ matrix.node }}
+          path: apps/zotero-addon/.scaffold/build/confucius.xpi
           if-no-files-found: error
 
   release:
@@ -47,8 +44,6 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run build
-      - run: npm run package:chrome
       - name: Build Zotero xpi
         run: npm run build --workspace @confucius/zotero-addon
       - uses: softprops/action-gh-release@v2
@@ -57,4 +52,3 @@ jobs:
           files: |
             apps/zotero-addon/.scaffold/build/confucius.xpi
             apps/zotero-addon/.scaffold/build/update.json
-            dist/confucius-chrome-*.zip

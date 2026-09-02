@@ -6,8 +6,8 @@ pref-base-url = Base URL
 pref-api-key = API key
 pref-model = Model
 pref-max-tokens = Max tokens (0 = provider default)
-pref-bridge-title = Chrome bridge
-pref-bridge-help = Paste this pairing token into the Confucius Chrome side panel. Requests only succeed on 127.0.0.1 with this token.
+pref-bridge-title = Local API
+pref-bridge-help = Bearer token for the local MCP and HTTP API. Requests only succeed on 127.0.0.1 with this token.
 pref-mcp-json = Extra MCP servers JSON (optional)
 pref-agent-title = Agent behavior
 pref-agent-help = Streaming, turn limits, and long-term memory. Limits apply to every model endpoint. Memories are plain markdown files you can edit directly.

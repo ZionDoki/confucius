@@ -661,6 +661,81 @@ function noteHtml(content: string): string {
   return `<div>${escaped.replace(/\n/g, "<br/>")}</div>`;
 }
 
+/**
+ * Minimal Markdown to note HTML: headings, bullet/numbered lists, bold,
+ * inline code, fenced code blocks and plain paragraphs. Deliberately not a
+ * full Markdown engine -- the note preview only needs structure.
+ */
+export function markdownToNoteHtml(markdown: string): string {
+  const escape = (text: string) =>
+    text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  const inline = (text: string) =>
+    escape(text)
+      .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+      .replace(/`([^`]+)`/g, "<code>$1</code>");
+  const lines = String(markdown ?? "").replace(/\r\n/g, "\n").split("\n");
+  const out: string[] = [];
+  let list: "ul" | "ol" | null = null;
+  let code: string[] | null = null;
+  const closeList = () => {
+    if (list) {
+      out.push(`</${list}>`);
+      list = null;
+    }
+  };
+  for (const line of lines) {
+    if (code) {
+      if (line.trimStart().startsWith("```")) {
+        out.push(`<pre>${escape(code.join("\n"))}</pre>`);
+        code = null;
+      } else {
+        code.push(line);
+      }
+      continue;
+    }
+    const trimmed = line.trim();
+    if (!trimmed) {
+      closeList();
+      continue;
+    }
+    if (trimmed.startsWith("```")) {
+      closeList();
+      code = [];
+      continue;
+    }
+    const heading = /^(#{1,6})\s+(.*)$/.exec(trimmed);
+    if (heading) {
+      closeList();
+      const level = Math.min(heading[1].length, 6);
+      out.push(`<h${level}>${inline(heading[2])}</h${level}>`);
+      continue;
+    }
+    const bullet = /^[-*]\s+(.*)$/.exec(trimmed);
+    const ordered = /^\d+[.)]\s+(.*)$/.exec(trimmed);
+    const item = bullet ?? ordered;
+    if (item) {
+      const wanted: "ul" | "ol" = bullet ? "ul" : "ol";
+      if (list !== wanted) {
+        closeList();
+        list = wanted;
+        out.push(`<${list}>`);
+      }
+      out.push(`<li>${inline(item[1])}</li>`);
+      continue;
+    }
+    closeList();
+    out.push(`<p>${inline(trimmed)}</p>`);
+  }
+  if (code) {
+    out.push(`<pre>${escape(code.join("\n"))}</pre>`);
+  }
+  closeList();
+  return `<div>${out.join("")}</div>`;
+}
+
 export class ZoteroToolHost {
   private readonly proposals = new Map<
     string,
@@ -739,6 +814,8 @@ export class ZoteroToolHost {
         return this.linkRelated(args);
       case "create_note":
         return this.createNote(args);
+      case "propose_note":
+        return this.proposeNote(args);
       case "append_to_note":
         return this.appendToNote(args);
       case "update_note":
@@ -1416,6 +1493,58 @@ export class ZoteroToolHost {
     }
     await note.saveTx();
     return ok("create_note", { libraryID: note.libraryID, key: note.key });
+  }
+
+  /**
+   * Approval-gated note write. The draft ({title, markdown}) is what the
+   * approval card shows; when allowed, this runs and creates the note.
+   * Parent falls back from an explicit ref to the reader's item to the
+   * library-pane selection; otherwise the note stays standalone.
+   */
+  private async proposeNote(args: Record<string, unknown>): Promise<ToolResult> {
+    const title = String(args.title ?? "").trim();
+    const markdown = String(args.markdown ?? "").trim();
+    if (!title || !markdown) {
+      return fail(
+        "propose_note",
+        "invalid_args",
+        "title and markdown are required",
+      );
+    }
+    let parent: Zotero.Item | null = null;
+    if (
+      typeof args.libraryID === "number" &&
+      typeof args.parentKey === "string" &&
+      args.parentKey.trim()
+    ) {
+      parent = getItem(args.libraryID, args.parentKey.trim());
+    }
+    if (!parent) {
+      const live = liveReaderContext();
+      if (live.reader?.parentKey) {
+        parent = getItem(live.reader.libraryID, live.reader.parentKey);
+      }
+    }
+    if (!parent) {
+      const pane = Zotero.getActiveZoteroPane?.();
+      const selected = (pane?.getSelectedItems?.() || []).filter(
+        (item) => item && !Array.isArray(item) && !item.isNote?.(),
+      );
+      parent = selected[0] ?? null;
+    }
+    const note = new Zotero.Item("note");
+    note.libraryID = parent ? parent.libraryID : defaultLibraryID(args);
+    note.setNote(markdownToNoteHtml(`# ${title}\n\n${markdown}`));
+    if (parent) {
+      note.parentID = parent.id;
+    }
+    await note.saveTx();
+    return ok("propose_note", {
+      libraryID: note.libraryID,
+      key: note.key,
+      title,
+      parentKey: parent?.key ?? null,
+    });
   }
 
   private async appendToNote(
