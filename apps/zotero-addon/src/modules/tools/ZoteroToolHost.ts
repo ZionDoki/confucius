@@ -1,4 +1,9 @@
 import type { ToolErrorCode, ToolResult } from "@confucius/protocol";
+import { buildOpenPdfUri, buildSelectUri } from "@confucius/protocol";
+import type {
+  LiveContextReader,
+  LiveContextSelection,
+} from "@confucius/protocol";
 import {
   collectMatches,
   compileSafeRegex,
@@ -41,6 +46,14 @@ function getItem(libraryID: number, key: string): Zotero.Item | null {
   return asItem(Zotero.Items.getByLibraryAndKey(libraryID, key));
 }
 
+function groupIDForLibrary(libraryID: number): number | undefined {
+  if (libraryID === Zotero.Libraries.userLibraryID) {
+    return undefined;
+  }
+  const groupID = Zotero.Groups.getGroupIDFromLibraryID(libraryID);
+  return groupID || undefined;
+}
+
 function summarizeItem(item: Zotero.Item) {
   const creators = item.getCreators?.() || [];
   const authors = creators
@@ -58,6 +71,7 @@ function summarizeItem(item: Zotero.Item) {
     creators: authors,
     year: item.getField?.("year") || "",
     doi: item.getField?.("DOI") || "",
+    zoteroUri: buildSelectUri(item.key, groupIDForLibrary(item.libraryID)),
   };
 }
 
@@ -158,7 +172,9 @@ async function importDoiFromCsl(
   return item;
 }
 
-async function findPdf(item: Zotero.Item): Promise<Zotero.Item | null> {
+export async function findPdf(
+  item: Zotero.Item,
+): Promise<Zotero.Item | null> {
   if (
     item.isAttachment?.() &&
     item.attachmentContentType === "application/pdf"
@@ -267,6 +283,111 @@ interface PdfReaderInstance {
   _initPromise?: Promise<unknown>;
   _waitForReader?: () => Promise<void>;
   _internalReader?: { _primaryView?: PdfPrimaryView };
+  navigate?: (location: Record<string, unknown>) => void | Promise<void>;
+}
+
+/**
+ * Build a Reader.open location from tool args. The reader resolves
+ * annotationID to the stored annotation position, pageIndex to a page scroll.
+ */
+function readerLocation(
+  args: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const annotationKey =
+    typeof args.annotationKey === "string" ? args.annotationKey.trim() : "";
+  if (annotationKey) {
+    return { annotationID: annotationKey };
+  }
+  if (
+    typeof args.pageIndex === "number" &&
+    Number.isInteger(args.pageIndex) &&
+    args.pageIndex >= 0
+  ) {
+    return { pageIndex: args.pageIndex };
+  }
+  return undefined;
+}
+
+/**
+ * Snapshot of what the user is looking at right now: the open reader plus the
+ * current text selection. Shared by the live-context spine and the
+ * get_pdf_selection tool so both stay in lockstep.
+ */
+export function liveReaderContext(): {
+  reader: LiveContextReader | null;
+  selection: LiveContextSelection | null;
+} {
+  try {
+    const reader = Zotero.Reader.getByTabID?.(
+      Zotero.getMainWindow()?.Zotero_Tabs?.selectedID,
+    ) as unknown as PdfReaderInstance | undefined;
+    if (!reader || reader._isTabClosed) {
+      return { reader: null, selection: null };
+    }
+    const attachment = reader.itemID
+      ? asItem(Zotero.Items.get(reader.itemID))
+      : null;
+    if (!attachment) {
+      return { reader: null, selection: null };
+    }
+    const view = reader._internalReader?._primaryView;
+    const currentPage = (
+      view?._iframeWindow?.PDFViewerApplication as
+        | { pdfViewer?: { currentPageNumber?: number } }
+        | undefined
+    )?.pdfViewer?.currentPageNumber;
+    const pageIndex = typeof currentPage === "number" ? currentPage - 1 : null;
+    const pageLabel =
+      (pageIndex === null ? undefined : view?._getPageLabel?.(pageIndex)) ??
+      null;
+    const parent = attachment.parentItemID
+      ? asItem(Zotero.Items.get(attachment.parentItemID))
+      : null;
+    const readerInfo: LiveContextReader = {
+      libraryID: attachment.libraryID,
+      attachmentKey: attachment.key,
+      parentKey: parent ? parent.key : null,
+      title: String(
+        parent?.getDisplayTitle?.() || attachment.getDisplayTitle?.() || "",
+      ),
+      pageLabel,
+      pageIndex,
+    };
+    let selection: LiveContextSelection | null = null;
+    const ranges = view?._selectionRanges || [];
+    if (ranges.length) {
+      const selected = view?._getAnnotationFromSelectionRanges?.(
+        ranges,
+        "highlight",
+      );
+      const fallbackText = ranges
+        .map((range) =>
+          range && typeof range === "object"
+            ? String((range as { text?: unknown }).text ?? "")
+            : "",
+        )
+        .filter(Boolean)
+        .join(" ");
+      const text = (selected?.text || fallbackText).trim();
+      if (text) {
+        const position = selected?.position;
+        const selPage = position ? position.pageIndex : pageIndex;
+        selection = {
+          text,
+          preview: text.slice(0, 60),
+          pageLabel:
+            selected?.pageLabel ||
+            (selPage === null || selPage === undefined
+              ? null
+              : (view?._getPageLabel?.(selPage) ?? null)),
+          pageIndex: selPage ?? null,
+        };
+      }
+    }
+    return { reader: readerInfo, selection };
+  } catch {
+    return { reader: null, selection: null };
+  }
 }
 
 interface LocatedHighlight {
@@ -1584,11 +1705,25 @@ export class ZoteroToolHost {
           (ann as unknown as { annotationSortIndex?: string })
             .annotationSortIndex || "",
         position: annotationPosition(ann),
+        zoteroUri: buildOpenPdfUri(pdf.key, {
+          groupID: groupIDForLibrary(pdf.libraryID),
+          annotationKey: ann.key,
+        }),
       }));
+    const first = annotations[0];
+    const firstPosition =
+      first && typeof first.position === "object" && first.position !== null
+        ? (first.position as { pageIndex?: unknown })
+        : null;
     return ok("get_annotations", {
       libraryID: pdf.libraryID,
       key: item.key,
       attachmentKey: pdf.key,
+      annotationKey: first?.key,
+      pageIndex:
+        typeof firstPosition?.pageIndex === "number"
+          ? firstPosition.pageIndex
+          : undefined,
       annotations,
     });
   }
@@ -1642,12 +1777,15 @@ export class ZoteroToolHost {
     pane?.selectItem?.(item.id);
     const pdf = await findPdf(item);
     if (pdf) {
-      await Zotero.Reader.open(pdf.id);
+      const location = readerLocation(args);
+      await Zotero.Reader.open(pdf.id, location as never);
     }
     return ok("open_item", summarizeItem(item));
   }
 
-  private proposeHighlights(args: Record<string, unknown>): ToolResult {
+  private async proposeHighlights(
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
     const ref = requireItemRef(args);
     if (!ref.ok) {
       return fail("propose_highlights", "invalid_args", ref.message);
@@ -1660,9 +1798,17 @@ export class ZoteroToolHost {
       }>) || [];
     const id = `${ref.libraryID}:${ref.key}`;
     this.proposals.set(id, highlights);
+    const item = getItem(ref.libraryID, ref.key);
+    const pdf = item ? await findPdf(item) : null;
+    const firstPage = highlights.find(
+      (highlight) => Number.isInteger(Number(highlight.page)),
+    )?.page;
     return ok("propose_highlights", {
       libraryID: ref.libraryID,
       key: ref.key,
+      attachmentKey: pdf?.key,
+      pageIndex:
+        firstPage === undefined ? undefined : Number(firstPage) - 1,
       count: highlights.length,
       highlights,
       persisted: false,
@@ -1704,7 +1850,7 @@ export class ZoteroToolHost {
         "Item has no PDF attachment",
       );
     }
-    const { view } = await waitForPdfReader(pdf);
+    const { reader, view } = await waitForPdfReader(pdf);
     const occurrenceCounts = new Map<string, number>();
     const located: LocatedHighlight[] = [];
     for (const highlight of highlights) {
@@ -1747,11 +1893,22 @@ export class ZoteroToolHost {
       throw error;
     }
     this.proposals.delete(id);
+    const first = located[0];
+    if (first?.position) {
+      try {
+        // Commit landed while the reader is open: jump to the first new
+        // highlight so the write-back is visible right away (one-shot).
+        await reader.navigate?.({ position: first.position });
+      } catch {
+        // Navigation is cosmetic; the committed annotations are the result.
+      }
+    }
     return ok("commit_annotations", {
       libraryID: pdf.libraryID,
       key: created[0]?.key || "",
       keys: created.map((annotation) => annotation.key),
       attachmentKey: pdf.key,
+      pageIndex: first?.position?.pageIndex,
       mode: "annotations",
       count: created.length,
     });

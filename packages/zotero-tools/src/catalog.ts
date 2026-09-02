@@ -7,7 +7,6 @@ import type {
   ToolRuntimeMeta,
 } from "@confucius/protocol";
 import {
-  BROWSER_TOOLS,
   LIBRARY_READ_TOOLS,
   LIBRARY_WRITE_TOOLS,
   MEMORY_READ_TOOLS,
@@ -61,7 +60,7 @@ function def(
 export const TOOL_DEFINITIONS: ToolDefinition[] = [
   def(
     "search_items",
-    "Search library items by title, creator, or everywhere.",
+    "Search library items by title, creator, or everywhere. Each result carries a zoteroUri for clickable linking.",
     {
       query: { type: "string" },
       field: {
@@ -353,10 +352,15 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     ["libraryID", "key", "pattern"],
   ),
-  def("get_annotations", "List annotations as JSON.", itemRef, [
-    "libraryID",
-    "key",
-  ]),
+  def(
+    "get_annotations",
+    "List annotations as JSON. Each annotation carries a zoteroUri linking into the PDF.",
+    itemRef,
+    [
+      "libraryID",
+      "key",
+    ],
+  ),
   def("get_pdf_selection", "Current PDF reader selection, if any.", itemRef),
   def("get_paper_metadata", "Title, authors, year, DOI for a paper.", itemRef, [
     "libraryID",
@@ -408,27 +412,6 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     "libraryID",
     "key",
   ]),
-  def(
-    "browser.get_active_tab",
-    "Last browser tab pushed by the Chrome extension.",
-    {},
-  ),
-  def(
-    "browser.extract_identifiers",
-    "DOI / arXiv / PMID extracted from the active tab.",
-    {},
-  ),
-  def("browser.extract_pdf", "PDF URL on the active tab, if any.", {}),
-  def(
-    "browser.extract_readable_text",
-    "Readable text snapshot from the active tab.",
-    {},
-  ),
-  def(
-    "browser.import_current_page",
-    "Import the active tab identifier via add_item (still requires approval).",
-    {},
-  ),
   def(
     "memory_search",
     "Search long-term memory for relevant prior knowledge about the user.",
@@ -618,14 +601,6 @@ for (const name of PAPER_READ_TOOLS) {
 for (const name of PAPER_WRITE_TOOLS) {
   TOOL_META[name] = meta(name, "paper.write", "serial", true);
 }
-for (const name of BROWSER_TOOLS) {
-  TOOL_META[name] = meta(
-    name,
-    "browser",
-    name === "browser.import_current_page" ? "serial" : "parallel_safe",
-    name === "browser.import_current_page",
-  );
-}
 for (const name of MEMORY_READ_TOOLS) {
   TOOL_META[name] = meta(name, "memory.read", "parallel_safe", false);
 }
@@ -637,7 +612,6 @@ export const WRITE_TOOL_NAMES = new Set<string>([
   ...LIBRARY_WRITE_TOOLS,
   ...PAPER_WRITE_TOOLS,
   ...MEMORY_WRITE_TOOLS,
-  "browser.import_current_page",
 ]);
 
 export const READ_ONLY_TOOL_NAMES = new Set<string>([
