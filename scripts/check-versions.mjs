@@ -20,6 +20,7 @@ const targets = [
   "apps/zotero-addon/package.json",
   "apps/chrome-extension/package.json",
   "apps/chrome-extension/manifest.json",
+  "package-lock.json",
 ];
 
 let failed = false;

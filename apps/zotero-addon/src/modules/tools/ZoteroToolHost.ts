@@ -61,8 +61,108 @@ function summarizeItem(item: Zotero.Item) {
   };
 }
 
+interface CslCreator {
+  family?: string;
+  given?: string;
+  literal?: string;
+}
+
+interface CslMetadata {
+  type?: string;
+  title?: string;
+  author?: CslCreator[];
+  issued?: { "date-parts"?: Array<Array<number | string>> };
+  "container-title"?: string;
+  volume?: string | number;
+  issue?: string | number;
+  page?: string | number;
+  DOI?: string;
+  URL?: string;
+  publisher?: string;
+  abstract?: string;
+}
+
+function doiFromIdentifier(identifier: string): string | null {
+  const match = identifier.match(/10\.\d{4,9}\/[-._;()/:a-z0-9]+/i);
+  return match ? match[0].replace(/[.,;]+$/, "") : null;
+}
+
+function cslItemType(type: string | undefined): string {
+  switch (String(type || "").toLowerCase()) {
+    case "book":
+      return "book";
+    case "chapter":
+      return "bookSection";
+    case "paper-conference":
+      return "conferencePaper";
+    case "thesis":
+      return "thesis";
+    default:
+      return "journalArticle";
+  }
+}
+
+function setItemField(item: Zotero.Item, field: string, value: unknown): void {
+  const text = String(value ?? "").trim();
+  if (!text) return;
+  try {
+    item.setField(field, text);
+  } catch {
+    // CSL contains fields that are not valid for every Zotero item type.
+  }
+}
+
+async function importDoiFromCsl(
+  doi: string,
+  libraryID: number,
+  collections: number[],
+): Promise<Zotero.Item> {
+  const xhr = await Zotero.HTTP.request(
+    "GET",
+    `https://doi.org/${encodeURI(doi)}`,
+    {
+      headers: { Accept: "application/vnd.citationstyles.csl+json" },
+      timeout: 30_000,
+    },
+  );
+  const metadata = JSON.parse(xhr.responseText || "") as CslMetadata;
+  if (!String(metadata.title ?? "").trim()) {
+    throw new Error("DOI metadata did not include a title");
+  }
+  const item = new Zotero.Item(cslItemType(metadata.type) as never);
+  (item as unknown as { libraryID: number }).libraryID = libraryID;
+  setItemField(item, "title", metadata.title);
+  setItemField(item, "publicationTitle", metadata["container-title"]);
+  setItemField(item, "volume", metadata.volume);
+  setItemField(item, "issue", metadata.issue);
+  setItemField(item, "pages", metadata.page);
+  setItemField(item, "DOI", metadata.DOI || doi);
+  setItemField(item, "url", metadata.URL || `https://doi.org/${doi}`);
+  setItemField(item, "publisher", metadata.publisher);
+  setItemField(item, "abstractNote", metadata.abstract);
+  const dateParts = metadata.issued?.["date-parts"]?.[0] ?? [];
+  setItemField(item, "date", dateParts.filter(Boolean).join("-"));
+  const creators: _ZoteroTypes.Item.CreatorJSON[] = [];
+  for (const creator of metadata.author ?? []) {
+    const literal = String(creator.literal ?? "").trim();
+    const firstName = String(creator.given ?? "").trim();
+    const lastName = String(creator.family ?? "").trim();
+    if (literal) creators.push({ creatorType: "author", name: literal });
+    else if (firstName || lastName) {
+      creators.push({ creatorType: "author", firstName, lastName });
+    }
+  }
+  if (creators.length) item.setCreators(creators);
+  if (collections.length) item.setCollections(collections);
+  await item.saveTx();
+  return item;
+}
+
 async function findPdf(item: Zotero.Item): Promise<Zotero.Item | null> {
-  if (item.isAttachment?.() && item.attachmentContentType === "application/pdf") {
+  if (
+    item.isAttachment?.() &&
+    item.attachmentContentType === "application/pdf"
+  ) {
     return item;
   }
   if (item.isNote?.()) {
@@ -85,6 +185,354 @@ async function pdfText(item: Zotero.Item): Promise<string | null> {
   }
   const text = await pdf.attachmentText;
   return text || null;
+}
+
+interface PdfPosition {
+  pageIndex: number;
+  rects: number[][];
+  nextPageRects?: number[][];
+}
+
+interface PdfFindController {
+  find(state: {
+    type: "find";
+    query: string;
+    phraseSearch: boolean;
+    caseSensitive: boolean;
+    entireWord: boolean;
+    highlightAll: boolean;
+    findPrevious: boolean;
+  }): void | Promise<void>;
+  getMatchPositionsAsync(pageIndex: number): Promise<PdfPosition[]>;
+  pageMatches?: Array<number[] | undefined>;
+  _pageMatches?: Array<number[] | undefined>;
+  _pendingFindMatches?: Set<number>;
+  _pdfDocument?: {
+    getPageData?: (input: { pageIndex: number }) => Promise<{
+      chars?: PdfPageChar[];
+    }>;
+  };
+}
+
+interface PdfSelectionAnnotation {
+  text?: string;
+  pageLabel?: string;
+  sortIndex?: string;
+  position?: PdfPosition;
+}
+
+interface PdfPageChar {
+  u?: string;
+  char?: string;
+  rect?: number[];
+  inlineRect?: number[];
+  rotation?: number;
+  spaceAfter?: boolean;
+  lineBreakAfter?: boolean;
+  paragraphBreakAfter?: boolean;
+}
+
+interface PdfPrimaryView {
+  initializedPromise?: Promise<void>;
+  _findController?: PdfFindController;
+  _iframeWindow?: Window & {
+    PDFViewerApplication?: {
+      pdfDocument?: { numPages?: number };
+    };
+  };
+  _selectionRanges?: unknown[];
+  _pdfPages?: Array<{ chars?: PdfPageChar[] } | undefined>;
+  _getAnnotationFromSelectionRanges?: (
+    ranges: unknown[],
+    type: "highlight",
+  ) => PdfSelectionAnnotation | null;
+  _ensureBasicPageData?: (pageIndex: number) => Promise<void>;
+  setFindState?: (state: {
+    active: boolean;
+    query: string;
+    highlightAll: boolean;
+    caseSensitive: boolean;
+    entireWord: boolean;
+  }) => void | Promise<void>;
+  getAnnotationMeta?: (position: PdfPosition) => {
+    sortIndex?: string;
+    pageLabel?: string;
+  };
+  _getPageLabel?: (pageIndex: number, usePhysical?: boolean) => string;
+}
+
+interface PdfReaderInstance {
+  itemID?: number;
+  _isTabClosed?: boolean;
+  _initPromise?: Promise<unknown>;
+  _waitForReader?: () => Promise<void>;
+  _internalReader?: { _primaryView?: PdfPrimaryView };
+}
+
+interface LocatedHighlight {
+  text: string;
+  comment: string;
+  position: PdfPosition;
+  sortIndex: string;
+  pageLabel: string;
+}
+
+async function waitForPdfReader(pdf: Zotero.Item): Promise<{
+  reader: PdfReaderInstance;
+  view: PdfPrimaryView;
+}> {
+  let reader = (await Zotero.Reader.open(pdf.id)) as
+    PdfReaderInstance | undefined;
+  const deadline = Date.now() + 15_000;
+  while (!reader && Date.now() < deadline) {
+    reader = (Zotero.Reader._readers as unknown as PdfReaderInstance[]).find(
+      (candidate) =>
+        candidate.itemID === pdf.id && candidate._isTabClosed !== true,
+    );
+    if (!reader) {
+      await Zotero.Promise.delay(25);
+    }
+  }
+  if (!reader) {
+    throw new Error("Zotero PDF reader did not open");
+  }
+  await reader._initPromise;
+  await reader._waitForReader?.();
+  const view = reader._internalReader?._primaryView;
+  if (!view) {
+    throw new Error("Zotero PDF reader view is unavailable");
+  }
+  await view.initializedPromise;
+  const findDeadline = Date.now() + 15_000;
+  while (!view._findController?._pdfDocument && Date.now() < findDeadline) {
+    await Zotero.Promise.delay(25);
+  }
+  if (!view._findController?._pdfDocument) {
+    throw new Error("Zotero PDF text search did not finish initializing");
+  }
+  return { reader, view };
+}
+
+function findPageMatches(
+  controller: PdfFindController,
+): Array<number[] | undefined> {
+  return controller.pageMatches ?? controller._pageMatches ?? [];
+}
+
+async function waitForPdfFind(controller: PdfFindController): Promise<boolean> {
+  const deadline = Date.now() + 5_000;
+  let observedActivity = false;
+  // Let the controller reset results from any previous query before checking
+  // its own activity and completion signal.
+  await Zotero.Promise.delay(0);
+  while (Date.now() < deadline) {
+    const matches = findPageMatches(controller);
+    const pending = controller._pendingFindMatches?.size ?? 0;
+    observedActivity ||= pending > 0 || matches.length > 0;
+    // Reader arrays cross a chrome-window boundary in Zotero. Requiring
+    // Array.isArray() for every entry rejects valid wrapped arrays, whereas the
+    // controller's pending set is its own completion signal.
+    if (observedActivity && pending === 0) {
+      return true;
+    }
+    await Zotero.Promise.delay(25);
+  }
+  return false;
+}
+
+function normalizedRect(value?: number[]): number[] | null {
+  if (
+    !value ||
+    value.length < 4 ||
+    value.some((part) => !Number.isFinite(part))
+  ) {
+    return null;
+  }
+  const [x1, y1, x2, y2] = value;
+  return [
+    Math.min(x1, x2),
+    Math.min(y1, y2),
+    Math.max(x1, x2),
+    Math.max(y1, y2),
+  ];
+}
+
+function rangeRects(
+  chars: PdfPageChar[],
+  offsetStart: number,
+  offsetEnd: number,
+): number[][] {
+  const rects: number[][] = [];
+  let start = offsetStart;
+  for (let index = start; index <= offsetEnd; index += 1) {
+    const current = chars[index];
+    if (!current || (!current.lineBreakAfter && index !== offsetEnd)) {
+      continue;
+    }
+    const first = chars[start];
+    const firstRect = normalizedRect(first?.rect);
+    const lastRect = normalizedRect(current.rect);
+    const inlineRect = normalizedRect(first?.inlineRect) ?? firstRect;
+    if (firstRect && lastRect && inlineRect) {
+      const vertical = first?.rotation === 90 || first?.rotation === 270;
+      rects.push(
+        vertical
+          ? [inlineRect[0], firstRect[1], inlineRect[2], lastRect[3]]
+          : [firstRect[0], inlineRect[1], lastRect[2], inlineRect[3]],
+      );
+    }
+    start = index + 1;
+  }
+  return rects;
+}
+
+async function directMatchPositions(
+  view: PdfPrimaryView,
+  pageIndex: number,
+  query: string,
+): Promise<PdfPosition[]> {
+  await view._ensureBasicPageData?.(pageIndex);
+  let chars = view._pdfPages?.[pageIndex]?.chars || [];
+  if (!chars.length) {
+    const pageData = await view._findController?._pdfDocument?.getPageData?.({
+      pageIndex,
+    });
+    chars = pageData?.chars || [];
+  }
+  if (!chars.length) {
+    return [];
+  }
+  let content = "";
+  const charIndexes: number[] = [];
+  chars.forEach((char, index) => {
+    const value = String(char.u ?? char.char ?? "");
+    for (let offset = 0; offset < value.length; offset += 1) {
+      content += value[offset];
+      charIndexes.push(index);
+    }
+    if (char.spaceAfter || char.lineBreakAfter || char.paragraphBreakAfter) {
+      content += " ";
+      charIndexes.push(index);
+    }
+  });
+  const needle = query.replace(/\s+/g, " ").toLocaleLowerCase();
+  const haystack = content.toLocaleLowerCase();
+  const positions: PdfPosition[] = [];
+  let from = 0;
+  while (needle && from < haystack.length) {
+    const match = haystack.indexOf(needle, from);
+    if (match < 0) {
+      break;
+    }
+    const start = charIndexes[match];
+    const end = charIndexes[match + needle.length - 1];
+    if (Number.isInteger(start) && Number.isInteger(end)) {
+      const rects = rangeRects(chars, start, end);
+      if (rects.length) {
+        positions.push({ pageIndex, rects });
+      }
+    }
+    from = match + Math.max(needle.length, 1);
+  }
+  return positions;
+}
+
+async function locateHighlight(
+  view: PdfPrimaryView,
+  highlight: { text: string; page?: number; comment?: string },
+  occurrence: number,
+): Promise<LocatedHighlight> {
+  const text = String(highlight.text ?? "").trim();
+  if (!text) {
+    throw new Error("Highlight text cannot be empty");
+  }
+  const controller = view._findController;
+  const pageCount =
+    view._iframeWindow?.PDFViewerApplication?.pdfDocument?.numPages ?? 0;
+  if (!controller || pageCount < 1) {
+    throw new Error("Zotero PDF text search is unavailable");
+  }
+  if (view.setFindState) {
+    await view.setFindState({
+      active: true,
+      query: text,
+      highlightAll: true,
+      caseSensitive: false,
+      entireWord: false,
+    });
+  } else {
+    await controller.find({
+      type: "find",
+      query: text,
+      phraseSearch: true,
+      caseSensitive: false,
+      entireWord: false,
+      highlightAll: true,
+      findPrevious: false,
+    });
+  }
+  const findReady = await waitForPdfFind(controller);
+
+  const requestedPage = Number(highlight.page);
+  const pageIndexes =
+    Number.isInteger(requestedPage) && requestedPage > 0
+      ? [requestedPage - 1]
+      : Array.from({ length: pageCount }, (_, index) => index);
+  const positions: PdfPosition[] = [];
+  for (const pageIndex of pageIndexes) {
+    if (pageIndex < 0 || pageIndex >= pageCount) {
+      continue;
+    }
+    let pagePositions: PdfPosition[] = [];
+    if (findReady) {
+      try {
+        pagePositions = await controller.getMatchPositionsAsync(pageIndex);
+      } catch {
+        pagePositions = [];
+      }
+    }
+    if (!pagePositions.length) {
+      pagePositions = await directMatchPositions(view, pageIndex, text);
+    }
+    positions.push(...pagePositions);
+  }
+  const position = positions[occurrence];
+  if (!position?.rects?.length) {
+    const pageHint =
+      pageIndexes.length === 1 ? ` on page ${requestedPage}` : "";
+    throw new Error(
+      `Highlight text was not found${pageHint}: ${text.slice(0, 120)}`,
+    );
+  }
+  await view._ensureBasicPageData?.(position.pageIndex);
+  const meta = view.getAnnotationMeta?.(position);
+  const pageLabel =
+    String(
+      meta?.pageLabel || view._getPageLabel?.(position.pageIndex, true) || "",
+    ) || String(position.pageIndex + 1);
+  const sortIndex =
+    String(meta?.sortIndex || "") ||
+    `${String(position.pageIndex).padStart(5, "0")}|000000|00000`;
+  return {
+    text,
+    comment: String(highlight.comment ?? ""),
+    position: JSON.parse(JSON.stringify(position)) as PdfPosition,
+    pageLabel,
+    sortIndex,
+  };
+}
+
+function annotationPosition(item: Zotero.Item): unknown {
+  const raw = (item as unknown as { annotationPosition?: unknown })
+    .annotationPosition;
+  if (typeof raw !== "string") {
+    return raw ?? null;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
 }
 
 function noteHtml(content: string): string {
@@ -210,7 +658,9 @@ export class ZoteroToolHost {
     }
   }
 
-  private async searchItems(args: Record<string, unknown>): Promise<ToolResult> {
+  private async searchItems(
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
     const query = String(args.query ?? "").trim();
     if (!query) {
       return fail("search_items", "invalid_args", "query is required");
@@ -238,7 +688,9 @@ export class ZoteroToolHost {
     });
   }
 
-  private async searchFulltext(args: Record<string, unknown>): Promise<ToolResult> {
+  private async searchFulltext(
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
     const query = String(args.query ?? "").trim();
     if (!query) {
       return fail("search_fulltext", "invalid_args", "query is required");
@@ -248,15 +700,44 @@ export class ZoteroToolHost {
     search.addCondition("fulltextContent", "contains", query);
     const ids = await search.search();
     const limit = Math.min(Number(args.limit) || 20, 50);
-    const attachments = await Zotero.Items.getAsync(ids.slice(0, limit));
-    const items = attachments.map((item) => {
-      const parent = item.parentItemID ? Zotero.Items.get(item.parentItemID) : item;
+    const attachments = await Zotero.Items.getAsync(ids);
+    attachments.sort((left, right) =>
+      String(right.dateModified || "").localeCompare(
+        String(left.dateModified || ""),
+      ),
+    );
+    const seen = new Set<number>();
+    const items: Zotero.Item[] = [];
+    for (const attachment of attachments) {
+      const item = attachment.parentItemID
+        ? Zotero.Items.get(attachment.parentItemID)
+        : attachment;
+      if (!item || seen.has(item.id)) {
+        continue;
+      }
+      seen.add(item.id);
+      items.push(item);
+      if (items.length >= limit) {
+        break;
+      }
+    }
+    const summaries = items.map((item) => {
+      const parent = item.parentItemID
+        ? Zotero.Items.get(item.parentItemID)
+        : item;
       return summarizeItem(parent || item);
     });
-    return ok("search_fulltext", { query, libraryID, total: ids.length, items });
+    return ok("search_fulltext", {
+      query,
+      libraryID,
+      total: ids.length,
+      items: summaries,
+    });
   }
 
-  private async searchNotes(args: Record<string, unknown>): Promise<ToolResult> {
+  private async searchNotes(
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
     const query = String(args.query ?? "").trim();
     if (!query) {
       return fail("search_notes", "invalid_args", "query is required");
@@ -264,8 +745,38 @@ export class ZoteroToolHost {
     const libraryID = defaultLibraryID(args);
     const search = new Zotero.Search({ libraryID });
     search.addCondition("note", "contains", query);
-    const ids = await search.search();
-    const items = await Zotero.Items.getAsync(ids.slice(0, 20));
+    const indexedIds = await search.search();
+    // Zotero's note-search index is eventually consistent after a write. Add
+    // recent notes from the source table so an update is immediately visible,
+    // then filter the merged set against the current note body to discard
+    // stale index hits. The indexed results still cover older matching notes.
+    const recentIds = await Zotero.DB.columnQueryAsync<number>(
+      `SELECT N.itemID
+         FROM itemNotes N
+         JOIN items I USING (itemID)
+        WHERE I.libraryID = ?
+        ORDER BY I.dateModified DESC
+        LIMIT 500`,
+      [libraryID],
+    );
+    const candidates = await Zotero.Items.getAsync([
+      ...new Set([...recentIds, ...indexedIds]),
+    ]);
+    const normalizedQuery = query.toLocaleLowerCase();
+    const items = candidates
+      .filter(
+        (item) =>
+          item.isNote?.() &&
+          String(item.getNote?.() || "")
+            .toLocaleLowerCase()
+            .includes(normalizedQuery),
+      )
+      .sort((left, right) =>
+        String(right.dateModified || "").localeCompare(
+          String(left.dateModified || ""),
+        ),
+      )
+      .slice(0, 20);
     return ok("search_notes", {
       query,
       items: items.map((item) => ({
@@ -275,7 +786,9 @@ export class ZoteroToolHost {
     });
   }
 
-  private async searchByTag(args: Record<string, unknown>): Promise<ToolResult> {
+  private async searchByTag(
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
     const tag = String(args.tag ?? "").trim();
     if (!tag) {
       return fail("search_by_tag", "invalid_args", "tag is required");
@@ -349,11 +862,18 @@ export class ZoteroToolHost {
   private getCollections(args: Record<string, unknown>): ToolResult {
     const libraryID = defaultLibraryID(args);
     const parentKey = args.parentKey ? String(args.parentKey) : "";
-    let collections: Zotero.Collection[] = [];
+    let collections: Zotero.Collection[];
     if (parentKey) {
-      const parent = Zotero.Collections.getByLibraryAndKey(libraryID, parentKey);
+      const parent = Zotero.Collections.getByLibraryAndKey(
+        libraryID,
+        parentKey,
+      );
       if (!parent) {
-        return fail("get_collections", "not_found", "Parent collection not found");
+        return fail(
+          "get_collections",
+          "not_found",
+          "Parent collection not found",
+        );
       }
       collections = parent.getChildCollections();
     } else {
@@ -395,7 +915,9 @@ export class ZoteroToolHost {
     const names = (Array.isArray(tags) ? tags : [])
       .slice(0, 200)
       .map((tag) =>
-        typeof tag === "string" ? tag : String((tag as { tag?: string }).tag || tag),
+        typeof tag === "string"
+          ? tag
+          : String((tag as { tag?: string }).tag || tag),
       );
     return ok("get_tags", { libraryID, tags: names });
   }
@@ -403,16 +925,18 @@ export class ZoteroToolHost {
   private async getRecent(args: Record<string, unknown>): Promise<ToolResult> {
     const libraryID = defaultLibraryID(args);
     const search = new Zotero.Search({ libraryID });
-    (search.addCondition as (c: string, op: string, v: string) => void)(
-      "dateModified",
-      "isThisMonth",
-      "true",
-    );
+    search.addCondition("dateModified", "isInTheLast", "30 days");
     const ids = await search.search();
-    const items = await Zotero.Items.getAsync(
-      ids.slice(0, Math.min(Number(args.limit) || 20, 50)),
-    );
-    return ok("get_recent", { items: items.map(summarizeItem) });
+    const limit = Math.min(Number(args.limit) || 20, 50);
+    const items = await Zotero.Items.getAsync(ids);
+    const recent = items
+      .sort((left, right) =>
+        String(right.dateModified || "").localeCompare(
+          String(left.dateModified || ""),
+        ),
+      )
+      .slice(0, limit);
+    return ok("get_recent", { items: recent.map(summarizeItem) });
   }
 
   private listSavedSearches(args: Record<string, unknown>): ToolResult {
@@ -432,7 +956,9 @@ export class ZoteroToolHost {
     });
   }
 
-  private async runSavedSearch(args: Record<string, unknown>): Promise<ToolResult> {
+  private async runSavedSearch(
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
     const libraryID = defaultLibraryID(args);
     const key = String(args.key ?? "");
     const saved = Zotero.Searches.getByLibraryAndKey(libraryID, key);
@@ -463,7 +989,9 @@ export class ZoteroToolHost {
     return ok("get_related_items", { items: related });
   }
 
-  private async createCollection(args: Record<string, unknown>): Promise<ToolResult> {
+  private async createCollection(
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
     const name = String(args.name ?? "").trim();
     if (!name) {
       return fail("create_collection", "invalid_args", "name is required");
@@ -474,9 +1002,16 @@ export class ZoteroToolHost {
     collection.name = name;
     const parentKey = args.parentKey ? String(args.parentKey) : "";
     if (parentKey) {
-      const parent = Zotero.Collections.getByLibraryAndKey(libraryID, parentKey);
+      const parent = Zotero.Collections.getByLibraryAndKey(
+        libraryID,
+        parentKey,
+      );
       if (!parent) {
-        return fail("create_collection", "not_found", "Parent collection not found");
+        return fail(
+          "create_collection",
+          "not_found",
+          "Parent collection not found",
+        );
       }
       collection.parentID = parent.id;
     }
@@ -488,7 +1023,9 @@ export class ZoteroToolHost {
     });
   }
 
-  private async renameCollection(args: Record<string, unknown>): Promise<ToolResult> {
+  private async renameCollection(
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
     const libraryID = defaultLibraryID(args);
     const key = String(args.key ?? "");
     const name = String(args.name ?? "").trim();
@@ -501,7 +1038,9 @@ export class ZoteroToolHost {
     return ok("rename_collection", { libraryID, key, name });
   }
 
-  private async addToCollection(args: Record<string, unknown>): Promise<ToolResult> {
+  private async addToCollection(
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
     const libraryID = defaultLibraryID(args);
     const item = getItem(libraryID, String(args.key ?? ""));
     const collection = Zotero.Collections.getByLibraryAndKey(
@@ -509,7 +1048,11 @@ export class ZoteroToolHost {
       String(args.collectionKey ?? ""),
     );
     if (!item || !collection) {
-      return fail("add_to_collection", "not_found", "Item or collection not found");
+      return fail(
+        "add_to_collection",
+        "not_found",
+        "Item or collection not found",
+      );
     }
     item.addToCollection(collection.id);
     await item.saveTx();
@@ -530,7 +1073,11 @@ export class ZoteroToolHost {
       String(args.collectionKey ?? ""),
     );
     if (!item || !collection) {
-      return fail("remove_from_collection", "not_found", "Item or collection not found");
+      return fail(
+        "remove_from_collection",
+        "not_found",
+        "Item or collection not found",
+      );
     }
     item.removeFromCollection(collection.id);
     await item.saveTx();
@@ -541,19 +1088,28 @@ export class ZoteroToolHost {
     });
   }
 
-  private async createSavedSearch(args: Record<string, unknown>): Promise<ToolResult> {
+  private async createSavedSearch(
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
     const name = String(args.name ?? "").trim();
     const query = String(args.query ?? "").trim();
     if (!name || !query) {
-      return fail("create_saved_search", "invalid_args", "name and query are required");
+      return fail(
+        "create_saved_search",
+        "invalid_args",
+        "name and query are required",
+      );
     }
     const libraryID = defaultLibraryID(args);
-    const search = new Zotero.Search();
-    (search as unknown as { libraryID: number }).libraryID = libraryID;
-    search.name = name;
-    search.addCondition("quicksearch-titleCreatorYear", "contains", query);
+    const search = new Zotero.Search({ libraryID, name });
+    search.addCondition("title", "contains", query);
     await search.saveTx();
-    return ok("create_saved_search", { libraryID, key: search.key, name, query });
+    return ok("create_saved_search", {
+      libraryID,
+      key: search.key,
+      name,
+      query,
+    });
   }
 
   private async addItem(args: Record<string, unknown>): Promise<ToolResult> {
@@ -581,23 +1137,60 @@ export class ZoteroToolHost {
       }
       collections.push(collection.id);
     }
-    const translate = new (Zotero.Translate as unknown as {
-      Search: new () => {
-        setIdentifier: (id: unknown) => void;
-        getTranslators: () => Promise<unknown[]>;
-        setTranslator: (translators: unknown) => void;
-        translate: (opts: unknown) => Promise<Zotero.Item[]>;
-      };
-    }).Search();
+    const translate = new (
+      Zotero.Translate as unknown as {
+        Search: new () => {
+          setIdentifier: (id: unknown) => void;
+          getTranslators: () => Promise<unknown[]>;
+          setTranslator: (translators: unknown) => void;
+          translate: (opts: unknown) => Promise<Zotero.Item[]>;
+        };
+      }
+    ).Search();
     translate.setIdentifier(identifiers[0]);
     const translators = await translate.getTranslators();
     if (!translators?.length) {
-      return fail("add_item", "unavailable", "No translator for that identifier");
+      return fail(
+        "add_item",
+        "unavailable",
+        "No translator for that identifier",
+      );
     }
     translate.setTranslator(translators);
-    const items = await translate.translate({ libraryID, collections });
+    let items: Zotero.Item[] = [];
+    let translatorError: unknown;
+    try {
+      items = await translate.translate({ libraryID, collections });
+    } catch (error) {
+      translatorError = error;
+    }
     if (!items?.length) {
-      return fail("add_item", "not_found", "Lookup returned no items");
+      const doi = doiFromIdentifier(identifier);
+      if (doi) {
+        try {
+          items = [await importDoiFromCsl(doi, libraryID, collections)];
+        } catch (error) {
+          const first =
+            translatorError instanceof Error
+              ? translatorError.message
+              : "translator returned no items";
+          const second = error instanceof Error ? error.message : String(error);
+          return fail(
+            "add_item",
+            "unavailable",
+            `Identifier lookup failed (${first}); DOI fallback failed (${second})`,
+          );
+        }
+      }
+    }
+    if (!items?.length) {
+      return fail(
+        "add_item",
+        translatorError ? "unavailable" : "not_found",
+        translatorError instanceof Error
+          ? translatorError.message
+          : "Lookup returned no items",
+      );
     }
     try {
       await Zotero.Attachments.addAvailableFiles(items);
@@ -614,7 +1207,8 @@ export class ZoteroToolHost {
       return fail("create_item", "invalid_args", "title is required");
     }
     const item = new Zotero.Item(itemType as never);
-    (item as unknown as { libraryID: number }).libraryID = defaultLibraryID(args);
+    (item as unknown as { libraryID: number }).libraryID =
+      defaultLibraryID(args);
     item.setField("title", title);
     const extra = args.extra as Record<string, string> | undefined;
     if (extra) {
@@ -626,7 +1220,9 @@ export class ZoteroToolHost {
     return ok("create_item", summarizeItem(item));
   }
 
-  private async updateItemMetadata(args: Record<string, unknown>): Promise<ToolResult> {
+  private async updateItemMetadata(
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
     const ref = requireItemRef(args);
     if (!ref.ok) {
       return fail("update_item_metadata", "invalid_args", ref.message);
@@ -643,7 +1239,9 @@ export class ZoteroToolHost {
     return ok("update_item_metadata", summarizeItem(item));
   }
 
-  private async batchUpdateTags(args: Record<string, unknown>): Promise<ToolResult> {
+  private async batchUpdateTags(
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
     const ref = requireItemRef(args);
     if (!ref.ok) {
       return fail("batch_update_tags", "invalid_args", ref.message);
@@ -665,7 +1263,9 @@ export class ZoteroToolHost {
     });
   }
 
-  private async linkRelated(args: Record<string, unknown>): Promise<ToolResult> {
+  private async linkRelated(
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
     const libraryID = defaultLibraryID(args);
     const item = getItem(libraryID, String(args.key ?? ""));
     const other = getItem(libraryID, String(args.relatedKey ?? ""));
@@ -700,7 +1300,9 @@ export class ZoteroToolHost {
     return ok("create_note", { libraryID: note.libraryID, key: note.key });
   }
 
-  private async appendToNote(args: Record<string, unknown>): Promise<ToolResult> {
+  private async appendToNote(
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
     const ref = requireItemRef(args);
     if (!ref.ok) {
       return fail("append_to_note", "invalid_args", ref.message);
@@ -734,17 +1336,72 @@ export class ZoteroToolHost {
       return fail("attach_file", "invalid_args", ref.message);
     }
     const item = getItem(ref.libraryID, ref.key);
-    const url = String(args.url ?? "");
-    if (!item || !url) {
-      return fail("attach_file", "invalid_args", "url is required");
+    if (!item) {
+      return fail("attach_file", "not_found", "Item not found");
     }
-    const attachment = await Zotero.Attachments.importFromURL({
-      url,
-      parentItemID: item.id,
-    });
+
+    const path = String(args.path ?? args.filePath ?? args.file ?? "").trim();
+    const url = String(args.url ?? "").trim();
+    if ((!path && !url) || (path && url)) {
+      return fail(
+        "attach_file",
+        "invalid_args",
+        "Provide exactly one of path or url",
+      );
+    }
+
+    let attachment: Zotero.Item;
+    let source: "path" | "url";
+    if (path) {
+      if (!(await IOUtils.exists(path))) {
+        return fail(
+          "attach_file",
+          "not_found",
+          `Local file not found: ${path}`,
+        );
+      }
+      const stat = await IOUtils.stat(path);
+      if (stat.type !== "regular") {
+        return fail(
+          "attach_file",
+          "invalid_args",
+          "path must point to a regular file",
+        );
+      }
+      attachment = await Zotero.Attachments.importFromFile({
+        file: path,
+        parentItemID: item.id,
+      });
+      source = "path";
+    } else {
+      let parsed: URL;
+      try {
+        parsed = new URL(url);
+      } catch {
+        return fail(
+          "attach_file",
+          "invalid_args",
+          "url must be a valid HTTP(S) URL; use path for local files",
+        );
+      }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return fail(
+          "attach_file",
+          "invalid_args",
+          "url must use HTTP(S); use path for local files",
+        );
+      }
+      attachment = await Zotero.Attachments.importFromURL({
+        url: parsed.href,
+        parentItemID: item.id,
+      });
+      source = "url";
+    }
     return ok("attach_file", {
       libraryID: attachment.libraryID,
       key: attachment.key,
+      parentKey: item.key,
+      source,
     });
   }
 
@@ -776,7 +1433,9 @@ export class ZoteroToolHost {
     });
   }
 
-  private async getPaperSection(args: Record<string, unknown>): Promise<ToolResult> {
+  private async getPaperSection(
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
     const ref = requireItemRef(args);
     if (!ref.ok) {
       return fail("get_paper_section", "invalid_args", ref.message);
@@ -789,7 +1448,10 @@ export class ZoteroToolHost {
     if (!text) {
       return fail("get_paper_section", "unavailable", "No indexed PDF text");
     }
-    const section = findSection(parseSections(text), String(args.section ?? ""));
+    const section = findSection(
+      parseSections(text),
+      String(args.section ?? ""),
+    );
     if (!section) {
       return fail("get_paper_section", "not_found", "Section not found");
     }
@@ -821,11 +1483,15 @@ export class ZoteroToolHost {
       libraryID: ref.libraryID,
       key: ref.key,
       pageCount: split.pageCount,
-      pages: split.pages.filter((page) => page.page >= start && page.page <= end),
+      pages: split.pages.filter(
+        (page) => page.page >= start && page.page <= end,
+      ),
     });
   }
 
-  private async getPageCount(args: Record<string, unknown>): Promise<ToolResult> {
+  private async getPageCount(
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
     const pages = await this.getPages({ ...args, start: 1, end: 1 });
     if (!pages.ok) {
       return pages;
@@ -858,18 +1524,22 @@ export class ZoteroToolHost {
     const compiled =
       toolName === "search_with_regex"
         ? compileSafeRegex(query, text)
-        : compileSafeRegex(
-            query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-            text,
-          );
+        : compileSafeRegex(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), text);
     if (!compiled.ok) {
       return fail(toolName, "invalid_args", compiled.reason);
     }
     const hits = collectMatches(compiled.regex, compiled.subject, 20);
-    return ok(toolName, { libraryID: ref.libraryID, key: ref.key, query, hits });
+    return ok(toolName, {
+      libraryID: ref.libraryID,
+      key: ref.key,
+      query,
+      hits,
+    });
   }
 
-  private getAnnotations(args: Record<string, unknown>): ToolResult {
+  private async getAnnotations(
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
     const ref = requireItemRef(args);
     if (!ref.ok) {
       return fail("get_annotations", "invalid_args", ref.message);
@@ -878,7 +1548,15 @@ export class ZoteroToolHost {
     if (!item) {
       return fail("get_annotations", "not_found", "Item not found");
     }
-    const raw = item.getAnnotations?.() || [];
+    const pdf = await findPdf(item);
+    if (!pdf) {
+      return fail(
+        "get_annotations",
+        "unavailable",
+        "Item has no PDF attachment",
+      );
+    }
+    const raw = pdf.getAnnotations?.(false) || [];
     const annotations = raw
       .map((entry) =>
         typeof entry === "object" && entry
@@ -886,35 +1564,68 @@ export class ZoteroToolHost {
           : asItem(Zotero.Items.get(entry as number)),
       )
       .filter((ann): ann is Zotero.Item => Boolean(ann))
+      .filter((ann) => ann.isAnnotation?.())
       .map((ann) => ({
         libraryID: ann.libraryID,
         key: ann.key,
         type: (ann as unknown as { annotationType?: string }).annotationType,
-        text: (ann as unknown as { annotationText?: string }).annotationText || "",
+        text:
+          (ann as unknown as { annotationText?: string }).annotationText || "",
         comment:
-          (ann as unknown as { annotationComment?: string }).annotationComment ||
+          (ann as unknown as { annotationComment?: string })
+            .annotationComment || "",
+        color:
+          (ann as unknown as { annotationColor?: string }).annotationColor ||
           "",
-        color: (ann as unknown as { annotationColor?: string }).annotationColor || "",
         pageLabel:
-          (ann as unknown as { annotationPageLabel?: string }).annotationPageLabel ||
-          "",
+          (ann as unknown as { annotationPageLabel?: string })
+            .annotationPageLabel || "",
+        sortIndex:
+          (ann as unknown as { annotationSortIndex?: string })
+            .annotationSortIndex || "",
+        position: annotationPosition(ann),
       }));
-    return ok("get_annotations", { annotations });
+    return ok("get_annotations", {
+      libraryID: pdf.libraryID,
+      key: item.key,
+      attachmentKey: pdf.key,
+      annotations,
+    });
   }
 
   private getPdfSelection(_args: Record<string, unknown>): ToolResult {
     try {
       const reader = Zotero.Reader.getByTabID?.(
         Zotero.getMainWindow()?.Zotero_Tabs?.selectedID,
+      ) as unknown as PdfReaderInstance | undefined;
+      const view = reader?._internalReader?._primaryView;
+      const ranges = view?._selectionRanges || [];
+      const selected = view?._getAnnotationFromSelectionRanges?.(
+        ranges,
+        "highlight",
       );
-      const text = (
-        reader?._internalReader?._lastView as
-          | { getSelectedText?: () => string }
-          | undefined
-      )?.getSelectedText?.();
-      return ok("get_pdf_selection", { text: text || "" });
+      const fallbackText = ranges
+        .map((range) =>
+          range && typeof range === "object"
+            ? String((range as { text?: unknown }).text ?? "")
+            : "",
+        )
+        .filter(Boolean)
+        .join(" ");
+      const position = selected?.position;
+      const attachment = reader?.itemID
+        ? asItem(Zotero.Items.get(reader.itemID))
+        : null;
+      return ok("get_pdf_selection", {
+        text: selected?.text || fallbackText,
+        libraryID: attachment?.libraryID,
+        attachmentKey: attachment?.key,
+        page: position ? position.pageIndex + 1 : undefined,
+        pageLabel: selected?.pageLabel || "",
+        position: position || null,
+      });
     } catch {
-      return ok("get_pdf_selection", { text: "" });
+      return ok("get_pdf_selection", { text: "", position: null });
     }
   }
 
@@ -941,11 +1652,12 @@ export class ZoteroToolHost {
     if (!ref.ok) {
       return fail("propose_highlights", "invalid_args", ref.message);
     }
-    const highlights = (args.highlights as Array<{
-      text: string;
-      page?: number;
-      comment?: string;
-    }>) || [];
+    const highlights =
+      (args.highlights as Array<{
+        text: string;
+        page?: number;
+        comment?: string;
+      }>) || [];
     const id = `${ref.libraryID}:${ref.key}`;
     this.proposals.set(id, highlights);
     return ok("propose_highlights", {
@@ -957,7 +1669,9 @@ export class ZoteroToolHost {
     });
   }
 
-  private async commitAnnotations(args: Record<string, unknown>): Promise<ToolResult> {
+  private async commitAnnotations(
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
     const ref = requireItemRef(args);
     if (!ref.ok) {
       return fail("commit_annotations", "invalid_args", ref.message);
@@ -968,30 +1682,78 @@ export class ZoteroToolHost {
     }
     const id = `${ref.libraryID}:${ref.key}`;
     const highlights =
-      (args.highlights as Array<{ text: string; comment?: string }>) ||
+      (args.highlights as Array<{
+        text: string;
+        page?: number;
+        comment?: string;
+      }>) ||
       this.proposals.get(id) ||
       [];
-    const note = new Zotero.Item("note");
-    note.libraryID = ref.libraryID;
-    note.parentID = item.id;
-    const body = highlights
-      .map(
-        (highlight) =>
-          `<p><blockquote>${escapeHtml(highlight.text)}</blockquote>${
-            highlight.comment ? `<br/>${escapeHtml(highlight.comment)}` : ""
-          }</p>`,
-      )
-      .join("");
-    note.setNote(
-      body || "<p>Confucius annotation pass (no highlight text provided).</p>",
-    );
-    await note.saveTx();
+    if (!highlights.length) {
+      return fail(
+        "commit_annotations",
+        "invalid_args",
+        "No highlights were proposed or provided",
+      );
+    }
+    const pdf = await findPdf(item);
+    if (!pdf) {
+      return fail(
+        "commit_annotations",
+        "unavailable",
+        "Item has no PDF attachment",
+      );
+    }
+    const { view } = await waitForPdfReader(pdf);
+    const occurrenceCounts = new Map<string, number>();
+    const located: LocatedHighlight[] = [];
+    for (const highlight of highlights) {
+      const occurrenceKey = `${String(highlight.text ?? "").trim()}\u0000${
+        Number.isInteger(Number(highlight.page)) ? Number(highlight.page) : ""
+      }`;
+      const occurrence = occurrenceCounts.get(occurrenceKey) ?? 0;
+      located.push(await locateHighlight(view, highlight, occurrence));
+      occurrenceCounts.set(occurrenceKey, occurrence + 1);
+    }
+
+    const created: Zotero.Item[] = [];
+    try {
+      for (const highlight of located) {
+        const annotation = await Zotero.Annotations.saveFromJSON(pdf, {
+          key: (
+            Zotero as typeof Zotero & {
+              DataObjectUtilities: { generateKey: () => string };
+            }
+          ).DataObjectUtilities.generateKey(),
+          type: "highlight",
+          text: highlight.text,
+          comment: highlight.comment,
+          color: Zotero.Annotations.DEFAULT_COLOR,
+          pageLabel: highlight.pageLabel,
+          sortIndex: highlight.sortIndex,
+          position: highlight.position,
+          readOnly: false,
+        } as unknown as _ZoteroTypes.Annotations.AnnotationJson);
+        created.push(annotation);
+      }
+    } catch (error) {
+      for (const annotation of created.reverse()) {
+        try {
+          await annotation.eraseTx();
+        } catch {
+          // Preserve the original write error; notifier cleanup is best effort.
+        }
+      }
+      throw error;
+    }
     this.proposals.delete(id);
     return ok("commit_annotations", {
-      libraryID: note.libraryID,
-      key: note.key,
-      mode: "note_fallback",
-      count: highlights.length,
+      libraryID: pdf.libraryID,
+      key: created[0]?.key || "",
+      keys: created.map((annotation) => annotation.key),
+      attachmentKey: pdf.key,
+      mode: "annotations",
+      count: created.length,
     });
   }
 
@@ -1004,22 +1766,31 @@ export class ZoteroToolHost {
     }
     const item = getItem(ref.libraryID, ref.key);
     if (!item) {
-      return fail("update_annotation_comment", "not_found", "Annotation not found");
+      return fail(
+        "update_annotation_comment",
+        "not_found",
+        "Annotation not found",
+      );
     }
     if (item.isAnnotation?.()) {
       item.annotationComment = String(args.comment ?? "");
       await item.saveTx();
-      return ok("update_annotation_comment", { key: item.key });
+      return ok("update_annotation_comment", {
+        libraryID: item.libraryID,
+        key: item.key,
+        comment: item.annotationComment || "",
+      });
     }
-    if (item.isNote?.()) {
-      item.setNote(noteHtml(String(args.comment ?? "")));
-      await item.saveTx();
-      return ok("update_annotation_comment", { key: item.key, mode: "note" });
-    }
-    return fail("update_annotation_comment", "not_found", "Not an annotation");
+    return fail(
+      "update_annotation_comment",
+      "invalid_args",
+      "Target item is not an annotation",
+    );
   }
 
-  private async deleteAnnotation(args: Record<string, unknown>): Promise<ToolResult> {
+  private async deleteAnnotation(
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
     const ref = requireItemRef(args);
     if (!ref.ok) {
       return fail("delete_annotation", "invalid_args", ref.message);
@@ -1028,14 +1799,14 @@ export class ZoteroToolHost {
     if (!item) {
       return fail("delete_annotation", "not_found", "Not found");
     }
+    if (!item.isAnnotation?.()) {
+      return fail(
+        "delete_annotation",
+        "invalid_args",
+        "Target item is not an annotation",
+      );
+    }
     await item.eraseTx();
     return ok("delete_annotation", { libraryID: ref.libraryID, key: ref.key });
   }
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
 }

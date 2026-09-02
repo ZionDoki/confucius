@@ -1,4 +1,5 @@
 import type { SessionContext, SessionMode, SessionRecord } from "./session";
+import type { ModelEndpoint } from "./endpoints";
 
 export interface JsonRpcRequest<T = unknown> {
   jsonrpc: "2.0";
@@ -43,11 +44,23 @@ export const RPC_METHODS = {
   memorySearch: "memory/search",
   memorySave: "memory/save",
   memoryDelete: "memory/delete",
+  knowledgeList: "knowledge/list",
+  knowledgeGet: "knowledge/get",
+  knowledgeSearch: "knowledge/search",
+  knowledgeCreate: "knowledge/create",
+  knowledgeUpdate: "knowledge/update",
+  knowledgeDelete: "knowledge/delete",
+  knowledgeSaveEntry: "knowledge/saveEntry",
+  knowledgeDeleteEntry: "knowledge/deleteEntry",
   configGet: "config/get",
   configSet: "config/set",
+  configListModels: "config/listModels",
   sessionSetPermissions: "session/setPermissions",
   sessionCompact: "session/compact",
   sessionContext: "session/context",
+  logsList: "logs/list",
+  logsSearch: "logs/search",
+  logsRead: "logs/read",
 } as const;
 
 export type RpcMethod = (typeof RPC_METHODS)[keyof typeof RPC_METHODS];
@@ -114,6 +127,54 @@ export interface MemoryDeleteParams {
   id: string;
 }
 
+export type KnowledgeEntryKind =
+  "paper" | "note" | "insight" | "method" | "discussion" | "mindmap";
+
+export interface KnowledgeListParams {
+  query?: string;
+  limit?: number;
+}
+
+export interface KnowledgeGetParams {
+  id: string;
+  kind?: KnowledgeEntryKind;
+  limit?: number;
+}
+
+export interface KnowledgeSearchParams {
+  query: string;
+  knowledgeBaseId?: string;
+  kind?: KnowledgeEntryKind;
+  limit?: number;
+}
+
+export interface KnowledgeCreateParams {
+  title: string;
+  description?: string;
+  tags?: string[];
+}
+
+export interface KnowledgeUpdateParams extends KnowledgeCreateParams {
+  id: string;
+}
+
+export interface KnowledgeSaveEntryParams {
+  id?: string;
+  knowledgeBaseId: string;
+  kind: KnowledgeEntryKind;
+  title: string;
+  content: string;
+  tags?: string[];
+  libraryID?: number;
+  key?: string;
+  clearSource?: boolean;
+}
+
+export interface KnowledgeDeleteEntryParams {
+  knowledgeBaseId: string;
+  id: string;
+}
+
 export type ReasoningEffort = "auto" | "off" | "low" | "medium" | "high";
 
 export const REASONING_EFFORTS: readonly ReasoningEffort[] = [
@@ -131,6 +192,27 @@ export function isReasoningEffort(value: unknown): value is ReasoningEffort {
   );
 }
 
+export const DEFAULT_MAX_ITERATIONS = 48;
+export const DEFAULT_MAX_TOOL_CALLS = 96;
+export const MAX_MAX_ITERATIONS = 200;
+export const MAX_MAX_TOOL_CALLS = 500;
+
+export function clampMaxIterations(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    return DEFAULT_MAX_ITERATIONS;
+  }
+  return Math.min(parsed, MAX_MAX_ITERATIONS);
+}
+
+export function clampMaxToolCalls(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    return DEFAULT_MAX_TOOL_CALLS;
+  }
+  return Math.min(parsed, MAX_MAX_TOOL_CALLS);
+}
+
 export interface ModelConfigView {
   baseUrl: string;
   apiKey: string;
@@ -144,17 +226,46 @@ export interface ModelConfigView {
   contextWindowTokens: number;
   /** Convenience flag for UIs: true when a non-empty API key is set. */
   hasApiKey: boolean;
+  /** True when the active endpoint has a Base URL and model. */
+  configured: boolean;
+  endpoints: ModelEndpoint[];
+  activeEndpointId: string;
+  /** Model loop rounds per user prompt. Global, not per endpoint. */
+  maxIterations: number;
+  /** Tool calls per user prompt. Global, not per endpoint. */
+  maxToolCalls: number;
 }
 
 export interface ConfigSetParams {
   baseUrl?: string;
   apiKey?: string;
   model?: string;
+  name?: string;
   maxTokens?: number;
   streamResponses?: boolean;
   memoryAutoExtract?: boolean;
   reasoningEffort?: ReasoningEffort;
   contextWindowTokens?: number;
+  /** Switch the active endpoint. */
+  activeEndpointId?: string;
+  /** Upsert one endpoint. Omit `id` to add; the upserted row becomes active. */
+  endpoint?: Partial<ModelEndpoint> & { id?: string };
+  deleteEndpointId?: string;
+  /** Model loop rounds per user prompt. Applies to every endpoint. */
+  maxIterations?: number;
+  /** Tool calls per user prompt. Applies to every endpoint. */
+  maxToolCalls?: number;
+}
+
+export interface ConfigListModelsParams {
+  /** Defaults to the active endpoint. */
+  endpointId?: string;
+}
+
+export interface ConfigListModelsResult {
+  endpointId: string;
+  models: string[];
+  error?: string;
 }
 
 export interface SessionContextStats {
@@ -162,12 +273,27 @@ export interface SessionContextStats {
   /** Characters of persisted conversation history. */
   chars: number;
   messages: number;
-  /** Rough token estimate (chars / 4). */
+  /** Token estimate from the shared chars-per-token ratio. */
   tokensEstimate: number;
   /** Compaction threshold in chars actually used by the host. */
   maxChars: number;
   contextWindowTokens: number;
   percent: number;
+}
+
+export interface LogsListParams {
+  limit?: number;
+}
+
+export interface LogsSearchParams {
+  query: string;
+  limit?: number;
+}
+
+export interface LogsReadParams {
+  sessionId: string;
+  query?: string;
+  maxChars?: number;
 }
 
 export interface SessionSetPermissionsParams {
@@ -176,7 +302,12 @@ export interface SessionSetPermissionsParams {
 }
 
 export type ConfigValidation =
-  | { ok: true; value: Required<Pick<ConfigSetParams, "baseUrl" | "apiKey" | "model" | "maxTokens">> }
+  | {
+      ok: true;
+      value: Required<
+        Pick<ConfigSetParams, "baseUrl" | "apiKey" | "model" | "maxTokens">
+      >;
+    }
   | { ok: false; errors: string[] };
 
 /**
@@ -187,7 +318,8 @@ export function validateConfigPatch(
   patch: Record<string, unknown>,
 ): ConfigValidation {
   const errors: string[] = [];
-  const baseUrl = patch.baseUrl === undefined ? undefined : String(patch.baseUrl).trim();
+  const baseUrl =
+    patch.baseUrl === undefined ? undefined : String(patch.baseUrl).trim();
   if (baseUrl !== undefined) {
     if (!/^https?:\/\//i.test(baseUrl)) {
       errors.push("Base URL must start with http:// or https://");
@@ -199,11 +331,13 @@ export function validateConfigPatch(
       }
     }
   }
-  const model = patch.model === undefined ? undefined : String(patch.model).trim();
+  const model =
+    patch.model === undefined ? undefined : String(patch.model).trim();
   if (model !== undefined && model === "") {
     errors.push("Model must not be empty");
   }
-  const apiKey = patch.apiKey === undefined ? undefined : String(patch.apiKey).trim();
+  const apiKey =
+    patch.apiKey === undefined ? undefined : String(patch.apiKey).trim();
   let maxTokensRaw = patch.maxTokens;
   if (maxTokensRaw !== undefined) {
     const parsed = Number(maxTokensRaw);
@@ -212,7 +346,8 @@ export function validateConfigPatch(
       maxTokensRaw = undefined;
     }
   }
-  const maxTokens = maxTokensRaw === undefined ? undefined : (Number(maxTokensRaw) as number);
+  const maxTokens =
+    maxTokensRaw === undefined ? undefined : (Number(maxTokensRaw) as number);
   const contextWindowRaw = patch.contextWindowTokens;
   let contextWindowTokens: number | undefined;
   if (contextWindowRaw !== undefined) {
@@ -222,7 +357,9 @@ export function validateConfigPatch(
       contextWindowTokens < 1000 ||
       contextWindowTokens > 10_000_000
     ) {
-      errors.push("Context window must be an integer between 1000 and 10000000 tokens");
+      errors.push(
+        "Context window must be an integer between 1000 and 10000000 tokens",
+      );
       contextWindowTokens = undefined;
     }
   }
@@ -232,6 +369,30 @@ export function validateConfigPatch(
     !isReasoningEffort(reasoningEffortRaw)
   ) {
     errors.push("Reasoning effort must be one of auto, off, low, medium, high");
+  }
+  if (patch.maxIterations !== undefined) {
+    const parsed = Number(patch.maxIterations);
+    if (
+      !Number.isInteger(parsed) ||
+      parsed < 1 ||
+      parsed > MAX_MAX_ITERATIONS
+    ) {
+      errors.push(
+        `Max model rounds must be an integer from 1 to ${MAX_MAX_ITERATIONS}`,
+      );
+    }
+  }
+  if (patch.maxToolCalls !== undefined) {
+    const parsed = Number(patch.maxToolCalls);
+    if (
+      !Number.isInteger(parsed) ||
+      parsed < 1 ||
+      parsed > MAX_MAX_TOOL_CALLS
+    ) {
+      errors.push(
+        `Max tool calls must be an integer from 1 to ${MAX_MAX_TOOL_CALLS}`,
+      );
+    }
   }
   if (errors.length > 0) {
     return { ok: false, errors };

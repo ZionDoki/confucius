@@ -26,6 +26,11 @@ class Addon {
     };
     this.hooks = hooks;
   }
+
+  /** Workspace and Chrome look up `Zotero.Confucius.rpc`. */
+  rpc(method: string, params?: Record<string, unknown>): Promise<unknown> {
+    return this.hooks.host.rpc(method, params);
+  }
 }
 
 export default Addon;

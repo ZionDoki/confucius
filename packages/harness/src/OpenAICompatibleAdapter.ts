@@ -1,3 +1,4 @@
+import { abortError } from "./abort";
 import type {
   ModelAdapter,
   ModelMessage,
@@ -68,7 +69,10 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     this.style = config.apiStyle ?? detectApiStyle(config.baseUrl);
   }
 
-  async complete(request: ModelRequest, signal?: AbortSignal): Promise<ModelTurn> {
+  async complete(
+    request: ModelRequest,
+    signal?: AbortSignal,
+  ): Promise<ModelTurn> {
     const response = await this.fetchWithRetry(request, signal);
     if (!response.ok) {
       const bodyText = await response.text().catch(() => "");
@@ -77,19 +81,35 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       );
     }
     const contentType = headerValue(response, "content-type");
-    if (
-      this.config.stream !== false &&
-      response.body &&
-      (this.style === "ollama"
-        ? contentType.includes("application/x-ndjson") ||
-          contentType.includes("application/json")
-        : contentType.includes("text/event-stream"))
-    ) {
-      return this.style === "ollama"
-        ? this.readOllamaStream(response, signal)
-        : this.readStream(response, signal);
+    const liveBody = readableBody(response);
+    if (this.config.stream !== false && liveBody) {
+      if (this.style === "ollama" && isOllamaStreamType(contentType)) {
+        return this.readOllamaStream(response, signal);
+      }
+      if (
+        this.style === "openai" &&
+        contentType.includes("text/event-stream")
+      ) {
+        return this.readStream(response, signal);
+      }
     }
     const text = await response.text();
+    if (this.config.stream !== false) {
+      // Zotero.HTTP buffers the whole body and has no ReadableStream.
+      // Parse the buffered SSE/NDJSON so a completed stream still yields a turn.
+      if (
+        this.style === "ollama" &&
+        (isOllamaStreamType(contentType) || looksLikeNdjson(text))
+      ) {
+        return this.readOllamaStream(bufferedResponse(text), signal);
+      }
+      if (
+        this.style === "openai" &&
+        (contentType.includes("text/event-stream") || looksLikeSse(text))
+      ) {
+        return this.readStream(bufferedResponse(text), signal);
+      }
+    }
     return this.style === "ollama"
       ? this.parseOllamaResponse(text)
       : this.parseJsonResponse(text);
@@ -204,9 +224,11 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     const toolCalls = new Map<number, ToolCallAccumulator>();
     let usage: ModelUsage | undefined;
     let sawData = false;
+    let ended = false;
 
     const handleChunk = (payloadText: string) => {
       if (payloadText === "[DONE]") {
+        ended = true;
         return;
       }
       let payload: {
@@ -266,7 +288,11 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       for (;;) {
         if (signal?.aborted) {
           await reader.cancel().catch(() => undefined);
-          throw new DOMException("Aborted", "AbortError");
+          throw abortError();
+        }
+        if (ended) {
+          await reader.cancel().catch(() => undefined);
+          break;
         }
         const { done, value } = await reader.read();
         if (done) {
@@ -280,6 +306,11 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
           if (trimmed.startsWith("data:")) {
             handleChunk(trimmed.slice(5).trim());
           }
+        }
+        const pending = buffer.trim();
+        if (pending === "data: [DONE]") {
+          handleChunk("[DONE]");
+          buffer = "";
         }
       }
       const remainder = buffer.trim();
@@ -322,6 +353,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     let toolCalls: ModelToolCall[] | undefined;
     let usage: ModelUsage | undefined;
     let sawData = false;
+    let ended = false;
 
     const handleLine = (line: string) => {
       if (!line.trim()) {
@@ -357,19 +389,24 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         toolCalls = mapOllamaToolCalls(chunk.message.tool_calls);
       }
       if (chunk.done) {
+        ended = true;
         usage = {
           promptTokens: chunk.prompt_eval_count,
           completionTokens: chunk.eval_count,
-          totalTokens:
-            (chunk.prompt_eval_count ?? 0) + (chunk.eval_count ?? 0),
+          totalTokens: (chunk.prompt_eval_count ?? 0) + (chunk.eval_count ?? 0),
         };
-      }    };
+      }
+    };
 
     try {
       for (;;) {
         if (signal?.aborted) {
           await reader.cancel().catch(() => undefined);
-          throw new DOMException("Aborted", "AbortError");
+          throw abortError();
+        }
+        if (ended) {
+          await reader.cancel().catch(() => undefined);
+          break;
         }
         const { done, value } = await reader.read();
         if (done) {
@@ -380,6 +417,17 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         buffer = lines.pop() ?? "";
         for (const line of lines) {
           handleLine(line);
+        }
+        if (!ended && buffer.trim()) {
+          try {
+            const parsed = JSON.parse(buffer.trim()) as { done?: unknown };
+            if (parsed && typeof parsed === "object" && parsed.done === true) {
+              handleLine(buffer);
+              buffer = "";
+            }
+          } catch {
+            // Incomplete JSON still arriving.
+          }
         }
       }
       handleLine(buffer);
@@ -578,6 +626,64 @@ function materializeToolCalls(
   return calls.length > 0 ? calls : undefined;
 }
 
+function readableBody(response: Response): boolean {
+  try {
+    return Boolean(
+      response.body && typeof response.body.getReader === "function",
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isOllamaStreamType(contentType: string): boolean {
+  return (
+    contentType.includes("application/x-ndjson") ||
+    contentType.includes("application/json")
+  );
+}
+
+function looksLikeSse(text: string): boolean {
+  return /^\s*data:/m.test(text);
+}
+
+function looksLikeNdjson(text: string): boolean {
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) {
+    return false;
+  }
+  try {
+    const first = JSON.parse(lines[0]) as { done?: unknown };
+    if (lines.length > 1) {
+      return true;
+    }
+    return first && typeof first === "object" && first.done === false;
+  } catch {
+    return false;
+  }
+}
+
+function bufferedResponse(text: string): Response {
+  const bytes = new TextEncoder().encode(text);
+  let sent = false;
+  const reader: ByteReader = {
+    async read() {
+      if (sent) {
+        return { done: true };
+      }
+      sent = true;
+      return { done: false, value: bytes };
+    },
+    async cancel() {
+      sent = true;
+    },
+  };
+  return { body: { getReader: () => reader } } as unknown as Response;
+}
+
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(resolve, ms);
@@ -585,7 +691,7 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
       "abort",
       () => {
         clearTimeout(timer);
-        reject(new DOMException("Aborted", "AbortError"));
+        reject(abortError());
       },
       { once: true },
     );
@@ -636,7 +742,9 @@ function toOpenAIMessage(message: ModelMessage) {
  * Ollama native messages: tool results are role:"tool" with a tool_name, so
  * resolve each toolCallId against the preceding assistant message's calls.
  */
-function toOllamaMessages(messages: ModelMessage[]): Array<Record<string, unknown>> {
+function toOllamaMessages(
+  messages: ModelMessage[],
+): Array<Record<string, unknown>> {
   const callNames = new Map<string, string>();
   return messages.map((message) => {
     if (message.role === "assistant" && message.toolCalls?.length) {

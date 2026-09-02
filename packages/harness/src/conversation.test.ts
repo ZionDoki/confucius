@@ -50,14 +50,10 @@ describe("OpenAICompatibleAdapter streaming", () => {
       fetchImpl: (async () =>
         sseResponse([
           {
-            choices: [
-              { delta: { reasoning_content: "thinking " } },
-            ],
+            choices: [{ delta: { reasoning_content: "thinking " } }],
           },
           {
-            choices: [
-              { delta: { reasoning_content: "hard" } },
-            ],
+            choices: [{ delta: { reasoning_content: "hard" } }],
           },
           { choices: [{ delta: { content: "Hello " } }] },
           { choices: [{ delta: { content: "world" } }] },
@@ -92,7 +88,11 @@ describe("OpenAICompatibleAdapter streaming", () => {
           },
           {
             choices: [{}],
-            usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+            usage: {
+              prompt_tokens: 10,
+              completion_tokens: 5,
+              total_tokens: 15,
+            },
           },
         ])) as unknown as typeof fetch,
     });
@@ -110,6 +110,76 @@ describe("OpenAICompatibleAdapter streaming", () => {
       completionTokens: 5,
       totalTokens: 15,
     });
+  });
+
+  it("parses a buffered SSE body when Response.body is missing", async () => {
+    const textDeltas: string[] = [];
+    const adapter = new OpenAICompatibleAdapter({
+      apiKey: "sk-test",
+      baseUrl: "https://api.example.test/v1",
+      model: "demo",
+      stream: true,
+      onTextDelta: (text) => textDeltas.push(text),
+      fetchImpl: (async () =>
+        ({
+          ok: true,
+          status: 200,
+          headers: { get: () => "text/event-stream" },
+          body: null,
+          async text() {
+            return [
+              'data: {"choices":[{"delta":{"content":"Buffered "}}]}',
+              'data: {"choices":[{"delta":{"content":"reply"}}]}',
+              "data: [DONE]",
+              "",
+            ].join("\n");
+          },
+        }) as unknown as Response) as unknown as typeof fetch,
+    });
+    const turn = await adapter.complete({
+      messages: [{ role: "user", content: "hi" }],
+    });
+    assert.equal(turn.text, "Buffered reply");
+    assert.deepEqual(textDeltas, ["Buffered ", "reply"]);
+  });
+
+  it("ends the turn on [DONE] even if the SSE body never closes", async () => {
+    const encoder = new TextEncoder();
+    const adapter = new OpenAICompatibleAdapter({
+      apiKey: "sk-test",
+      baseUrl: "https://api.example.test/v1",
+      model: "demo",
+      stream: true,
+      fetchImpl: (async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(
+                  'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n',
+                ),
+              );
+              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          },
+        )) as unknown as typeof fetch,
+    });
+    const turn = await Promise.race([
+      adapter.complete({
+        messages: [{ role: "user", content: "hi" }],
+      }),
+      new Promise<never>((_, reject) => {
+        setTimeout(
+          () => reject(new Error("stream did not end after [DONE]")),
+          1000,
+        );
+      }),
+    ]);
+    assert.equal(turn.text, "Hi");
   });
 
   it("retries a 429 once and then succeeds", async () => {
@@ -267,11 +337,7 @@ describe("compactHistory", () => {
     const result = await compactHistory(model, messages, 4_000);
     assert.equal(result.compacted, true);
     assert.ok(result.messages[0].content.includes("SUMMARY."));
-    assert.ok(
-      result.messages
-        .at(-1)
-        ?.content.includes("answer 29"),
-    );
+    assert.ok(result.messages.at(-1)?.content.includes("answer 29"));
     assert.equal(needsCompaction(result.messages, 4_000), false);
   });
 

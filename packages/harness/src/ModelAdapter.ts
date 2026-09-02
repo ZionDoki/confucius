@@ -1,3 +1,5 @@
+import { abortError } from "./abort";
+
 export interface ModelToolCall {
   id: string;
   name: string;
@@ -51,7 +53,7 @@ export class ScriptedModel implements ModelAdapter {
 
   complete(_request: ModelRequest, signal?: AbortSignal): Promise<ModelTurn> {
     if (signal?.aborted) {
-      return Promise.reject(new DOMException("Aborted", "AbortError"));
+      return Promise.reject(abortError());
     }
     const turn = this.script[this.index] ?? { text: "" };
     this.index += 1;

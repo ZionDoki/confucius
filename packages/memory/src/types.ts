@@ -5,12 +5,19 @@ export const MEMORY_TYPES = [
   "paper",
   "procedure",
   "insight",
+  "note",
+  "method",
+  "discussion",
+  "mindmap",
 ] as const;
 
 export type MemoryType = (typeof MEMORY_TYPES)[number];
 
 export function isMemoryType(value: unknown): value is MemoryType {
-  return typeof value === "string" && (MEMORY_TYPES as readonly string[]).includes(value);
+  return (
+    typeof value === "string" &&
+    (MEMORY_TYPES as readonly string[]).includes(value)
+  );
 }
 
 export interface MemoryRecord {
@@ -60,7 +67,18 @@ export type MemoryOp =
 export interface MemoryQuery {
   query: string;
   type?: MemoryType;
+  /** Tags that contribute to retrieval ranking (legacy any-match semantics). */
   tags?: string[];
+  /** Exact tags used only to constrain the corpus; every tag must match. */
+  filterTags?: string[];
+  limit?: number;
+}
+
+export interface MemoryListOptions {
+  type?: MemoryType;
+  /** Exact tags to filter on. */
+  tags?: string[];
+  tagsMode?: "any" | "all";
   limit?: number;
 }
 

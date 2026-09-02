@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import type { ApprovalResolution } from "@confucius/protocol";
 import { createHarness, session } from "./test-kit";
 import { MemoryToolProvider } from "./MemoryToolProvider";
 import { assertParallelSafeInvariant } from "./ConcurrencyScheduler";
@@ -37,7 +38,9 @@ describe("TurnLoop", () => {
       "turn_completed",
     ]);
     assert.ok(checkpoints.count("turn_1") >= 2);
-    const toolResult = events.events.find((event) => event.type === "tool_result");
+    const toolResult = events.events.find(
+      (event) => event.type === "tool_result",
+    );
     assert.equal(toolResult?.type, "tool_result");
     if (toolResult?.type === "tool_result") {
       assert.equal(toolResult.payload.result.ok, true);
@@ -111,11 +114,69 @@ describe("TurnLoop", () => {
       userText: "Make a collection named RLHF",
     });
 
-    const resultEvent = events.events.find((event) => event.type === "tool_result");
+    const resultEvent = events.events.find(
+      (event) => event.type === "tool_result",
+    );
     assert.equal(resultEvent?.type, "tool_result");
     if (resultEvent?.type === "tool_result") {
       assert.equal(resultEvent.payload.result.ok, true);
     }
+  });
+
+  it("publishes approval_required before waiting for an interactive decision", async () => {
+    let releaseApproval:
+      | ((resolution: ApprovalResolution) => void)
+      | undefined;
+    let requestId = "";
+    const { loop, events } = createHarness({
+      script: [
+        {
+          toolCalls: [
+            {
+              id: "call_pending_create",
+              name: "create_collection",
+              args: { name: "Needs approval" },
+            },
+          ],
+        },
+        { text: "Created after approval." },
+      ],
+      resolve: (request) => {
+        requestId = request.id;
+        return new Promise<ApprovalResolution>((resolve) => {
+          releaseApproval = resolve;
+        });
+      },
+    });
+
+    const running = loop.run({
+      session: session(),
+      turnId: "turn_pending_approval",
+      userText: "Create a collection after I approve it",
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(events.types(), [
+      "turn_started",
+      "tool_requested",
+      "approval_required",
+    ]);
+    assert.ok(releaseApproval, "approval resolver should be waiting");
+    assert.equal(
+      events.events.some((event) => event.type === "tool_result"),
+      false,
+    );
+
+    releaseApproval({
+      id: requestId,
+      verdict: "allow",
+      scope: "once",
+    });
+    const result = await running;
+
+    assert.equal(result.phase, "done");
+    assert.ok(events.types().includes("approval_resolved"));
+    assert.ok(events.types().includes("tool_result"));
   });
 
   it("stops when the iteration budget is exhausted", async () => {
@@ -161,7 +222,9 @@ describe("TurnLoop", () => {
 
     assert.equal(result.phase, "done");
     assert.equal(budget.iterationsUsed, 2);
-    const requested = events.types().filter((type) => type === "tool_requested");
+    const requested = events
+      .types()
+      .filter((type) => type === "tool_requested");
     assert.equal(requested.length, 2);
     assert.equal(events.types().at(-1), "turn_completed");
   });
@@ -170,9 +233,7 @@ describe("TurnLoop", () => {
     const { loop, events } = createHarness({
       script: [
         {
-          toolCalls: [
-            { id: "bad", name: "search_items", args: {} },
-          ],
+          toolCalls: [{ id: "bad", name: "search_items", args: {} }],
         },
         { text: "Need a query." },
       ],
@@ -184,7 +245,9 @@ describe("TurnLoop", () => {
       userText: "search",
     });
 
-    const resultEvent = events.events.find((event) => event.type === "tool_result");
+    const resultEvent = events.events.find(
+      (event) => event.type === "tool_result",
+    );
     assert.equal(resultEvent?.type, "tool_result");
     if (resultEvent?.type === "tool_result" && !resultEvent.payload.result.ok) {
       assert.equal(resultEvent.payload.result.code, "invalid_args");
@@ -204,6 +267,24 @@ describe("TurnLoop", () => {
       signal: controller.signal,
     });
     assert.equal(result.phase, "aborted");
+  });
+
+  it("treats a cross-compartment AbortError as aborted", async () => {
+    const { loop, events } = createHarness({
+      model: {
+        complete: () => Promise.reject({ name: "AbortError" }),
+      },
+    });
+    const result = await loop.run({
+      session: session(),
+      turnId: "turn_abort_shape",
+      userText: "hi",
+    });
+    assert.equal(result.phase, "aborted");
+    assert.equal(
+      events.events.some((event) => event.type === "turn_aborted"),
+      true,
+    );
   });
 });
 

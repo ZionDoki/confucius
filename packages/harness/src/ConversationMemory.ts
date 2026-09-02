@@ -29,7 +29,8 @@ const SUMMARY_PROMPT = [
   "Preserve: the user's goals and constraints, decisions made, papers and items",
   "discussed (cite as libraryID:key), search results that mattered, findings,",
   "and pending actions. Drop small talk and redundant tool output.",
-  "Reply with the summary only, at most 300 words.",
+  "The full transcript remains in searchable conversation logs; this summary is",
+  "only for in-context continuity. Reply with the summary only, at most 300 words.",
 ].join(" ");
 
 /**
@@ -45,7 +46,11 @@ export async function compactHistory(
   signal?: AbortSignal,
 ): Promise<CompactionResult> {
   let current = messages.slice();
-  for (let round = 0; round < 3 && needsCompaction(current, maxChars); round++) {
+  for (
+    let round = 0;
+    round < 3 && needsCompaction(current, maxChars);
+    round++
+  ) {
     const tailChars = tailLengthWithinBudget(current, Math.floor(maxChars / 2));
     const prefix = current.slice(0, current.length - tailChars);
     const tail = current.slice(current.length - tailChars);

@@ -1,4 +1,7 @@
-import { parseSkillMarkdown, type ConfuciusSkill } from "@confucius/skill-format";
+import {
+  parseSkillMarkdown,
+  type ConfuciusSkill,
+} from "@confucius/skill-format";
 import { BUILTIN_SKILLS } from "../skills/builtin";
 
 export class SkillStore {

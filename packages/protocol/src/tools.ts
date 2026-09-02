@@ -65,12 +65,20 @@ export const BROWSER_TOOLS = [
 export const MEMORY_READ_TOOLS = [
   "memory_search",
   "memory_list",
+  "knowledge_base_list",
+  "knowledge_base_get",
+  "knowledge_base_search",
+  "conversation_log_search",
+  "conversation_log_read",
 ] as const;
 
 export const MEMORY_WRITE_TOOLS = [
   "memory_save",
   "memory_update",
   "memory_delete",
+  "knowledge_base_create",
+  "knowledge_base_update",
+  "knowledge_base_save_entry",
 ] as const;
 
 export type LibraryReadTool = (typeof LIBRARY_READ_TOOLS)[number];

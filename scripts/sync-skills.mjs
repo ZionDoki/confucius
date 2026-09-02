@@ -40,7 +40,8 @@ for (const slug of entries) {
     continue;
   }
   const markdown = readFileSync(path, "utf8");
-  lines.push(`  ${JSON.stringify(slug)}: ${JSON.stringify(markdown)},`);
+  lines.push(`  ${JSON.stringify(slug)}:`);
+  lines.push(`    ${JSON.stringify(markdown)},`);
 }
 lines.push("};");
 lines.push("");

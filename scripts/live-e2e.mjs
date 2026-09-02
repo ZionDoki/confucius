@@ -47,13 +47,12 @@ const flag = (name) => {
 const HOST = flag("host") ?? "http://172.30.111.252:54321";
 const MODEL = flag("model") ?? "qwen3.8-27b:latest";
 const ONLY = flag("only");
-const BASES =
-  flag("base")
-    ? [{ name: flag("style") ?? "custom", url: flag("base") }]
-    : [
-        { name: "openai", url: `${HOST}/v1` },
-        { name: "ollama-native", url: `${HOST}/api/chat` },
-      ];
+const BASES = flag("base")
+  ? [{ name: flag("style") ?? "custom", url: flag("base") }]
+  : [
+      { name: "openai", url: `${HOST}/v1` },
+      { name: "ollama-native", url: `${HOST}/api/chat` },
+    ];
 
 // ---------------------------------------------------------------------------
 // Fake Zotero library: three papers; the first has real multi-page text.
@@ -224,7 +223,10 @@ function buildTools(engine) {
   register("search_with_regex", (args) => {
     const item = requireItemRef(args);
     if (!item) return { error: "not found" };
-    const compiled = compileSafeRegex(String(args.pattern ?? ""), item.fullText);
+    const compiled = compileSafeRegex(
+      String(args.pattern ?? ""),
+      item.fullText,
+    );
     if (!compiled.ok) return { error: compiled.reason };
     return {
       hits: collectMatches(compiled.regex, compiled.subject, 10),
@@ -282,9 +284,9 @@ function buildTools(engine) {
   register("delete_annotation", (args) => {
     const found = findAnnotation(String(args.key ?? ""));
     if (!found) return { error: "annotation not found" };
-    const list = committed.get(found.itemKey).filter(
-      (ann) => ann.key !== found.annotation.key,
-    );
+    const list = committed
+      .get(found.itemKey)
+      .filter((ann) => ann.key !== found.annotation.key);
     committed.set(found.itemKey, list);
     return { remaining: list.length };
   });
@@ -311,7 +313,9 @@ function buildTools(engine) {
       content: args.content ? String(args.content) : undefined,
     }),
   );
-  register("memory_delete", (args) => ({ removed: engine.delete(String(args.id ?? "")) }));
+  register("memory_delete", (args) => ({
+    removed: engine.delete(String(args.id ?? "")),
+  }));
   return tools;
 }
 
@@ -332,7 +336,14 @@ function makeAdapter(baseUrl, extra = {}) {
 }
 
 /** Run one live turn through the real TurnLoop. */
-async function runTurn({ baseUrl, tools, prompt, history = [], approve = "allow", stream = true }) {
+async function runTurn({
+  baseUrl,
+  tools,
+  prompt,
+  history = [],
+  approve = "allow",
+  stream = true,
+}) {
   const ids = createIdFactory("id");
   const events = new MemoryEventLog();
   const deltas = { text: [], reasoning: [] };
@@ -416,9 +427,7 @@ function assert(condition, message) {
 }
 
 function toolCallsOf(events) {
-  return events
-    .filter((type) => type === "tool_requested")
-    .map(() => null); // filled by helper below
+  return events.filter((type) => type === "tool_requested").map(() => null); // filled by helper below
 }
 
 // Track actual requested tool names via a wrapper on the event log.
@@ -477,9 +486,7 @@ async function main() {
         },
       });
       const turn = await adapter.complete({
-        messages: [
-          { role: "user", content: "Reply with exactly: stream ok" },
-        ],
+        messages: [{ role: "user", content: "Reply with exactly: stream ok" }],
       });
       assert(text.length > 0, "no text deltas streamed");
       assert(
@@ -490,12 +497,18 @@ async function main() {
     });
 
     await test(`[${base.name}] reasoning effort levels are accepted`, async () => {
-      const off = makeAdapter(base.url, { stream: false, reasoningEffort: "off" });
+      const off = makeAdapter(base.url, {
+        stream: false,
+        reasoningEffort: "off",
+      });
       const turnOff = await off.complete({
         messages: [{ role: "user", content: "Reply with: ok" }],
       });
       assert(turnOff.text !== undefined, "effort=off produced no text");
-      const low = makeAdapter(base.url, { stream: false, reasoningEffort: "low" });
+      const low = makeAdapter(base.url, {
+        stream: false,
+        reasoningEffort: "low",
+      });
       const turnLow = await low.complete({
         messages: [{ role: "user", content: "Reply with: ok" }],
       });
@@ -525,8 +538,13 @@ async function main() {
       });
       const result = await loop.run({
         session: {
-          id: "s", title: "t", createdAt: 1, updatedAt: 1,
-          mode: "agent", context: {}, permissionMode: "ask",
+          id: "s",
+          title: "t",
+          createdAt: 1,
+          updatedAt: 1,
+          mode: "agent",
+          context: {},
+          permissionMode: "ask",
         },
         turnId: "t1",
         userText:
@@ -538,7 +556,12 @@ async function main() {
         `expected search_items, got [${capture.requested.join(", ")}]`,
       );
       assert(
-        capture.requested.some((name) => name === "list_sections" || name === "get_paper_section" || name === "get_pages"),
+        capture.requested.some(
+          (name) =>
+            name === "list_sections" ||
+            name === "get_paper_section" ||
+            name === "get_pages",
+        ),
         `expected a section/page tool, got [${capture.requested.join(", ")}]`,
       );
     });
@@ -566,8 +589,13 @@ async function main() {
       });
       const result = await loop.run({
         session: {
-          id: "s", title: "t", createdAt: 1, updatedAt: 1,
-          mode: "agent", context: {}, permissionMode: "ask",
+          id: "s",
+          title: "t",
+          createdAt: 1,
+          updatedAt: 1,
+          mode: "agent",
+          context: {},
+          permissionMode: "ask",
         },
         turnId: "t2",
         userText:
@@ -608,8 +636,13 @@ async function main() {
       });
       const result = await loop.run({
         session: {
-          id: "s", title: "t", createdAt: 1, updatedAt: 1,
-          mode: "agent", context: {}, permissionMode: "ask",
+          id: "s",
+          title: "t",
+          createdAt: 1,
+          updatedAt: 1,
+          mode: "agent",
+          context: {},
+          permissionMode: "ask",
         },
         turnId: "t3",
         userText:
@@ -658,8 +691,13 @@ async function main() {
       });
       const result2 = await loop2.run({
         session: {
-          id: "s", title: "t", createdAt: 1, updatedAt: 1,
-          mode: "agent", context: {}, permissionMode: "ask",
+          id: "s",
+          title: "t",
+          createdAt: 1,
+          updatedAt: 1,
+          mode: "agent",
+          context: {},
+          permissionMode: "ask",
         },
         turnId: "t4",
         userText:
@@ -681,8 +719,22 @@ async function main() {
       if (annotations.length === 0) {
         // Self-sufficient when run with --only: seed two annotations.
         committed.set("ATTN2017", [
-          { libraryID: 1, key: "ATTN2017-ann1", type: "highlight", text: "h = 8 parallel attention layers", comment: "", pageLabel: "2" },
-          { libraryID: 1, key: "ATTN2017-ann2", type: "highlight", text: "28.4 BLEU", comment: "", pageLabel: "3" },
+          {
+            libraryID: 1,
+            key: "ATTN2017-ann1",
+            type: "highlight",
+            text: "h = 8 parallel attention layers",
+            comment: "",
+            pageLabel: "2",
+          },
+          {
+            libraryID: 1,
+            key: "ATTN2017-ann2",
+            type: "highlight",
+            text: "28.4 BLEU",
+            comment: "",
+            pageLabel: "3",
+          },
         ]);
         annotations = committed.get("ATTN2017");
       }
@@ -714,8 +766,13 @@ async function main() {
       });
       const result = await loop.run({
         session: {
-          id: "s", title: "t", createdAt: 1, updatedAt: 1,
-          mode: "agent", context: {}, permissionMode: "ask",
+          id: "s",
+          title: "t",
+          createdAt: 1,
+          updatedAt: 1,
+          mode: "agent",
+          context: {},
+          permissionMode: "ask",
         },
         turnId: "t5",
         userText: `Two annotation chores: (1) set the comment of annotation key=${first.key} (libraryID=1) to "key architectural choice" via update_annotation_comment; (2) delete annotation key=${first.key} via delete_annotation. The key belongs to the annotation itself, not the paper.`,
@@ -758,8 +815,13 @@ async function main() {
       const before = notes.length;
       const result = await loop.run({
         session: {
-          id: "s", title: "t", createdAt: 1, updatedAt: 1,
-          mode: "agent", context: {}, permissionMode: "ask",
+          id: "s",
+          title: "t",
+          createdAt: 1,
+          updatedAt: 1,
+          mode: "agent",
+          context: {},
+          permissionMode: "ask",
         },
         turnId: "t6",
         userText:
@@ -784,29 +846,39 @@ async function main() {
       const existing = await engine.search({ query: "RAG research", limit: 5 });
       const userText1 =
         "Please remember this about me: my research direction is retrieval-augmented generation (RAG), and I distrust claims without experiments.";
-      let ops = [];
-      let raw = "";
-      for (let attempt = 0; attempt < 2 && ops.length === 0; attempt++) {
-        const extractionTurn = await quiet.complete({
-          messages: buildExtractionMessages({
-            userText: userText1,
-            assistantText: turn1.result.text,
-            existing: existing.map((hit) => hit.record),
-          }),
-        });
-        raw = extractionTurn.text ?? "";
-        ops = parseExtractionResponse(raw);
+      const alreadyRemembered = existing.some((hit) =>
+        /retrieval|rag|增强/i.test(hit.record.content + hit.record.title),
+      );
+      if (!alreadyRemembered) {
+        let ops = [];
+        let raw = "";
+        for (let attempt = 0; attempt < 2 && ops.length === 0; attempt++) {
+          const extractionTurn = await quiet.complete({
+            messages: buildExtractionMessages({
+              userText: userText1,
+              assistantText: turn1.result.text,
+              existing: existing.map((hit) => hit.record),
+            }),
+          });
+          raw = extractionTurn.text ?? "";
+          ops = parseExtractionResponse(raw);
+        }
+        assert(
+          ops.length > 0,
+          `neither the turn nor extraction saved memory (raw: ${raw.slice(0, 300)})`,
+        );
+        const changes = await engine.applyOps(ops, "ses_live");
+        assert(changes.length > 0, "no extraction changes applied");
       }
-      assert(ops.length > 0, `extraction produced no ops (raw: ${raw.slice(0, 300)}`);
-      const changes = await engine.applyOps(ops, "ses_live");
-      assert(changes.length > 0, "no changes applied");
 
       // Recall must find it.
       const recall = await engine.search({ query: "研究方向 RAG" });
       assert(recall.length > 0, "memory recall found nothing");
       const all = await engine.list({});
       assert(
-        all.some((record) => /retrieval|rag|增强/i.test(record.content + record.title)),
+        all.some((record) =>
+          /retrieval|rag|增强/i.test(record.content + record.title),
+        ),
         `memory content unexpected: ${all.map((r) => r.content).join(" | ")}`,
       );
 
@@ -818,13 +890,16 @@ async function main() {
       const turn2 = await runTurn({
         baseUrl: base.url,
         tools,
-        prompt: "What did I tell you about my research direction? Answer briefly.",
+        prompt:
+          "What did I tell you about my research direction? Answer briefly.",
         history: turn1.result.messages,
       });
       assert(turn2.result.phase === "done", "turn 2 failed");
       const answer = turn2.result.text.toLowerCase();
       assert(
-        answer.includes("retrieval") || answer.includes("rag") || answer.includes("检索"),
+        answer.includes("retrieval") ||
+          answer.includes("rag") ||
+          answer.includes("检索"),
         `turn 2 answer did not recall RAG: ${turn2.result.text.slice(0, 200)}`,
       );
       // History replay: turn 2 saw 4 prior messages.
@@ -853,10 +928,16 @@ async function main() {
 
     await test(`[${base.name}] read-only tool set excludes writes`, () => {
       for (const name of ["create_note", "commit_annotations", "memory_save"]) {
-        assert(!READ_ONLY_TOOL_NAMES.has(name), `${name} leaked into read-only set`);
+        assert(
+          !READ_ONLY_TOOL_NAMES.has(name),
+          `${name} leaked into read-only set`,
+        );
       }
       for (const name of ["search_items", "get_pages", "memory_search"]) {
-        assert(READ_ONLY_TOOL_NAMES.has(name), `${name} missing from read-only set`);
+        assert(
+          READ_ONLY_TOOL_NAMES.has(name),
+          `${name} missing from read-only set`,
+        );
       }
     });
   }

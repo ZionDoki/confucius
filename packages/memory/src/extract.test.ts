@@ -150,6 +150,7 @@ describe("MemoryEngine", () => {
       "User now prefers primary sources over surveys.",
     );
     assert.equal(updated?.history.length, 1);
+    assert.deepEqual(updated?.tags, ["reading"]);
     assert.match(updated?.history[0].content ?? "", /survey papers/);
 
     // Deleted in the same batch; unknown id still a no-op.

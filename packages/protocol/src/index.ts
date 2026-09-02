@@ -73,10 +73,53 @@ export type {
   ConfuciusEventType,
   PlanStep,
 } from "./events";
+export {
+  coalesceTimeline,
+  nextReasoningFold,
+  toolLineStatus,
+  toolsSummary,
+} from "./timeline";
+export { escapeHtml, renderMarkdownHtml } from "./markdown";
+export { countMindMapNodes, parseMindMapOutline } from "./mindmap";
+export type { MindMapNode } from "./mindmap";
+export type {
+  ReasoningFold,
+  TimelineBlock,
+  TimelineToolCall,
+} from "./timeline";
 
 export { RPC_METHODS, validateConfigPatch } from "./rpc";
-export { isReasoningEffort, REASONING_EFFORTS } from "./rpc";
+export {
+  DEFAULT_MAX_ITERATIONS,
+  DEFAULT_MAX_TOOL_CALLS,
+  MAX_MAX_ITERATIONS,
+  MAX_MAX_TOOL_CALLS,
+  clampMaxIterations,
+  clampMaxToolCalls,
+  isReasoningEffort,
+  REASONING_EFFORTS,
+} from "./rpc";
+export {
+  MAX_ENDPOINTS,
+  activeEndpoint,
+  applyEndpointPatch,
+  blankEndpoint,
+  defaultEndpoint,
+  endpointIsConfigured,
+  endpointLabel,
+  newEndpointId,
+  parseEndpointsJson,
+  resolveEndpointStore,
+} from "./endpoints";
 export type {
+  EndpointPatchResult,
+  EndpointStore,
+  LegacyModelPrefs,
+  ModelEndpoint,
+} from "./endpoints";
+export type {
+  ConfigListModelsParams,
+  ConfigListModelsResult,
   ConfigSetParams,
   ConfigValidation,
   JsonRpcError,
@@ -87,6 +130,17 @@ export type {
   MemoryListParams,
   MemorySaveParams,
   MemorySearchParams,
+  KnowledgeCreateParams,
+  KnowledgeDeleteEntryParams,
+  KnowledgeEntryKind,
+  KnowledgeGetParams,
+  KnowledgeListParams,
+  KnowledgeSaveEntryParams,
+  KnowledgeSearchParams,
+  KnowledgeUpdateParams,
+  LogsListParams,
+  LogsReadParams,
+  LogsSearchParams,
   ModelConfigView,
   ReasoningEffort,
   RpcMethod,

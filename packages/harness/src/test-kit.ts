@@ -1,10 +1,18 @@
-import type { PermissionMode, SessionRecord, ToolRiskLevel } from "@confucius/protocol";
+import type {
+  PermissionMode,
+  SessionRecord,
+  ToolRiskLevel,
+} from "@confucius/protocol";
 import { BudgetAccountant } from "./BudgetAccountant";
 import { MemoryCheckpointStore } from "./CheckpointStore";
 import { MemoryEventLog } from "./EventLog";
 import { createClock, createIdFactory } from "./ids";
 import { MemoryToolProvider, jsonObjectSchema } from "./MemoryToolProvider";
-import { ScriptedModel, type ModelTurn } from "./ModelAdapter";
+import {
+  ScriptedModel,
+  type ModelAdapter,
+  type ModelTurn,
+} from "./ModelAdapter";
 import { PermissionGate } from "./PermissionGate";
 import { TurnLoop } from "./TurnLoop";
 
@@ -21,7 +29,8 @@ export function session(id = "sess_1"): SessionRecord {
 }
 
 export function createHarness(options: {
-  script: ModelTurn[];
+  script?: ModelTurn[];
+  model?: ModelAdapter;
   maxIterations?: number;
   maxToolCalls?: number;
   modeFor?: (toolName: string) => PermissionMode;
@@ -32,7 +41,7 @@ export function createHarness(options: {
   const events = new MemoryEventLog();
   const checkpoints = new MemoryCheckpointStore();
   const tools = new MemoryToolProvider();
-  const model = new ScriptedModel(options.script);
+  const model = options.model ?? new ScriptedModel(options.script ?? []);
   const budget = new BudgetAccountant({
     maxIterations: options.maxIterations ?? 8,
     maxToolCalls: options.maxToolCalls ?? 20,
@@ -52,10 +61,7 @@ export function createHarness(options: {
     {
       name: "search_items",
       description: "Search the library",
-      inputSchema: jsonObjectSchema(
-        { query: { type: "string" } },
-        ["query"],
-      ),
+      inputSchema: jsonObjectSchema({ query: { type: "string" } }, ["query"]),
     },
     {
       name: "search_items",

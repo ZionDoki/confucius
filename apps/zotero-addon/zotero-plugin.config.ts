@@ -7,9 +7,9 @@ export default defineConfig({
   name: pkg.config.addonName,
   id: pkg.config.addonID,
   namespace: pkg.config.addonRef,
-  updateURL: `https://github.com/confucius-agent/confucius/releases/download/release/update.json`,
+  updateURL: `https://github.com/ZionDoki/confucius/releases/latest/download/update.json`,
   xpiDownloadLink:
-    "https://github.com/confucius-agent/confucius/releases/download/v{{version}}/confucius.xpi",
+    "https://github.com/ZionDoki/confucius/releases/download/v{{version}}/confucius.xpi",
 
   build: {
     assets: ["addon/**/*.*"],

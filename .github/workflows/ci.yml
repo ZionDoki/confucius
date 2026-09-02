@@ -2,7 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
+    tags: ["v*"]
   pull_request:
 
 jobs:
@@ -10,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node: [20, 24]
+        node: [22, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,9 +20,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run sync-skills:check
+      - run: npm run sync-chrome-markdown:check
       - run: npm run versions:check
       - run: npm run typecheck
       - run: npm test
+      - run: npm run lint
       - run: npm run build
       - name: Package Chrome extension
         run: npm run package:chrome
@@ -41,7 +44,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run build
@@ -50,6 +53,8 @@ jobs:
         run: npm run build --workspace @confucius/zotero-addon
       - uses: softprops/action-gh-release@v2
         with:
+          generate_release_notes: true
           files: |
             apps/zotero-addon/.scaffold/build/confucius.xpi
+            apps/zotero-addon/.scaffold/build/update.json
             dist/confucius-chrome-*.zip

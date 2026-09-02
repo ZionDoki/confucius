@@ -24,6 +24,7 @@ export class PermissionGate {
     turnId: string;
     toolName: string;
     args: Record<string, unknown>;
+    onRequest?: (request: ApprovalRequest) => void;
   }): Promise<
     | { verdict: "allow"; request?: ApprovalRequest; resolution?: ApprovalResolution }
     | { verdict: "deny"; request?: ApprovalRequest; resolution?: ApprovalResolution }
@@ -45,6 +46,11 @@ export class PermissionGate {
       riskLevel: this.options.riskFor(input.toolName),
       createdAt: this.options.now(),
     };
+
+    // Surface the request before waiting for the UI to resolve it. Emitting
+    // only after `resolve` completes deadlocks interactive approval flows:
+    // the UI cannot show a request that the turn loop has not published yet.
+    input.onRequest?.(request);
 
     if (!this.options.resolve) {
       return { verdict: "deny", request };

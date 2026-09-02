@@ -70,6 +70,13 @@ export class MemoryRetriever {
         continue;
       }
       if (
+        query.filterTags &&
+        query.filterTags.length > 0 &&
+        !hasAllTags(doc.record, query.filterTags)
+      ) {
+        continue;
+      }
+      if (
         query.tags &&
         query.tags.length > 0 &&
         !query.tags.some((tag) =>
@@ -84,8 +91,12 @@ export class MemoryRetriever {
       if (lexical <= 0 && !hasTagOverlap(doc.record, query.tags ?? [])) {
         continue;
       }
-      const recency = recencyBoost(doc.record.lastAccessedAt || doc.record.updatedAt, now);
-      const reinforcement = Math.log1p(doc.record.accessCount) / Math.log1p(MAX_ACCESS_COUNT);
+      const recency = recencyBoost(
+        doc.record.lastAccessedAt || doc.record.updatedAt,
+        now,
+      );
+      const reinforcement =
+        Math.log1p(doc.record.accessCount) / Math.log1p(MAX_ACCESS_COUNT);
       const confidence = doc.record.confidence;
       const score =
         lexical * WEIGHTS.lexical +
@@ -99,7 +110,9 @@ export class MemoryRetriever {
         lexicalScore: round3(lexical),
       });
     }
-    scored.sort((a, b) => b.score - a.score || b.record.updatedAt - a.record.updatedAt);
+    scored.sort(
+      (a, b) => b.score - a.score || b.record.updatedAt - a.record.updatedAt,
+    );
     const limited = scored.slice(0, Math.max(1, query.limit ?? 6));
     if (recordsChanged) {
       recordsChanged();
@@ -112,7 +125,8 @@ export class MemoryRetriever {
       return 0;
     }
     const avgLength =
-      this.docs.reduce((sum, entry) => sum + entry.length, 0) / this.docs.length;
+      this.docs.reduce((sum, entry) => sum + entry.length, 0) /
+      this.docs.length;
     const queryTf = termFrequency(queryTokens);
     let score = 0;
     for (const [term, queryCount] of queryTf) {
@@ -121,8 +135,11 @@ export class MemoryRetriever {
         continue;
       }
       const docFrequency = this.df.get(term) ?? 0;
-      const idf = Math.log(1 + (this.docs.length - docFrequency + 0.5) / (docFrequency + 0.5));
-      const denominator = frequency + K1 * (1 - B + (B * doc.length) / avgLength);
+      const idf = Math.log(
+        1 + (this.docs.length - docFrequency + 0.5) / (docFrequency + 0.5),
+      );
+      const denominator =
+        frequency + K1 * (1 - B + (B * doc.length) / avgLength);
       score += idf * ((frequency * (K1 + 1)) / denominator) * queryCount;
     }
     return score;
@@ -138,6 +155,11 @@ function hasTagOverlap(record: MemoryRecord, tags: string[]): boolean {
   );
 }
 
+function hasAllTags(record: MemoryRecord, tags: string[]): boolean {
+  const own = new Set(record.tags.map((tag) => tag.toLowerCase()));
+  return tags.every((tag) => own.has(tag.toLowerCase()));
+}
+
 function recencyBoost(timestamp: number, now: number): number {
   if (!timestamp || timestamp >= now) {
     return 1;
@@ -150,9 +172,9 @@ function round3(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
-export function memoryTypesOf(records: MemoryRecord[]): Partial<
-  Record<MemoryType, number>
-> {
+export function memoryTypesOf(
+  records: MemoryRecord[],
+): Partial<Record<MemoryType, number>> {
   const byType: Partial<Record<MemoryType, number>> = {};
   for (const record of records) {
     byType[record.type] = (byType[record.type] ?? 0) + 1;

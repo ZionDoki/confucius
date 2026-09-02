@@ -7,7 +7,10 @@ body {
   overflow: hidden;
   background: #1c2420;
   color: #f4efe6;
-  font: 13px/1.45 "Segoe UI", "SF Pro Text", sans-serif;
+  font:
+    13px/1.45 "Segoe UI",
+    "SF Pro Text",
+    sans-serif;
 }
 
 .workspace {

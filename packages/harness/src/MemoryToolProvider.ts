@@ -5,6 +5,7 @@ import type {
   ToolRuntimeMeta,
 } from "@confucius/protocol";
 import { assertParallelSafeInvariant } from "./ConcurrencyScheduler";
+import { isAbortError } from "./abort";
 import { normalizeResult, normalizeThrown } from "./ResultNormalizer";
 
 export type ToolHandler = (
@@ -76,10 +77,6 @@ export class MemoryToolProvider {
       return normalizeThrown(name, error);
     }
   }
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
 }
 
 export function jsonObjectSchema(

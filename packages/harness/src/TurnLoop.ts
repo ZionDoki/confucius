@@ -5,6 +5,7 @@ import type {
 } from "@confucius/protocol";
 import { BudgetAccountant } from "./BudgetAccountant";
 import type { TurnCheckpoint } from "./CheckpointStore";
+import { cloneValue } from "./clone";
 import { splitBatches, type ScheduledCall } from "./ConcurrencyScheduler";
 import type { MemoryEventLog } from "./EventLog";
 import type { Clock, IdFactory } from "./ids";
@@ -12,6 +13,7 @@ import type { ModelAdapter, ModelMessage, ModelToolCall } from "./ModelAdapter";
 import type { PermissionGate } from "./PermissionGate";
 import { validateArgs } from "./SchemaValidate";
 import type { ToolProvider } from "./ToolProvider";
+import { errorMessage, isAbortError } from "./abort";
 import { truncateToolResult } from "./truncate";
 
 export interface CheckpointStore {
@@ -56,7 +58,8 @@ export class TurnLoop {
     const messages: ModelMessage[] = [
       {
         role: "system",
-        content: this.deps.systemPrompt ?? "You are Confucius, a research agent.",
+        content:
+          this.deps.systemPrompt ?? "You are Confucius, a research agent.",
       },
       ...(input.history ?? []),
       { role: "user", content: input.userText },
@@ -67,9 +70,7 @@ export class TurnLoop {
 
     let delivered = "";
 
-    const resultOf = (
-      phase: TurnLoopResult["phase"],
-    ): TurnLoopResult => ({
+    const resultOf = (phase: TurnLoopResult["phase"]): TurnLoopResult => ({
       phase,
       text: delivered,
       messages: messages.slice(1),
@@ -87,6 +88,13 @@ export class TurnLoop {
           { messages, tools: this.deps.tools.listTools() },
           input.signal,
         );
+        // Some adapters return a partial turn when a streaming request is
+        // aborted after data has arrived. Do not deliver that stale response
+        // or execute its tool calls after the caller has superseded it.
+        if (input.signal?.aborted) {
+          this.emit(input, "turn_aborted", { reason: "signal" });
+          return resultOf("aborted");
+        }
 
         if (modelTurn.reasoning && !modelTurn.streamed) {
           this.emit(input, "reasoning_delta", { text: modelTurn.reasoning });
@@ -107,7 +115,11 @@ export class TurnLoop {
 
         if (toolCalls.length === 0) {
           this.emit(input, "turn_completed", { phase: "done" });
-          this.checkpoint(input.turnId, this.deps.budget.iterationsUsed, messages);
+          this.checkpoint(
+            input.turnId,
+            this.deps.budget.iterationsUsed,
+            messages,
+          );
           return resultOf("done");
         }
 
@@ -116,7 +128,11 @@ export class TurnLoop {
           this.emit(input, "turn_aborted", { reason: "signal" });
           return resultOf("aborted");
         }
-        this.checkpoint(input.turnId, this.deps.budget.iterationsUsed, messages);
+        this.checkpoint(
+          input.turnId,
+          this.deps.budget.iterationsUsed,
+          messages,
+        );
       }
 
       this.emit(input, "turn_completed", { phase: "done" });
@@ -126,8 +142,7 @@ export class TurnLoop {
         this.emit(input, "turn_aborted", { reason: "signal" });
         return resultOf("aborted");
       }
-      const message = error instanceof Error ? error.message : String(error);
-      this.emit(input, "turn_failed", { message });
+      this.emit(input, "turn_failed", { message: errorMessage(error) });
       return resultOf("failed");
     }
   }
@@ -167,11 +182,11 @@ export class TurnLoop {
         turnId: input.turnId,
         toolName: call.name,
         args: call.args,
+        onRequest: (request) => {
+          this.emit(input, "approval_required", { request });
+        },
       });
 
-      if (decision.request) {
-        this.emit(input, "approval_required", { request: decision.request });
-      }
       if (decision.resolution) {
         this.emit(input, "approval_resolved", {
           resolution: decision.resolution,
@@ -213,7 +228,9 @@ export class TurnLoop {
       });
     }
 
-    const batches = splitBatches(allowed, (name) => this.deps.tools.getMeta(name));
+    const batches = splitBatches(allowed, (name) =>
+      this.deps.tools.getMeta(name),
+    );
     for (const batch of batches) {
       if (input.signal?.aborted) {
         return "aborted";
@@ -221,11 +238,7 @@ export class TurnLoop {
       const results = await Promise.all(
         batch.map(async (call) => {
           const result = truncateToolResult(
-            await this.deps.tools.call(
-              call.toolName,
-              call.args,
-              input.signal,
-            ),
+            await this.deps.tools.call(call.toolName, call.args, input.signal),
           );
           return { call, result };
         }),
@@ -243,11 +256,15 @@ export class TurnLoop {
     return "ok";
   }
 
-  private checkpoint(turnId: string, iteration: number, messages: ModelMessage[]) {
+  private checkpoint(
+    turnId: string,
+    iteration: number,
+    messages: ModelMessage[],
+  ) {
     this.deps.checkpoints.save({
       turnId,
       iteration,
-      messages: structuredClone(messages),
+      messages: cloneValue(messages),
     });
   }
 
@@ -266,8 +283,4 @@ export class TurnLoop {
     } as ConfuciusEvent;
     this.deps.events.append(event);
   }
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
 }

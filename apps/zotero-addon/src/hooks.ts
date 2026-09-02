@@ -10,7 +10,10 @@ import {
   registerToolbarButton,
   unregisterToolbarButton,
 } from "./modules/ui/toolbar";
-import { closeWorkspaceWindow } from "./modules/ui/workspaceWindow";
+import {
+  closeWorkspaceSidebar,
+  closeWorkspaceWindow,
+} from "./modules/ui/workspaceWindow";
 import { AgentHost } from "./modules/host/AgentHost";
 import {
   bindPrefsWindow,
@@ -30,8 +33,6 @@ async function onStartup() {
   ensurePairingToken();
   await host.start();
   registerHttpBridge(host);
-  // @ts-expect-error runtime host for workspace + Chrome.
-  Zotero.Confucius = host;
   try {
     await registerPreferencePane();
   } catch (error) {
@@ -41,7 +42,11 @@ async function onStartup() {
   }
 
   for (const win of Zotero.getMainWindows()) {
-    await onMainWindowLoad(win);
+    try {
+      await onMainWindowLoad(win);
+    } catch (error) {
+      ztoolkit.log("[Confucius] main window load failed", error);
+    }
   }
 
   addon.data.initialized = true;
@@ -50,11 +55,16 @@ async function onStartup() {
 
 async function onMainWindowLoad(win: Window): Promise<void> {
   addon.data.ztoolkit = createZToolkit();
-  registerToolbarButton(win);
+  try {
+    registerToolbarButton(win);
+  } catch (error) {
+    ztoolkit.log("[Confucius] toolbar registration failed", error);
+  }
 }
 
 async function onMainWindowUnload(win: Window): Promise<void> {
   unregisterToolbarButton(win);
+  closeWorkspaceSidebar(win);
 }
 
 function onShutdown(): void {
@@ -63,8 +73,6 @@ function onShutdown(): void {
   addon.data.alive = false;
   // @ts-expect-error Plugin instance is removed on shutdown.
   delete Zotero[addon.data.config.addonInstance];
-  // @ts-expect-error runtime host.
-  delete Zotero.Confucius;
 }
 
 function onPrefsEvent(type: string, data: { window: Window }): void {

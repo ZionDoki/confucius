@@ -1,17 +1,24 @@
 import { BasicTool } from "zotero-plugin-toolkit";
 import Addon from "./addon";
 import { config } from "../package.json";
+import { installWebPlatform } from "./utils/webPlatform";
+
+// loadSubScript sandbox is not a Window; AbortController/fetch live on the
+// main window. Copy them across (with a polyfill fallback) before any prompt.
+installWebPlatform(_globalThis);
 
 const basicTool = new BasicTool();
 
-// @ts-expect-error Plugin instance is installed on Zotero at runtime.
-if (!basicTool.getGlobal("Zotero")[config.addonInstance]) {
+const instanceKey = config.addonInstance;
+const ZoteroGlobal = basicTool.getGlobal("Zotero") as typeof Zotero &
+  Record<string, { hooks?: unknown } | undefined>;
+// A leftover AgentHost from a previous overwrite has no bootstrap hooks.
+if (!ZoteroGlobal[instanceKey]?.hooks) {
   _globalThis.addon = new Addon();
   defineGlobal("ztoolkit", () => {
     return _globalThis.addon.data.ztoolkit;
   });
-  // @ts-expect-error Plugin instance is installed on Zotero at runtime.
-  Zotero[config.addonInstance] = addon;
+  ZoteroGlobal[instanceKey] = _globalThis.addon;
 }
 
 function defineGlobal(name: Parameters<BasicTool["getGlobal"]>[0]): void;

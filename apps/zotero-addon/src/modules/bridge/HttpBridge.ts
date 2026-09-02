@@ -7,7 +7,10 @@ import {
   CONFUCIUS_WORKSPACE_PROBE_PATH,
 } from "@confucius/protocol";
 import { openAndInspectWorkspace } from "../ui/workspaceWindow";
-import { READ_ONLY_TOOL_NAMES, TOOL_DEFINITIONS } from "@confucius/zotero-tools";
+import {
+  READ_ONLY_TOOL_NAMES,
+  TOOL_DEFINITIONS,
+} from "@confucius/zotero-tools";
 import type { AgentHost } from "../host/AgentHost";
 import { getPref } from "../../utils/prefs";
 import pkg from "../../../package.json";
@@ -227,7 +230,9 @@ export function registerHttpBridge(host: AgentHost): void {
         return json(401, { error: "unauthorized" });
       }
       const body = parseData(options);
-      const method = String(body.method ?? options?.query?.method ?? "tools/list");
+      const method = String(
+        body.method ?? options?.query?.method ?? "tools/list",
+      );
       const id = body.id ?? 1;
       if (method === "initialize") {
         return json(200, {
@@ -266,7 +271,10 @@ export function registerHttpBridge(host: AgentHost): void {
             },
           });
         }
-        const result = await host.tools.execute(name, params.arguments ?? {});
+        const result = await host.executeReadOnlyTool(
+          name,
+          params.arguments ?? {},
+        );
         // MCP tools/call must answer with content blocks, not a raw ToolResult.
         return json(200, {
           jsonrpc: "2.0",

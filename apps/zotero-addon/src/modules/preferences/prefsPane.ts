@@ -1,6 +1,7 @@
 import { getPref, setPref } from "../../utils/prefs";
 import { getString } from "../../utils/locale";
 import { config } from "../../../package.json";
+import { clampMaxIterations, clampMaxToolCalls } from "@confucius/protocol";
 
 export async function registerPreferencePane(): Promise<void> {
   const paneId = "confucius-prefpane";
@@ -13,9 +14,10 @@ export async function registerPreferencePane(): Promise<void> {
     pluginID: config.addonID,
     id: paneId,
     src: rootURI + "content/preferences.xhtml",
-    label: getString("prefs-title") === "confucius-prefs-title"
-      ? "Confucius"
-      : getString("prefs-title"),
+    label:
+      getString("prefs-title") === "confucius-prefs-title"
+        ? "Confucius"
+        : getString("prefs-title"),
     image: `chrome://${config.addonRef}/content/icons/favicon.svg`,
   });
 }
@@ -27,7 +29,8 @@ export function bindPrefsWindow(win: Window): void {
     key: Parameters<typeof getPref>[0],
     numeric = false,
   ) => {
-    const el = doc.getElementById(id) as HTMLInputElement | HTMLTextAreaElement | null;
+    const el = doc.getElementById(id) as
+      HTMLInputElement | HTMLTextAreaElement | null;
     if (!el) {
       return;
     }
@@ -48,10 +51,7 @@ export function bindPrefsWindow(win: Window): void {
   bind("confucius-pref-model", "model");
   bind("confucius-pref-maxTokens", "maxTokens", true);
   bind("confucius-pref-mcpServersJson", "mcpServersJson");
-  const bindCheck = (
-    id: string,
-    key: Parameters<typeof getPref>[0],
-  ) => {
+  const bindCheck = (id: string, key: Parameters<typeof getPref>[0]) => {
     const el = doc.getElementById(id) as HTMLInputElement | null;
     if (!el) {
       return;
@@ -63,6 +63,30 @@ export function bindPrefsWindow(win: Window): void {
   };
   bindCheck("confucius-pref-streamResponses", "streamResponses");
   bindCheck("confucius-pref-memoryAutoExtract", "memoryAutoExtract");
+  const bindBudget = (
+    id: string,
+    key: "maxIterations" | "maxToolCalls",
+    clamp: (value: unknown) => number,
+  ) => {
+    const el = doc.getElementById(id) as HTMLInputElement | null;
+    if (!el) {
+      return;
+    }
+    el.value = String(clamp(getPref(key)));
+    const persist = () => {
+      const next = clamp(el.value);
+      setPref(key, next);
+      el.value = String(next);
+    };
+    el.addEventListener("change", persist);
+    el.addEventListener("blur", persist);
+  };
+  bindBudget(
+    "confucius-pref-maxIterations",
+    "maxIterations",
+    clampMaxIterations,
+  );
+  bindBudget("confucius-pref-maxToolCalls", "maxToolCalls", clampMaxToolCalls);
   const token = doc.getElementById(
     "confucius-pref-pairingToken",
   ) as HTMLInputElement | null;

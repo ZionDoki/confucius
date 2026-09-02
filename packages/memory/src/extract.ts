@@ -17,7 +17,10 @@ const SYSTEM_PROMPT = [
   "Ignore one-off questions, transient context, and anything already covered by an",
   "existing memory unless it contradicts or refines it.",
   "",
-  "Known memory types: preference, fact, project, paper, procedure, insight.",
+  "Known memory types: preference, fact, project, paper, procedure, insight,",
+  "note, method, discussion, mindmap. Use the last four only when the user",
+  "explicitly asks to retain research material; structured knowledge-base tools",
+  "are preferred for topic-specific notes and mind maps.",
   "",
   "Rules:",
   "- When the user explicitly asks you to remember something, ALWAYS emit an add op",
@@ -71,7 +74,10 @@ export function parseExtractionResponse(text: string): MemoryOp[] {
 }
 
 function extractJsonArray(text: string): unknown[] | null {
-  const stripped = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
+  const stripped = text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/```\s*$/, "");
   const start = stripped.indexOf("[");
   const end = stripped.lastIndexOf("]");
   if (start < 0 || end <= start) {
@@ -118,7 +124,9 @@ function coerceOp(entry: unknown): MemoryOp | null {
       id,
       content,
       title: String(record.title ?? "").trim() || undefined,
-      tags: toStringArray(record.tags),
+      tags: Array.isArray(record.tags)
+        ? toStringArray(record.tags)
+        : undefined,
       confidence: clamp01(record.confidence),
     };
   }
@@ -136,7 +144,11 @@ function toStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.map(String).map((tag) => tag.trim()).filter(Boolean).slice(0, 8);
+  return value
+    .map(String)
+    .map((tag) => tag.trim())
+    .filter(Boolean)
+    .slice(0, 8);
 }
 
 function clamp01(value: unknown): number {

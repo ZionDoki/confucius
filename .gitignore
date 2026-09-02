@@ -11,4 +11,7 @@ Thumbs.db
 .env.*
 !.env.example
 apps/chrome-extension/dist/
+apps/chrome-extension/vendor/
 apps/zotero-addon/.scaffold/
+/tmp/
+/output/

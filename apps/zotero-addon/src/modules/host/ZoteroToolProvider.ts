@@ -5,6 +5,7 @@ import type {
   ToolRuntimeMeta,
 } from "@confucius/protocol";
 import type { ToolProvider } from "@confucius/harness";
+import { MEMORY_READ_TOOLS, MEMORY_WRITE_TOOLS } from "@confucius/protocol";
 import { TOOL_DEFINITIONS, TOOL_META } from "@confucius/zotero-tools";
 import type { ZoteroToolHost } from "../tools/ZoteroToolHost";
 import type { BrowserContextStore } from "./BrowserContext";
@@ -16,14 +17,20 @@ export class ZoteroToolProvider implements ToolProvider {
   ) {}
 
   listTools(): ToolDefinition[] {
-    return TOOL_DEFINITIONS;
+    return TOOL_DEFINITIONS.filter((tool) => !MEMORY_TOOL_NAMES.has(tool.name));
   }
 
   getMeta(name: string): ToolRuntimeMeta | null {
+    if (MEMORY_TOOL_NAMES.has(name)) {
+      return null;
+    }
     return TOOL_META[name] ?? null;
   }
 
   getSchema(name: string): JsonSchemaObject | undefined {
+    if (MEMORY_TOOL_NAMES.has(name)) {
+      return undefined;
+    }
     return TOOL_DEFINITIONS.find((tool) => tool.name === name)?.inputSchema;
   }
 
@@ -61,7 +68,11 @@ export class ZoteroToolProvider implements ToolProvider {
       };
     }
     if (name === "browser.extract_pdf") {
-      return { ok: true, toolName: name, data: { pdfUrl: snap?.identifiers.pdfUrl ?? "" } };
+      return {
+        ok: true,
+        toolName: name,
+        data: { pdfUrl: snap?.identifiers.pdfUrl ?? "" },
+      };
     }
     if (name === "browser.extract_readable_text") {
       return {
@@ -84,7 +95,11 @@ export class ZoteroToolProvider implements ToolProvider {
           message: "No identifier on the active tab",
         };
       }
-      return this.host.execute("add_item", { ...args, identifier });
+      const imported = await this.host.execute("add_item", {
+        ...args,
+        identifier,
+      });
+      return { ...imported, toolName: name };
     }
     return {
       ok: false,
@@ -94,3 +109,8 @@ export class ZoteroToolProvider implements ToolProvider {
     };
   }
 }
+
+const MEMORY_TOOL_NAMES = new Set<string>([
+  ...MEMORY_READ_TOOLS,
+  ...MEMORY_WRITE_TOOLS,
+]);

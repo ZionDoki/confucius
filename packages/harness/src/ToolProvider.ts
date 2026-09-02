@@ -61,6 +61,51 @@ export class FilteredToolProvider implements ToolProvider {
   }
 }
 
+export interface ToolCallHookInfo {
+  toolName: string;
+  args: Record<string, unknown>;
+  result: ToolResult;
+}
+
+/**
+ * Wrap any provider so every successful or failed call is visible to an
+ * access hook (promotion, logging, metrics). Hook errors never fail the tool.
+ */
+export class HookedToolProvider implements ToolProvider {
+  constructor(
+    private readonly inner: ToolProvider,
+    private readonly afterCall: (
+      info: ToolCallHookInfo,
+    ) => Promise<void> | void,
+  ) {}
+
+  listTools(): ToolDefinition[] {
+    return this.inner.listTools();
+  }
+
+  getMeta(name: string): ToolRuntimeMeta | null {
+    return this.inner.getMeta(name);
+  }
+
+  getSchema(name: string): JsonSchemaObject | undefined {
+    return this.inner.getSchema(name);
+  }
+
+  async call(
+    name: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<ToolResult> {
+    const result = await this.inner.call(name, args, signal);
+    try {
+      await this.afterCall({ toolName: name, args, result });
+    } catch {
+      // Access hooks must not change tool semantics.
+    }
+    return result;
+  }
+}
+
 export class CompositeToolProvider implements ToolProvider {
   constructor(private readonly providers: ToolProvider[]) {}
 

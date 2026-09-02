@@ -6,6 +6,7 @@ import type {
 } from "@confucius/protocol";
 import type { ToolProvider } from "@confucius/harness";
 import { McpHttpClient, type McpServerConfig } from "@confucius/mcp-client";
+import { hostFetch } from "../../utils/webPlatform";
 
 export class McpToolProvider implements ToolProvider {
   private tools: ToolDefinition[] = [];
@@ -13,7 +14,7 @@ export class McpToolProvider implements ToolProvider {
   constructor(private readonly client: McpHttpClient) {}
 
   static async connect(config: McpServerConfig): Promise<McpToolProvider> {
-    const provider = new McpToolProvider(new McpHttpClient(config));
+    const provider = new McpToolProvider(new McpHttpClient(config, hostFetch));
     provider.tools = await provider.client.listTools();
     return provider;
   }

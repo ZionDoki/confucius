@@ -17,9 +17,18 @@
   <groupbox>
     <label><html:h2 data-l10n-id="pref-bridge-title"></html:h2></label>
     <html:p data-l10n-id="pref-bridge-help"></html:p>
-    <html:input id="confucius-pref-pairingToken" type="text" readonly="true" width="400" />
+    <html:input
+      id="confucius-pref-pairingToken"
+      type="text"
+      readonly="true"
+      width="400"
+    />
     <label data-l10n-id="pref-mcp-json" />
-    <html:textarea id="confucius-pref-mcpServersJson" rows="4" cols="60"></html:textarea>
+    <html:textarea
+      id="confucius-pref-mcpServersJson"
+      rows="4"
+      cols="60"
+    ></html:textarea>
   </groupbox>
   <groupbox>
     <label><html:h2 data-l10n-id="pref-agent-title"></html:h2></label>
@@ -32,6 +41,10 @@
       <html:input id="confucius-pref-memoryAutoExtract" type="checkbox" />
       <html:span data-l10n-id="pref-memory-auto-extract"></html:span>
     </html:label>
+    <label data-l10n-id="pref-max-iterations" />
+    <html:input id="confucius-pref-maxIterations" type="number" width="120" />
+    <label data-l10n-id="pref-max-tool-calls" />
+    <html:input id="confucius-pref-maxToolCalls" type="number" width="120" />
     <html:p data-l10n-id="pref-memory-location"></html:p>
   </groupbox>
 </vbox>

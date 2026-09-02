@@ -27,6 +27,10 @@ memories/
   mem_a1b2c3d4.md    # one memory: frontmatter metadata + body + history
 ```
 
+Conversation logs live beside memory, under `<Zotero data>/confucius/logs/`. Each session is one markdown file. Compaction of the in-context working set never deletes them. `conversation_log_search` / `conversation_log_read` retrieve excerpts; a tool-layer access hook counts hits and promotes a repeatedly retrieved excerpt into a durable memory (`promoted-from-log`). Memories that keep being retrieved are pinned (`confucius:pinned`) and always injected into the system prompt.
+
+History compaction uses the model's configured context window: it reserves room for the system prompt, tool schemas, and output tokens, then compact when the working transcript exceeds 70% of what remains.
+
 A memory file:
 
 ```

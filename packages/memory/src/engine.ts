@@ -3,6 +3,7 @@ import { MemoryRetriever } from "./retrieval";
 import { FileMemoryStore } from "./store";
 import type {
   MemoryOp,
+  MemoryListOptions,
   MemoryQuery,
   MemoryRecord,
   MemorySearchResult,
@@ -86,14 +87,23 @@ export class MemoryEngine {
     return results;
   }
 
-  async list(options: { type?: MemoryType; limit?: number } = {}): Promise<
-    MemoryRecord[]
-  > {
+  async list(options: MemoryListOptions = {}): Promise<MemoryRecord[]> {
     await this.ensureLoaded();
     const all = this.store.all();
-    const filtered = options.type
+    let filtered = options.type
       ? all.filter((record) => record.type === options.type)
       : all;
+    const tags = (options.tags ?? [])
+      .map((tag) => tag.trim().toLowerCase())
+      .filter(Boolean);
+    if (tags.length > 0) {
+      filtered = filtered.filter((record) => {
+        const own = new Set(record.tags.map((tag) => tag.toLowerCase()));
+        return options.tagsMode === "any"
+          ? tags.some((tag) => own.has(tag))
+          : tags.every((tag) => own.has(tag));
+      });
+    }
     return filtered.slice(0, Math.max(1, options.limit ?? 50));
   }
 
@@ -110,7 +120,10 @@ export class MemoryEngine {
     await this.ensureLoaded();
     return this.store
       .all()
-      .filter((record) => jaccard(record.content, content) >= NEAR_DUPLICATE_THRESHOLD);
+      .filter(
+        (record) =>
+          jaccard(record.content, content) >= NEAR_DUPLICATE_THRESHOLD,
+      );
   }
 
   async save(input: {
@@ -147,6 +160,7 @@ export class MemoryEngine {
 
   async update(input: {
     id: string;
+    type?: MemoryType;
     content?: string;
     title?: string;
     tags?: string[];
@@ -160,15 +174,22 @@ export class MemoryEngine {
     const content = input.content?.trim() ?? existing.content;
     const next: MemoryRecord = {
       ...existing,
+      type: input.type ?? existing.type,
       title: input.title?.trim() || existing.title,
       content,
-      tags: input.tags && input.tags.length > 0 ? input.tags : existing.tags,
+      tags:
+        input.tags === undefined
+          ? existing.tags
+          : input.tags.map((tag) => tag.trim()).filter(Boolean),
       confidence: clamp01(input.confidence ?? existing.confidence),
       updatedAt: this.now(),
       history:
         content === existing.content
           ? existing.history
-          : [{ at: existing.updatedAt, content: existing.content }, ...existing.history].slice(0, 10),
+          : [
+              { at: existing.updatedAt, content: existing.content },
+              ...existing.history,
+            ].slice(0, 10),
     };
     await this.serialize(() =>
       this.store.put(next).then(() => this.store.rebuildIndex()),
@@ -180,11 +201,13 @@ export class MemoryEngine {
   async delete(id: string): Promise<boolean> {
     await this.ensureLoaded();
     const existed = await this.serialize(() =>
-      this.store.remove(id).then((removed) =>
-        removed
-          ? this.store.rebuildIndex().then(() => true)
-          : Promise.resolve(false),
-      ),
+      this.store
+        .remove(id)
+        .then((removed) =>
+          removed
+            ? this.store.rebuildIndex().then(() => true)
+            : Promise.resolve(false),
+        ),
     );
     this.reindex();
     return existed;
@@ -252,7 +275,10 @@ export class MemoryEngine {
             ...existing,
             title: op.title?.trim() || existing.title,
             content: op.content.trim(),
-            tags: op.tags && op.tags.length > 0 ? op.tags : existing.tags,
+            tags:
+              op.tags === undefined
+                ? existing.tags
+                : op.tags.map((tag) => tag.trim()).filter(Boolean),
             confidence: clamp01(op.confidence ?? existing.confidence),
             updatedAt: this.now(),
             history:

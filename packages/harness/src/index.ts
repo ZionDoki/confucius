@@ -21,10 +21,30 @@ export type { ToolHandler } from "./MemoryToolProvider";
 export {
   CompositeToolProvider,
   FilteredToolProvider,
+  HookedToolProvider,
 } from "./ToolProvider";
-export type { ToolProvider } from "./ToolProvider";
-export { OpenAICompatibleAdapter } from "./OpenAICompatibleAdapter";
-export type { OpenAICompatibleConfig } from "./OpenAICompatibleAdapter";
+export type { ToolCallHookInfo, ToolProvider } from "./ToolProvider";
+export {
+  CHARS_PER_TOKEN,
+  estimateTokens,
+  historyBudgetChars,
+} from "./contextBudget";
+export type { HistoryBudgetInput } from "./contextBudget";
+export {
+  OpenAICompatibleAdapter,
+  detectApiStyle,
+} from "./OpenAICompatibleAdapter";
+export type {
+  ApiStyle,
+  OpenAICompatibleConfig,
+} from "./OpenAICompatibleAdapter";
+export {
+  listEndpointModels,
+  mergeModelChoices,
+  modelsListRequest,
+  parseModelsList,
+} from "./modelsList";
+export type { ListModelsInput, ListModelsResult } from "./modelsList";
 export { truncateToolResult, MAX_TOOL_RESULT_CHARS } from "./truncate";
 export { ScriptedModel } from "./ModelAdapter";
 export type {
@@ -40,3 +60,4 @@ export { normalizeResult, normalizeThrown } from "./ResultNormalizer";
 export { validateArgs } from "./SchemaValidate";
 export { TurnLoop } from "./TurnLoop";
 export type { TurnLoopDeps, TurnLoopInput, TurnLoopResult } from "./TurnLoop";
+export { abortError, errorMessage, isAbortError } from "./abort";
