@@ -28,8 +28,22 @@ function selectedItems(win: Window): Zotero.Item[] {
   );
 }
 
-/** Sync mirror of findPdf: enough for menu visibility on loaded items. */
-function hasPdf(item: Zotero.Item): boolean {
+/** Duck-typed item shape so the PDF probe stays unit-testable without Zotero. */
+export interface MenuProbeItem {
+  isAttachment?: () => boolean;
+  isNote?: () => boolean;
+  attachmentContentType?: string | false;
+  getAttachments?: () => number[] | false;
+}
+
+/**
+ * Sync mirror of findPdf: enough for menu visibility on loaded items.
+ * `getAttachment` stands in for Zotero.Items.get.
+ */
+export function hasPdfForMenu(
+  item: MenuProbeItem,
+  getAttachment: (id: number) => MenuProbeItem | false | undefined,
+): boolean {
   if (item.isAttachment?.()) {
     return item.attachmentContentType === "application/pdf";
   }
@@ -38,13 +52,20 @@ function hasPdf(item: Zotero.Item): boolean {
   }
   const ids = item.getAttachments?.() || [];
   return ids.some((id) => {
-    const attachment = Zotero.Items.get(id) as Zotero.Item | false;
+    const attachment = getAttachment(id);
     return (
       !!attachment &&
       !Array.isArray(attachment) &&
       attachment.attachmentContentType === "application/pdf"
     );
   });
+}
+
+function hasPdf(item: Zotero.Item): boolean {
+  return hasPdfForMenu(
+    item,
+    (id) => Zotero.Items.get(id) as Zotero.Item | false,
+  );
 }
 
 function queueLaunch(skillSlug: string): void {

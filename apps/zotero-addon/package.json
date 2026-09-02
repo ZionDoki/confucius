@@ -21,7 +21,7 @@
     "start": "zotero-plugin serve",
     "build": "zotero-plugin build && tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test test/*.test.mjs src/modules/ui/workspaceToggle.test.ts src/modules/host/SkillToolProvider.test.ts src/modules/ui/linkNavigator.test.ts",
+    "test": "node --import tsx --test test/*.test.mjs src/modules/ui/workspaceToggle.test.ts src/modules/host/SkillToolProvider.test.ts src/modules/ui/linkNavigator.test.ts src/modules/ui/itemMenu.test.ts",
     "lint": "prettier --check . && eslint .",
     "lint:fix": "prettier --write . && eslint . --fix"
   },
