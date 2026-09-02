@@ -1,5 +1,6 @@
 import { config } from "../package.json";
 import hooks from "./hooks";
+import { openLink as navigateLink } from "./modules/ui/linkNavigator";
 import { createZToolkit } from "./utils/ztoolkit";
 
 class Addon {
@@ -27,9 +28,14 @@ class Addon {
     this.hooks = hooks;
   }
 
-  /** Workspace and Chrome look up `Zotero.Confucius.rpc`. */
+  /** Workspace looks up `Zotero.Confucius.rpc`. */
   rpc(method: string, params?: Record<string, unknown>): Promise<unknown> {
     return this.hooks.host.rpc(method, params);
+  }
+
+  /** Workspace link clicks land here (`Zotero.Confucius.openLink`). */
+  openLink(href: string): Promise<{ ok: boolean; message?: string }> {
+    return navigateLink(href);
   }
 }
 
