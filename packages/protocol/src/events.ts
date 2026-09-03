@@ -1,6 +1,15 @@
 import type { SessionContext, SessionMode, TurnPhase } from "./session";
 import type { ApprovalRequest, ApprovalResolution } from "./permissions";
 import type { ToolFailure, ToolSuccess } from "./tools";
+import type {
+  ArtifactSummary,
+  Citation,
+  MemoryProposal,
+  RuntimeStatus,
+  TaskStatus,
+} from "./research";
+
+export type { ArtifactKind, ArtifactRecord, Citation } from "./research";
 
 export type ConfuciusEventType =
   | "session_created"
@@ -20,7 +29,14 @@ export type ConfuciusEventType =
   | "memory_updated"
   | "turn_completed"
   | "turn_failed"
-  | "turn_aborted";
+  | "turn_aborted"
+  | "task_status_changed"
+  | "runtime_status"
+  | "command_execution"
+  | "file_change"
+  | "turn_diff_updated"
+  | "context_drifted"
+  | "memory_proposed";
 
 export interface ConfuciusEventBase {
   id: string;
@@ -34,30 +50,6 @@ export interface PlanStep {
   id: string;
   label: string;
   status: "pending" | "running" | "done" | "failed" | "skipped";
-}
-
-export type ArtifactKind =
-  | "note_draft"
-  | "annotation_proposal"
-  | "collection_diff"
-  | "report"
-  | "citation_list";
-
-export interface ArtifactRecord {
-  id: string;
-  sessionId: string;
-  kind: ArtifactKind;
-  title: string;
-  body: unknown;
-  updatedAt: number;
-}
-
-export interface Citation {
-  itemLibraryID: number;
-  itemKey: string;
-  page?: number;
-  section?: string;
-  quote?: string;
 }
 
 type EventPayloads = {
@@ -77,7 +69,7 @@ type EventPayloads = {
   };
   approval_required: { request: ApprovalRequest };
   approval_resolved: { resolution: ApprovalResolution };
-  artifact_upserted: { artifact: ArtifactRecord };
+  artifact_upserted: { artifact: ArtifactSummary };
   text_delta: { text: string };
   reasoning_delta: { text: string };
   citation: { citation: Citation };
@@ -91,6 +83,26 @@ type EventPayloads = {
   turn_completed: { phase: TurnPhase };
   turn_failed: { message: string };
   turn_aborted: { reason: string };
+  task_status_changed: { status: TaskStatus; reason?: string };
+  runtime_status: { runtime: RuntimeStatus };
+  command_execution: {
+    callId: string;
+    command: string;
+    status: "started" | "completed" | "failed";
+    output?: string;
+    exitCode?: number;
+  };
+  file_change: {
+    path: string;
+    status: "proposed" | "applied" | "rejected";
+    diff?: string;
+  };
+  turn_diff_updated: { diff: string };
+  context_drifted: {
+    lockedFingerprint: string;
+    liveFingerprint: string;
+  };
+  memory_proposed: { proposal: MemoryProposal };
 };
 
 export type ConfuciusEvent = {

@@ -1,0 +1,29 @@
+{
+  "name": "@confucius/agent-sidecar",
+  "version": "0.2.1",
+  "private": true,
+  "description": "Local runtime bridge for Confucius research agents",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "bin": {
+    "confucius-agent-sidecar": "./src/cli.ts",
+    "confucius-mcp-proxy": "./src/mcpProxy.ts"
+  },
+  "scripts": {
+    "start": "tsx src/cli.ts",
+    "codex:types": "codex app-server generate-ts --experimental --out src/generated/codex",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/*.test.ts"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "1.4.0",
+    "@confucius/protocol": "*",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@openai/codex": "0.153.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "tsx": "^4.23.0",
+    "typescript": "^5.9.3"
+  }
+}

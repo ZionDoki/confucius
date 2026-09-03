@@ -9,6 +9,11 @@ import type {
 } from "./ModelAdapter";
 
 import type { ReasoningEffort } from "@confucius/protocol";
+import {
+  splitThinkTaggedContent,
+  ThinkTagStreamParser,
+  type ThinkTaggedContent,
+} from "./ThinkTagParser";
 
 export type ApiStyle = "openai" | "ollama";
 
@@ -62,11 +67,69 @@ export function detectApiStyle(baseUrl: string): ApiStyle {
   }
 }
 
+/**
+ * OpenAI-compatible gateways (New-API, vLLM, university mirrors) serve
+ * /v1/models and /v1/chat/completions. Users often paste the host only;
+ * some paste the full /chat/completions URL. Ollama native /api/chat is
+ * left alone.
+ */
+export function normalizeOpenAICompatibleBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  if (detectApiStyle(trimmed) === "ollama") {
+    return trimmed.replace(/\/+$/, "");
+  }
+  try {
+    const url = new URL(trimmed);
+    let path = url.pathname.replace(/\/+$/, "") || "/";
+    if (/\/chat\/completions$/i.test(path)) {
+      path = path.slice(0, -"/chat/completions".length) || "/";
+    }
+    if (path === "/") {
+      path = "/v1";
+    }
+    url.pathname = path;
+    url.hash = "";
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    const stripped = trimmed
+      .replace(/\/+$/, "")
+      .replace(/\/chat\/completions$/i, "");
+    const afterScheme = stripped.replace(/^[a-z]+:\/\//i, "");
+    if (!afterScheme.includes("/")) {
+      return `${stripped}/v1`;
+    }
+    return stripped;
+  }
+}
+
+export function describeNonJsonModelBody(
+  kind: "list" | "response",
+  text: string,
+): string {
+  const html = /<!doctype html|<html[\s>]|<script[\s>]/i.test(text);
+  if (kind === "list") {
+    return html
+      ? "Model list returned HTML instead of JSON. For OpenAI-compatible gateways, the Base URL should end with /v1."
+      : "Model list is not JSON";
+  }
+  return html
+    ? "Model returned HTML instead of JSON. For OpenAI-compatible gateways, the Base URL should end with /v1."
+    : `Model response is not JSON: ${text.trim().slice(0, 180)}`;
+}
+
 export class OpenAICompatibleAdapter implements ModelAdapter {
   private readonly style: ApiStyle;
+  private readonly baseUrl: string;
 
   constructor(private readonly config: OpenAICompatibleConfig) {
     this.style = config.apiStyle ?? detectApiStyle(config.baseUrl);
+    this.baseUrl =
+      this.style === "ollama"
+        ? config.baseUrl.replace(/\/+$/, "")
+        : normalizeOpenAICompatibleBaseUrl(config.baseUrl);
   }
 
   async complete(
@@ -122,8 +185,8 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     const fetchImpl = this.config.fetchImpl ?? fetch;
     const url =
       this.style === "ollama"
-        ? this.config.baseUrl
-        : joinUrl(this.config.baseUrl, "/chat/completions");
+        ? this.baseUrl
+        : joinUrl(this.baseUrl, "/chat/completions");
     const stream = this.config.stream !== false;
     const body: Record<string, unknown> =
       this.style === "ollama"
@@ -221,6 +284,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     let buffer = "";
     let text = "";
     let reasoning = "";
+    const thinkTags = new ThinkTagStreamParser();
     const toolCalls = new Map<number, ToolCallAccumulator>();
     let usage: ModelUsage | undefined;
     let sawData = false;
@@ -265,8 +329,10 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         this.config.onReasoningDelta?.(reasoningPiece);
       }
       if (delta.content) {
-        text += delta.content;
-        this.config.onTextDelta?.(delta.content);
+        const parsed = thinkTags.push(delta.content);
+        text += parsed.text;
+        reasoning += parsed.reasoning;
+        emitThinkTaggedContent(this.config, parsed);
       }
       for (const call of delta.tool_calls ?? []) {
         const index = call.index ?? 0;
@@ -325,6 +391,11 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       }
     }
 
+    const tail = thinkTags.finish();
+    text += tail.text;
+    reasoning += tail.reasoning;
+    emitThinkTaggedContent(this.config, tail);
+
     if (usage) {
       this.config.onUsage?.(usage);
     }
@@ -350,6 +421,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     let buffer = "";
     let text = "";
     let thinking = "";
+    const thinkTags = new ThinkTagStreamParser();
     let toolCalls: ModelToolCall[] | undefined;
     let usage: ModelUsage | undefined;
     let sawData = false;
@@ -382,8 +454,10 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         this.config.onReasoningDelta?.(chunk.message.thinking);
       }
       if (chunk.message?.content) {
-        text += chunk.message.content;
-        this.config.onTextDelta?.(chunk.message.content);
+        const parsed = thinkTags.push(chunk.message.content);
+        text += parsed.text;
+        thinking += parsed.reasoning;
+        emitThinkTaggedContent(this.config, parsed);
       }
       if (chunk.message?.tool_calls?.length) {
         toolCalls = mapOllamaToolCalls(chunk.message.tool_calls);
@@ -437,6 +511,11 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       }
     }
 
+    const tail = thinkTags.finish();
+    text += tail.text;
+    thinking += tail.reasoning;
+    emitThinkTaggedContent(this.config, tail);
+
     if (usage) {
       this.config.onUsage?.(usage);
     }
@@ -450,7 +529,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
   }
 
   private parseJsonResponse(text: string): ModelTurn {
-    const payload = JSON.parse(text) as {
+    let payload: {
       choices?: Array<{
         message?: {
           content?: string | null;
@@ -464,6 +543,11 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       }>;
       usage?: ModelUsage | null;
     };
+    try {
+      payload = JSON.parse(text) as typeof payload;
+    } catch {
+      throw new Error(describeNonJsonModelBody("response", text));
+    }
     const message = payload.choices?.[0]?.message;
     if (!message) {
       throw new Error("Model response missing choices[0].message");
@@ -492,9 +576,13 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       this.config.onUsage?.(normalizeUsage(payload.usage));
     }
 
+    const tagged = splitThinkTaggedContent(message.content ?? "");
+    const explicitReasoning =
+      message.reasoning_content ?? message.reasoning ?? "";
+
     return {
-      text: message.content ?? undefined,
-      reasoning: message.reasoning_content ?? message.reasoning ?? undefined,
+      text: tagged.text || undefined,
+      reasoning: joinReasoning(explicitReasoning, tagged.reasoning),
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       usage: payload.usage ? normalizeUsage(payload.usage) : undefined,
     };
@@ -528,15 +616,30 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     if (usage) {
       this.config.onUsage?.(usage);
     }
+    const tagged = splitThinkTaggedContent(message.content || "");
     return {
-      text: message.content || undefined,
-      reasoning: message.thinking || undefined,
+      text: tagged.text || undefined,
+      reasoning: joinReasoning(message.thinking || "", tagged.reasoning),
       toolCalls: message.tool_calls?.length
         ? mapOllamaToolCalls(message.tool_calls)
         : undefined,
       usage,
     };
   }
+}
+
+function emitThinkTaggedContent(
+  config: OpenAICompatibleConfig,
+  content: ThinkTaggedContent,
+): void {
+  if (content.reasoning) config.onReasoningDelta?.(content.reasoning);
+  if (content.text) config.onTextDelta?.(content.text);
+}
+
+function joinReasoning(explicit: string, tagged: string): string | undefined {
+  if (!explicit) return tagged || undefined;
+  if (!tagged || tagged === explicit) return explicit;
+  return `${explicit}${tagged}`;
 }
 
 /** Map usage from OpenAI snake_case, camelCase, or Ollama eval counters. */

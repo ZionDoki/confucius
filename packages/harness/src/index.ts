@@ -7,7 +7,10 @@ export {
 } from "./ConversationMemory";
 export type { CompactionResult } from "./ConversationMemory";
 export { MemoryCheckpointStore } from "./CheckpointStore";
-export type { TurnCheckpoint } from "./CheckpointStore";
+export type {
+  ToolExecutionCheckpoint,
+  TurnCheckpoint,
+} from "./CheckpointStore";
 export {
   assertParallelSafeInvariant,
   splitBatches,
@@ -32,7 +35,9 @@ export {
 export type { HistoryBudgetInput } from "./contextBudget";
 export {
   OpenAICompatibleAdapter,
+  describeNonJsonModelBody,
   detectApiStyle,
+  normalizeOpenAICompatibleBaseUrl,
 } from "./OpenAICompatibleAdapter";
 export type {
   ApiStyle,

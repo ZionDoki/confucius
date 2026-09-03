@@ -2,7 +2,15 @@ export type PermissionMode = "auto_allow" | "ask" | "deny";
 
 export type PermissionScope = "once" | "session" | "always";
 
-export type ToolRiskLevel = "read" | "network" | "write" | "mcp" | "high_cost";
+export type ToolRiskLevel =
+  "read" | "network" | "write" | "mcp" | "command" | "file_write" | "high_cost";
+
+export type ApprovalKind =
+  | "tool"
+  | "command"
+  | "file_change"
+  | "runtime_permission"
+  | "artifact_writeback";
 
 export type ApprovalVerdict = "allow" | "deny";
 
@@ -20,6 +28,11 @@ export interface ApprovalRequest {
    * approval card shows this by default; raw args stay behind a toggle.
    */
   summary?: string;
+  origin?: "native" | "codex" | "kimi";
+  kind?: ApprovalKind;
+  before?: string;
+  after?: string;
+  providerRequestId?: string | number;
 }
 
 export interface ApprovalResolution {

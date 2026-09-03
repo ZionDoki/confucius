@@ -1,4 +1,16 @@
-import type { ConfuciusEvent } from "@confucius/protocol";
+import type {
+  AgentBackendKind,
+  ArtifactBody,
+  ArtifactRecord,
+  ConfuciusEvent,
+  LaunchIntent,
+  LockedContextSnapshot,
+  MemoryConsent,
+  MemoryProposal,
+  ResearchTaskRecord,
+  RuntimeStatus,
+  TaskTemplate,
+} from "@confucius/protocol";
 import {
   DEFAULT_MAX_ITERATIONS,
   DEFAULT_MAX_TOOL_CALLS,
@@ -19,6 +31,8 @@ import {
   type UiFont,
   type LaunchConsumeResult,
   type LiveContextResult,
+  templatesForContext,
+  taskTemplate,
 } from "@confucius/protocol";
 import { durableExcerpt } from "@confucius/memory";
 import { slashMenuToken, type ConfuciusSkill } from "@confucius/skill-format";
@@ -115,13 +129,17 @@ export interface MountOptions {
   onLayoutChange?: (layout: WorkspaceLayout) => void;
 }
 
-type SessionRow = { id: string; title?: string };
+type SessionRow = ResearchTaskRecord;
 
 type ApprovalRow = {
   id: string;
   toolName: string;
   args: Record<string, unknown>;
   summary?: string;
+  before?: string;
+  after?: string;
+  kind?: string;
+  origin?: string;
 };
 
 type MemoryRow = {
@@ -176,6 +194,7 @@ type ModelConfig = {
   maxTokens: number;
   streamResponses: boolean;
   memoryAutoExtract: boolean;
+  memoryConsent: MemoryConsent;
   reasoningEffort: "auto" | "off" | "low" | "medium" | "high";
   contextWindowTokens: number;
   hasApiKey: boolean;
@@ -506,6 +525,138 @@ const TUI_CSS = `
   text-decoration-color: #cbb890;
   text-underline-offset: 2px;
   cursor: pointer;
+}
+.confucius-task-row {
+  border-left: 2px solid transparent;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.confucius-task-row:hover { background: #f0ece3 !important; }
+.confucius-task-row[data-active="true"] { border-left-color: #a45a2a; }
+.confucius-artifact-shell {
+  width: min(900px, 100%);
+  min-width: 0;
+  margin: 0 auto;
+}
+.confucius-artifact-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #ddd8cc;
+}
+.confucius-artifact-tab {
+  appearance: none;
+  max-width: 240px;
+  padding: 5px 9px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #6b665c;
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.confucius-artifact-tab:hover { background: #ebe7de; }
+.confucius-artifact-tab[aria-selected="true"] {
+  background: #33302a;
+  color: #fff;
+}
+.confucius-artifact-paper {
+  min-width: 0;
+  padding: 26px clamp(16px, 5vw, 52px) 42px;
+  border: 1px solid #e1ddd3;
+  border-radius: 3px;
+  background: #fffefa;
+  box-shadow: 0 8px 28px rgba(70, 59, 43, .07);
+}
+.confucius-artifact-paper .tui-answer { font-size: 1.02em; line-height: 1.68; }
+.confucius-artifact-paper table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .92em;
+}
+.confucius-artifact-paper th,
+.confucius-artifact-paper td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #e5e1d8;
+  text-align: left;
+  vertical-align: top;
+}
+.confucius-artifact-paper th { color: #6b665c; font-size: .82em; letter-spacing: .05em; text-transform: uppercase; }
+.confucius-template-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(86px, auto);
+  gap: 0 18px;
+  margin-top: 18px;
+  border-top: 1px solid #ddd8cc;
+}
+.confucius-template-button {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  min-width: 0;
+  min-height: 86px;
+  padding: 15px 2px;
+  border: 0;
+  border-bottom: 1px solid #e5e1d8;
+  background: transparent;
+  color: #33302a;
+  box-sizing: border-box;
+  white-space: normal;
+  text-align: left;
+  cursor: pointer;
+}
+.confucius-template-button:hover { color: #9a4f25; }
+.confucius-template-title { display: block; margin-bottom: 3px; font-weight: 700; }
+.confucius-template-copy { display: block; color: #777166; font-size: .9em; line-height: 1.4; }
+.confucius-context-drift {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: #8a4b26;
+  font-size: .86em;
+}
+.confucius-runtime-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: #9b968b;
+}
+.confucius-runtime-dot[data-state="ready"] { background: #4f7657; }
+.confucius-runtime-dot[data-state="auth_required"] { background: #bf762f; }
+.confucius-runtime-dot[data-state="error"] { background: #b3452f; }
+.confucius-before-after {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+.confucius-before-after pre {
+  max-height: 180px;
+  margin: 3px 0 0;
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid #e5e1d8;
+  border-radius: 6px;
+  background: #fff;
+  white-space: pre-wrap;
+  font: 11px/1.45 ui-monospace, Consolas, monospace;
+}
+@media (max-width: 620px) {
+  .confucius-template-grid,
+  .confucius-before-after { grid-template-columns: minmax(0, 1fr); }
+  .confucius-template-grid { grid-auto-rows: minmax(70px, auto); }
+  .confucius-template-button { min-height: 70px; }
+  .confucius-artifact-paper { padding: 18px 14px 30px; }
 }
 `;
 
@@ -1239,7 +1390,12 @@ function bindWorkspace(
       percent: number;
     } | null,
     live: null as LiveContextResult | null,
-    suppressedSelectionKey: null as string | null,
+    artifacts: [] as ArtifactRecord[],
+    selectedArtifactId: null as string | null,
+    selectedArtifactRevision: null as number | null,
+    memoryProposals: [] as MemoryProposal[],
+    runtimes: [] as RuntimeStatus[],
+    sidecarConnected: false,
   };
   let pendingPermissionUpdate: Promise<void> = Promise.resolve();
 
@@ -1394,17 +1550,112 @@ function bindWorkspace(
     display: showSessions ? "block" : "none",
   });
   sessionPane.className = "confucius-pane confucius-session-pane";
-  const timelinePane = el(doc, "div", {
+  sessionPane.setAttribute("aria-label", "Research tasks");
+  const workbenchPane = el(doc, "div", {
     flex: "1 1 auto",
+    minWidth: "0px",
+    minHeight: "0px",
+    display: "flex",
+    flexDirection: "column",
+    overflow: "hidden",
+    background: "#f5f3ee",
+  });
+  workbenchPane.className = "confucius-workbench-pane";
+  const artifactPane = el(
+    doc,
+    "main",
+    {
+      display: "block",
+      flex: "1 1 0px",
+      minHeight: "180px",
+      overflow: "auto",
+      padding: compact ? "12px" : "22px 24px",
+      boxSizing: "border-box",
+      background: "#f5f3ee",
+    },
+    { id: "confucius-artifact-canvas" },
+  );
+  artifactPane.className = "confucius-artifact-canvas";
+  const activityDetails = el(
+    doc,
+    "section",
+    {
+      display: "flex",
+      flex: "0 1 auto",
+      flexDirection: "column",
+      minHeight: "0px",
+      maxHeight: compact ? "52%" : "46%",
+      overflow: "hidden",
+      borderTop: "1px solid #d9d4c9",
+      background: "#faf9f6",
+    },
+    { id: "confucius-activity-stream", "aria-label": "Activity" },
+  );
+  const activitySummary = el(
+    doc,
+    "button",
+    {
+      display: "block",
+      flex: "0 0 auto",
+      width: "100%",
+      padding: "9px 14px",
+      border: "0",
+      background: "transparent",
+      color: "#5e594f",
+      cursor: "pointer",
+      font: "inherit",
+      fontWeight: "600",
+      textAlign: "left",
+      userSelect: "none",
+    },
+    {
+      id: "confucius-activity-toggle",
+      type: "button",
+      "aria-controls": "confucius-activity-content",
+      "aria-expanded": "false",
+    },
+  );
+  const timelinePane = el(doc, "div", {
+    display: "none",
+    flex: "1 1 auto",
+    height: compact ? "280px" : "300px",
+    minHeight: "0px",
     minWidth: compact ? "0px" : "280px",
     padding: "14px",
     overflow: "auto",
-    background: "#f5f3ee",
+    background: "#faf9f6",
     boxSizing: "border-box",
   });
+  timelinePane.id = "confucius-activity-content";
   timelinePane.className = "confucius-pane confucius-timeline-pane";
+  let activityOpen = false;
+  let activitySummaryLabel = "Activity";
+  function paintActivityDisclosure(): void {
+    activitySummary.textContent = `${activityOpen ? "▾" : "▸"} ${activitySummaryLabel}`;
+    activitySummary.setAttribute(
+      "aria-expanded",
+      activityOpen ? "true" : "false",
+    );
+    timelinePane.style.display = activityOpen ? "block" : "none";
+  }
+  function setActivityOpen(open: boolean): void {
+    activityOpen = open;
+    paintActivityDisclosure();
+  }
+  function setActivitySummaryLabel(label: string): void {
+    activitySummaryLabel = label;
+    paintActivityDisclosure();
+  }
+  activitySummary.addEventListener("click", () => {
+    setActivityOpen(!activityOpen);
+  });
+  paintActivityDisclosure();
+  activityDetails.appendChild(activitySummary);
+  activityDetails.appendChild(timelinePane);
+  workbenchPane.appendChild(artifactPane);
+  workbenchPane.appendChild(activityDetails);
   columns.appendChild(sessionPane);
-  columns.appendChild(timelinePane);
+  columns.appendChild(workbenchPane);
 
   const composer = el(doc, "form", {
     display: "flex",
@@ -2819,8 +3070,81 @@ function bindWorkspace(
       const key = `tools:${block.calls[0]?.callId || index}`;
       return renderTools(targetDoc, block.calls, key);
     }
+    if (block.kind === "plan") {
+      const plan = tuiBlock(targetDoc, {
+        margin: "0 0 8px",
+        padding: "7px 10px",
+        borderLeft: "2px solid #ba8b56",
+        background: "#f2eee6",
+      });
+      const heading = el(targetDoc, "div", {
+        marginBottom: "4px",
+        color: "#6b665c",
+        fontSize: "11px",
+        fontWeight: "700",
+        textTransform: "uppercase",
+      });
+      heading.textContent = getString("workspace-activity-plan");
+      plan.appendChild(heading);
+      for (const step of block.steps) {
+        const row = el(targetDoc, "div", {
+          padding: "2px 0",
+          color: step.status === "failed" ? "#b3452f" : "#4f4a42",
+        });
+        row.textContent = `${
+          step.status === "done"
+            ? "✓"
+            : step.status === "running"
+              ? "→"
+              : step.status === "failed"
+                ? "!"
+                : "·"
+        } ${step.label}`;
+        plan.appendChild(row);
+      }
+      return plan;
+    }
+    if (block.kind === "command" || block.kind === "file") {
+      const action = tuiBlock(targetDoc, {
+        margin: "0 0 8px",
+        padding: "7px 10px",
+        border: "1px solid #ddd8cc",
+        borderRadius: "7px",
+        background: "#f2eee6",
+        fontFamily: UI_FONT_STACKS.mono,
+        fontSize: ".88em",
+      });
+      const heading = el(targetDoc, "div", {
+        color:
+          block.status === "failed" || block.status === "rejected"
+            ? "#b3452f"
+            : "#555046",
+      });
+      heading.textContent =
+        block.kind === "command"
+          ? `$ ${block.command} · ${block.status}`
+          : `${block.path} · ${block.status}`;
+      action.appendChild(heading);
+      const detail = block.kind === "command" ? block.output : block.diff;
+      if (detail) {
+        const pre = el(targetDoc, "pre", {
+          maxHeight: "180px",
+          margin: "5px 0 0",
+          overflow: "auto",
+          whiteSpace: "pre-wrap",
+        });
+        pre.textContent = detail;
+        action.appendChild(pre);
+      }
+      return action;
+    }
     const row = tuiBlock(targetDoc, {
-      color: block.tone === "fail" ? "#8a2e1d" : "#7b766b",
+      color:
+        block.tone === "fail"
+          ? "#8a2e1d"
+          : block.tone === "artifact"
+            ? "#4f7657"
+            : "#7b766b",
       fontSize: "0.93em",
       padding: "0 4px",
     });
@@ -2839,71 +3163,67 @@ function bindWorkspace(
     root.style.fontSize = `${size}px`;
   }
 
-  function selectionKey(sel: {
-    text: string;
-    pageIndex: number | null;
-  }): string {
-    return `${sel.pageIndex ?? -1}|${sel.text}`;
-  }
-
-  function isSelectionSuppressed(): boolean {
-    const sel = state.live?.selection;
-    return Boolean(sel && state.suppressedSelectionKey === selectionKey(sel));
-  }
-
   function renderContextBar(): void {
     contextBar.textContent = "";
-    const reader = state.live?.reader ?? null;
-    const sel = state.live?.selection ?? null;
-    const items = state.live?.items ?? [];
-    const collection = state.live?.collection ?? null;
+    const task = currentTask();
+    const locked = task?.lockedContext;
+    const live = state.live?.lockedSnapshot;
     type Chip = {
       text: string;
       title?: string;
       onClick?: () => void;
-      onRemove?: () => void;
     };
     const chips: Chip[] = [];
-    if (reader) {
+    const source = locked ?? live;
+    if (source?.reader) {
       chips.push({
-        text: `📖 ${reader.title}${reader.pageLabel ? ` · p${reader.pageLabel}` : ""}`,
+        text: `📖 ${source.reader.title}${source.reader.pageLabel ? ` · p${source.reader.pageLabel}` : ""}`,
         title: getString("workspace-ctx-open"),
         onClick: () => {
           void rpc("reader/open", {
-            libraryID: reader.libraryID,
-            key: reader.attachmentKey,
-            pageIndex: reader.pageIndex ?? undefined,
+            libraryID: source.reader?.libraryID,
+            key: source.reader?.attachmentKey,
+            pageIndex: source.reader?.pageIndex ?? undefined,
           }).catch(() => undefined);
         },
       });
     }
-    if (sel && !isSelectionSuppressed()) {
+    if (source?.selection) {
       chips.push({
-        text: `✍️ ${sel.preview}`,
+        text: `✍️ ${source.selection.text.slice(0, 100)}`,
         title: getString("workspace-ctx-open"),
-        onClick: reader
+        onClick: source.reader
           ? () => {
               void rpc("reader/open", {
-                libraryID: reader.libraryID,
-                key: reader.attachmentKey,
-                pageIndex: sel.pageIndex ?? undefined,
+                libraryID: source.reader?.libraryID,
+                key: source.reader?.attachmentKey,
+                pageIndex: source.selection?.pageIndex ?? undefined,
               }).catch(() => undefined);
             }
           : undefined,
-        onRemove: () => {
-          state.suppressedSelectionKey = selectionKey(sel);
-          renderContextBar();
-        },
       });
     }
-    if (items.length) {
+    if (source?.items.length) {
       chips.push({
-        text: `🗂 ${items.length} ${getString("workspace-ctx-items")}`,
+        text: `🗂 ${source.items.length} ${getString("workspace-ctx-items")}`,
       });
-    } else if (collection) {
-      chips.push({ text: `🗂 ${collection}` });
     }
-    contextBar.style.display = chips.length ? "flex" : "none";
+    if (source?.collection) {
+      chips.push({ text: `🗂 ${source.collection.name}` });
+    } else if (source?.savedSearch) {
+      chips.push({ text: `⌕ ${source.savedSearch.name}` });
+    }
+    contextBar.style.display = chips.length || task ? "flex" : "none";
+    if (task) {
+      const lock = el(doc, "div", {
+        color: "#7b766b",
+        fontSize: ".84em",
+        fontWeight: "650",
+      });
+      lock.textContent = `🔒 ${getString("workspace-locked-context")}`;
+      lock.title = new Date(task.lockedContext.capturedAt).toLocaleString();
+      contextBar.appendChild(lock);
+    }
     for (const chip of chips) {
       const node = el(doc, "div", {
         display: "inline-flex",
@@ -2931,24 +3251,50 @@ function bindWorkspace(
         node.style.cursor = "pointer";
       }
       node.appendChild(label);
-      if (chip.onRemove) {
-        const remove = el(doc, "span", {
-          cursor: "pointer",
-          color: "#8a857c",
-          fontWeight: "700",
-        });
-        remove.textContent = "×";
-        remove.title = getString("workspace-ctx-remove");
-        remove.addEventListener("click", (event) => {
-          event.stopPropagation();
-          chip.onRemove?.();
-        });
-        node.appendChild(remove);
-      }
       if (chip.onClick) {
         node.addEventListener("click", () => chip.onClick?.());
       }
       contextBar.appendChild(node);
+    }
+    if (task && live && live.fingerprint !== task.lockedContext.fingerprint) {
+      const drift = el(doc, "div");
+      drift.className = "confucius-context-drift";
+      const message = el(doc, "span");
+      message.textContent = getString("workspace-context-changed");
+      const updateContext = (mode: "add" | "replace"): void => {
+        void (async () => {
+          try {
+            await rpc("task/setContext", {
+              taskId: task.id,
+              mode,
+              context: live,
+            });
+            await refreshSessions();
+            await loadTask(task.id);
+            renderLists();
+          } catch (error) {
+            state.sendError =
+              error instanceof Error ? error.message : String(error);
+            renderLists();
+          }
+        })();
+      };
+      const add = button(
+        doc,
+        "confucius-context-add",
+        getString("workspace-context-add"),
+      );
+      const replace = button(
+        doc,
+        "confucius-context-replace",
+        getString("workspace-context-replace"),
+      );
+      add.addEventListener("click", () => updateContext("add"));
+      replace.addEventListener("click", () => updateContext("replace"));
+      drift.appendChild(message);
+      drift.appendChild(add);
+      drift.appendChild(replace);
+      contextBar.appendChild(drift);
     }
   }
 
@@ -2984,14 +3330,47 @@ function bindWorkspace(
       summary.textContent = item.summary;
       card.appendChild(summary);
     }
+    if (item.before !== undefined || item.after !== undefined) {
+      const diff = el(targetDoc, "div");
+      diff.className = "confucius-before-after";
+      for (const [label, value] of [
+        [getString("workspace-writeback-before"), item.before ?? ""],
+        [getString("workspace-writeback-after"), item.after ?? ""],
+      ]) {
+        const column = el(targetDoc, "div");
+        const heading = el(targetDoc, "div", {
+          color: "#6b665c",
+          fontSize: "10px",
+          fontWeight: "700",
+          letterSpacing: ".06em",
+          textTransform: "uppercase",
+        });
+        heading.textContent = label;
+        const content = el(targetDoc, "pre");
+        content.textContent = value;
+        column.appendChild(heading);
+        column.appendChild(content);
+        diff.appendChild(column);
+      }
+      card.appendChild(diff);
+    }
     const actions = el(targetDoc, "div", {
       display: "flex",
       gap: "6px",
       marginTop: "6px",
     });
-    const allow = button(targetDoc, "", "Allow", "primary");
-    const always = button(targetDoc, "", "Always");
-    const deny = button(targetDoc, "", "Deny");
+    const allow = button(
+      targetDoc,
+      "",
+      getString("workspace-approval-allow-once"),
+      "primary",
+    );
+    const always = button(
+      targetDoc,
+      "",
+      getString("workspace-approval-allow-task"),
+    );
+    const deny = button(targetDoc, "", getString("workspace-approval-deny"));
     deny.style.background = "#ffffff";
     deny.style.border = "1px solid #b3452f";
     deny.style.color = "#b3452f";
@@ -2999,7 +3378,7 @@ function bindWorkspace(
       void resolveApproval(item.id, "allow", "once");
     });
     always.addEventListener("click", () => {
-      void resolveApproval(item.id, "allow", "always");
+      void resolveApproval(item.id, "allow", "session");
     });
     deny.addEventListener("click", () => {
       void resolveApproval(item.id, "deny", "once");
@@ -3053,6 +3432,962 @@ function bindWorkspace(
     return card;
   }
 
+  function currentTask(): ResearchTaskRecord | undefined {
+    return state.sessions.find((item) => item.id === state.sessionId);
+  }
+
+  async function refreshArtifacts(taskId = state.sessionId): Promise<void> {
+    if (!taskId) {
+      state.artifacts = [];
+      state.selectedArtifactId = null;
+      state.selectedArtifactRevision = null;
+      return;
+    }
+    try {
+      const listed = (await rpc("artifact/list", { taskId })) as {
+        artifacts?: ArtifactRecord[];
+      };
+      if (state.sessionId !== taskId) return;
+      state.artifacts = listed.artifacts ?? [];
+      const selected = state.artifacts.find(
+        (artifact) => artifact.id === state.selectedArtifactId,
+      );
+      if (!selected) {
+        state.selectedArtifactId = state.artifacts[0]?.id ?? null;
+        state.selectedArtifactRevision = state.artifacts[0]?.revision ?? null;
+      } else if (
+        !selected.revisions.some(
+          (revision) => revision.revision === state.selectedArtifactRevision,
+        )
+      ) {
+        state.selectedArtifactRevision = selected.revision;
+      }
+    } catch {
+      if (state.sessionId === taskId) state.artifacts = [];
+    }
+  }
+
+  async function refreshRuntimes(force = false): Promise<void> {
+    try {
+      const listed = (await rpc(
+        force ? "runtime/refresh" : "runtime/list",
+        {},
+      )) as { sidecarConnected?: boolean; runtimes?: RuntimeStatus[] };
+      state.sidecarConnected = listed.sidecarConnected === true;
+      state.runtimes = listed.runtimes ?? [];
+    } catch {
+      state.sidecarConnected = false;
+      state.runtimes = [];
+    }
+  }
+
+  async function refreshMemoryProposals(): Promise<void> {
+    try {
+      const listed = (await rpc("memory/proposal/list", {})) as {
+        proposals?: MemoryProposal[];
+      };
+      state.memoryProposals = listed.proposals ?? [];
+    } catch {
+      state.memoryProposals = [];
+    }
+  }
+
+  async function loadTask(taskId: string): Promise<void> {
+    state.sessionId = taskId;
+    state.lastEventId = null;
+    state.running = false;
+    state.pendingUserText = "";
+    state.sendError = "";
+    state.selectedArtifactId = null;
+    state.selectedArtifactRevision = null;
+    const loaded = (await rpc("task/load", { taskId })) as ResearchTaskRecord;
+    if (state.sessionId !== taskId) return;
+    const index = state.sessions.findIndex((item) => item.id === taskId);
+    if (index >= 0) state.sessions[index] = loaded;
+    else state.sessions.unshift(loaded);
+    state.mode = loaded.mode === "plan" ? "plan" : "agent";
+    state.permission =
+      loaded.permissionMode === "auto_allow"
+        ? "auto_allow"
+        : loaded.permissionMode === "deny"
+          ? "deny"
+          : "ask";
+    const bundle = (await rpc("task/events", { taskId })) as {
+      events?: ConfuciusEvent[];
+    };
+    if (state.sessionId !== taskId) return;
+    state.events = mergeEvents([], bundle.events ?? [], true);
+    state.lastEventId = state.events.at(-1)?.id ?? null;
+    state.running =
+      loaded.status === "running" || loaded.status === "awaiting_approval";
+    collectApprovals();
+    await refreshArtifacts(taskId);
+    syncModeButton();
+    updateRunningUI();
+  }
+
+  async function createTask(
+    options: {
+      title?: string;
+      context?: LockedContextSnapshot;
+      backend?: AgentBackendKind;
+      templateId?: string;
+      prompt?: string;
+      autoStart?: boolean;
+      skillSlug?: string;
+    } = {},
+  ): Promise<ResearchTaskRecord> {
+    const current = currentTask();
+    const created = (await rpc("task/new", {
+      title: options.title ?? "Untitled research task",
+      // With no explicit launch context, let AgentHost capture the live Zotero
+      // state while handling this click's RPC. The polled value can lag a
+      // reader-tab or item-selection change.
+      context: options.context,
+      backend: options.backend ?? current?.backend ?? "native",
+      templateId: options.templateId,
+      autoStart: false,
+    })) as ResearchTaskRecord;
+    state.sessions = [
+      created,
+      ...state.sessions.filter((row) => row.id !== created.id),
+    ];
+    await loadTask(created.id);
+    if (options.skillSlug) {
+      await rpc("skill/activate", {
+        sessionId: created.id,
+        slug: options.skillSlug,
+      });
+    }
+    const startText = String(options.prompt ?? "").trim();
+    if (options.autoStart && startText) {
+      setActivityOpen(true);
+      await rpc("task/prompt", { taskId: created.id, text: startText });
+      await refreshSessions();
+      await loadTask(created.id);
+    }
+    return created;
+  }
+
+  async function runTemplate(
+    template: TaskTemplate,
+    context?: LockedContextSnapshot,
+  ): Promise<void> {
+    state.sendError = "";
+    try {
+      await createTask({
+        title: template.title,
+        context,
+        templateId: template.id,
+        prompt: template.prompt,
+        autoStart: true,
+        skillSlug: template.skillSlug,
+      });
+      await refreshArtifacts();
+      renderLists();
+    } catch (error) {
+      state.sendError = error instanceof Error ? error.message : String(error);
+      renderLists();
+    }
+  }
+
+  async function consumeLaunchIntent(intent: LaunchIntent): Promise<void> {
+    const template = taskTemplate(intent.templateId);
+    const promptText = String(intent.prompt ?? template?.prompt ?? "").trim();
+    await createTask({
+      title: template?.title ?? (promptText.slice(0, 72) || "Research task"),
+      context: intent.context,
+      templateId: template?.id,
+      prompt: promptText,
+      autoStart: intent.autoStart,
+      skillSlug: intent.skillSlug ?? template?.skillSlug,
+    });
+    if (!intent.autoStart && intent.skillSlug) {
+      prompt.value = `/${intent.skillSlug} `;
+      prompt.focus();
+    }
+    await refreshSessions();
+    await refreshArtifacts();
+    renderLists();
+  }
+
+  function artifactKindLabel(kind: ArtifactRecord["kind"]): string {
+    return getString(`workspace-artifact-kind-${kind.replace(/_/g, "-")}`);
+  }
+
+  function taskStatusLabel(task: ResearchTaskRecord): string {
+    return getString(`workspace-task-status-${task.status.replace(/_/g, "-")}`);
+  }
+
+  function runtimeLabel(backend: AgentBackendKind): string {
+    return backend === "native"
+      ? getString("workspace-runtime-native")
+      : backend[0].toUpperCase() + backend.slice(1);
+  }
+
+  function runtimeStatus(backend: AgentBackendKind): RuntimeStatus | undefined {
+    if (backend === "native") {
+      return {
+        backend,
+        state: configReady(state.config) ? "ready" : "unavailable",
+        message: configReady(state.config)
+          ? getString("workspace-runtime-native-ready")
+          : getString("workspace-config-banner"),
+        checkedAt: Date.now(),
+      };
+    }
+    return state.runtimes.find((runtime) => runtime.backend === backend);
+  }
+
+  function contextSummary(context: LockedContextSnapshot): string {
+    const pieces: string[] = [];
+    if (context.selection) {
+      pieces.push(getString("workspace-source-selection"));
+    }
+    if (context.items.length) {
+      pieces.push(
+        `${context.items.length} ${getString("workspace-ctx-items")}`,
+      );
+    }
+    if (context.collection) pieces.push(context.collection.name);
+    if (context.savedSearch) pieces.push(context.savedSearch.name);
+    if (context.reader?.pageLabel)
+      pieces.push(`p. ${context.reader.pageLabel}`);
+    return pieces.join(" · ") || getString("workspace-source-empty");
+  }
+
+  function renderTemplatePicker(
+    target: HTMLElement,
+    context: LockedContextSnapshot,
+  ): void {
+    const heading = el(doc, "div", {
+      marginTop: "22px",
+      fontSize: "11px",
+      color: "#8a857c",
+      fontWeight: "700",
+      letterSpacing: "0.09em",
+      textTransform: "uppercase",
+    });
+    heading.textContent = getString("workspace-template-heading");
+    target.appendChild(heading);
+    const grid = el(doc, "div");
+    grid.className = "confucius-template-grid";
+    for (const template of templatesForContext(context)) {
+      const templateButton = el(doc, "button", undefined, {
+        type: "button",
+        "data-template-id": template.id,
+      });
+      templateButton.className = "confucius-template-button";
+      const name = el(doc, "span");
+      name.className = "confucius-template-title";
+      name.textContent = getString(`workspace-template-${template.id}`);
+      const copy = el(doc, "span");
+      copy.className = "confucius-template-copy";
+      copy.textContent = getString(`workspace-template-${template.id}-help`);
+      templateButton.appendChild(name);
+      templateButton.appendChild(copy);
+      templateButton.addEventListener("click", () => {
+        void runTemplate(template, context);
+      });
+      grid.appendChild(templateButton);
+    }
+    target.appendChild(grid);
+  }
+
+  function renderArtifactBodyNode(body: ArtifactBody): HTMLElement {
+    const container = el(doc, "div");
+    if (body.type === "markdown") {
+      container.className = "tui-answer";
+      fillAnswerHtml(container, body.markdown);
+      return container;
+    }
+    const table = (
+      headers: string[],
+      rows: Array<Array<string | HTMLElement>>,
+    ): HTMLElement => {
+      const node = el(doc, "table");
+      const head = el(doc, "thead");
+      const headRow = el(doc, "tr");
+      for (const label of headers) {
+        const cell = el(doc, "th");
+        cell.textContent = label;
+        headRow.appendChild(cell);
+      }
+      head.appendChild(headRow);
+      node.appendChild(head);
+      const tbody = el(doc, "tbody");
+      for (const values of rows) {
+        const row = el(doc, "tr");
+        for (const value of values) {
+          const cell = el(doc, "td");
+          if (typeof value === "string") cell.textContent = value;
+          else cell.appendChild(value);
+          row.appendChild(cell);
+        }
+        tbody.appendChild(row);
+      }
+      node.appendChild(tbody);
+      return node;
+    };
+    if (body.type === "evidence_audit") {
+      container.appendChild(
+        table(
+          [
+            getString("workspace-artifact-claim"),
+            getString("workspace-artifact-verdict"),
+            getString("workspace-artifact-rationale"),
+          ],
+          body.claims.map((claim) => [
+            claim.claim,
+            claim.verdict,
+            claim.rationale,
+          ]),
+        ),
+      );
+    } else if (body.type === "literature_map") {
+      const nodes = el(doc, "div", { marginBottom: "18px" });
+      for (const node of body.nodes) {
+        const row = el(doc, "div", {
+          padding: "8px 0",
+          borderBottom: "1px solid #ece8df",
+        });
+        const name = el(doc, "strong");
+        name.textContent = node.label;
+        row.appendChild(name);
+        if (node.summary) {
+          const summary = el(doc, "div", { color: "#6b665c" });
+          summary.textContent = node.summary;
+          row.appendChild(summary);
+        }
+        if (node.item) {
+          row.appendChild(
+            locateLink(doc, { ...node.item, pageIndex: undefined }),
+          );
+        }
+        nodes.appendChild(row);
+      }
+      container.appendChild(nodes);
+      container.appendChild(
+        table(
+          [
+            getString("workspace-artifact-from"),
+            getString("workspace-artifact-relation"),
+            getString("workspace-artifact-to"),
+          ],
+          body.edges.map((edge) => [edge.source, edge.relation, edge.target]),
+        ),
+      );
+    } else if (body.type === "triage_table") {
+      container.appendChild(
+        table(
+          [
+            getString("workspace-artifact-source"),
+            getString("workspace-artifact-decision"),
+            getString("workspace-artifact-reason"),
+          ],
+          body.rows.map((row) => {
+            const source = el(doc, "div");
+            const title = el(doc, "div", { fontWeight: "600" });
+            title.textContent = row.title;
+            source.appendChild(title);
+            source.appendChild(locateLink(doc, row.item));
+            return [source, row.decision, row.reason];
+          }),
+        ),
+      );
+    } else if (body.type === "annotation_set") {
+      for (const highlight of body.highlights) {
+        const quote = el(doc, "blockquote", {
+          margin: "0 0 14px",
+          padding: "4px 0 4px 14px",
+          borderLeft: `3px solid ${highlight.color || "#c89b65"}`,
+        });
+        const text = el(doc, "div");
+        text.textContent = `“${highlight.quote}”`;
+        quote.appendChild(text);
+        const meta = el(doc, "div", { color: "#777166", fontSize: ".86em" });
+        meta.textContent = [`p. ${highlight.page}`, highlight.comment]
+          .filter(Boolean)
+          .join(" · ");
+        quote.appendChild(meta);
+        container.appendChild(quote);
+      }
+    } else if (body.type === "collection_diff") {
+      container.appendChild(
+        table(
+          [
+            getString("workspace-artifact-operation"),
+            getString("workspace-artifact-target"),
+          ],
+          body.operations.map((operation) => [
+            operation.op,
+            operation.item
+              ? `${operation.item.libraryID}:${operation.item.key}`
+              : (operation.value ?? ""),
+          ]),
+        ),
+      );
+    } else if (body.type === "citation_list") {
+      const list = el(doc, "ol", { paddingLeft: "24px" });
+      for (const entry of body.entries) {
+        const item = el(doc, "li", { marginBottom: "10px" });
+        item.textContent = entry.rendered;
+        list.appendChild(item);
+      }
+      container.appendChild(list);
+    }
+    return container;
+  }
+
+  function writebackTargets(
+    artifact: ArtifactRecord,
+  ): Array<{ value: string; label: string }> {
+    const targets = [
+      {
+        value: "zotero_note",
+        label: getString("workspace-writeback-note"),
+      },
+      {
+        value: "knowledge_base",
+        label: getString("workspace-writeback-knowledge"),
+      },
+    ];
+    if (artifact.kind === "annotation_set") {
+      targets.unshift({
+        value: "zotero_annotations",
+        label: getString("workspace-writeback-annotations"),
+      });
+    }
+    if (artifact.kind === "collection_diff") {
+      targets.unshift({
+        value: "zotero_tags",
+        label: getString("workspace-writeback-tags"),
+      });
+      targets.unshift({
+        value: "zotero_collection",
+        label: getString("workspace-writeback-collection"),
+      });
+    }
+    return targets;
+  }
+
+  function openWritebackPreview(
+    artifact: ArtifactRecord,
+    revision: number,
+  ): void {
+    const task = state.sessions.find((row) => row.id === artifact.taskId);
+    if (task?.status === "running" || task?.status === "awaiting_approval") {
+      state.sendError = getString("workspace-writeback-disabled-running");
+      renderLists();
+      return;
+    }
+    if (artifact.writeback?.state === "pending") {
+      state.sendError = getString("workspace-writeback-disabled-pending");
+      renderLists();
+      return;
+    }
+    doc.getElementById("confucius-writeback-overlay")?.remove();
+    const overlay = el(
+      doc,
+      "div",
+      {
+        position: "absolute",
+        inset: "0px",
+        zIndex: "1100",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "10px",
+        boxSizing: "border-box",
+        background: "rgba(28,25,23,.45)",
+      },
+      { id: "confucius-writeback-overlay" },
+    );
+    const panel = el(doc, "div", {
+      width: "min(760px, 100%)",
+      maxHeight: "100%",
+      overflow: "auto",
+      padding: "18px",
+      boxSizing: "border-box",
+      borderRadius: "9px",
+      background: "#faf9f6",
+      color: "#33302a",
+      boxShadow: "0 18px 50px rgba(28,25,23,.2)",
+    });
+    const heading = el(doc, "div", {
+      marginBottom: "10px",
+      fontSize: "16px",
+      fontWeight: "700",
+    });
+    heading.textContent = getString("workspace-writeback-preview");
+    const targetSelect = el(
+      doc,
+      "select",
+      {
+        width: "100%",
+        height: "34px",
+        marginBottom: "10px",
+        border: "1px solid #ddd8cc",
+        borderRadius: "7px",
+        background: "#fff",
+      },
+      { id: "confucius-writeback-target" },
+    ) as HTMLSelectElement;
+    for (const target of writebackTargets(artifact)) {
+      const option = el(doc, "option", undefined, { value: target.value });
+      option.textContent = target.label;
+      targetSelect.appendChild(option);
+    }
+    const knowledgeInput = el(
+      doc,
+      "input",
+      {
+        display: "none",
+        width: "100%",
+        height: "34px",
+        marginBottom: "10px",
+        padding: "0 8px",
+        boxSizing: "border-box",
+        border: "1px solid #ddd8cc",
+        borderRadius: "7px",
+      },
+      {
+        type: "text",
+        placeholder: getString("workspace-writeback-knowledge-id"),
+      },
+    ) as HTMLInputElement;
+    const preview = el(doc, "div");
+    preview.className = "confucius-before-after";
+    const errorLine = el(doc, "div", {
+      minHeight: "18px",
+      marginTop: "8px",
+      color: "#b3452f",
+    });
+    const actions = el(doc, "div", {
+      display: "flex",
+      justifyContent: "flex-end",
+      gap: "8px",
+      marginTop: "10px",
+    });
+    const cancel = button(doc, "", getString("workspace-settings-cancel"));
+    const requestApproval = button(
+      doc,
+      "confucius-writeback-request",
+      getString("workspace-writeback-request"),
+      "primary",
+    );
+    requestApproval.setAttribute("disabled", "true");
+    const loadPreview = async (): Promise<void> => {
+      requestApproval.setAttribute("disabled", "true");
+      errorLine.textContent = "";
+      preview.textContent = "";
+      try {
+        const result = (await rpc("artifact/writebackPreview", {
+          id: artifact.id,
+          revision,
+          target: targetSelect.value,
+        })) as { before: string; after: string };
+        for (const [label, value] of [
+          [getString("workspace-writeback-before"), result.before],
+          [getString("workspace-writeback-after"), result.after],
+        ]) {
+          const column = el(doc, "div");
+          const title = el(doc, "div", {
+            color: "#6b665c",
+            fontSize: "11px",
+            fontWeight: "700",
+          });
+          title.textContent = label;
+          const content = el(doc, "pre");
+          content.textContent = value;
+          column.appendChild(title);
+          column.appendChild(content);
+          preview.appendChild(column);
+        }
+        requestApproval.removeAttribute("disabled");
+      } catch (error) {
+        errorLine.textContent =
+          error instanceof Error ? error.message : String(error);
+      }
+    };
+    targetSelect.addEventListener("change", () => {
+      knowledgeInput.style.display =
+        targetSelect.value === "knowledge_base" ? "block" : "none";
+      void loadPreview();
+    });
+    cancel.addEventListener("click", () => overlay.remove());
+    requestApproval.addEventListener("click", () => {
+      requestApproval.setAttribute("disabled", "true");
+      void (async () => {
+        try {
+          await rpc("artifact/writebackCommit", {
+            id: artifact.id,
+            revision,
+            target: targetSelect.value,
+            knowledgeBaseId: knowledgeInput.value.trim() || undefined,
+          });
+          overlay.remove();
+          setActivityOpen(true);
+          await loadTask(artifact.taskId);
+          renderLists();
+        } catch (error) {
+          errorLine.textContent =
+            error instanceof Error ? error.message : String(error);
+          requestApproval.removeAttribute("disabled");
+        }
+      })();
+    });
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) overlay.remove();
+    });
+    actions.appendChild(cancel);
+    actions.appendChild(requestApproval);
+    panel.appendChild(heading);
+    panel.appendChild(targetSelect);
+    panel.appendChild(knowledgeInput);
+    panel.appendChild(preview);
+    panel.appendChild(errorLine);
+    panel.appendChild(actions);
+    overlay.appendChild(panel);
+    root.appendChild(overlay);
+    void loadPreview();
+  }
+
+  function renderArtifactCanvas(): void {
+    const savedScroll = artifactPane.scrollTop;
+    artifactPane.textContent = "";
+    const shell = el(doc, "div");
+    shell.className = "confucius-artifact-shell";
+    artifactPane.appendChild(shell);
+    const task = currentTask();
+    if (!task) {
+      const eyebrow = el(doc, "div", {
+        color: "#9a4f25",
+        fontSize: "11px",
+        fontWeight: "700",
+        letterSpacing: ".11em",
+        textTransform: "uppercase",
+      });
+      eyebrow.textContent = getString("workspace-research-workbench");
+      const heading = el(doc, "h1", {
+        maxWidth: "700px",
+        margin: "7px 0 8px",
+        fontSize: compact ? "24px" : "31px",
+        lineHeight: "1.15",
+        letterSpacing: "-.025em",
+      });
+      heading.textContent = getString("workspace-empty-heading");
+      const copy = el(doc, "p", {
+        maxWidth: "620px",
+        margin: "0",
+        color: "#6b665c",
+        lineHeight: "1.55",
+      });
+      copy.textContent = getString("workspace-empty-copy");
+      shell.appendChild(eyebrow);
+      shell.appendChild(heading);
+      shell.appendChild(copy);
+      const context = state.live?.lockedSnapshot;
+      if (context) {
+        const source = el(doc, "div", {
+          marginTop: "12px",
+          color: "#6b665c",
+          fontSize: ".9em",
+        });
+        source.textContent = `${getString("workspace-current-source")}: ${contextSummary(context)}`;
+        shell.appendChild(source);
+        renderTemplatePicker(shell, context);
+      }
+      return;
+    }
+
+    const header = el(doc, "div", {
+      display: "flex",
+      alignItems: "flex-start",
+      justifyContent: "space-between",
+      flexWrap: "wrap",
+      gap: "10px",
+      marginBottom: "16px",
+    });
+    const headerCopy = el(doc, "div", { minWidth: "0px", flex: "1 1 280px" });
+    const meta = el(doc, "div", {
+      color: "#8a857c",
+      fontSize: "11px",
+      fontWeight: "700",
+      letterSpacing: ".08em",
+      textTransform: "uppercase",
+    });
+    meta.textContent = `${runtimeLabel(task.backend)} · ${taskStatusLabel(task)}`;
+    const title = el(doc, "h1", {
+      margin: "5px 0 4px",
+      overflowWrap: "anywhere",
+      fontSize: compact ? "21px" : "27px",
+      lineHeight: "1.2",
+      letterSpacing: "-.02em",
+    });
+    title.textContent = task.title || getString("workspace-untitled-task");
+    const source = el(doc, "div", { color: "#6b665c", fontSize: ".9em" });
+    source.textContent = contextSummary(task.lockedContext);
+    headerCopy.appendChild(meta);
+    headerCopy.appendChild(title);
+    headerCopy.appendChild(source);
+
+    const controls = el(doc, "div", {
+      display: "flex",
+      alignItems: "center",
+      flexWrap: "wrap",
+      gap: "7px",
+    });
+    const runtimeSelect = el(
+      doc,
+      "select",
+      {
+        height: "32px",
+        maxWidth: "150px",
+        border: "1px solid #d7d1c5",
+        borderRadius: "7px",
+        background: "#fff",
+        color: "#33302a",
+      },
+      { id: "confucius-task-runtime", title: getString("workspace-runtime") },
+    ) as HTMLSelectElement;
+    for (const backend of ["native", "codex", "kimi"] as const) {
+      const runtime = runtimeStatus(backend);
+      const option = el(doc, "option", undefined, { value: backend });
+      option.textContent = `${runtimeLabel(backend)}${
+        backend !== "native" && runtime?.state !== "ready" ? " · !" : ""
+      }`;
+      option.setAttribute("data-state", runtime?.state ?? "unavailable");
+      runtimeSelect.appendChild(option);
+    }
+    runtimeSelect.value = task.backend;
+    runtimeSelect.disabled = state.running;
+    runtimeSelect.addEventListener("change", () => {
+      const backend = runtimeSelect.value as AgentBackendKind;
+      void (async () => {
+        try {
+          await rpc("task/setBackend", {
+            taskId: task.id,
+            backend,
+            capabilityProfile: task.capabilityProfile,
+            workingDirectory: task.workingDirectory,
+          });
+          await refreshSessions();
+          await loadTask(task.id);
+          renderLists();
+        } catch (error) {
+          state.sendError =
+            error instanceof Error ? error.message : String(error);
+          runtimeSelect.value = task.backend;
+          renderLists();
+        }
+      })();
+    });
+    controls.appendChild(runtimeSelect);
+    if (task.status === "interrupted") {
+      const resume = button(
+        doc,
+        "confucius-task-continue",
+        getString("workspace-task-continue"),
+        "primary",
+      );
+      resume.addEventListener("click", () => {
+        void (async () => {
+          try {
+            setActivityOpen(true);
+            await rpc("task/continue", { taskId: task.id });
+            await refreshSessions();
+            await loadTask(task.id);
+            renderLists();
+          } catch (error) {
+            state.sendError =
+              error instanceof Error ? error.message : String(error);
+            renderLists();
+          }
+        })();
+      });
+      controls.appendChild(resume);
+    }
+    header.appendChild(headerCopy);
+    header.appendChild(controls);
+    shell.appendChild(header);
+
+    if (!state.artifacts.length) {
+      const empty = el(doc, "div", {
+        padding: "28px 0 6px",
+        borderTop: "1px solid #ddd8cc",
+      });
+      const emptyTitle = el(doc, "div", {
+        marginBottom: "6px",
+        fontSize: "17px",
+        fontWeight: "700",
+      });
+      emptyTitle.textContent =
+        task.status === "running" || task.status === "awaiting_approval"
+          ? getString("workspace-artifact-building")
+          : getString("workspace-no-artifacts");
+      const emptyCopy = el(doc, "div", {
+        maxWidth: "620px",
+        color: "#6b665c",
+        lineHeight: "1.5",
+      });
+      emptyCopy.textContent = getString("workspace-no-artifacts-help");
+      empty.appendChild(emptyTitle);
+      empty.appendChild(emptyCopy);
+      shell.appendChild(empty);
+      if (!state.running) renderTemplatePicker(shell, task.lockedContext);
+      return;
+    }
+
+    const toolbar = el(doc, "div");
+    toolbar.className = "confucius-artifact-toolbar";
+    for (const artifact of state.artifacts) {
+      const tab = el(doc, "button", undefined, {
+        type: "button",
+        role: "tab",
+        "aria-selected":
+          artifact.id === state.selectedArtifactId ? "true" : "false",
+        "data-artifact-id": artifact.id,
+      });
+      tab.className = "confucius-artifact-tab";
+      tab.textContent = artifact.title;
+      tab.title = `${artifactKindLabel(artifact.kind)} · r${artifact.revision}`;
+      tab.addEventListener("click", () => {
+        state.selectedArtifactId = artifact.id;
+        state.selectedArtifactRevision = artifact.revision;
+        renderArtifactCanvas();
+      });
+      toolbar.appendChild(tab);
+    }
+    shell.appendChild(toolbar);
+    const artifact =
+      state.artifacts.find((row) => row.id === state.selectedArtifactId) ??
+      state.artifacts[0];
+    if (!artifact) return;
+    const revisionNumber = state.selectedArtifactRevision ?? artifact.revision;
+    const revision =
+      artifact.revisions.find((row) => row.revision === revisionNumber) ??
+      artifact.revisions.at(-1);
+    if (!revision) return;
+    state.selectedArtifactId = artifact.id;
+    state.selectedArtifactRevision = revision.revision;
+
+    const paper = el(doc, "article");
+    paper.className = "confucius-artifact-paper";
+    const paperMeta = el(doc, "div", {
+      display: "flex",
+      alignItems: "center",
+      flexWrap: "wrap",
+      gap: "7px",
+      color: "#8a857c",
+      fontSize: "11px",
+      fontWeight: "700",
+      letterSpacing: ".07em",
+      textTransform: "uppercase",
+    });
+    const kind = el(doc, "span");
+    kind.textContent = artifactKindLabel(artifact.kind);
+    const revisionSelect = el(
+      doc,
+      "select",
+      {
+        border: "0",
+        background: "transparent",
+        color: "#6b665c",
+        font: "inherit",
+        textTransform: "none",
+      },
+      { id: "confucius-artifact-revision" },
+    ) as HTMLSelectElement;
+    for (const item of [...artifact.revisions].reverse()) {
+      const option = el(doc, "option", undefined, {
+        value: String(item.revision),
+      });
+      option.textContent = `Revision ${item.revision}`;
+      revisionSelect.appendChild(option);
+    }
+    revisionSelect.value = String(revision.revision);
+    revisionSelect.addEventListener("change", () => {
+      state.selectedArtifactRevision = Number(revisionSelect.value);
+      renderArtifactCanvas();
+    });
+    const writeback = button(
+      doc,
+      "confucius-artifact-writeback",
+      getString("workspace-writeback"),
+    );
+    writeback.style.marginLeft = "auto";
+    const writebackBlocked =
+      task.status === "running" ||
+      task.status === "awaiting_approval" ||
+      artifact.writeback?.state === "pending";
+    if (writebackBlocked) {
+      writeback.setAttribute("disabled", "true");
+      writeback.title =
+        artifact.writeback?.state === "pending"
+          ? getString("workspace-writeback-disabled-pending")
+          : getString("workspace-writeback-disabled-running");
+    }
+    writeback.addEventListener("click", () =>
+      openWritebackPreview(artifact, revision.revision),
+    );
+    paperMeta.appendChild(kind);
+    paperMeta.appendChild(revisionSelect);
+    if (
+      artifact.writeback?.state === "committed" &&
+      artifact.writeback.revision === revision.revision
+    ) {
+      const committed = el(doc, "span", { color: "#4f7657" });
+      committed.textContent = getString("workspace-writeback-committed");
+      paperMeta.appendChild(committed);
+    }
+    paperMeta.appendChild(writeback);
+    const artifactTitle = el(doc, "h2", {
+      margin: "10px 0 20px",
+      fontSize: compact ? "23px" : "30px",
+      lineHeight: "1.16",
+      letterSpacing: "-.025em",
+    });
+    artifactTitle.textContent = artifact.title;
+    paper.appendChild(paperMeta);
+    paper.appendChild(artifactTitle);
+    paper.appendChild(renderArtifactBodyNode(revision.body));
+    if (revision.citations.length) {
+      const citationHeading = el(doc, "h3", {
+        margin: "28px 0 8px",
+        paddingTop: "14px",
+        borderTop: "1px solid #e5e1d8",
+        fontSize: "13px",
+      });
+      citationHeading.textContent = getString("workspace-artifact-citations");
+      paper.appendChild(citationHeading);
+      const list = el(doc, "ol", { paddingLeft: "22px" });
+      for (const citation of revision.citations) {
+        const item = el(doc, "li", { marginBottom: "8px" });
+        const label = el(doc, "div");
+        label.textContent =
+          citation.quote ||
+          citation.section ||
+          `${citation.itemLibraryID}:${citation.itemKey}`;
+        item.appendChild(label);
+        item.appendChild(
+          locateLink(doc, {
+            libraryID: citation.itemLibraryID,
+            key: citation.itemKey,
+            pageIndex:
+              typeof citation.page === "number"
+                ? Math.max(0, citation.page - 1)
+                : undefined,
+          }),
+        );
+        list.appendChild(item);
+      }
+      paper.appendChild(list);
+    }
+    shell.appendChild(paper);
+    artifactPane.scrollTop = savedScroll;
+  }
+
   let lastListSignature = "";
 
   function listSignature(): string {
@@ -3066,7 +4401,18 @@ function bindWorkspace(
       state.sendError,
       state.mode,
       state.approvals.map((item) => item.id).join(","),
-      state.sessions.map((item) => `${item.id}:${item.title ?? ""}`).join("|"),
+      state.sessions
+        .map(
+          (item) =>
+            `${item.id}:${item.title ?? ""}:${item.status}:${item.backend}:${item.lockedContext.fingerprint}`,
+        )
+        .join("|"),
+      state.artifacts
+        .map((item) => `${item.id}:${item.revision}:${item.status}`)
+        .join("|"),
+      state.selectedArtifactId ?? "",
+      String(state.selectedArtifactRevision ?? ""),
+      state.runtimes.map((item) => `${item.backend}:${item.state}`).join("|"),
       state.config && configReady(state.config) ? "1" : "0",
     ].join("\u0000");
   }
@@ -3075,29 +4421,68 @@ function bindWorkspace(
     applyAppearance();
     renderContextBar();
     syncEndpointButton();
+    renderArtifactCanvas();
     lastListSignature = listSignature();
     sessionPane.textContent = "";
-    sessionPane.appendChild(paneLabel(doc, getString("workspace-sessions")));
+    sessionPane.appendChild(paneLabel(doc, getString("workspace-tasks")));
     if (!state.sessions.length) {
-      sessionPane.appendChild(muted(doc, getString("workspace-no-sessions")));
+      sessionPane.appendChild(muted(doc, getString("workspace-no-tasks")));
     } else {
       for (const item of state.sessions) {
         const row = el(doc, "div", {
           display: "flex",
-          alignItems: "center",
-          gap: "4px",
-          padding: "8px",
-          borderRadius: "8px",
+          alignItems: "flex-start",
+          gap: "7px",
+          padding: "9px 7px",
           cursor: "pointer",
           background: item.id === state.sessionId ? "#f0ece3" : "transparent",
         });
+        row.className = "confucius-task-row";
+        row.setAttribute(
+          "data-active",
+          item.id === state.sessionId ? "true" : "false",
+        );
+        row.setAttribute("data-task-status", item.status);
+        const dot = el(doc, "span", {
+          width: "7px",
+          height: "7px",
+          flex: "0 0 7px",
+          marginTop: "6px",
+          borderRadius: "50%",
+          background:
+            item.status === "completed"
+              ? "#4f7657"
+              : item.status === "failed"
+                ? "#b3452f"
+                : item.status === "running" ||
+                    item.status === "awaiting_approval"
+                  ? "#b97837"
+                  : item.status === "interrupted"
+                    ? "#8561a5"
+                    : "#aaa49a",
+        });
         const label = el(doc, "div", {
           flex: "1 1 auto",
+          minWidth: "0px",
+        });
+        const labelTitle = el(doc, "div", {
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
+          fontWeight: item.id === state.sessionId ? "650" : "500",
         });
-        label.textContent = item.title || item.id;
+        labelTitle.textContent = item.title || item.id;
+        const labelMeta = el(doc, "div", {
+          marginTop: "2px",
+          overflow: "hidden",
+          color: "#8a857c",
+          fontSize: "10px",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        });
+        labelMeta.textContent = `${runtimeLabel(item.backend)} · ${taskStatusLabel(item)}`;
+        label.appendChild(labelTitle);
+        label.appendChild(labelMeta);
         const del = el(
           doc,
           "button",
@@ -3110,19 +4495,22 @@ function bindWorkspace(
             font: "inherit",
             padding: "0 4px",
           },
-          { type: "button", title: "Delete session" },
+          { type: "button", title: getString("workspace-delete-task") },
         );
         del.textContent = "✕";
         del.addEventListener("click", (event) => {
           event.stopPropagation();
           void (async () => {
-            await rpc("session/delete", { sessionId: item.id });
+            await rpc("task/delete", { taskId: item.id });
             if (state.sessionId === item.id) {
               state.sessionId = null;
               state.events = [];
               state.lastEventId = null;
               state.running = false;
               state.pendingUserText = "";
+              state.artifacts = [];
+              state.selectedArtifactId = null;
+              state.selectedArtifactRevision = null;
             }
             await refreshSessions();
             renderLists();
@@ -3131,38 +4519,7 @@ function bindWorkspace(
         row.addEventListener("click", () => {
           void (async () => {
             const selectedSessionId = item.id;
-            state.sessionId = selectedSessionId;
-            state.lastEventId = null;
-            state.running = false;
-            const loaded = (await rpc("session/load", {
-              sessionId: selectedSessionId,
-            })) as { mode?: string };
-            if (state.sessionId !== selectedSessionId) {
-              return;
-            }
-            state.mode = loaded.mode === "plan" ? "plan" : "agent";
-            state.permission =
-              (loaded as { permissionMode?: string }).permissionMode ===
-              "auto_allow"
-                ? "auto_allow"
-                : (loaded as { permissionMode?: string }).permissionMode ===
-                    "deny"
-                  ? "deny"
-                  : "ask";
-            syncModeButton();
-            const bundle = (await rpc("session/events", {
-              sessionId: selectedSessionId,
-            })) as { events?: ConfuciusEvent[] };
-            if (state.sessionId !== selectedSessionId) {
-              return;
-            }
-            state.events = mergeEvents([], bundle.events || [], true);
-            if (state.events.length) {
-              state.lastEventId = state.events[state.events.length - 1].id;
-            }
-            collectApprovals();
-            state.running = isRunningFromEvents(state.events);
-            updateRunningUI();
+            await loadTask(selectedSessionId);
             if (auxiliaryOverlay) {
               showSessions = false;
               syncAuxiliaryPanes();
@@ -3170,6 +4527,7 @@ function bindWorkspace(
             renderLists();
           })();
         });
+        row.appendChild(dot);
         row.appendChild(label);
         row.appendChild(del);
         sessionPane.appendChild(row);
@@ -3185,6 +4543,15 @@ function bindWorkspace(
     const savedTimelineScroll = timelinePane.scrollTop;
     timelinePane.textContent = "";
     const session = state.sessions.find((item) => item.id === state.sessionId);
+    setActivitySummaryLabel(
+      `${getString("workspace-activity")}${
+        state.approvals.length
+          ? ` · ${state.approvals.length} ${getString("workspace-awaiting-approval")}`
+          : state.events.length
+            ? ` · ${state.events.length}`
+            : ""
+      }`,
+    );
     const timelineHead = el(doc, "div", {
       display: "flex",
       alignItems: "center",
@@ -3215,7 +4582,11 @@ function bindWorkspace(
       timelineHead.appendChild(noteBtn);
     }
     timelinePane.appendChild(timelineHead);
-    if (state.config && !configReady(state.config)) {
+    if (
+      session?.backend === "native" &&
+      state.config &&
+      !configReady(state.config)
+    ) {
       const banner = el(doc, "div", {
         border: "1px solid #d9b36a",
         borderRadius: "8px",
@@ -3274,6 +4645,18 @@ function bindWorkspace(
   }
 
   function syncEndpointButton(): void {
+    const task = currentTask();
+    if (task && task.backend !== "native") {
+      const runtime = runtimeStatus(task.backend);
+      endpointName.textContent = runtimeLabel(task.backend);
+      endpointBtn.title =
+        runtime?.message || getString("workspace-runtime-external");
+      endpointBtn.setAttribute(
+        "aria-expanded",
+        endpointMenuOpen ? "true" : "false",
+      );
+      return;
+    }
     const active = state.config?.endpoints?.find(
       (endpoint) => endpoint.id === state.config?.activeEndpointId,
     );
@@ -3307,6 +4690,10 @@ function bindWorkspace(
           toolName: request.toolName,
           args: request.args,
           summary: request.summary,
+          before: request.before,
+          after: request.after,
+          kind: request.kind,
+          origin: request.origin,
         });
       }
       if (event.type === "approval_resolved") {
@@ -3353,10 +4740,10 @@ function bindWorkspace(
   }
 
   async function refreshSessions(): Promise<void> {
-    const listed = (await rpc("session/list", {})) as {
-      sessions?: SessionRow[];
+    const listed = (await rpc("task/list", {})) as {
+      tasks?: SessionRow[];
     };
-    state.sessions = listed.sessions || [];
+    state.sessions = listed.tasks || [];
     if (!state.sessionId && state.sessions[0]) {
       state.sessionId = state.sessions[0].id;
     }
@@ -3367,7 +4754,12 @@ function bindWorkspace(
     if (!text || state.sending || state.running) {
       return;
     }
-    if (state.config && !configReady(state.config)) {
+    const selectedTask = currentTask();
+    if (
+      (selectedTask?.backend ?? "native") === "native" &&
+      state.config &&
+      !configReady(state.config)
+    ) {
       state.sendError = getString("workspace-config-banner");
       renderLists();
       openSettings();
@@ -3382,8 +4774,9 @@ function bindWorkspace(
     renderLists();
     try {
       if (!state.sessionId) {
-        const created = (await rpc("session/new", {
+        const created = (await rpc("task/new", {
           title: text.slice(0, 72),
+          context: state.live?.lockedSnapshot,
         })) as SessionRow;
         state.sessionId = created.id;
         state.events = [];
@@ -3397,10 +4790,10 @@ function bindWorkspace(
       const promptSessionId = state.sessionId;
       await refreshSessions();
       renderLists();
-      const started = (await rpc("session/prompt", {
-        sessionId: promptSessionId,
+      setActivityOpen(true);
+      const started = (await rpc("task/prompt", {
+        taskId: promptSessionId,
         text,
-        context: { suppressSelection: isSelectionSuppressed() },
       })) as { superseded?: boolean };
       if (state.sessionId !== promptSessionId) {
         if (state.pendingUserText === text) {
@@ -3418,8 +4811,8 @@ function bindWorkspace(
       updateRunningUI();
       await refreshSessions();
       const requestedCursor = state.lastEventId;
-      const bundle = (await rpc("session/events", {
-        sessionId: promptSessionId,
+      const bundle = (await rpc("task/events", {
+        taskId: promptSessionId,
       })) as { events?: ConfuciusEvent[] };
       if (state.sessionId !== promptSessionId) {
         if (state.pendingUserText === text) {
@@ -3436,6 +4829,9 @@ function bindWorkspace(
         state.running = isRunningFromEvents(state.events);
       }
       collectApprovals();
+      if (incoming.some((event) => event.type === "artifact_upserted")) {
+        await refreshArtifacts(promptSessionId);
+      }
       renderLists();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -3453,7 +4849,7 @@ function bindWorkspace(
   async function resolveApproval(
     id: string,
     verdict: "allow" | "deny",
-    scope: "once" | "always",
+    scope: "once" | "session",
   ) {
     await rpc("approval/resolve", { id, verdict, scope });
     collectApprovals();
@@ -3539,6 +4935,7 @@ function bindWorkspace(
       "div",
       {
         display: "flex",
+        flexWrap: "wrap",
         gap: "4px",
         borderBottom: "1px solid #e5e1d8",
         marginBottom: "14px",
@@ -3546,6 +4943,24 @@ function bindWorkspace(
       { role: "tablist" },
     );
     const modelTab = el(doc, "div", {}, { id: "confucius-cfg-model-tab" });
+    const runtimeTab = el(
+      doc,
+      "div",
+      { display: "none" },
+      { id: "confucius-cfg-runtime-tab" },
+    );
+    const memoryTab = el(
+      doc,
+      "div",
+      { display: "none" },
+      { id: "confucius-cfg-memory-tab" },
+    );
+    const securityTab = el(
+      doc,
+      "div",
+      { display: "none" },
+      { id: "confucius-cfg-security-tab" },
+    );
     const appearanceTab = el(
       doc,
       "div",
@@ -3590,11 +5005,31 @@ function bindWorkspace(
       "confucius-cfg-tab-appearance",
       getString("workspace-settings-tab-appearance"),
     );
-    const setSettingsTab = (tab: "model" | "appearance"): void => {
+    const runtimeTabBtn = makeTabButton(
+      "confucius-cfg-tab-runtime",
+      getString("workspace-settings-tab-runtime"),
+    );
+    const memoryTabBtn = makeTabButton(
+      "confucius-cfg-tab-memory",
+      getString("workspace-settings-tab-memory"),
+    );
+    const securityTabBtn = makeTabButton(
+      "confucius-cfg-tab-security",
+      getString("workspace-settings-tab-security"),
+    );
+    const setSettingsTab = (
+      tab: "model" | "runtime" | "memory" | "security" | "appearance",
+    ): void => {
       modelTab.style.display = tab === "model" ? "block" : "none";
+      runtimeTab.style.display = tab === "runtime" ? "block" : "none";
+      memoryTab.style.display = tab === "memory" ? "block" : "none";
+      securityTab.style.display = tab === "security" ? "block" : "none";
       appearanceTab.style.display = tab === "appearance" ? "block" : "none";
       const pairs: Array<[HTMLElement, boolean]> = [
         [modelTabBtn, tab === "model"],
+        [runtimeTabBtn, tab === "runtime"],
+        [memoryTabBtn, tab === "memory"],
+        [securityTabBtn, tab === "security"],
         [appearanceTabBtn, tab === "appearance"],
       ];
       for (const [btn, active] of pairs) {
@@ -3604,11 +5039,17 @@ function bindWorkspace(
       }
     };
     modelTabBtn.addEventListener("click", () => setSettingsTab("model"));
+    runtimeTabBtn.addEventListener("click", () => setSettingsTab("runtime"));
+    memoryTabBtn.addEventListener("click", () => setSettingsTab("memory"));
+    securityTabBtn.addEventListener("click", () => setSettingsTab("security"));
     appearanceTabBtn.addEventListener("click", () =>
       setSettingsTab("appearance"),
     );
     panel.appendChild(tabBar);
     panel.appendChild(modelTab);
+    panel.appendChild(runtimeTab);
+    panel.appendChild(memoryTab);
+    panel.appendChild(securityTab);
     panel.appendChild(appearanceTab);
     setSettingsTab("model");
 
@@ -3618,7 +5059,8 @@ function bindWorkspace(
       model: "",
       maxTokens: 0,
       streamResponses: true,
-      memoryAutoExtract: true,
+      memoryAutoExtract: false,
+      memoryConsent: "review",
       reasoningEffort: "auto",
       contextWindowTokens: 32768,
       hasApiKey: false,
@@ -3745,11 +5187,6 @@ function bindWorkspace(
       "confucius-cfg-stream",
       live.streamResponses !== false,
     );
-    const extract = check(
-      "Extract memories after each turn",
-      "confucius-cfg-memory",
-      live.memoryAutoExtract !== false,
-    );
     const iterationsInput = field(
       getString("workspace-max-iterations"),
       "confucius-cfg-maxIterations",
@@ -3762,6 +5199,449 @@ function bindWorkspace(
       String(live.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS),
       "number",
     );
+
+    let memoryChoice: MemoryConsent = live.memoryConsent ?? "review";
+    const sectionIntro = (target: HTMLElement, text: string): void => {
+      const intro = el(doc, "p", {
+        margin: "0 0 12px",
+        color: "#6b665c",
+        lineHeight: "1.5",
+      });
+      intro.textContent = text;
+      target.appendChild(intro);
+    };
+
+    sectionIntro(runtimeTab, getString("workspace-runtime-help"));
+    const sidecarLine = el(doc, "div", {
+      marginBottom: "10px",
+      fontWeight: "650",
+    });
+    const runtimeList = el(doc, "div", {
+      marginBottom: "12px",
+      borderTop: "1px solid #e5e1d8",
+    });
+    const runtimeActions = el(doc, "div", {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: "8px",
+      marginBottom: "14px",
+    });
+    const runtimeRefresh = button(
+      doc,
+      "confucius-runtime-refresh",
+      getString("workspace-runtime-refresh"),
+    );
+    const kimiExecutable = el(
+      doc,
+      "input",
+      {
+        width: "100%",
+        height: "32px",
+        margin: "4px 0 7px",
+        padding: "0 8px",
+        boxSizing: "border-box",
+        border: "1px solid #ddd8cc",
+        borderRadius: "7px",
+      },
+      {
+        id: "confucius-runtime-kimi-path",
+        type: "text",
+        placeholder: getString("workspace-runtime-kimi-path"),
+      },
+    ) as HTMLInputElement;
+    const kimiSave = button(
+      doc,
+      "confucius-runtime-kimi-save",
+      getString("workspace-runtime-kimi-save"),
+    );
+    const runtimeError = el(doc, "div", {
+      minHeight: "18px",
+      color: "#b3452f",
+    });
+    const paintRuntimePanel = (): void => {
+      sidecarLine.textContent = state.sidecarConnected
+        ? getString("workspace-sidecar-connected")
+        : getString("workspace-sidecar-offline");
+      runtimeList.textContent = "";
+      const runtimes: RuntimeStatus[] = [
+        runtimeStatus("native")!,
+        ...(["codex", "kimi"] as const).map(
+          (backend) =>
+            runtimeStatus(backend) ?? {
+              backend,
+              state: "unavailable" as const,
+              message: getString("workspace-sidecar-start-help"),
+              checkedAt: Date.now(),
+            },
+        ),
+      ];
+      for (const runtime of runtimes) {
+        const row = el(doc, "div", {
+          display: "grid",
+          gridTemplateColumns: "12px minmax(80px, .45fr) minmax(0, 1fr)",
+          gap: "7px",
+          alignItems: "start",
+          padding: "9px 2px",
+          borderBottom: "1px solid #e5e1d8",
+        });
+        const dot = el(doc, "span", { marginTop: "5px" });
+        dot.className = "confucius-runtime-dot";
+        dot.setAttribute("data-state", runtime.state);
+        const identity = el(doc, "div", { fontWeight: "650" });
+        identity.textContent = `${runtimeLabel(runtime.backend)}${
+          runtime.version ? ` ${runtime.version}` : ""
+        }`;
+        const detail = el(doc, "div", {
+          minWidth: "0px",
+          color: runtime.state === "error" ? "#b3452f" : "#6b665c",
+          overflowWrap: "anywhere",
+        });
+        detail.textContent = `${getString(
+          `workspace-runtime-state-${runtime.state.replace(/_/g, "-")}`,
+        )}${runtime.message ? ` · ${runtime.message}` : ""}`;
+        row.appendChild(dot);
+        row.appendChild(identity);
+        row.appendChild(detail);
+        runtimeList.appendChild(row);
+        if (runtime.backend === "kimi" && runtime.executable) {
+          kimiExecutable.value = runtime.executable;
+        }
+      }
+    };
+    runtimeRefresh.addEventListener("click", () => {
+      void (async () => {
+        runtimeRefresh.setAttribute("disabled", "true");
+        runtimeError.textContent = "";
+        await refreshRuntimes(true);
+        paintRuntimePanel();
+        runtimeRefresh.removeAttribute("disabled");
+      })().catch((error) => {
+        runtimeError.textContent =
+          error instanceof Error ? error.message : String(error);
+        runtimeRefresh.removeAttribute("disabled");
+      });
+    });
+    kimiSave.addEventListener("click", () => {
+      void (async () => {
+        runtimeError.textContent = "";
+        await rpc("runtime/configure", {
+          backend: "kimi",
+          executable: kimiExecutable.value.trim(),
+        });
+        await refreshRuntimes(true);
+        paintRuntimePanel();
+      })().catch((error) => {
+        runtimeError.textContent =
+          error instanceof Error ? error.message : String(error);
+      });
+    });
+    runtimeActions.appendChild(runtimeRefresh);
+    runtimeTab.appendChild(sidecarLine);
+    runtimeTab.appendChild(runtimeList);
+    runtimeTab.appendChild(runtimeActions);
+    const kimiLabel = el(doc, "label", {
+      display: "block",
+      color: "#6b665c",
+      fontSize: "11px",
+    });
+    kimiLabel.textContent = getString("workspace-runtime-kimi-label");
+    runtimeTab.appendChild(kimiLabel);
+    runtimeTab.appendChild(kimiExecutable);
+    runtimeTab.appendChild(kimiSave);
+    runtimeTab.appendChild(runtimeError);
+    paintRuntimePanel();
+
+    sectionIntro(memoryTab, getString("workspace-memory-consent-help"));
+    const memoryModes = el(doc, "div", {
+      display: "grid",
+      gap: "6px",
+      marginBottom: "16px",
+    });
+    for (const choice of ["off", "review", "auto"] as const) {
+      const label = el(doc, "label", {
+        display: "grid",
+        gridTemplateColumns: "18px minmax(0, 1fr)",
+        gap: "7px",
+        alignItems: "start",
+        padding: "8px",
+        border: "1px solid #e5e1d8",
+        borderRadius: "7px",
+        cursor: "pointer",
+      });
+      const input = el(doc, "input", undefined, {
+        type: "radio",
+        name: "confucius-memory-consent",
+        value: choice,
+      }) as HTMLInputElement;
+      input.checked = memoryChoice === choice;
+      input.addEventListener("change", () => {
+        if (input.checked) memoryChoice = choice;
+      });
+      const copy = el(doc, "div");
+      const name = el(doc, "div", { fontWeight: "650" });
+      name.textContent = getString(`workspace-memory-${choice}`);
+      const help = el(doc, "div", { color: "#6b665c", fontSize: ".9em" });
+      help.textContent = getString(`workspace-memory-${choice}-help`);
+      copy.appendChild(name);
+      copy.appendChild(help);
+      label.appendChild(input);
+      label.appendChild(copy);
+      memoryModes.appendChild(label);
+    }
+    memoryTab.appendChild(memoryModes);
+    const proposalHeading = el(doc, "div", {
+      marginBottom: "6px",
+      fontSize: "11px",
+      color: "#6b665c",
+      fontWeight: "700",
+      letterSpacing: ".07em",
+      textTransform: "uppercase",
+    });
+    proposalHeading.textContent = getString("workspace-memory-proposals");
+    const proposalList = el(doc, "div");
+    const paintMemoryProposals = (): void => {
+      proposalList.textContent = "";
+      const pending = state.memoryProposals.filter(
+        (proposal) => proposal.status === "pending",
+      );
+      if (!pending.length) {
+        proposalList.appendChild(
+          muted(doc, getString("workspace-memory-no-proposals")),
+        );
+        return;
+      }
+      for (const proposal of pending) {
+        const row = el(doc, "div", {
+          padding: "10px 0",
+          borderTop: "1px solid #e5e1d8",
+        });
+        const op = el(doc, "div", {
+          marginBottom: "5px",
+          color: "#8a4b26",
+          fontSize: "11px",
+          fontWeight: "700",
+          textTransform: "uppercase",
+        });
+        op.textContent = `${proposal.op} · ${proposal.type ?? "memory"}`;
+        const titleInput = el(
+          doc,
+          "input",
+          {
+            width: "100%",
+            height: "31px",
+            marginBottom: "5px",
+            padding: "0 7px",
+            boxSizing: "border-box",
+            border: "1px solid #ddd8cc",
+            borderRadius: "6px",
+          },
+          { type: "text", value: proposal.title ?? "" },
+        ) as HTMLInputElement;
+        const contentInput = el(doc, "textarea", {
+          width: "100%",
+          minHeight: "74px",
+          padding: "7px",
+          boxSizing: "border-box",
+          border: "1px solid #ddd8cc",
+          borderRadius: "6px",
+          resize: "vertical",
+        }) as HTMLTextAreaElement;
+        contentInput.value = proposal.content ?? "";
+        titleInput.disabled = proposal.op === "delete";
+        contentInput.disabled = proposal.op === "delete";
+        const buttons = el(doc, "div", {
+          display: "flex",
+          gap: "6px",
+          marginTop: "6px",
+        });
+        const accept = button(
+          doc,
+          "",
+          getString("workspace-memory-accept"),
+          "primary",
+        );
+        const reject = button(doc, "", getString("workspace-memory-reject"));
+        const resolve = (verdict: "accept" | "reject"): void => {
+          void (async () => {
+            await rpc("memory/proposal/resolve", {
+              id: proposal.id,
+              verdict,
+              edited: {
+                title: titleInput.value,
+                content: contentInput.value,
+                tags: proposal.tags,
+                type: proposal.type,
+              },
+            });
+            await refreshMemoryProposals();
+            await refreshMemories();
+            paintMemoryProposals();
+          })().catch((error) => {
+            runtimeError.textContent =
+              error instanceof Error ? error.message : String(error);
+          });
+        };
+        accept.addEventListener("click", () => resolve("accept"));
+        reject.addEventListener("click", () => resolve("reject"));
+        buttons.appendChild(accept);
+        buttons.appendChild(reject);
+        row.appendChild(op);
+        row.appendChild(titleInput);
+        row.appendChild(contentInput);
+        row.appendChild(buttons);
+        proposalList.appendChild(row);
+      }
+    };
+    memoryTab.appendChild(proposalHeading);
+    memoryTab.appendChild(proposalList);
+    paintMemoryProposals();
+
+    const settingsTask = currentTask();
+    let securityProfile = settingsTask?.capabilityProfile ?? "zotero_only";
+    sectionIntro(securityTab, getString("workspace-security-help"));
+    if (!settingsTask) {
+      securityTab.appendChild(
+        muted(doc, getString("workspace-security-no-task")),
+      );
+    }
+    const profileSelect = el(
+      doc,
+      "select",
+      {
+        width: "100%",
+        height: "34px",
+        marginBottom: "10px",
+        border: "1px solid #ddd8cc",
+        borderRadius: "7px",
+        background: "#fff",
+      },
+      { id: "confucius-security-profile" },
+    ) as HTMLSelectElement;
+    for (const [value, label] of [
+      ["zotero_only", getString("workspace-security-zotero-only")],
+      ["workspace", getString("workspace-security-workspace")],
+    ]) {
+      const option = el(doc, "option", undefined, { value });
+      option.textContent = label;
+      profileSelect.appendChild(option);
+    }
+    profileSelect.value = securityProfile;
+    profileSelect.disabled = !settingsTask;
+    const workingDirectory = el(
+      doc,
+      "input",
+      {
+        width: "100%",
+        height: "34px",
+        marginBottom: "8px",
+        padding: "0 8px",
+        boxSizing: "border-box",
+        border: "1px solid #ddd8cc",
+        borderRadius: "7px",
+      },
+      {
+        id: "confucius-security-working-directory",
+        type: "text",
+        value: settingsTask?.workingDirectory ?? "",
+        placeholder: getString("workspace-security-directory"),
+      },
+    ) as HTMLInputElement;
+    const confirmDirectory = el(doc, "input", undefined, {
+      id: "confucius-security-confirm",
+      type: "checkbox",
+    }) as HTMLInputElement;
+    confirmDirectory.checked = settingsTask?.capabilityProfile === "workspace";
+    const confirmLabel = el(doc, "label", {
+      display: "flex",
+      gap: "6px",
+      alignItems: "flex-start",
+      marginBottom: "12px",
+      color: "#6b665c",
+    });
+    const confirmCopy = el(doc, "span");
+    confirmCopy.textContent = getString("workspace-security-confirm");
+    confirmLabel.appendChild(confirmDirectory);
+    confirmLabel.appendChild(confirmCopy);
+    const securityPathStatus = el(doc, "div", {
+      minHeight: "18px",
+      margin: "-2px 0 8px",
+      color: "#6b665c",
+      fontSize: "11px",
+      overflowWrap: "anywhere",
+    });
+    let capabilityPreviewPending: Promise<boolean> | null = null;
+    const previewSecurityDirectory = (): Promise<boolean> => {
+      if (!settingsTask || securityProfile !== "workspace") {
+        return Promise.resolve(true);
+      }
+      const requested = workingDirectory.value.trim();
+      const pending = (async () => {
+        const preview = (await rpc("task/previewCapabilities", {
+          taskId: settingsTask.id,
+          capabilityProfile: "workspace",
+          workingDirectory: requested,
+        })) as {
+          workingDirectory?: string;
+          confirmationRequired: boolean;
+        };
+        if (workingDirectory.value.trim() !== requested) return false;
+        const normalized = preview.workingDirectory ?? "";
+        if (normalized && normalized !== requested) {
+          workingDirectory.value = normalized;
+          confirmDirectory.checked = false;
+          securityPathStatus.textContent = `${getString(
+            "workspace-security-normalized-changed",
+          )} ${normalized}`;
+          return false;
+        }
+        securityPathStatus.textContent = `${getString(
+          "workspace-security-directory-preview",
+        )} ${normalized}`;
+        return true;
+      })().catch((error) => {
+        confirmDirectory.checked = false;
+        securityPathStatus.textContent =
+          error instanceof Error ? error.message : String(error);
+        return false;
+      });
+      capabilityPreviewPending = pending;
+      void pending.finally(() => {
+        if (capabilityPreviewPending === pending) {
+          capabilityPreviewPending = null;
+        }
+      });
+      return pending;
+    };
+    const paintSecurity = (): void => {
+      securityProfile =
+        profileSelect.value === "workspace" ? "workspace" : "zotero_only";
+      const workspace = securityProfile === "workspace";
+      workingDirectory.style.display = workspace ? "block" : "none";
+      securityPathStatus.style.display = workspace ? "block" : "none";
+      confirmLabel.style.display = workspace ? "flex" : "none";
+    };
+    profileSelect.addEventListener("change", () => {
+      paintSecurity();
+      securityPathStatus.textContent = "";
+      if (
+        securityProfile === "workspace" &&
+        settingsTask?.capabilityProfile !== "workspace"
+      ) {
+        confirmDirectory.checked = false;
+      }
+    });
+    workingDirectory.addEventListener("input", () => {
+      confirmDirectory.checked = false;
+      securityPathStatus.textContent = "";
+    });
+    confirmDirectory.addEventListener("change", () => {
+      if (confirmDirectory.checked) void previewSecurityDirectory();
+    });
+    securityTab.appendChild(profileSelect);
+    securityTab.appendChild(workingDirectory);
+    securityTab.appendChild(securityPathStatus);
+    securityTab.appendChild(confirmLabel);
+    paintSecurity();
 
     let fontChoice: UiFont = isUiFont(live.uiFont)
       ? live.uiFont
@@ -4091,6 +5971,20 @@ function bindWorkspace(
       void (async () => {
         errorLine.textContent = "";
         try {
+          if (
+            settingsTask &&
+            securityProfile === "workspace" &&
+            (!workingDirectory.value.trim() || !confirmDirectory.checked)
+          ) {
+            throw new Error(getString("workspace-security-confirm-error"));
+          }
+          if (settingsTask && securityProfile === "workspace") {
+            const previewMatches = await (capabilityPreviewPending ??
+              previewSecurityDirectory());
+            if (!previewMatches || !confirmDirectory.checked) {
+              throw new Error(getString("workspace-security-confirm-error"));
+            }
+          }
           const endpoint: Record<string, unknown> = {
             name: nameInput.value,
             baseUrl: baseUrlInput.value,
@@ -4106,7 +6000,7 @@ function bindWorkspace(
           const next = (await rpc("config/set", {
             endpoint,
             streamResponses: stream.checked,
-            memoryAutoExtract: extract.checked,
+            memoryConsent: memoryChoice,
             maxIterations:
               Number(iterationsInput.value) || DEFAULT_MAX_ITERATIONS,
             maxToolCalls:
@@ -4125,6 +6019,20 @@ function bindWorkspace(
           toolCallsInput.value = String(
             next.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS,
           );
+          if (settingsTask) {
+            await rpc("task/setBackend", {
+              taskId: settingsTask.id,
+              backend: settingsTask.backend,
+              capabilityProfile: securityProfile,
+              workingDirectory:
+                securityProfile === "workspace"
+                  ? workingDirectory.value.trim()
+                  : undefined,
+              confirmed: confirmDirectory.checked,
+            });
+            await refreshSessions();
+            await loadTask(settingsTask.id);
+          }
           paintList();
         } catch (error) {
           errorLine.textContent =
@@ -4133,6 +6041,13 @@ function bindWorkspace(
       })();
     });
     root.appendChild(overlay);
+    void Promise.all([refreshRuntimes(true), refreshMemoryProposals()]).then(
+      () => {
+        if (!overlay.parentElement) return;
+        paintRuntimePanel();
+        paintMemoryProposals();
+      },
+    );
   }
 
   async function refreshMemories(): Promise<void> {
@@ -4230,7 +6145,7 @@ function bindWorkspace(
     state.mode = mode;
     syncModeButton();
     if (state.sessionId) {
-      void rpc("session/setMode", { sessionId: state.sessionId, mode });
+      void rpc("task/setMode", { taskId: state.sessionId, mode });
     }
   }
 
@@ -4241,8 +6156,8 @@ function bindWorkspace(
       const update = pendingPermissionUpdate
         .catch(() => undefined)
         .then(() =>
-          rpc("session/setPermissions", {
-            sessionId,
+          rpc("task/setPermissions", {
+            taskId: sessionId,
             permissionMode: mode,
           }),
         )
@@ -4266,8 +6181,8 @@ function bindWorkspace(
     try {
       status.style.color = "#8c6a3f";
       status.textContent = getString("workspace-compacting");
-      const stats = (await rpc("session/compact", {
-        sessionId: state.sessionId,
+      const stats = (await rpc("task/compact", {
+        taskId: state.sessionId,
       })) as {
         percent: number;
         tokensEstimate: number;
@@ -4698,6 +6613,33 @@ function bindWorkspace(
     void ensureModels(endpointId);
   }
 
+  async function applyTaskBackend(backend: AgentBackendKind): Promise<void> {
+    const task = currentTask();
+    try {
+      if (!task) {
+        await createTask({
+          title: getString("workspace-untitled-task"),
+          context: state.live?.lockedSnapshot,
+          backend,
+        });
+      } else {
+        await rpc("task/setBackend", {
+          taskId: task.id,
+          backend,
+          capabilityProfile: task.capabilityProfile,
+          workingDirectory: task.workingDirectory,
+        });
+        await refreshSessions();
+        await loadTask(task.id);
+      }
+      state.sendError = "";
+    } catch (error) {
+      state.sendError = error instanceof Error ? error.message : String(error);
+    }
+    closeEndpointMenu();
+    renderLists();
+  }
+
   async function applyModelSelection(
     endpointId: string,
     model: string,
@@ -4767,6 +6709,27 @@ function bindWorkspace(
       label.textContent = title;
       menu.appendChild(label);
     };
+
+    section(getString("workspace-runtime"));
+    const selectedBackend = currentTask()?.backend ?? "native";
+    for (const backend of ["native", "codex", "kimi"] as const) {
+      const runtime = runtimeStatus(backend);
+      const row = menuRow(runtimeLabel(backend), {
+        active: selectedBackend === backend,
+        hint:
+          runtime?.state === "ready"
+            ? getString("workspace-runtime-ready")
+            : runtime?.state === "auth_required"
+              ? getString("workspace-runtime-auth-required")
+              : backend === "native"
+                ? ""
+                : getString("workspace-runtime-unavailable"),
+        onClick: () => void applyTaskBackend(backend),
+      });
+      row.setAttribute("data-runtime", backend);
+      row.setAttribute("role", "menuitem");
+      menu.appendChild(row);
+    }
 
     section(getString("workspace-endpoints"));
     const endpointRows = new Map<string, HTMLElement>();
@@ -4913,6 +6876,9 @@ function bindWorkspace(
       : { kind: "effort" };
     renderEndpointMenu();
     syncEndpointButton();
+    void refreshRuntimes(true).then(() => {
+      if (endpointMenuOpen) renderEndpointMenu();
+    });
     if (activeId) {
       void ensureModels(activeId);
     }
@@ -5073,26 +7039,23 @@ function bindWorkspace(
       await ensureSkills();
       await refreshSessions();
       await refreshMemories();
+      if (!state.runtimes.length) await refreshRuntimes(false);
+      if (!state.memoryProposals.length) await refreshMemoryProposals();
       try {
         const live = (await rpc("context/live", {})) as LiveContextResult;
-        if (
-          state.suppressedSelectionKey &&
-          live.selection &&
-          selectionKey(live.selection) !== state.suppressedSelectionKey
-        ) {
-          state.suppressedSelectionKey = null;
-        }
         state.live = live;
       } catch {
         /* live context is cosmetic */
       }
       try {
-        // Entry points (item menu) queue a skill; prefill it as a /slug.
+        // Item and reader entry points carry a click-time context snapshot.
         const launch = (await rpc(
           "workspace/launch-consume",
           {},
         )) as LaunchConsumeResult;
-        if (launch.skillSlug) {
+        if (launch.intent) {
+          await consumeLaunchIntent(launch.intent);
+        } else if (launch.skillSlug) {
           prompt.value = `/${launch.skillSlug} `;
           prompt.focus();
         }
@@ -5102,8 +7065,8 @@ function bindWorkspace(
       if (state.sessionId) {
         const polledSessionId = state.sessionId;
         const requestedCursor = state.lastEventId;
-        const bundle = (await rpc("session/events", {
-          sessionId: polledSessionId,
+        const bundle = (await rpc("task/events", {
+          taskId: polledSessionId,
           afterId: requestedCursor,
         })) as { events?: ConfuciusEvent[]; cursorFound?: boolean };
         if (state.sessionId !== polledSessionId) {
@@ -5125,14 +7088,23 @@ function bindWorkspace(
         if (incoming.some((event) => event.type === "memory_updated")) {
           await refreshMemories();
         }
+        if (incoming.some((event) => event.type === "memory_proposed")) {
+          await refreshMemoryProposals();
+        }
+        if (
+          !state.selectedArtifactId ||
+          incoming.some((event) => event.type === "artifact_upserted")
+        ) {
+          await refreshArtifacts(polledSessionId);
+        }
         const wasRunning = state.running;
         state.running = isRunningFromEvents(state.events);
         if (wasRunning !== state.running) {
           updateRunningUI();
         }
         try {
-          const stats = (await rpc("session/context", {
-            sessionId: state.sessionId,
+          const stats = (await rpc("task/context", {
+            taskId: state.sessionId,
           })) as {
             tokensEstimate: number;
             contextWindowTokens: number;
@@ -5172,17 +7144,9 @@ function bindWorkspace(
 
   newSessionBtn.addEventListener("click", () => {
     void (async () => {
-      const created = (await rpc("session/new", {
-        title: "Untitled",
-      })) as SessionRow;
-      state.sessionId = created.id;
-      state.events = [];
-      state.lastEventId = null;
-      state.mode = "agent";
-      state.running = false;
-      state.pendingUserText = "";
-      state.approvals = [];
-      syncModeButton();
+      await createTask({
+        title: getString("workspace-untitled-task"),
+      });
       await refreshSessions();
       renderLists();
     })();
@@ -5211,7 +7175,7 @@ function bindWorkspace(
   });
   stopBtn.addEventListener("click", () => {
     if (state.sessionId) {
-      void rpc("session/abort", { sessionId: state.sessionId }).then(() => {
+      void rpc("task/abort", { taskId: state.sessionId }).then(() => {
         state.running = false;
         updateRunningUI();
       });

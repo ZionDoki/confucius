@@ -21,6 +21,7 @@ declare namespace _ZoteroTypes {
       "mcpServersJson": string;
       "streamResponses": boolean;
       "memoryAutoExtract": boolean;
+      "memoryConsent": string;
       "maxIterations": number;
       "maxToolCalls": number;
       "alwaysAllowedTools": string;

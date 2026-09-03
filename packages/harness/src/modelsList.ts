@@ -1,4 +1,9 @@
-import { detectApiStyle, type ApiStyle } from "./OpenAICompatibleAdapter";
+import {
+  describeNonJsonModelBody,
+  detectApiStyle,
+  normalizeOpenAICompatibleBaseUrl,
+  type ApiStyle,
+} from "./OpenAICompatibleAdapter";
 
 export const MAX_LISTED_MODELS = 200;
 
@@ -39,7 +44,7 @@ export function modelsListRequest(baseUrl: string): {
       return { url: joinUrl(trimmed, "/api/tags"), style };
     }
   }
-  const root = trimmed.replace(/\/chat\/completions\/?$/, "");
+  const root = normalizeOpenAICompatibleBaseUrl(trimmed);
   return { url: joinUrl(root, "/models"), style };
 }
 
@@ -140,7 +145,7 @@ export async function listEndpointModels(
     } catch {
       return {
         models: mergeModelChoices(saved, []),
-        error: "Model list is not JSON",
+        error: describeNonJsonModelBody("list", text),
       };
     }
     return {

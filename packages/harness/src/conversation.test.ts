@@ -112,6 +112,34 @@ describe("OpenAICompatibleAdapter streaming", () => {
     });
   });
 
+  it("parses think tags even when SSE chunks split both tags", async () => {
+    const textDeltas: string[] = [];
+    const reasoningDeltas: string[] = [];
+    const adapter = new OpenAICompatibleAdapter({
+      apiKey: "sk-test",
+      baseUrl: "https://api.example.test/v1",
+      model: "tagged-reasoner",
+      stream: true,
+      onTextDelta: (text) => textDeltas.push(text),
+      onReasoningDelta: (text) => reasoningDeltas.push(text),
+      fetchImpl: (async () =>
+        sseResponse([
+          { choices: [{ delta: { content: "<thi" } }] },
+          { choices: [{ delta: { content: "nk>inspect " } }] },
+          { choices: [{ delta: { content: "sources</th" } }] },
+          { choices: [{ delta: { content: "ink>Supported" } }] },
+          { choices: [{ delta: { content: "." } }] },
+        ])) as unknown as typeof fetch,
+    });
+    const turn = await adapter.complete({
+      messages: [{ role: "user", content: "check" }],
+    });
+    assert.equal(turn.reasoning, "inspect sources");
+    assert.equal(turn.text, "Supported.");
+    assert.deepEqual(reasoningDeltas, ["inspect ", "sources"]);
+    assert.deepEqual(textDeltas, ["Supported", "."]);
+  });
+
   it("parses a buffered SSE body when Response.body is missing", async () => {
     const textDeltas: string[] = [];
     const adapter = new OpenAICompatibleAdapter({

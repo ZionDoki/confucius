@@ -7,6 +7,68 @@ import { MemoryToolProvider } from "./MemoryToolProvider";
 import { assertParallelSafeInvariant } from "./ConcurrencyScheduler";
 
 describe("TurnLoop", () => {
+  it("persists a started tool record before executing the provider", async () => {
+    const snapshots: Array<{ status?: string }> = [];
+    const { loop, events } = createHarness({
+      script: [
+        {
+          toolCalls: [
+            { id: "danger", name: "search_items", args: { query: "x" } },
+          ],
+        },
+      ],
+      checkpointStore: {
+        async save(checkpoint) {
+          const status = checkpoint.toolExecutions.at(-1)?.status;
+          snapshots.push({ status });
+          if (status === "started") throw new Error("checkpoint unavailable");
+        },
+      },
+    });
+
+    const result = await loop.run({
+      session: session(),
+      turnId: "turn_durable",
+      userText: "search",
+    });
+
+    assert.equal(result.phase, "failed");
+    assert.equal(
+      snapshots.some((entry) => entry.status === "started"),
+      true,
+    );
+    assert.equal(
+      events.events.some((event) => event.type === "tool_result"),
+      false,
+    );
+  });
+
+  it("checkpoints tool results after a completed call", async () => {
+    const statuses: string[][] = [];
+    const { loop } = createHarness({
+      script: [
+        {
+          toolCalls: [
+            { id: "read", name: "search_items", args: { query: "x" } },
+          ],
+        },
+        { text: "done" },
+      ],
+      checkpointStore: {
+        save(checkpoint) {
+          statuses.push(checkpoint.toolExecutions.map((entry) => entry.status));
+        },
+      },
+    });
+    await loop.run({
+      session: session(),
+      turnId: "turn_tool_result",
+      userText: "search",
+    });
+    assert.ok(statuses.some((entries) => entries.includes("started")));
+    assert.ok(statuses.some((entries) => entries.includes("completed")));
+  });
+
   it("runs a read-only search then delivers text", async () => {
     const { loop, events, checkpoints } = createHarness({
       script: [
@@ -162,6 +224,51 @@ describe("TurnLoop", () => {
     if (resultEvent?.type === "tool_result") {
       assert.equal(resultEvent.payload.result.ok, true);
     }
+  });
+
+  it("executes user-edited approval arguments and checkpoints that exact call", async () => {
+    const { loop, events, checkpoints } = createHarness({
+      script: [
+        {
+          toolCalls: [
+            {
+              id: "call_edited",
+              name: "search_items",
+              args: { query: "before" },
+            },
+          ],
+        },
+        { text: "Used the reviewed query." },
+      ],
+      modeFor: () => "ask",
+      resolve: (request) => ({
+        id: request.id,
+        verdict: "allow",
+        scope: "once",
+        editedArgs: { query: "after" },
+      }),
+    });
+
+    const result = await loop.run({
+      session: session(),
+      turnId: "turn_edited_args",
+      userText: "Search after review",
+    });
+
+    const toolMessage = result.messages.find(
+      (message) => message.role === "tool",
+    );
+    assert.match(toolMessage?.content ?? "", /hit:after/);
+    const latest = checkpoints.latest("turn_edited_args");
+    assert.deepEqual(latest?.toolExecutions[0]?.args, { query: "after" });
+    assert.equal(
+      events.events.some(
+        (event) =>
+          event.type === "approval_resolved" &&
+          event.payload.resolution.editedArgs?.query === "after",
+      ),
+      true,
+    );
   });
 
   it("publishes approval_required before waiting for an interactive decision", async () => {

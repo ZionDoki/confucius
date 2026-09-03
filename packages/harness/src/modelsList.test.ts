@@ -19,6 +19,21 @@ describe("modelsListRequest", () => {
     );
   });
 
+  it("adds /v1 when the Base URL is only a host", () => {
+    assert.deepEqual(modelsListRequest("https://mirror.lzu.edu.cn"), {
+      url: "https://mirror.lzu.edu.cn/v1/models",
+      style: "openai",
+    });
+    assert.equal(
+      modelsListRequest("https://mirror.lzu.edu.cn/").url,
+      "https://mirror.lzu.edu.cn/v1/models",
+    );
+    assert.equal(
+      modelsListRequest("https://mirror.lzu.edu.cn/v1/chat/completions").url,
+      "https://mirror.lzu.edu.cn/v1/models",
+    );
+  });
+
   it("maps Ollama /api/chat onto /api/tags", () => {
     assert.deepEqual(modelsListRequest("http://127.0.0.1:11434/api/chat"), {
       url: "http://127.0.0.1:11434/api/tags",
@@ -85,5 +100,41 @@ describe("listEndpointModels", () => {
     );
     assert.deepEqual(result.models, ["kept"]);
     assert.match(result.error || "", /HTTP 401/);
+  });
+
+  it("requests /v1/models for a host-only Base URL", async () => {
+    let requested = "";
+    const result = await listEndpointModels(
+      {
+        baseUrl: "https://mirror.lzu.edu.cn",
+        apiKey: "k",
+        model: "MiniMax-M3",
+      },
+      (async (input: RequestInfo | URL) => {
+        requested = String(input);
+        return new Response(JSON.stringify({ data: [{ id: "MiniMax-M3" }] }), {
+          status: 200,
+        });
+      }) as unknown as typeof fetch,
+    );
+    assert.equal(requested, "https://mirror.lzu.edu.cn/v1/models");
+    assert.deepEqual(result.models, ["MiniMax-M3"]);
+    assert.equal(result.error, undefined);
+  });
+
+  it("explains HTML challenge pages instead of a JSON parse failure", async () => {
+    const result = await listEndpointModels(
+      {
+        baseUrl: "https://api.example.test/v1",
+        model: "kept",
+      },
+      (async () =>
+        new Response(
+          "<!DOCTYPE html><body><script src=/testpow/p.js?2></script>",
+          { status: 200, headers: { "content-type": "text/html" } },
+        )) as unknown as typeof fetch,
+    );
+    assert.deepEqual(result.models, ["kept"]);
+    assert.match(result.error || "", /HTML instead of JSON/);
   });
 });

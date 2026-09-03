@@ -31,20 +31,51 @@
     ></html:textarea>
   </groupbox>
   <groupbox>
+    <label><html:h2 data-l10n-id="pref-runtime-title"></html:h2></label>
+    <html:p data-l10n-id="pref-runtime-help"></html:p>
+    <html:div id="confucius-pref-runtime-status"></html:div>
+    <html:button
+      id="confucius-pref-runtime-refresh"
+      type="button"
+      data-l10n-id="pref-runtime-refresh"
+    ></html:button>
+    <label data-l10n-id="pref-runtime-kimi-path" />
+    <html:input id="confucius-pref-kimiExecutable" type="text" width="400" />
+    <html:button
+      id="confucius-pref-runtime-kimi-save"
+      type="button"
+      data-l10n-id="pref-runtime-kimi-save"
+    ></html:button>
+  </groupbox>
+  <groupbox>
     <label><html:h2 data-l10n-id="pref-agent-title"></html:h2></label>
     <html:p data-l10n-id="pref-agent-help"></html:p>
     <html:label>
       <html:input id="confucius-pref-streamResponses" type="checkbox" />
       <html:span data-l10n-id="pref-stream-responses"></html:span>
     </html:label>
-    <html:label>
-      <html:input id="confucius-pref-memoryAutoExtract" type="checkbox" />
-      <html:span data-l10n-id="pref-memory-auto-extract"></html:span>
-    </html:label>
     <label data-l10n-id="pref-max-iterations" />
     <html:input id="confucius-pref-maxIterations" type="number" width="120" />
     <label data-l10n-id="pref-max-tool-calls" />
     <html:input id="confucius-pref-maxToolCalls" type="number" width="120" />
     <html:p data-l10n-id="pref-memory-location"></html:p>
+  </groupbox>
+  <groupbox>
+    <label><html:h2 data-l10n-id="pref-memory-title"></html:h2></label>
+    <html:p data-l10n-id="pref-memory-help"></html:p>
+    <label data-l10n-id="pref-memory-consent" />
+    <html:select id="confucius-pref-memoryConsent" width="240">
+      <html:option value="off" data-l10n-id="pref-memory-off"></html:option>
+      <html:option
+        value="review"
+        data-l10n-id="pref-memory-review"
+      ></html:option>
+      <html:option value="auto" data-l10n-id="pref-memory-auto"></html:option>
+    </html:select>
+  </groupbox>
+  <groupbox>
+    <label><html:h2 data-l10n-id="pref-security-title"></html:h2></label>
+    <html:p data-l10n-id="pref-security-help"></html:p>
+    <html:p data-l10n-id="pref-security-workspace"></html:p>
   </groupbox>
 </vbox>

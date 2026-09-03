@@ -23,11 +23,11 @@
 
 host 侧新增 live context 快照，三类 chip：
 
-| kind | 来源 | 内容 |
-|---|---|---|
-| `reader` | `Zotero.Reader.getByTabID(Zotero_Tabs.selectedID)` | PDF 标题、attachment/parent key、当前页 label |
-| `selection` | reader `_selectionRanges`（复用 `get_pdf_selection` 取值路径） | 选文前 60 字、页、position |
-| `items` / `collection` | `ZoteroPane.getSelectedItems()` / 选中集合或 saved search | 条目数（prompt 注入最多 10 条 summarizeItem）或集合名 |
+| kind                   | 来源                                                           | 内容                                                  |
+| ---------------------- | -------------------------------------------------------------- | ----------------------------------------------------- |
+| `reader`               | `Zotero.Reader.getByTabID(Zotero_Tabs.selectedID)`             | PDF 标题、attachment/parent key、当前页 label         |
+| `selection`            | reader `_selectionRanges`（复用 `get_pdf_selection` 取值路径） | 选文前 60 字、页、position                            |
+| `items` / `collection` | `ZoteroPane.getSelectedItems()` / 选中集合或 saved search      | 条目数（prompt 注入最多 10 条 summarizeItem）或集合名 |
 
 - 新 RPC `context/live` 返回快照；view 随现有 2s poll 拉取，不新增推送通道。
 - 更新时机依赖 poll 天然覆盖（reader 切 tab、选区变化、主列表选择变化均在下个 poll 反映）。
@@ -59,12 +59,12 @@ host 侧新增 live context 快照，三类 chip：
 
 ### 阅读器入口
 
-- 新模块 `src/modules/ui/readerEntry.ts`：
-  `Zotero.Reader.registerEventListener("createReader")` 往阅读器工具栏注入
-  Confucius 按钮（赤陶圆标）。点击 → 按当前布局偏好打开工作区并聚焦输入框。
-- 启动注册挂到 `hooks.ts`。
-- Stretch goal：阅读器选区右键菜单「问 Confucius」。阅读器 iframe DOM 脆，
-  做不稳即降级（toolbar 按钮 + 选区 chip 已覆盖主路径），不阻塞切片交付。
+- 不向 PDF 阅读器工具栏注入额外按钮；工作区统一由 Zotero 右上角的
+  Confucius 全局按钮打开，避免同一功能出现两个视觉入口。
+- 新模块 `src/modules/ui/readerContextMenu.ts`：通过 Reader 公开事件注册
+  选区右键模板（解释选区、核验论断、保存洞见、生成笔记）。菜单点击时捕获
+  完整上下文快照，打开工作区，并按所选模板直接创建和启动任务。
+- 启动注册挂到 `hooks.ts`；选区 chip 继续承担可见上下文与定位能力。
 
 ### 写回定位
 
@@ -109,7 +109,8 @@ host 侧新增 live context 快照，三类 chip：
 ### 单测（沿用字符串检查式约束）
 
 - `test/workspace-document.test.mjs`：chip 栏渲染、`Live context:` 段、
-  定位链接、`propose_note` 审批复用、「写入笔记」按钮、itemmenu/readerEntry 注册代码存在；
+  定位链接、`propose_note` 审批复用、「写入笔记」按钮、item menu 与
+  reader context menu 注册代码存在；
   保持「禁 native select」等既有断言。
 - host 侧：selection 截断 2000、suppressSelection 生效、`open_item` 位置参数、
   `propose_note` commit 创建 note、`launch-consume` 一次性语义。
@@ -122,8 +123,8 @@ host 侧新增 live context 快照，三类 chip：
 ### Computer Use 验收（AGENTS.md 硬要求）
 
 每切片完成后用 Computer Use 打开真实窗口走用户路径：
-窄侧栏 + 宽悬浮窗两形态、阅读器 toolbar 按钮、选区 chip 出现与注入、
-定位跳转、itemmenu 两项、写入笔记审批。桌面操控若被中断，
+窄侧栏 + 宽悬浮窗两形态、右上角全局按钮、阅读器选区右键模板、
+选区 chip 出现与注入、定位跳转、itemmenu 两项、写入笔记审批。桌面操控若被中断，
 如实声明「未能用 Computer Use 打开界面」，不得假装看过。
 
 ## 关键文件
@@ -131,7 +132,7 @@ host 侧新增 live context 快照，三类 chip：
 - `apps/zotero-addon/src/modules/host/AgentHost.ts` — context/live、注入段、pendingLaunch、note/propose-from-session
 - `apps/zotero-addon/src/modules/tools/ZoteroToolHost.ts` — open_item 位置参数、propose_note
 - `apps/zotero-addon/src/modules/ui/WorkspaceView.ts` — chip 栏、定位链接、写入笔记按钮、launch 消费
-- `apps/zotero-addon/src/modules/ui/readerEntry.ts`（新）— 阅读器 toolbar 按钮
+- `apps/zotero-addon/src/modules/ui/readerContextMenu.ts`（新）— 阅读器选区右键模板与点击时上下文捕获
 - `apps/zotero-addon/src/modules/ui/itemMenu.ts`（新）— 条目树右键菜单
 - `packages/protocol/src/rpc.ts` — 新 RPC 与类型
 
