@@ -697,138 +697,130 @@ const TUI_CSS = `
   position: absolute;
   inset: 0;
   z-index: 1000;
-  display: flex;
-  padding: 12px;
+  display: block;
+  padding: 0;
   box-sizing: border-box;
-  background: rgba(45, 40, 34, .34);
-  backdrop-filter: blur(3px);
-  animation: confucius-artifact-overlay-in 130ms ease-out;
+  background: #f7f5f0;
+  animation: confucius-artifact-overlay-in 150ms ease-out;
 }
+.confucius-artifact-overlay[data-refresh="true"] { animation: none; }
 .confucius-artifact-dialog {
-  width: min(1040px, 100%);
+  width: 100%;
   height: 100%;
   min-width: 0;
   min-height: 0;
-  margin: auto;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 58px;
+  grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
-  border: 1px solid #d8d2c6;
-  border-radius: 10px;
-  background: #fffefa;
-  box-shadow: 0 24px 70px rgba(40, 34, 27, .2);
-}
-.confucius-artifact-dialog-header {
-  display: block;
-  min-width: 0;
-  border-bottom: 1px solid #ddd8cc;
-  background: #faf9f6;
-}
-.confucius-artifact-dialog-identity {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  padding: 13px 14px 11px 16px;
-}
-.confucius-artifact-dialog-copy { flex: 1 1 auto; min-width: 0; }
-.confucius-artifact-dialog-title {
-  overflow: hidden;
-  font-size: 15px;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.confucius-artifact-dialog-meta {
-  margin-bottom: 2px;
-  color: #8a857c;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: .07em;
-  text-transform: uppercase;
-}
-.confucius-artifact-dialog-toolbar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
-  min-width: 0;
-  min-height: 42px;
-  padding: 5px 10px;
-  border-top: 1px solid #ebe7de;
+  border: 0;
+  border-radius: 0;
   background: #f7f5f0;
+  box-shadow: none;
+}
+.confucius-artifact-action-rail {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+  padding: 10px 8px;
+  border-left: 1px solid #ded9cf;
+  background: #f1eee7;
   box-sizing: border-box;
 }
-.confucius-artifact-dialog-toolbar-spacer { flex: 1 1 auto; }
+.confucius-artifact-rail-spacer { flex: 1 1 auto; }
+.confucius-artifact-rail-divider {
+  width: 24px;
+  height: 1px;
+  flex: 0 0 1px;
+  margin: 1px 0 3px;
+  background: #d8d2c6;
+}
+.confucius-artifact-rail-button,
 .confucius-artifact-menu-trigger {
   appearance: none;
-  min-width: 0;
-  height: 32px;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 0 9px;
+  position: relative;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  flex: 0 0 40px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
   overflow: hidden;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: 9px;
   background: transparent;
-  color: #4f4a42;
+  color: #5d574d;
   box-sizing: border-box;
   font: inherit;
   cursor: pointer;
-  transition: background 100ms ease, border-color 100ms ease, color 100ms ease;
+  transition: background 110ms ease, border-color 110ms ease, color 110ms ease, transform 110ms ease;
 }
+.confucius-artifact-rail-button:hover,
 .confucius-artifact-menu-trigger:hover {
-  border-color: #ddd8cc;
-  background: #fffefa;
+  border-color: #d7d0c4;
+  background: rgba(255, 254, 250, .84);
   color: #33302a;
+  transform: translateX(-1px);
 }
 .confucius-artifact-menu-trigger[aria-expanded="true"] {
-  border-color: #c9c1b3;
+  border-color: #c5b9a8;
   background: #fffefa;
-  color: #33302a;
+  color: #8a5a2b;
 }
-.confucius-artifact-menu-trigger[data-kind="artifact"] {
-  max-width: min(330px, 42vw);
+.confucius-artifact-rail-button:focus-visible,
+.confucius-artifact-menu-trigger:focus-visible {
+  outline: 2px solid #8a5a2b;
+  outline-offset: 1px;
 }
+.confucius-artifact-rail-button svg,
+.confucius-artifact-menu-trigger svg { width: 18px; height: 18px; display: block; }
 .confucius-artifact-menu-trigger-value {
-  min-width: 0;
-  overflow: hidden;
-  font-weight: 600;
-  text-overflow: ellipsis;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: -.02em;
   white-space: nowrap;
 }
 .confucius-artifact-menu-trigger-chevron {
-  flex: 0 0 auto;
-  color: #8a857c;
-  font-size: 10px;
+  position: absolute;
+  right: 4px;
+  bottom: 2px;
+  color: #9a9387;
+  font-size: 11px;
+  line-height: 1;
   transition: transform 100ms ease;
 }
-.confucius-artifact-menu-trigger[aria-expanded="true"] .confucius-artifact-menu-trigger-chevron {
-  transform: rotate(180deg);
-}
 .confucius-artifact-revision-badge {
-  height: 32px;
-  display: inline-flex;
-  align-items: center;
-  padding: 0 9px;
-  color: #777166;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: #898277;
   box-sizing: border-box;
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 700;
 }
 #confucius-artifact-writeback {
-  border-color: transparent !important;
-  background: transparent !important;
-  color: #8a5a2b !important;
-  font-weight: 650 !important;
+  color: #8a5a2b;
 }
 #confucius-artifact-writeback:hover {
-  border-color: #ddd8cc !important;
-  background: #fffefa !important;
+  border-color: #cabca9;
+  background: #fffefa;
+}
+.confucius-artifact-rail-button:disabled {
+  opacity: .38;
+  cursor: default;
+  transform: none;
 }
 .confucius-artifact-choice-menu {
-  animation: confucius-artifact-menu-in 100ms ease-out;
+  animation: confucius-artifact-menu-in 110ms ease-out;
 }
 .confucius-artifact-choice {
   appearance: none;
@@ -851,9 +843,12 @@ const TUI_CSS = `
 .confucius-artifact-choice:hover,
 .confucius-artifact-choice:focus-visible {
   outline: none;
-  background: #f0ece3;
+  background: #f2eee6;
 }
-.confucius-artifact-choice[data-selected="true"] { background: #ece7dd; }
+.confucius-artifact-choice[data-selected="true"] {
+  background: #eee8dd;
+  box-shadow: inset 2px 0 #9a6430;
+}
 .confucius-artifact-choice-copy { min-width: 0; }
 .confucius-artifact-choice-title {
   display: block;
@@ -874,23 +869,47 @@ const TUI_CSS = `
   text-align: center;
 }
 .confucius-artifact-dialog-body {
+  grid-column: 1;
+  grid-row: 1;
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: 20px clamp(12px, 3vw, 34px) 36px;
+  padding: clamp(26px, 5vh, 54px) clamp(18px, 5vw, 68px) 64px;
+  background: #faf8f3;
   box-sizing: border-box;
 }
 .confucius-artifact-shell {
-  width: min(900px, 100%);
+  width: min(780px, 100%);
   min-width: 0;
   margin: 0 auto;
 }
 .confucius-artifact-paper {
   min-width: 0;
-  padding: 26px clamp(16px, 5vw, 52px) 42px;
+  padding: 10px 0 48px;
   border: 0;
   border-radius: 0;
   background: transparent;
+}
+.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-dialog {
+  grid-template-columns: minmax(0, 1fr) 46px;
+}
+.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-action-rail {
+  padding: 8px 4px;
+}
+.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-rail-button,
+.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-menu-trigger,
+.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-revision-badge {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  flex-basis: 36px;
+}
+.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-dialog-body {
+  padding: 18px 10px 40px;
+}
+.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-paper {
+  padding: 8px 2px 36px;
 }
 .confucius-artifact-paper .tui-answer { font-size: 1.02em; line-height: 1.68; }
 .confucius-artifact-paper table {
@@ -975,25 +994,29 @@ const TUI_CSS = `
   .confucius-before-after { grid-template-columns: minmax(0, 1fr); }
   .confucius-template-grid { grid-auto-rows: minmax(70px, auto); }
   .confucius-template-button { min-height: 70px; }
-  .confucius-artifact-overlay { padding: 0; }
-  .confucius-artifact-dialog { border: 0; border-radius: 0; }
-  .confucius-artifact-dialog-identity { padding: 10px 8px 9px 12px; }
-  .confucius-artifact-dialog-toolbar { padding: 5px 6px; }
-  .confucius-artifact-dialog-toolbar-spacer { display: none; }
-  .confucius-artifact-menu-trigger[data-kind="artifact"] { flex: 1 1 145px; max-width: none; }
-  #confucius-artifact-writeback { margin-left: auto; }
-  .confucius-artifact-dialog-body { padding: 12px 8px 24px; }
+  .confucius-artifact-dialog { grid-template-columns: minmax(0, 1fr) 46px; }
+  .confucius-artifact-action-rail { padding: 8px 4px; }
+  .confucius-artifact-rail-button,
+  .confucius-artifact-menu-trigger,
+  .confucius-artifact-revision-badge {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    min-height: 36px;
+    flex-basis: 36px;
+  }
+  .confucius-artifact-dialog-body { padding: 18px 10px 40px; }
   .confucius-artifact-file { grid-template-columns: 38px minmax(0, 1fr); gap: 9px; padding: 11px; }
   .confucius-artifact-file-open { display: none; }
-  .confucius-artifact-paper { padding: 18px 14px 30px; }
+  .confucius-artifact-paper { padding: 8px 2px 36px; }
 }
 @keyframes confucius-artifact-overlay-in {
   from { opacity: 0; }
   to { opacity: 1; }
 }
 @keyframes confucius-artifact-menu-in {
-  from { opacity: 0; transform: translateY(-3px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; transform: translateX(4px); }
+  to { opacity: 1; transform: translateX(0); }
 }
 @media (prefers-reduced-motion: reduce) {
   .confucius-artifact-overlay,
@@ -1383,6 +1406,32 @@ function workspaceKnowledgeIcon(doc: Document): Element {
     node.setAttribute("cy", String(cy));
     node.setAttribute("r", "2");
     svg.appendChild(node);
+  }
+  return svg;
+}
+
+function artifactActionIcon(
+  doc: Document,
+  kind: "close" | "artifacts" | "writeback",
+): Element {
+  const svg = doc.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.7");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  const paths =
+    kind === "close"
+      ? ["M6.5 6.5l11 11", "M17.5 6.5l-11 11"]
+      : kind === "artifacts"
+        ? ["M7 4.5h7.5L18 8v11.5H7z", "M14.5 4.5V8H18", "M4 7.5v13h11"]
+        : ["M12 3.5v12", "m-4-4 4 4 4-4", "M5 19.5h14"];
+  for (const data of paths) {
+    const path = doc.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", data);
+    svg.appendChild(path);
   }
   return svg;
 }
@@ -2275,10 +2324,16 @@ function bindWorkspace(
     syncAuxiliaryPanes();
   }
 
-  const onWindowResize = () => applyResponsiveLayout();
+  const onWindowResize = () => {
+    applyResponsiveLayout();
+    closeArtifactChoiceMenu(false);
+  };
   const ResizeObserverCtor = win?.ResizeObserver;
   const resizeObserver = ResizeObserverCtor
-    ? new ResizeObserverCtor(() => applyResponsiveLayout())
+    ? new ResizeObserverCtor(() => {
+        applyResponsiveLayout();
+        closeArtifactChoiceMenu(false);
+      })
     : null;
   resizeObserver?.observe(root);
   win?.addEventListener("resize", onWindowResize);
@@ -4618,7 +4673,7 @@ function bindWorkspace(
       state.selectedArtifactRevision = revision;
     }
     closeArtifactChoiceMenu(false);
-    renderArtifactViewer(true);
+    renderArtifactViewer(true, true);
   }
 
   function renderArtifactChoiceMenu(
@@ -4651,6 +4706,7 @@ function bindWorkspace(
       {
         id: "confucius-artifact-choice-menu",
         role: "listbox",
+        "data-placement": "left",
         "aria-label": getString(
           kind === "artifact"
             ? "workspace-artifact-switch"
@@ -4736,7 +4792,7 @@ function bindWorkspace(
       rows[index]?.focus();
     });
 
-    placeMenu(anchor, menu, kind === "artifact" ? 320 : 176);
+    placeMenu(anchor, menu, kind === "artifact" ? 320 : 176, "left");
     const selected = menu.querySelector(
       '[data-selected="true"]',
     ) as HTMLElement | null;
@@ -4747,6 +4803,11 @@ function bindWorkspace(
     kind: "artifact" | "revision",
     value: string,
   ): HTMLElement {
+    const controlLabel = getString(
+      kind === "artifact"
+        ? "workspace-artifact-switch"
+        : "workspace-artifact-revision",
+    );
     const trigger = el(doc, "button", undefined, {
       id:
         kind === "artifact"
@@ -4754,22 +4815,24 @@ function bindWorkspace(
           : "confucius-artifact-revision-trigger",
       type: "button",
       "data-kind": kind,
+      title: `${controlLabel}: ${value}`,
       "aria-haspopup": "listbox",
+      "aria-controls": "confucius-artifact-choice-menu",
       "aria-expanded": artifactChoiceMenu?.kind === kind ? "true" : "false",
-      "aria-label": getString(
-        kind === "artifact"
-          ? "workspace-artifact-switch"
-          : "workspace-artifact-revision",
-      ),
+      "aria-label": `${controlLabel}: ${value}`,
     });
     trigger.className = "confucius-artifact-menu-trigger";
-    const label = el(doc, "span");
-    label.className = "confucius-artifact-menu-trigger-value";
-    label.textContent = value;
+    if (kind === "artifact") {
+      trigger.appendChild(artifactActionIcon(doc, "artifacts"));
+    } else {
+      const label = el(doc, "span");
+      label.className = "confucius-artifact-menu-trigger-value";
+      label.textContent = value;
+      trigger.appendChild(label);
+    }
     const chevron = el(doc, "span", undefined, { "aria-hidden": "true" });
     chevron.className = "confucius-artifact-menu-trigger-chevron";
-    chevron.textContent = "▾";
-    trigger.appendChild(label);
+    chevron.textContent = "‹";
     trigger.appendChild(chevron);
     trigger.addEventListener("click", (event) => {
       event.preventDefault();
@@ -4817,7 +4880,7 @@ function bindWorkspace(
     )
       ? (revision ?? artifact.revision)
       : artifact.revision;
-    renderArtifactViewer(true);
+    renderArtifactViewer(true, true);
   }
 
   function artifactViewerSignature(): string {
@@ -4833,7 +4896,7 @@ function bindWorkspace(
     ].join("|");
   }
 
-  function renderArtifactViewer(force = false): void {
+  function renderArtifactViewer(force = false, resetScroll = false): void {
     const existing = doc.getElementById(
       "confucius-artifact-overlay",
     ) as HTMLElement | null;
@@ -4871,7 +4934,7 @@ function bindWorkspace(
     const previousBody = doc.getElementById(
       "confucius-artifact-dialog-body",
     ) as HTMLElement | null;
-    const previousScroll = previousBody?.scrollTop ?? 0;
+    const previousScroll = resetScroll ? 0 : (previousBody?.scrollTop ?? 0);
     const wasOpen = Boolean(existing);
     closeArtifactChoiceMenu(false);
     existing?.remove();
@@ -4883,6 +4946,7 @@ function bindWorkspace(
       "aria-labelledby": "confucius-artifact-dialog-title",
     });
     overlay.className = "confucius-artifact-overlay";
+    if (wasOpen) overlay.setAttribute("data-refresh", "true");
     overlay.addEventListener("click", (event) => {
       if (event.target === overlay) closeArtifactViewer();
     });
@@ -4896,65 +4960,53 @@ function bindWorkspace(
 
     const dialog = el(doc, "section");
     dialog.className = "confucius-artifact-dialog";
-    const header = el(doc, "header");
-    header.className = "confucius-artifact-dialog-header";
-
-    const identity = el(doc, "div");
-    identity.className = "confucius-artifact-dialog-identity";
-    const copy = el(doc, "div");
-    copy.className = "confucius-artifact-dialog-copy";
-    const headerMeta = el(doc, "div");
-    headerMeta.className = "confucius-artifact-dialog-meta";
-    headerMeta.textContent = `${artifactKindLabel(
-      artifact.kind,
-    )} · ${runtimeLabel(revision.backend)}`;
-    const title = el(doc, "div", undefined, {
-      id: "confucius-artifact-dialog-title",
+    const rail = el(doc, "aside", undefined, {
+      role: "toolbar",
+      "aria-orientation": "vertical",
+      "aria-label": getString("workspace-artifact-actions"),
     });
-    title.className = "confucius-artifact-dialog-title";
-    title.textContent = artifact.title;
-    copy.appendChild(headerMeta);
-    copy.appendChild(title);
-
+    rail.className = "confucius-artifact-action-rail";
     const closeButton = el(doc, "button", undefined, {
       type: "button",
       title: getString("workspace-artifact-close"),
       "aria-label": getString("workspace-artifact-close"),
     });
-    closeButton.className = "confucius-icon-button";
-    closeButton.textContent = "×";
-    closeButton.style.fontSize = "24px";
+    closeButton.className = "confucius-artifact-rail-button";
+    closeButton.appendChild(artifactActionIcon(doc, "close"));
     closeButton.addEventListener("click", () => closeArtifactViewer());
-    identity.appendChild(copy);
-    identity.appendChild(closeButton);
-
-    const toolbar = el(doc, "div", undefined, {
-      role: "toolbar",
-      "aria-label": getString("workspace-artifact-actions"),
-    });
-    toolbar.className = "confucius-artifact-dialog-toolbar";
+    rail.appendChild(closeButton);
+    const divider = el(doc, "span", undefined, { "aria-hidden": "true" });
+    divider.className = "confucius-artifact-rail-divider";
+    rail.appendChild(divider);
     if (state.artifacts.length > 1) {
-      toolbar.appendChild(artifactMenuTrigger("artifact", artifact.title));
+      rail.appendChild(artifactMenuTrigger("artifact", artifact.title));
     }
     if (artifact.revisions.length > 1) {
-      toolbar.appendChild(
+      rail.appendChild(
         artifactMenuTrigger("revision", `r${revision.revision}`),
       );
     } else {
-      const revisionBadge = el(doc, "span");
+      const revisionLabel = `${getString("workspace-artifact-revision")}: r${revision.revision}`;
+      const revisionBadge = el(doc, "span", undefined, {
+        title: revisionLabel,
+        "aria-label": revisionLabel,
+      });
       revisionBadge.className = "confucius-artifact-revision-badge";
       revisionBadge.textContent = `r${revision.revision}`;
-      toolbar.appendChild(revisionBadge);
+      rail.appendChild(revisionBadge);
     }
     const spacer = el(doc, "span", undefined, { "aria-hidden": "true" });
-    spacer.className = "confucius-artifact-dialog-toolbar-spacer";
-    toolbar.appendChild(spacer);
+    spacer.className = "confucius-artifact-rail-spacer";
+    rail.appendChild(spacer);
 
-    const writeback = button(
-      doc,
-      "confucius-artifact-writeback",
-      getString("workspace-writeback"),
-    );
+    const writeback = el(doc, "button", undefined, {
+      id: "confucius-artifact-writeback",
+      type: "button",
+      title: getString("workspace-writeback"),
+      "aria-label": getString("workspace-writeback"),
+    });
+    writeback.className = "confucius-artifact-rail-button";
+    writeback.appendChild(artifactActionIcon(doc, "writeback"));
     const writebackBlocked =
       task.status === "running" ||
       task.status === "awaiting_approval" ||
@@ -4969,10 +5021,8 @@ function bindWorkspace(
     writeback.addEventListener("click", () =>
       openWritebackPreview(artifact, revision.revision),
     );
-    toolbar.appendChild(writeback);
-    header.appendChild(identity);
-    header.appendChild(toolbar);
-    dialog.appendChild(header);
+    rail.appendChild(writeback);
+    dialog.appendChild(rail);
 
     const dialogBody = el(doc, "div", undefined, {
       id: "confucius-artifact-dialog-body",
@@ -4996,7 +5046,7 @@ function bindWorkspace(
     const kind = el(doc, "span");
     kind.textContent = `${artifactKindLabel(artifact.kind)} · ${runtimeLabel(
       revision.backend,
-    )}`;
+    )} · r${revision.revision}`;
     paperMeta.appendChild(kind);
     if (
       artifact.writeback?.state === "committed" &&
@@ -5006,12 +5056,17 @@ function bindWorkspace(
       committed.textContent = getString("workspace-writeback-committed");
       paperMeta.appendChild(committed);
     }
-    const artifactTitle = el(doc, "h2", {
-      margin: "10px 0 20px",
-      fontSize: compact ? "23px" : "30px",
-      lineHeight: "1.16",
-      letterSpacing: "-.025em",
-    });
+    const artifactTitle = el(
+      doc,
+      "h2",
+      {
+        margin: "10px 0 20px",
+        fontSize: compact ? "23px" : "30px",
+        lineHeight: "1.16",
+        letterSpacing: "-.025em",
+      },
+      { id: "confucius-artifact-dialog-title" },
+    );
     artifactTitle.textContent = artifact.title;
     paper.appendChild(paperMeta);
     paper.appendChild(artifactTitle);
@@ -7145,6 +7200,7 @@ function bindWorkspace(
     anchor: HTMLElement,
     menu: HTMLElement,
     preferredWidth = 220,
+    placement: "auto" | "left" = "auto",
   ): void {
     const view = doc.defaultView;
     const rect = anchor.getBoundingClientRect();
@@ -7157,14 +7213,26 @@ function bindWorkspace(
       rootRect.width ? rootRect.right - 8 : width - 8,
     );
     const availableWidth = Math.max(120, rightBound - leftBound);
-    const menuWidth = Math.min(preferredWidth, availableWidth);
+    const sideRight =
+      placement === "left"
+        ? Math.min(rightBound, Math.max(leftBound + 120, rect.left - 6))
+        : rightBound;
+    const placementWidth =
+      placement === "left"
+        ? Math.max(120, sideRight - leftBound)
+        : availableWidth;
+    const menuWidth = Math.min(preferredWidth, availableWidth, placementWidth);
+    const menuLeft =
+      placement === "left"
+        ? Math.max(leftBound, sideRight - menuWidth)
+        : Math.min(
+            Math.max(leftBound, rect.left),
+            Math.max(leftBound, rightBound - menuWidth),
+          );
     menu.style.position = "fixed";
     menu.style.width = `${menuWidth}px`;
     menu.style.maxWidth = `${availableWidth}px`;
-    menu.style.left = `${Math.min(
-      Math.max(leftBound, rect.left),
-      Math.max(leftBound, rightBound - menuWidth),
-    )}px`;
+    menu.style.left = `${menuLeft}px`;
     menu.style.right = "auto";
     menu.style.top = "0px";
     menu.style.bottom = "auto";
@@ -7172,6 +7240,22 @@ function bindWorkspace(
     const host = doc.body ?? doc.documentElement;
     host?.appendChild(menu);
     const box = menu.getBoundingClientRect();
+    if (placement === "left") {
+      const topBound = Math.max(8, rootRect.height ? rootRect.top + 8 : 8);
+      const bottomBound = Math.min(
+        height - 8,
+        rootRect.height ? rootRect.bottom - 8 : height - 8,
+      );
+      const availableHeight = Math.max(80, bottomBound - topBound);
+      menu.style.maxHeight = `${Math.min(360, availableHeight)}px`;
+      const measuredHeight = Math.min(box.height, availableHeight);
+      menu.style.top = `${Math.min(
+        Math.max(topBound, rect.top),
+        Math.max(topBound, bottomBound - measuredHeight),
+      )}px`;
+      menu.style.visibility = "visible";
+      return;
+    }
     const spaceAbove = rect.top - 8;
     const spaceBelow = height - rect.bottom - 8;
     const openAbove =

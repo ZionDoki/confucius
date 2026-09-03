@@ -331,9 +331,31 @@ test("artifact viewer uses unclipped custom menus instead of native selects", ()
   assert.equal(view.includes('role: "option"'), true);
   assert.equal(view.includes('key === "ArrowDown"'), true);
   assert.equal(view.includes("placeMenu(anchor, menu"), true);
+  assert.equal(view.includes('kind === "artifact" ? 320 : 176, "left"'), true);
   assert.equal(/,\s*"select"/.test(viewer), false);
   assert.equal(view.includes('id: "confucius-artifact-switcher",'), false);
   assert.equal(view.includes('id: "confucius-artifact-revision",'), false);
+});
+
+test("artifact viewer is a full-bleed reading surface with a right action rail", () => {
+  const view = readFileSync(
+    join(root, "src/modules/ui/WorkspaceView.ts"),
+    "utf8",
+  );
+  const viewer = view.slice(
+    view.indexOf("function renderArtifactViewer"),
+    view.indexOf("let lastListSignature"),
+  );
+  assert.equal(
+    view.includes("grid-template-columns: minmax(0, 1fr) 58px;"),
+    true,
+  );
+  assert.equal(viewer.includes("confucius-artifact-action-rail"), true);
+  assert.equal(viewer.includes('"aria-orientation": "vertical"'), true);
+  assert.equal(viewer.includes('artifactActionIcon(doc, "close")'), true);
+  assert.equal(viewer.includes('artifactActionIcon(doc, "writeback")'), true);
+  assert.equal(viewer.includes("confucius-artifact-dialog-header"), false);
+  assert.equal(view.includes("box-shadow: none;"), true);
 });
 
 test("sidebar artifact files use a compact two-line layout", () => {
