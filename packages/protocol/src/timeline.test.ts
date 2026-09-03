@@ -156,20 +156,30 @@ describe("coalesceTimeline", () => {
         diff: "+evidence",
       }),
       event("artifact_upserted", {
-        artifact: { title: "Evidence report", revision: 2 },
+        artifact: {
+          id: "artifact-1",
+          sessionId: "s",
+          taskId: "s",
+          kind: "report",
+          title: "Evidence report",
+          status: "ready",
+          revision: 2,
+          createdAt: 1,
+          updatedAt: 2,
+        },
       }),
     ]);
     assert.deepEqual(
       blocks.map((block) => block.kind),
-      ["plan", "command", "file", "status"],
+      ["plan", "command", "file", "artifact"],
     );
     assert.equal(
       blocks[1]?.kind === "command" ? blocks[1].status : "missing",
       "completed",
     );
     assert.equal(
-      blocks[3]?.kind === "status" ? blocks[3].tone : "missing",
-      "artifact",
+      blocks[3]?.kind === "artifact" ? blocks[3].artifact.id : "missing",
+      "artifact-1",
     );
   });
 
