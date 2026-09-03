@@ -383,7 +383,7 @@ export class KimiAdapter implements RuntimeAdapter {
             fs: { readTextFile: false, writeTextFile: false },
             plan: {},
           },
-          clientInfo: { name: "confucius-zotero", version: "0.3.0" },
+          clientInfo: { name: "confucius-zotero", version: "0.3.1" },
         }),
         10_000,
         () =>

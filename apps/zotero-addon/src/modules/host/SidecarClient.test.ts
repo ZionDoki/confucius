@@ -7,7 +7,7 @@ const descriptor = {
   pid: 42,
   baseUrl: "http://127.0.0.1:4567",
   token: "s".repeat(43),
-  version: "0.3.0",
+  version: "0.3.1",
   startedAt: 1,
 };
 

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.3.1 — 2026-09-04
+
+- The activity stream is now the permanent main workspace; the separate
+  artifact canvas and stream-wide collapse control are gone.
+- Research artifacts appear as versioned file blocks in the stream. Click a
+  block to inspect revisions, citations, and write-back actions in a
+  full-workspace viewer.
+
 ## 0.3.0 — 2026-09-03
 
 ### Research workbench
