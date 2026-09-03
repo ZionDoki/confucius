@@ -554,7 +554,10 @@ test("zotero uri links render as underlined anchors and navigate on click", () =
   // Firefox XHTML click targets are often the text node, so we walk the
   // parent chain (hrefFromEvent) instead of event.target.closest("a").
   assert.equal(view.includes("hrefFromEvent(event)"), true);
-  assert.equal(view.includes("node.innerHTML = renderMarkdownHtml(text)"), true);
+  assert.equal(
+    view.includes("node.innerHTML = renderMarkdownHtml(text)"),
+    true,
+  );
   assert.equal(view.includes("hydrateAnswerLinks(node)"), true);
   assert.equal(view.includes("onWorkspaceLink"), true);
   assert.equal(

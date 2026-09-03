@@ -48,8 +48,7 @@ function workspaceRootOf(node: Element | null): HTMLElement | null {
 }
 
 function pluginOpenLink():
-  | ((href: string) => Promise<{ ok: boolean; message?: string }>)
-  | undefined {
+  ((href: string) => Promise<{ ok: boolean; message?: string }>) | undefined {
   try {
     return (
       Zotero as unknown as {
