@@ -134,6 +134,32 @@ describe("OpenAICompatibleAdapter ollama native style", () => {
     assert.equal(turn.streamed, true);
   });
 
+  it("separates think tags carried in Ollama content chunks", async () => {
+    const textDeltas: string[] = [];
+    const reasoningDeltas: string[] = [];
+    const adapter = new OpenAICompatibleAdapter({
+      apiKey: "ollama",
+      baseUrl: nativeUrl,
+      model: "tagged-reasoner",
+      stream: true,
+      onTextDelta: (piece) => textDeltas.push(piece),
+      onReasoningDelta: (piece) => reasoningDeltas.push(piece),
+      fetchImpl: (async () =>
+        ndjsonResponse([
+          { message: { content: "<think>plan" }, done: false },
+          { message: { content: " carefully</think>Done" }, done: false },
+          { message: { content: "." }, done: true },
+        ])) as unknown as typeof fetch,
+    });
+    const turn = await adapter.complete({
+      messages: [{ role: "user", content: "work" }],
+    });
+    assert.equal(turn.reasoning, "plan carefully");
+    assert.equal(turn.text, "Done.");
+    assert.deepEqual(reasoningDeltas, ["plan", " carefully"]);
+    assert.deepEqual(textDeltas, ["Done", "."]);
+  });
+
   it("parses buffered NDJSON when Response.body is missing", async () => {
     const textDeltas: string[] = [];
     const adapter = new OpenAICompatibleAdapter({

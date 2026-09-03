@@ -132,4 +132,61 @@ describe("coalesceTimeline", () => {
       assert.equal(toolsSummary(blocks[1].calls), "search_items · get_item");
     }
   });
+
+  it("keeps external plans, commands, file diffs, and artifacts auditable", () => {
+    const blocks = coalesceTimeline([
+      event("plan_updated", {
+        steps: [{ id: "p1", label: "Inspect sources", status: "running" }],
+      }),
+      event("command_execution", {
+        callId: "cmd1",
+        command: "tool --version",
+        status: "started",
+      }),
+      event("command_execution", {
+        callId: "cmd1",
+        command: "tool --version",
+        status: "completed",
+        output: "1.0.0",
+        exitCode: 0,
+      }),
+      event("file_change", {
+        path: "report.md",
+        status: "proposed",
+        diff: "+evidence",
+      }),
+      event("artifact_upserted", {
+        artifact: { title: "Evidence report", revision: 2 },
+      }),
+    ]);
+    assert.deepEqual(
+      blocks.map((block) => block.kind),
+      ["plan", "command", "file", "status"],
+    );
+    assert.equal(
+      blocks[1]?.kind === "command" ? blocks[1].status : "missing",
+      "completed",
+    );
+    assert.equal(
+      blocks[3]?.kind === "status" ? blocks[3].tone : "missing",
+      "artifact",
+    );
+  });
+
+  it("leaves context drift to the single interactive context-bar notice", () => {
+    const drift = (liveFingerprint: string) =>
+      event("context_drifted", {
+        lockedFingerprint: "ctx_locked",
+        liveFingerprint,
+      });
+    const blocks = coalesceTimeline([
+      drift("ctx_live_a"),
+      drift("ctx_live_a"),
+      drift("ctx_live_b"),
+      event("context_updated", { context: {} }),
+      drift("ctx_live_c"),
+      drift("ctx_live_c"),
+    ]);
+    assert.equal(blocks.length, 0);
+  });
 });

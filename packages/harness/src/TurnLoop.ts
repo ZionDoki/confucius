@@ -4,7 +4,10 @@ import type {
   ToolResult,
 } from "@confucius/protocol";
 import { BudgetAccountant } from "./BudgetAccountant";
-import type { TurnCheckpoint } from "./CheckpointStore";
+import type {
+  ToolExecutionCheckpoint,
+  TurnCheckpoint,
+} from "./CheckpointStore";
 import { cloneValue } from "./clone";
 import { splitBatches, type ScheduledCall } from "./ConcurrencyScheduler";
 import type { MemoryEventLog } from "./EventLog";
@@ -17,7 +20,7 @@ import { errorMessage, isAbortError } from "./abort";
 import { truncateToolResult } from "./truncate";
 
 export interface CheckpointStore {
-  save(checkpoint: TurnCheckpoint): void;
+  save(checkpoint: TurnCheckpoint): Promise<void> | void;
 }
 
 export interface TurnLoopInput {
@@ -73,8 +76,10 @@ export class TurnLoop {
       { role: "user", content: input.userText },
     ];
 
+    const toolExecutions: ToolExecutionCheckpoint[] = [];
+
     this.emit(input, "turn_started", { userText: input.userText });
-    this.checkpoint(input.turnId, 0, messages);
+    await this.checkpoint(input.turnId, 0, messages, toolExecutions);
 
     let delivered = "";
 
@@ -123,23 +128,30 @@ export class TurnLoop {
 
         if (toolCalls.length === 0) {
           this.emit(input, "turn_completed", { phase: "done" });
-          this.checkpoint(
+          await this.checkpoint(
             input.turnId,
             this.deps.budget.iterationsUsed,
             messages,
+            toolExecutions,
           );
           return resultOf("done");
         }
 
-        const executed = await this.executeTools(input, toolCalls, messages);
+        const executed = await this.executeTools(
+          input,
+          toolCalls,
+          messages,
+          toolExecutions,
+        );
         if (executed === "aborted") {
           this.emit(input, "turn_aborted", { reason: "signal" });
           return resultOf("aborted");
         }
-        this.checkpoint(
+        await this.checkpoint(
           input.turnId,
           this.deps.budget.iterationsUsed,
           messages,
+          toolExecutions,
         );
       }
 
@@ -159,6 +171,7 @@ export class TurnLoop {
     input: TurnLoopInput,
     toolCalls: ModelToolCall[],
     messages: ModelMessage[],
+    toolExecutions: ToolExecutionCheckpoint[],
   ): Promise<"ok" | "aborted"> {
     const allowed: ScheduledCall[] = [];
 
@@ -224,8 +237,9 @@ export class TurnLoop {
         continue;
       }
 
+      const approvedArgs = decision.resolution?.editedArgs ?? call.args;
       const schema = this.deps.tools.getSchema(call.name);
-      const invalid = validateArgs(call.name, schema, call.args);
+      const invalid = validateArgs(call.name, schema, approvedArgs);
       if (invalid) {
         this.emit(input, "tool_result", { callId: eventId, result: invalid });
         messages.push({
@@ -241,7 +255,7 @@ export class TurnLoop {
         callId: eventId,
         modelCallId: call.id,
         toolName: call.name,
-        args: call.args,
+        args: approvedArgs,
       });
     }
 
@@ -252,15 +266,57 @@ export class TurnLoop {
       if (input.signal?.aborted) {
         return "aborted";
       }
+      for (const call of batch) {
+        toolExecutions.push({
+          callId: call.callId,
+          modelCallId: call.modelCallId,
+          toolName: call.toolName,
+          args: cloneValue(call.args),
+          status: "started",
+        });
+      }
+      // This write is deliberately awaited before touching the provider. If
+      // the host dies after this point, restore can surface the call as
+      // unknown instead of silently replaying a potentially mutating action.
+      await this.checkpoint(
+        input.turnId,
+        this.deps.budget.iterationsUsed,
+        messages,
+        toolExecutions,
+      );
       const results = await Promise.all(
         batch.map(async (call) => {
-          const result = truncateToolResult(
-            await this.deps.tools.call(call.toolName, call.args, input.signal),
-          );
+          let result: ToolResult;
+          try {
+            result = truncateToolResult(
+              await this.deps.tools.call(
+                call.toolName,
+                call.args,
+                input.signal,
+              ),
+            );
+          } catch (error) {
+            result = {
+              ok: false,
+              toolName: call.toolName,
+              code: "internal",
+              message: errorMessage(error),
+            };
+          }
           return { call, result };
         }),
       );
       for (const { call, result } of results) {
+        const execution = [...toolExecutions]
+          .reverse()
+          .find(
+            (entry) =>
+              entry.callId === call.callId && entry.status === "started",
+          );
+        if (execution) {
+          execution.status = result.ok ? "completed" : "failed";
+          execution.result = cloneValue(result);
+        }
         this.emit(input, "tool_result", { callId: call.callId, result });
         messages.push({
           role: "tool",
@@ -268,20 +324,29 @@ export class TurnLoop {
           toolCallId: call.modelCallId ?? call.callId,
         });
       }
+      await this.checkpoint(
+        input.turnId,
+        this.deps.budget.iterationsUsed,
+        messages,
+        toolExecutions,
+      );
     }
 
     return "ok";
   }
 
-  private checkpoint(
+  private async checkpoint(
     turnId: string,
     iteration: number,
     messages: ModelMessage[],
-  ) {
-    this.deps.checkpoints.save({
+    toolExecutions: ToolExecutionCheckpoint[],
+  ): Promise<void> {
+    await this.deps.checkpoints.save({
       turnId,
       iteration,
+      savedAt: this.deps.now(),
       messages: cloneValue(messages),
+      toolExecutions: cloneValue(toolExecutions),
     });
   }
 

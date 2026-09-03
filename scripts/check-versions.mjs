@@ -17,6 +17,7 @@ const targets = [
   "packages/protocol/package.json",
   "packages/skill-format/package.json",
   "packages/zotero-tools/package.json",
+  "apps/agent-sidecar/package.json",
   "apps/zotero-addon/package.json",
   "package-lock.json",
 ];

@@ -1,7 +1,18 @@
 export interface TurnCheckpoint {
   turnId: string;
   iteration: number;
+  savedAt: number;
   messages: unknown[];
+  toolExecutions: ToolExecutionCheckpoint[];
+}
+
+export interface ToolExecutionCheckpoint {
+  callId: string;
+  modelCallId?: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  status: "started" | "completed" | "failed";
+  result?: unknown;
 }
 
 export class MemoryCheckpointStore {

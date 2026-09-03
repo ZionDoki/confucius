@@ -58,6 +58,11 @@ describe("validateConfigPatch", () => {
     assert.equal(validateConfigPatch({ maxToolCalls: 0 }).ok, false);
     assert.equal(validateConfigPatch({ maxIterations: 201 }).ok, false);
   });
+
+  it("validates the three-state memory consent", () => {
+    assert.equal(validateConfigPatch({ memoryConsent: "review" }).ok, true);
+    assert.equal(validateConfigPatch({ memoryConsent: "silent" }).ok, false);
+  });
 });
 
 describe("budget clamps", () => {

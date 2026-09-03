@@ -1,4 +1,4 @@
-import type { ConfuciusEvent } from "./events";
+import type { ConfuciusEvent, PlanStep } from "./events";
 import type { ToolResult } from "./tools";
 
 export type ReasoningFold = "preview" | "open" | "compact";
@@ -16,9 +16,24 @@ export type TimelineBlock =
   | { kind: "reasoning"; text: string }
   | { kind: "text"; text: string }
   | { kind: "tools"; calls: TimelineToolCall[] }
+  | { kind: "plan"; steps: PlanStep[] }
+  | {
+      kind: "command";
+      callId: string;
+      command: string;
+      status: "started" | "completed" | "failed";
+      output?: string;
+      exitCode?: number;
+    }
+  | {
+      kind: "file";
+      path: string;
+      status: "proposed" | "applied" | "rejected";
+      diff?: string;
+    }
   | {
       kind: "status";
-      tone: "memory" | "fail" | "abort";
+      tone: "info" | "artifact" | "memory" | "fail" | "abort";
       text: string;
     };
 
@@ -129,6 +144,80 @@ export function coalesceTimeline(events: ConfuciusEvent[]): TimelineBlock[] {
     if (event.type === "turn_started") {
       flushAnswer();
       blocks.push({ kind: "user", text: event.payload.userText });
+      continue;
+    }
+    if (event.type === "plan_updated") {
+      flushAnswer();
+      blocks.push({ kind: "plan", steps: event.payload.steps });
+      continue;
+    }
+    if (event.type === "command_execution") {
+      flushAnswer();
+      const existing = [...blocks]
+        .reverse()
+        .find(
+          (block): block is Extract<TimelineBlock, { kind: "command" }> =>
+            block.kind === "command" && block.callId === event.payload.callId,
+        );
+      if (existing) Object.assign(existing, event.payload);
+      else blocks.push({ kind: "command", ...event.payload });
+      continue;
+    }
+    if (event.type === "file_change") {
+      flushAnswer();
+      blocks.push({ kind: "file", ...event.payload });
+      continue;
+    }
+    if (event.type === "turn_diff_updated") {
+      flushAnswer();
+      blocks.push({
+        kind: "file",
+        path: "Turn diff",
+        status: "proposed",
+        diff: event.payload.diff,
+      });
+      continue;
+    }
+    if (event.type === "artifact_upserted") {
+      flushAnswer();
+      blocks.push({
+        kind: "status",
+        tone: "artifact",
+        text: `artifact r${event.payload.artifact.revision}: ${event.payload.artifact.title}`,
+      });
+      continue;
+    }
+    if (event.type === "runtime_status") {
+      flushAnswer();
+      blocks.push({
+        kind: "status",
+        tone: event.payload.runtime.state === "error" ? "fail" : "info",
+        text: `${event.payload.runtime.backend}: ${event.payload.runtime.state}${
+          event.payload.runtime.message
+            ? ` — ${event.payload.runtime.message}`
+            : ""
+        }`,
+      });
+      continue;
+    }
+    if (event.type === "context_drifted") {
+      // The workspace context bar owns this interactive notice (including its
+      // add/replace actions). Keep the event for audit and integrations, but
+      // do not duplicate the same message in the activity stream.
+      continue;
+    }
+    if (event.type === "context_updated") {
+      continue;
+    }
+    if (event.type === "memory_proposed") {
+      flushAnswer();
+      blocks.push({
+        kind: "status",
+        tone: "memory",
+        text: `memory proposal: ${
+          event.payload.proposal.title ?? event.payload.proposal.op
+        }`,
+      });
       continue;
     }
     if (event.type === "memory_updated") {

@@ -141,9 +141,9 @@ test("composer has plus menu, slash commands, context ring, single send/stop", (
     "utf8",
   );
   assert.equal(view.includes("slashCommands"), true);
-  assert.equal(view.includes("session/setPermissions"), true);
-  assert.equal(view.includes("session/compact"), true);
-  assert.equal(view.includes("session/context"), true);
+  assert.equal(view.includes("task/setPermissions"), true);
+  assert.equal(view.includes("task/compact"), true);
+  assert.equal(view.includes("task/context"), true);
   assert.equal(view.includes("logs/list"), true);
   assert.equal(view.includes("reasoningEffort"), true);
   assert.equal(view.includes("contextWindowTokens"), true);
@@ -240,9 +240,13 @@ test("settings effort control is a button group, not a native select", () => {
     join(root, "src/modules/ui/WorkspaceView.ts"),
     "utf8",
   );
-  // Native select popups do not paint or click in Zotero chrome windows.
-  assert.equal(view.includes("HTMLSelectElement"), false);
-  assert.equal(/,\s*"select"/.test(view), false);
+  // The effort control stays a paintable button group even though Runtime,
+  // revision, and safety choices now legitimately use native selects.
+  const effortBlock = view.slice(
+    view.indexOf("const effortRow"),
+    view.indexOf("const stream = check"),
+  );
+  assert.equal(/,\s*"select"/.test(effortBlock), false);
   assert.equal(view.includes("effortPicker"), true);
   assert.equal(view.includes('"confucius-cfg-effort"'), true);
   assert.equal(view.includes('role: "radiogroup"'), true);
@@ -288,7 +292,7 @@ test("timeline is TUI-style: foldable thinking/tools, unfolded answers", () => {
   assert.equal(view.includes("timelinePane.scrollHeight"), true);
 });
 
-test("composer model picker is a cascading menu, not a native select", () => {
+test("composer model picker remains a cascading menu alongside Runtime choices", () => {
   const view = readFileSync(
     join(root, "src/modules/ui/WorkspaceView.ts"),
     "utf8",
@@ -300,7 +304,12 @@ test("composer model picker is a cascading menu, not a native select", () => {
   assert.equal(view.includes("openModelsSubmenu"), true);
   assert.equal(view.includes("applyModelSelection"), true);
   assert.equal(view.includes("confucius-endpoint-submenu"), true);
-  assert.equal(view.includes("HTMLSelectElement"), false);
+  const composerBlock = view.slice(
+    view.indexOf('id: "confucius-endpoint"'),
+    view.indexOf("const contextRing"),
+  );
+  assert.equal(/,\s*"select"/.test(composerBlock), false);
+  assert.equal(view.includes('id: "confucius-task-runtime"'), true);
 });
 
 test("settings can add and save multiple model endpoints", () => {
@@ -339,7 +348,7 @@ test("workspace exposes an editable research knowledge base and mind maps", () =
   assert.equal(view.includes("workspaceKnowledgeIcon"), true);
 });
 
-test("live context spine renders chips and injects Live context", () => {
+test("tasks lock context and expose explicit add or replace on drift", () => {
   const view = readFileSync(
     join(root, "src/modules/ui/WorkspaceView.ts"),
     "utf8",
@@ -358,26 +367,29 @@ test("live context spine renders chips and injects Live context", () => {
   );
   assert.equal(rpc.includes('contextLive: "context/live"'), true);
   assert.equal(rpc.includes('readerOpen: "reader/open"'), true);
-  assert.equal(rpc.includes("suppressSelection"), true);
+  assert.equal(rpc.includes("lockedSnapshot"), true);
   assert.equal(tools.includes("export function liveReaderContext"), true);
   assert.equal(host.includes("case RPC_METHODS.contextLive"), true);
   assert.equal(host.includes("case RPC_METHODS.readerOpen"), true);
-  assert.equal(host.includes("Live context:"), true);
+  assert.equal(host.includes("Locked task context captured at"), true);
+  assert.equal(
+    host.includes("Do not replace it with the live Zotero selection"),
+    true,
+  );
   assert.equal(host.includes("firstSelectedItem"), false);
   assert.equal(host.includes("Current Zotero selection"), false);
   assert.equal(view.includes('id: "confucius-context-bar"'), true);
   assert.equal(view.includes('rpc("context/live"'), true);
   assert.equal(view.includes('rpc("reader/open"'), true);
-  assert.equal(view.includes("suppressedSelectionKey"), true);
-  assert.equal(
-    view.includes("context: { suppressSelection: isSelectionSuppressed() }"),
-    true,
-  );
+  assert.equal(view.includes('rpc("task/setContext"'), true);
+  assert.equal(view.includes('updateContext("add")'), true);
+  assert.equal(view.includes('updateContext("replace")'), true);
+  assert.equal(view.includes("suppressedSelectionKey"), false);
 });
 
-test("reading loop: reader entry, locate links and write-back navigation", () => {
+test("reading loop: selection menu, locate links and write-back navigation", () => {
   const entry = readFileSync(
-    join(root, "src/modules/ui/readerEntry.ts"),
+    join(root, "src/modules/ui/readerContextMenu.ts"),
     "utf8",
   );
   const hooks = readFileSync(join(root, "src/hooks.ts"), "utf8");
@@ -402,16 +414,25 @@ test("reading loop: reader entry, locate links and write-back navigation", () =>
     "utf8",
   );
 
-  // Reader toolbar badge + selection context menu, registered once from hooks.
+  // The selection context menu is registered once from hooks. The workspace
+  // has one global toolbar entry; no duplicate control is injected into the
+  // PDF annotation toolbar.
   assert.equal(entry.includes("registerEventListener"), true);
-  assert.equal(entry.includes('"renderToolbar"'), true);
+  assert.equal(entry.includes('"renderToolbar"'), false);
+  assert.equal(entry.includes("confucius-reader-entry"), false);
   assert.equal(entry.includes('"createSelectorContextMenu"'), true);
+  assert.equal(entry.includes('"createViewContextMenu"'), true);
+  assert.equal(entry.includes("captureLockedContext"), true);
+  assert.equal(
+    entry.includes("focusWorkspacePrompt(templateId, context)"),
+    true,
+  );
   assert.equal(entry.includes("openWorkspace"), true);
   assert.equal(entry.includes("confucius-prompt"), true);
-  assert.equal(hooks.includes("registerReaderEntry()"), true);
-  assert.equal(hooks.includes("unregisterReaderEntry()"), true);
-  assert.equal(enFtl.includes("confucius-reader-ask"), true);
-  assert.equal(zhFtl.includes("confucius-reader-ask"), true);
+  assert.equal(hooks.includes("registerReaderContextMenu()"), true);
+  assert.equal(hooks.includes("unregisterReaderContextMenu()"), true);
+  assert.equal(enFtl.includes("confucius-reader-entry-tooltip"), false);
+  assert.equal(zhFtl.includes("confucius-reader-entry-tooltip"), false);
 
   // open_item location args map annotationKey to the reader's annotationID.
   assert.equal(tools.includes("function readerLocation"), true);
@@ -454,6 +475,10 @@ test("triage entry and knowledge output: item menu, launch queue, propose_note",
     join(root, "src/modules/ui/itemMenu.ts"),
     "utf8",
   );
+  const readerContextMenu = readFileSync(
+    join(root, "src/modules/ui/readerContextMenu.ts"),
+    "utf8",
+  );
   const hooks = readFileSync(join(root, "src/hooks.ts"), "utf8");
   const host = readFileSync(
     join(root, "src/modules/host/AgentHost.ts"),
@@ -486,8 +511,8 @@ test("triage entry and knowledge output: item menu, launch queue, propose_note",
 
   // Slice 2: two #zotero-itemmenu entries gated on selection shape + PDF.
   assert.equal(itemMenu.includes('"zotero-itemmenu"'), true);
-  assert.equal(itemMenu.includes("paper-deep-reading"), true);
-  assert.equal(itemMenu.includes("library-triage"), true);
+  assert.equal(itemMenu.includes('templateId: "deep-read"'), true);
+  assert.equal(itemMenu.includes('templateId: "triage"'), true);
   assert.equal(itemMenu.includes("queueLaunch"), true);
   assert.equal(itemMenu.includes("popupshowing"), true);
   assert.equal(itemMenu.includes("items.length < 2"), true);
@@ -495,12 +520,49 @@ test("triage entry and knowledge output: item menu, launch queue, propose_note",
   assert.equal(hooks.includes("unregisterItemMenu(win)"), true);
   assert.equal(enFtl.includes("confucius-itemmenu-deep-read"), true);
   assert.equal(zhFtl.includes("confucius-itemmenu-triage"), true);
+  for (const key of [
+    "itemmenu-evidence-audit",
+    "itemmenu-related-work",
+    "itemmenu-paper-note",
+    "itemmenu-compare",
+    "itemmenu-synthesis",
+    "itemmenu-literature-map",
+  ]) {
+    assert.equal(itemMenu.includes(`labelKey: "${key}"`), true);
+    assert.equal(enFtl.includes(`confucius-${key}`), true);
+    assert.equal(zhFtl.includes(`confucius-${key}`), true);
+  }
+  for (const key of [
+    "reader-explain-selection",
+    "reader-verify-claim",
+    "reader-save-insight",
+    "reader-selection-note",
+  ]) {
+    assert.equal(readerContextMenu.includes(`"${key}"`), true);
+    assert.equal(enFtl.includes(`confucius-${key}`), true);
+    assert.equal(zhFtl.includes(`confucius-${key}`), true);
+  }
 
-  // Skill launch queue is one-shot: consumed then cleared by the poll.
-  assert.equal(host.includes("queueLaunch(skillSlug: string)"), true);
+  // LaunchIntent is one-shot, carries click-time context, then is cleared.
+  assert.equal(
+    host.includes("queueLaunch(intent: LaunchIntent | string)"),
+    true,
+  );
+  assert.equal(
+    host.includes("context: intent.context ?? this.captureLockedContext()"),
+    true,
+  );
   assert.equal(host.includes("this.pendingLaunch = null"), true);
   assert.equal(rpc.includes('launchConsume: "workspace/launch-consume"'), true);
   assert.equal(view.includes('"workspace/launch-consume"'), true);
+  assert.equal(view.includes("context: options.context,"), true);
+  assert.equal(
+    view.includes("context: options.context ?? state.live?.lockedSnapshot"),
+    false,
+  );
+  assert.equal(host.includes("pane?.getCollectionTreeRows?.()"), true);
+  assert.equal(host.includes("pane?.getSelectedCollections?.()?.[0]"), true);
+  assert.equal(host.includes("pane?.getSelectedSavedSearches?.()?.[0]"), true);
 
   // Slice 3: propose_note approval pipeline and the timeline write-note button.
   assert.equal(catalog.includes('"propose_note"'), true);

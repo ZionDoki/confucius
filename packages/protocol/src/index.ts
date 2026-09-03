@@ -6,8 +6,11 @@ export {
   CONFUCIUS_MCP_PATH,
   CONFUCIUS_PROTOCOL_VERSION,
   CONFUCIUS_RPC_PATH,
+  MCP_LATEST_PROTOCOL_VERSION,
+  MCP_SUPPORTED_PROTOCOL_VERSIONS,
   buildHealthResponse,
   isConfuciusHealthResponse,
+  negotiateMcpProtocolVersion,
 } from "./http";
 export type { ConfuciusHealthResponse } from "./http";
 
@@ -16,6 +19,7 @@ export type { CollectionRef, ItemRef } from "./item";
 
 export type {
   ApprovalRequest,
+  ApprovalKind,
   ApprovalResolution,
   ApprovalVerdict,
   PermissionMode,
@@ -52,17 +56,68 @@ export type {
 } from "./tools";
 
 export type {
+  ResearchTaskRecord,
   SessionContext,
   SessionMode,
   SessionRecord,
   TurnPhase,
   TurnRecord,
 } from "./session";
+export { isTaskStatus, migrateSessionRecord } from "./session";
 
+export {
+  AGENT_BACKENDS,
+  artifactBodyMatchesKind,
+  emptyLockedContext,
+  isAgentBackendKind,
+  isArtifactKind,
+  isArtifactRecord,
+  isCitation,
+  isLockedContextSnapshot,
+  isMemoryConsent,
+  isRecoverableTurn,
+  legacyContextSnapshot,
+  lockedContextFingerprint,
+  lockedContextSourceIds,
+  mergeLockedContexts,
+  summarizeArtifact,
+  withLockedContextFingerprint,
+} from "./research";
+export { TASK_TEMPLATES, taskTemplate, templatesForContext } from "./templates";
+export type { TaskTemplate, TaskTemplateId } from "./templates";
 export type {
+  AgentBackendKind,
+  AnnotationSetArtifactBody,
+  ArtifactBody,
   ArtifactKind,
   ArtifactRecord,
+  ArtifactRevision,
+  ArtifactStatus,
+  ArtifactSummary,
+  ArtifactUpsertInput,
+  ArtifactWriteback,
+  CapabilityProfile,
   Citation,
+  CitationListArtifactBody,
+  CollectionDiffArtifactBody,
+  EvidenceAuditArtifactBody,
+  LiteratureMapArtifactBody,
+  LockedCollectionContext,
+  LockedContextSnapshot,
+  LockedItemContext,
+  LockedReaderContext,
+  LockedSavedSearchContext,
+  LockedSelectionContext,
+  MarkdownArtifactBody,
+  MemoryConsent,
+  MemoryProposal,
+  RecoverableTurn,
+  RuntimeStatus,
+  TaskStatus,
+  TriageTableArtifactBody,
+} from "./research";
+
+export type {
   ConfuciusEvent,
   ConfuciusEventBase,
   ConfuciusEventType,
@@ -75,16 +130,8 @@ export {
   toolsSummary,
 } from "./timeline";
 export { escapeHtml, renderMarkdownHtml } from "./markdown";
-export {
-  buildOpenPdfUri,
-  buildSelectUri,
-  parseZoteroUri,
-} from "./zoteroUri";
-export type {
-  ZoteroOpenPdfUri,
-  ZoteroSelectUri,
-  ZoteroUri,
-} from "./zoteroUri";
+export { buildOpenPdfUri, buildSelectUri, parseZoteroUri } from "./zoteroUri";
+export type { ZoteroOpenPdfUri, ZoteroSelectUri, ZoteroUri } from "./zoteroUri";
 export { countMindMapNodes, parseMindMapOutline } from "./mindmap";
 export type { MindMapNode } from "./mindmap";
 export type {
@@ -155,6 +202,7 @@ export type {
   KnowledgeSearchParams,
   KnowledgeUpdateParams,
   LaunchConsumeResult,
+  LaunchIntent,
   LogsListParams,
   LogsReadParams,
   LogsSearchParams,
@@ -175,4 +223,20 @@ export type {
   SessionEventsParams,
   SkillActivateParams,
   UiFont,
+  ArtifactGetParams,
+  ArtifactListParams,
+  ArtifactListResult,
+  ArtifactUpsertParams,
+  ArtifactWritebackParams,
+  MemoryProposalListResult,
+  MemoryProposalResolveParams,
+  RuntimeConfigureParams,
+  RuntimeListResult,
+  TaskListResult,
+  TaskNewParams,
+  TaskPromptParams,
+  TaskPreviewCapabilitiesParams,
+  TaskPreviewCapabilitiesResult,
+  TaskSetBackendParams,
+  TaskSetContextParams,
 } from "./rpc";

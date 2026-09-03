@@ -1,5 +1,22 @@
-import type { SessionContext, SessionMode, SessionRecord } from "./session";
+import type {
+  ResearchTaskRecord,
+  SessionContext,
+  SessionMode,
+  SessionRecord,
+} from "./session";
 import type { ModelEndpoint } from "./endpoints";
+import type {
+  AgentBackendKind,
+  ArtifactRecord,
+  ArtifactUpsertInput,
+  CapabilityProfile,
+  LockedContextSnapshot,
+  MemoryConsent,
+  MemoryProposal,
+  RuntimeStatus,
+} from "./research";
+import { isMemoryConsent } from "./research";
+import type { TaskTemplateId } from "./templates";
 
 export interface JsonRpcRequest<T = unknown> {
   jsonrpc: "2.0";
@@ -65,6 +82,33 @@ export const RPC_METHODS = {
   logsList: "logs/list",
   logsSearch: "logs/search",
   logsRead: "logs/read",
+  taskNew: "task/new",
+  taskLoad: "task/load",
+  taskList: "task/list",
+  taskPrompt: "task/prompt",
+  taskAbort: "task/abort",
+  taskDelete: "task/delete",
+  taskContinue: "task/continue",
+  taskEvents: "task/events",
+  taskSetMode: "task/setMode",
+  taskSetPermissions: "task/setPermissions",
+  taskContext: "task/context",
+  taskCompact: "task/compact",
+  taskSetContext: "task/setContext",
+  taskSetBackend: "task/setBackend",
+  taskPreviewCapabilities: "task/previewCapabilities",
+  taskToolList: "task/toolList",
+  taskToolCall: "task/toolCall",
+  artifactList: "artifact/list",
+  artifactGet: "artifact/get",
+  artifactUpsert: "artifact/upsert",
+  artifactWritebackPreview: "artifact/writebackPreview",
+  artifactWritebackCommit: "artifact/writebackCommit",
+  runtimeList: "runtime/list",
+  runtimeRefresh: "runtime/refresh",
+  runtimeConfigure: "runtime/configure",
+  memoryProposalList: "memory/proposal/list",
+  memoryProposalResolve: "memory/proposal/resolve",
 } as const;
 
 export type RpcMethod = (typeof RPC_METHODS)[keyof typeof RPC_METHODS];
@@ -73,6 +117,102 @@ export interface SessionNewParams {
   title?: string;
   mode?: SessionMode;
   context?: SessionContext;
+}
+
+export interface TaskNewParams {
+  title?: string;
+  mode?: SessionMode;
+  backend?: AgentBackendKind;
+  lockedContext?: LockedContextSnapshot;
+  activeKnowledgeBaseId?: string;
+  capabilityProfile?: CapabilityProfile;
+  workingDirectory?: string;
+  confirmed?: boolean;
+  templateId?: TaskTemplateId;
+  autoStart?: boolean;
+  prompt?: string;
+}
+
+export interface TaskPromptParams {
+  taskId: string;
+  text: string;
+}
+
+export interface TaskSetContextParams {
+  taskId: string;
+  mode: "add" | "replace";
+  /** Omit to capture the current Zotero selection at click time. */
+  context?: LockedContextSnapshot;
+}
+
+export interface TaskSetBackendParams {
+  taskId: string;
+  backend: AgentBackendKind;
+  capabilityProfile?: CapabilityProfile;
+  workingDirectory?: string;
+  confirmed?: boolean;
+}
+
+export interface TaskPreviewCapabilitiesParams {
+  taskId: string;
+  capabilityProfile?: CapabilityProfile;
+  workingDirectory?: string;
+}
+
+export interface TaskPreviewCapabilitiesResult {
+  capabilityProfile: CapabilityProfile;
+  workingDirectory?: string;
+  confirmationRequired: boolean;
+}
+
+export interface TaskListResult {
+  tasks: ResearchTaskRecord[];
+}
+
+export interface ArtifactListParams {
+  taskId: string;
+}
+
+export interface ArtifactListResult {
+  artifacts: ArtifactRecord[];
+}
+
+export type ArtifactUpsertParams = ArtifactUpsertInput;
+
+export interface ArtifactGetParams {
+  id: string;
+}
+
+export interface ArtifactWritebackParams {
+  id: string;
+  revision?: number;
+  target?:
+    | "zotero_note"
+    | "zotero_annotations"
+    | "zotero_collection"
+    | "zotero_tags"
+    | "knowledge_base";
+  knowledgeBaseId?: string;
+}
+
+export interface RuntimeListResult {
+  sidecarConnected: boolean;
+  runtimes: RuntimeStatus[];
+}
+
+export interface RuntimeConfigureParams {
+  backend: Exclude<AgentBackendKind, "native">;
+  executable?: string;
+}
+
+export interface MemoryProposalListResult {
+  proposals: MemoryProposal[];
+}
+
+export interface MemoryProposalResolveParams {
+  id: string;
+  verdict: "accept" | "reject";
+  edited?: Partial<Pick<MemoryProposal, "type" | "title" | "content" | "tags">>;
 }
 
 export interface SessionPromptParams {
@@ -112,6 +252,8 @@ export interface LiveContextResult {
   selection: LiveContextSelection | null;
   items: LiveContextItem[];
   collection: string | null;
+  fingerprint?: string;
+  lockedSnapshot?: LockedContextSnapshot;
 }
 
 export interface ReaderOpenParams {
@@ -124,6 +266,15 @@ export interface ReaderOpenParams {
 /** One-shot queue from entry points (item menu) consumed by the workspace poll. */
 export interface LaunchConsumeResult {
   skillSlug: string | null;
+  intent?: LaunchIntent | null;
+}
+
+export interface LaunchIntent {
+  templateId?: TaskTemplateId;
+  skillSlug?: string;
+  context?: LockedContextSnapshot;
+  autoStart: boolean;
+  prompt?: string;
 }
 
 export interface NoteProposeFromSessionParams {
@@ -287,7 +438,10 @@ export function clampUiFontSize(value: unknown): number {
   if (!Number.isFinite(parsed)) {
     return DEFAULT_UI_FONT_SIZE;
   }
-  return Math.min(MAX_UI_FONT_SIZE, Math.max(MIN_UI_FONT_SIZE, Math.round(parsed)));
+  return Math.min(
+    MAX_UI_FONT_SIZE,
+    Math.max(MIN_UI_FONT_SIZE, Math.round(parsed)),
+  );
 }
 
 export interface ModelConfigView {
@@ -297,6 +451,7 @@ export interface ModelConfigView {
   maxTokens: number;
   streamResponses: boolean;
   memoryAutoExtract: boolean;
+  memoryConsent: MemoryConsent;
   /** "auto" leaves the server default; "off" disables thinking where the API allows it. */
   reasoningEffort: ReasoningEffort;
   /** Context window in tokens, used for the composer usage ring and compaction target. */
@@ -325,6 +480,7 @@ export interface ConfigSetParams {
   maxTokens?: number;
   streamResponses?: boolean;
   memoryAutoExtract?: boolean;
+  memoryConsent?: MemoryConsent;
   reasoningEffort?: ReasoningEffort;
   contextWindowTokens?: number;
   /** Switch the active endpoint. */
@@ -454,6 +610,12 @@ export function validateConfigPatch(
     !isReasoningEffort(reasoningEffortRaw)
   ) {
     errors.push("Reasoning effort must be one of auto, off, low, medium, high");
+  }
+  if (
+    patch.memoryConsent !== undefined &&
+    !isMemoryConsent(patch.memoryConsent)
+  ) {
+    errors.push("Memory consent must be one of off, review, auto");
   }
   if (patch.maxIterations !== undefined) {
     const parsed = Number(patch.maxIterations);

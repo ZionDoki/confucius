@@ -36,6 +36,7 @@ export function createHarness(options: {
   modeFor?: (toolName: string) => PermissionMode;
   resolve?: ConstructorParameters<typeof PermissionGate>[0]["resolve"];
   describeCall?: ConstructorParameters<typeof TurnLoop>[0]["describeCall"];
+  checkpointStore?: ConstructorParameters<typeof TurnLoop>[0]["checkpoints"];
 }) {
   const ids = createIdFactory("id");
   const now = createClock(1000);
@@ -113,7 +114,7 @@ export function createHarness(options: {
     permissions,
     budget,
     events,
-    checkpoints,
+    checkpoints: options.checkpointStore ?? checkpoints,
     ids,
     now,
   });

@@ -10,6 +10,8 @@
   ],
   "scripts": {
     "start": "npm run start --workspace=@confucius/zotero-addon",
+    "sidecar": "npm run start --workspace=@confucius/agent-sidecar",
+    "sidecar:mcp": "tsx apps/agent-sidecar/src/mcpProxy.ts",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",

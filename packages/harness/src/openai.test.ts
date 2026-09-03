@@ -1,11 +1,82 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { OpenAICompatibleAdapter } from "./OpenAICompatibleAdapter";
+import {
+  OpenAICompatibleAdapter,
+  normalizeOpenAICompatibleBaseUrl,
+} from "./OpenAICompatibleAdapter";
 import { FilteredToolProvider } from "./ToolProvider";
 import { MemoryToolProvider, jsonObjectSchema } from "./MemoryToolProvider";
 import { truncateToolResult } from "./truncate";
 
+describe("normalizeOpenAICompatibleBaseUrl", () => {
+  it("adds /v1 to host-only OpenAI-compatible URLs", () => {
+    assert.equal(
+      normalizeOpenAICompatibleBaseUrl("https://mirror.lzu.edu.cn"),
+      "https://mirror.lzu.edu.cn/v1",
+    );
+    assert.equal(
+      normalizeOpenAICompatibleBaseUrl("https://mirror.lzu.edu.cn/"),
+      "https://mirror.lzu.edu.cn/v1",
+    );
+    assert.equal(
+      normalizeOpenAICompatibleBaseUrl("https://api.openai.com/v1"),
+      "https://api.openai.com/v1",
+    );
+    assert.equal(
+      normalizeOpenAICompatibleBaseUrl(
+        "https://mirror.lzu.edu.cn/v1/chat/completions",
+      ),
+      "https://mirror.lzu.edu.cn/v1",
+    );
+    assert.equal(
+      normalizeOpenAICompatibleBaseUrl("http://127.0.0.1:11434/api/chat"),
+      "http://127.0.0.1:11434/api/chat",
+    );
+  });
+});
+
 describe("OpenAICompatibleAdapter", () => {
+  it("posts host-only Base URLs to /v1/chat/completions", async () => {
+    let requested = "";
+    const adapter = new OpenAICompatibleAdapter({
+      apiKey: "sk-test",
+      baseUrl: "https://mirror.lzu.edu.cn",
+      model: "MiniMax-M3",
+      stream: false,
+      fetchImpl: (async (input: RequestInfo | URL) => {
+        requested = String(input);
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: "pong" } }],
+          }),
+        );
+      }) as unknown as typeof fetch,
+    });
+    const turn = await adapter.complete({
+      messages: [{ role: "user", content: "ping" }],
+    });
+    assert.equal(requested, "https://mirror.lzu.edu.cn/v1/chat/completions");
+    assert.equal(turn.text, "pong");
+  });
+
+  it("explains HTML bodies instead of throwing a JSON SyntaxError", async () => {
+    const adapter = new OpenAICompatibleAdapter({
+      apiKey: "sk-test",
+      baseUrl: "https://api.example.test/v1",
+      model: "demo",
+      stream: false,
+      fetchImpl: (async () =>
+        new Response(
+          "<!DOCTYPE html><body><script src=/testpow/p.js?2></script>",
+          { status: 200, headers: { "content-type": "text/html" } },
+        )) as unknown as typeof fetch,
+    });
+    await assert.rejects(
+      adapter.complete({ messages: [{ role: "user", content: "hi" }] }),
+      /HTML instead of JSON/,
+    );
+  });
+
   it("maps tool_calls onto ModelTurn", async () => {
     const adapter = new OpenAICompatibleAdapter({
       apiKey: "sk-test",
@@ -46,6 +117,33 @@ describe("OpenAICompatibleAdapter", () => {
     assert.equal(turn.toolCalls?.[0]?.name, "search_items");
     assert.deepEqual(turn.toolCalls?.[0]?.args, { query: "x" });
   });
+
+  it("separates think-tag reasoning from non-streaming content", async () => {
+    const adapter = new OpenAICompatibleAdapter({
+      apiKey: "sk-test",
+      baseUrl: "https://api.example.test/v1",
+      model: "tagged-reasoner",
+      stream: false,
+      fetchImpl: (async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content:
+                    "<think>inspect the evidence</think>The claim is supported.",
+                },
+              },
+            ],
+          }),
+        )) as unknown as typeof fetch,
+    });
+    const turn = await adapter.complete({
+      messages: [{ role: "user", content: "check this" }],
+    });
+    assert.equal(turn.reasoning, "inspect the evidence");
+    assert.equal(turn.text, "The claim is supported.");
+  });
 });
 
 describe("FilteredToolProvider", () => {
@@ -79,10 +177,7 @@ describe("FilteredToolProvider", () => {
       },
       () => ({ created: true }),
     );
-    const filtered = new FilteredToolProvider(
-      inner,
-      new Set(["search_items"]),
-    );
+    const filtered = new FilteredToolProvider(inner, new Set(["search_items"]));
     assert.deepEqual(
       filtered.listTools().map((tool) => tool.name),
       ["search_items"],

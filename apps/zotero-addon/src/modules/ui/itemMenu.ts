@@ -1,6 +1,7 @@
 import { config } from "../../../package.json";
 import { getString } from "../../utils/locale";
 import { openWorkspace } from "./workspaceWindow";
+import type { LaunchIntent, TaskTemplateId } from "@confucius/protocol";
 
 /**
  * Library-pane entry points on #zotero-itemmenu: "deep-read this item" for a
@@ -11,6 +12,60 @@ import { openWorkspace } from "./workspaceWindow";
 
 const DEEP_READ_ID = `${config.addonRef}-item-deep-read`;
 const TRIAGE_ID = `${config.addonRef}-item-triage`;
+
+const SINGLE_ENTRIES: ReadonlyArray<{
+  id: string;
+  templateId: TaskTemplateId;
+  labelKey: string;
+}> = [
+  {
+    id: DEEP_READ_ID,
+    templateId: "deep-read",
+    labelKey: "itemmenu-deep-read",
+  },
+  {
+    id: `${config.addonRef}-item-evidence-audit`,
+    templateId: "evidence-audit",
+    labelKey: "itemmenu-evidence-audit",
+  },
+  {
+    id: `${config.addonRef}-item-related-work`,
+    templateId: "related-work",
+    labelKey: "itemmenu-related-work",
+  },
+  {
+    id: `${config.addonRef}-item-paper-note`,
+    templateId: "paper-note",
+    labelKey: "itemmenu-paper-note",
+  },
+];
+
+const MULTI_ENTRIES: ReadonlyArray<{
+  id: string;
+  templateId: TaskTemplateId;
+  labelKey: string;
+}> = [
+  {
+    id: `${config.addonRef}-item-compare`,
+    templateId: "compare",
+    labelKey: "itemmenu-compare",
+  },
+  {
+    id: TRIAGE_ID,
+    templateId: "triage",
+    labelKey: "itemmenu-triage",
+  },
+  {
+    id: `${config.addonRef}-item-synthesis`,
+    templateId: "synthesis",
+    labelKey: "itemmenu-synthesis",
+  },
+  {
+    id: `${config.addonRef}-item-literature-map`,
+    templateId: "literature-map",
+    labelKey: "itemmenu-literature-map",
+  },
+];
 
 interface ZoteroPaneLike {
   getSelectedItems?: () => unknown[];
@@ -68,19 +123,19 @@ function hasPdf(item: Zotero.Item): boolean {
   );
 }
 
-function queueLaunch(skillSlug: string): void {
+function queueLaunch(intent: LaunchIntent): void {
   const instance = (
     Zotero as unknown as Record<
       string,
-      | { hooks?: { host?: { queueLaunch?: (slug: string) => void } } }
+      | { hooks?: { host?: { queueLaunch?: (value: LaunchIntent) => void } } }
       | undefined
     >
   )[config.addonInstance];
-  instance?.hooks?.host?.queueLaunch?.(skillSlug);
+  instance?.hooks?.host?.queueLaunch?.(intent);
 }
 
-function launchWithSkill(skillSlug: string): void {
-  queueLaunch(skillSlug);
+function launchWithTemplate(templateId: TaskTemplateId): void {
+  queueLaunch({ templateId, autoStart: true });
   openWorkspace()?.focus();
 }
 
@@ -107,13 +162,14 @@ function createMenuItem(
 
 function onItemMenuShowing(win: Window, doc: Document): void {
   const items = selectedItems(win);
-  const deepRead = doc.getElementById(DEEP_READ_ID) as HTMLElement | null;
-  const triage = doc.getElementById(TRIAGE_ID) as HTMLElement | null;
-  if (deepRead) {
-    deepRead.hidden = !(items.length === 1 && hasPdf(items[0]));
+  const singleVisible = items.length === 1 && hasPdf(items[0]);
+  for (const entry of SINGLE_ENTRIES) {
+    const node = doc.getElementById(entry.id) as HTMLElement | null;
+    if (node) node.hidden = !singleVisible;
   }
-  if (triage) {
-    triage.hidden = items.length < 2;
+  for (const entry of MULTI_ENTRIES) {
+    const node = doc.getElementById(entry.id) as HTMLElement | null;
+    if (node) node.hidden = items.length < 2;
   }
 }
 
@@ -126,24 +182,21 @@ export function registerItemMenu(win?: Window): void {
     return;
   }
   try {
-    if (doc.getElementById(DEEP_READ_ID) && doc.getElementById(TRIAGE_ID)) {
+    if (
+      [...SINGLE_ENTRIES, ...MULTI_ENTRIES].every((entry) =>
+        doc.getElementById(entry.id),
+      )
+    ) {
       return;
     }
-    const deepRead = createMenuItem(
-      doc,
-      DEEP_READ_ID,
-      getString("itemmenu-deep-read"),
-      () => launchWithSkill("paper-deep-reading"),
+    const entries = [...SINGLE_ENTRIES, ...MULTI_ENTRIES];
+    const nodes = entries.map((entry) =>
+      createMenuItem(doc, entry.id, getString(entry.labelKey), () =>
+        launchWithTemplate(entry.templateId),
+      ),
     );
-    const triage = createMenuItem(
-      doc,
-      TRIAGE_ID,
-      getString("itemmenu-triage"),
-      () => launchWithSkill("library-triage"),
-    );
-    if (deepRead && triage) {
-      menu.appendChild(deepRead);
-      menu.appendChild(triage);
+    if (nodes.every((node) => node !== null)) {
+      for (const node of nodes) menu.appendChild(node as HTMLElement);
       menu.addEventListener("popupshowing", () => onItemMenuShowing(main, doc));
     }
   } catch (error) {
@@ -154,7 +207,9 @@ export function registerItemMenu(win?: Window): void {
 export function unregisterItemMenu(win?: Window): void {
   const main = win ?? Zotero.getMainWindow();
   const doc = main.document;
-  for (const id of [DEEP_READ_ID, TRIAGE_ID]) {
+  for (const id of [...SINGLE_ENTRIES, ...MULTI_ENTRIES].map(
+    (entry) => entry.id,
+  )) {
     doc.getElementById(id)?.remove();
   }
 }

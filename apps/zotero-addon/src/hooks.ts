@@ -11,9 +11,9 @@ import {
   unregisterToolbarButton,
 } from "./modules/ui/toolbar";
 import {
-  registerReaderEntry,
-  unregisterReaderEntry,
-} from "./modules/ui/readerEntry";
+  registerReaderContextMenu,
+  unregisterReaderContextMenu,
+} from "./modules/ui/readerContextMenu";
 import { registerItemMenu, unregisterItemMenu } from "./modules/ui/itemMenu";
 import {
   closeWorkspaceSidebar,
@@ -39,9 +39,9 @@ async function onStartup() {
   await host.start();
   registerHttpBridge(host);
   try {
-    registerReaderEntry();
+    registerReaderContextMenu();
   } catch (error) {
-    ztoolkit.log("[Confucius] reader entry registration failed", error);
+    ztoolkit.log("[Confucius] reader context-menu registration failed", error);
   }
   try {
     await registerPreferencePane();
@@ -85,7 +85,7 @@ async function onMainWindowUnload(win: Window): Promise<void> {
 
 function onShutdown(): void {
   closeWorkspaceWindow();
-  unregisterReaderEntry();
+  unregisterReaderContextMenu();
   unregisterHttpBridge();
   addon.data.alive = false;
   // @ts-expect-error Plugin instance is removed on shutdown.
