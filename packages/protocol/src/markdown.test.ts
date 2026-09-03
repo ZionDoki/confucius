@@ -44,6 +44,10 @@ describe("renderMarkdownHtml", () => {
     assert.match(html, /href="zotero:\/\/select\/library\/items\/ABC123"/);
     assert.match(
       html,
+      /data-href="zotero:\/\/select\/library\/items\/ABC123"/,
+    );
+    assert.match(
+      html,
       /href="zotero:\/\/open-pdf\/library\/items\/PDF9KEY\?annotation=ANN1KEY"/,
     );
     assert.equal(/<a href="javascript:/.test(html), false);

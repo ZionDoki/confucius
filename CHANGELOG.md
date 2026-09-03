@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.2.1 — 2026-09-03
+
+### Workspace
+
+- Clicking a markdown literature link now opens the item the same way the
+  timeline locate control does (library selection plus the PDF reader when
+  there is an attachment). Chrome XHTML was swallowing clicks on
+  `zotero://` hrefs; the URI is kept on `data-href` and handled in
+  JavaScript.
+- Opening the workspace no longer hangs. Privileged chrome cannot parse
+  answer HTML with `DOMParser` / `text/html`.
+
+## 0.2.0 — 2026-09-03
+
 ### Skills
 
 - Skills are injected with Agent Skills progressive disclosure: the system

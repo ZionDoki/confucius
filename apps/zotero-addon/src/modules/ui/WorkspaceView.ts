@@ -24,11 +24,84 @@ import { durableExcerpt } from "@confucius/memory";
 import { slashMenuToken, type ConfuciusSkill } from "@confucius/skill-format";
 import { renderToString as katexRender } from "katex";
 import { getString } from "../../utils/locale";
+import { hrefFromEvent } from "./anchorFromEvent";
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 
 const linkHosts = new WeakMap<HTMLElement, WorkspaceHost | null>();
 const linkListeners = new WeakSet<HTMLElement>();
+let lastNavHref = "";
+let lastNavAt = 0;
+
+function workspaceRootOf(node: Element | null): HTMLElement | null {
+  let current: {
+    classList?: { contains: (name: string) => boolean };
+    parentElement?: Element | null;
+  } | null = node;
+  while (current) {
+    if (current.classList?.contains("confucius-workspace-root")) {
+      return current as HTMLElement;
+    }
+    current = current.parentElement ?? null;
+  }
+  return null;
+}
+
+function pluginOpenLink():
+  | ((href: string) => Promise<{ ok: boolean; message?: string }>)
+  | undefined {
+  try {
+    return (
+      Zotero as unknown as {
+        Confucius?: {
+          openLink?: (
+            href: string,
+          ) => Promise<{ ok: boolean; message?: string }>;
+        };
+      }
+    ).Confucius?.openLink;
+  } catch {
+    return undefined;
+  }
+}
+
+function reportLinkError(from: Element, message: string): void {
+  const status = from.ownerDocument?.getElementById(
+    "confucius-status",
+  ) as HTMLElement | null;
+  if (!status) {
+    return;
+  }
+  status.style.color = "#b3452f";
+  status.textContent = message;
+}
+
+function openWorkspaceHref(from: Element, href: string): void {
+  const now = Date.now();
+  if (href === lastNavHref && now - lastNavAt < 500) {
+    return;
+  }
+  lastNavHref = href;
+  lastNavAt = now;
+  const root = workspaceRootOf(from);
+  const opener =
+    (root ? linkHosts.get(root)?.openLink : undefined) ?? pluginOpenLink();
+  if (!opener) {
+    return;
+  }
+  void opener(href)
+    .then((result) => {
+      if (!result.ok && result.message) {
+        reportLinkError(from, result.message);
+      }
+    })
+    .catch((error: unknown) => {
+      reportLinkError(
+        from,
+        error instanceof Error ? error.message : String(error),
+      );
+    });
+}
 
 export interface WorkspaceHost {
   rpc(method: string, params?: Record<string, unknown>): Promise<unknown>;
@@ -450,8 +523,73 @@ function ensureTuiStyles(doc: Document): void {
   }
 }
 
+function readAnchorHref(el: Element): string {
+  const fromData = String(el.getAttribute("data-href") || "").trim();
+  if (fromData) {
+    return fromData;
+  }
+  const fromAttr = String(el.getAttribute("href") || "").trim();
+  if (fromAttr && !/^chrome:/i.test(fromAttr)) {
+    return fromAttr;
+  }
+  return "";
+}
+
+function collectAnchors(node: HTMLElement): Element[] {
+  const found: Element[] = [];
+  const visit = (el: Element) => {
+    if (String(el.localName || "").toLowerCase() === "a") {
+      found.push(el);
+    }
+    const children = el.children;
+    for (let i = 0; i < children.length; i += 1) {
+      visit(children[i]);
+    }
+  };
+  visit(node);
+  return found;
+}
+
+function bindAnchorNavigation(anchor: Element, href: string): void {
+  anchor.addEventListener("click", (event: Event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openWorkspaceHref(anchor, href);
+  });
+}
+
+function hydrateAnswerLinks(node: HTMLElement): void {
+  const doc = node.ownerDocument;
+  if (!doc) {
+    return;
+  }
+  for (const old of collectAnchors(node)) {
+    const href = readAnchorHref(old);
+    if (!href) {
+      continue;
+    }
+    const replacement = doc.createElementNS(HTML_NS, "a");
+    // chrome:// XHTML swallows clicks on zotero:// hrefs; the locate button
+    // works because it is a plain click handler with no custom protocol.
+    replacement.setAttribute("href", /^zotero:/i.test(href) ? "#" : href);
+    replacement.setAttribute("data-href", href);
+    replacement.setAttribute("rel", "noreferrer");
+    replacement.setAttribute("title", href);
+    while (old.firstChild) {
+      replacement.appendChild(old.firstChild);
+    }
+    old.parentNode?.replaceChild(replacement, old);
+    bindAnchorNavigation(replacement, href);
+  }
+}
+
 function fillAnswerHtml(node: HTMLElement, text: string): void {
   node.innerHTML = renderMarkdownHtml(text);
+  try {
+    hydrateAnswerLinks(node);
+  } catch {
+    // Links still render; root-level click delegation remains.
+  }
   node.querySelectorAll(".tui-math").forEach((el: Element) => {
     const html = el as HTMLElement;
     const tex = html.getAttribute("data-tex") || html.textContent || "";
@@ -1058,21 +1196,26 @@ function bindWorkspace(
   linkHosts.set(root, host);
   if (!linkListeners.has(root)) {
     linkListeners.add(root);
-    root.addEventListener("click", (event) => {
-      const anchor = (event.target as HTMLElement | null)?.closest?.("a");
-      const href = anchor?.getAttribute("href") || "";
-      const boundHost = linkHosts.get(root);
-      if (!href || href.startsWith("#") || !boundHost?.openLink) {
+    const onWorkspaceLink = (event: Event) => {
+      const mouseButton = (event as { button?: number }).button;
+      if (typeof mouseButton === "number" && mouseButton !== 0) {
+        return;
+      }
+      const href = hrefFromEvent(event);
+      if (!href || href === "#") {
+        return;
+      }
+      const start =
+        (event.target as { parentElement?: Element | null } | null)
+          ?.parentElement ?? (event.target as Element | null);
+      if (!start) {
         return;
       }
       event.preventDefault();
-      void boundHost.openLink(href).then((result) => {
-        if (!result.ok && result.message) {
-          status.style.color = "#b3452f";
-          status.textContent = result.message;
-        }
-      });
-    });
+      event.stopPropagation();
+      openWorkspaceHref(start, href);
+    };
+    root.addEventListener("click", onWorkspaceLink, true);
   }
 
   const state = {
@@ -2911,10 +3054,29 @@ function bindWorkspace(
     return card;
   }
 
+  let lastListSignature = "";
+
+  function listSignature(): string {
+    return [
+      state.sessionId ?? "",
+      state.lastEventId ?? "",
+      String(state.events.length),
+      state.running ? "1" : "0",
+      state.sending ? "1" : "0",
+      state.pendingUserText,
+      state.sendError,
+      state.mode,
+      state.approvals.map((item) => item.id).join(","),
+      state.sessions.map((item) => `${item.id}:${item.title ?? ""}`).join("|"),
+      state.config && configReady(state.config) ? "1" : "0",
+    ].join("\u0000");
+  }
+
   function renderLists(): void {
     applyAppearance();
     renderContextBar();
     syncEndpointButton();
+    lastListSignature = listSignature();
     sessionPane.textContent = "";
     sessionPane.appendChild(paneLabel(doc, getString("workspace-sessions")));
     if (!state.sessions.length) {
@@ -4983,7 +5145,13 @@ function bindWorkspace(
           /* stats are cosmetic */
         }
       }
-      renderLists();
+      if (listSignature() !== lastListSignature) {
+        renderLists();
+      } else {
+        applyAppearance();
+        renderContextBar();
+        syncEndpointButton();
+      }
       if (state.sending) {
         status.style.color = "#8c6a3f";
         status.textContent = getString("workspace-sending");

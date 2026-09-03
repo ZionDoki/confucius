@@ -134,7 +134,10 @@ function renderInline(source: string, slots: MathSlot[]): string {
     }
     const link = rest.match(/^\[([^\]]+)\]\(([^)\s]+)\)/);
     if (link && isSafeHref(link[2])) {
-      html += `<a href="${escapeHtml(link[2])}" rel="noreferrer">${escapeHtml(link[1])}</a>`;
+      const href = escapeHtml(link[2]);
+      // data-href survives chrome innerHTML even if href with a custom
+      // scheme is dropped; the workspace hydrates real <a href> from it.
+      html += `<a href="${href}" data-href="${href}" rel="noreferrer">${escapeHtml(link[1])}</a>`;
       rest = rest.slice(link[0].length);
       continue;
     }

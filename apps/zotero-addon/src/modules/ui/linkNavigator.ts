@@ -1,5 +1,6 @@
 import { parseZoteroUri, type ZoteroUri } from "@confucius/protocol";
 import { getString } from "../../utils/locale";
+import { findPdf } from "../tools/ZoteroToolHost";
 
 export interface OpenLinkResult {
   ok: boolean;
@@ -28,24 +29,57 @@ function resolveLibraryID(uri: ZoteroUri): number | null {
   return Zotero.Libraries.userLibraryID;
 }
 
-function selectItemInMainWindow(item: Zotero.Item): void {
-  const win = Zotero.getMainWindow();
-  win?.focus();
-  Zotero.getActiveZoteroPane?.()?.selectItem?.(item.id);
+function asItem(value: unknown): Zotero.Item | null {
+  if (!value || value === false || Array.isArray(value)) {
+    return null;
+  }
+  return value as Zotero.Item;
+}
+
+async function selectItemInMainWindow(item: Zotero.Item): Promise<void> {
+  const win = Zotero.getMainWindow() as
+    | (Window & {
+        ZoteroPane?: {
+          selectItem?: (id: number) => Promise<unknown> | unknown;
+        };
+        Zotero_Tabs?: { select: (id: string) => void };
+      })
+    | undefined;
+  if (!win) {
+    return;
+  }
+  win.focus();
+  try {
+    win.Zotero_Tabs?.select("zotero-pane");
+  } catch {
+    // selectItem also requests the library tab.
+  }
+  await win.ZoteroPane?.selectItem?.(item.id);
 }
 
 async function focusSelect(
   uri: Extract<ZoteroUri, { kind: "select" }>,
 ): Promise<OpenLinkResult> {
   const libraryID = resolveLibraryID(uri);
-  const found = libraryID
-    ? Zotero.Items.getByLibraryAndKey(libraryID, uri.key)
-    : null;
-  const item = found || null;
+  const item = asItem(
+    libraryID ? Zotero.Items.getByLibraryAndKey(libraryID, uri.key) : null,
+  );
   if (!item) {
     return { ok: false, message: getString("workspace-link-not-found") };
   }
-  selectItemInMainWindow(item);
+  await selectItemInMainWindow(item);
+  try {
+    const pdf = await findPdf(item);
+    if (pdf) {
+      await (
+        Zotero.Reader as unknown as {
+          open: (itemID: number) => Promise<unknown>;
+        }
+      ).open(pdf.id);
+    }
+  } catch {
+    // Selecting the item is enough if the reader cannot open.
+  }
   return { ok: true };
 }
 
@@ -53,17 +87,19 @@ async function focusOpenPdf(
   uri: Extract<ZoteroUri, { kind: "open-pdf" }>,
 ): Promise<OpenLinkResult> {
   const libraryID = resolveLibraryID(uri);
-  const foundAttachment = libraryID
-    ? Zotero.Items.getByLibraryAndKey(libraryID, uri.attachmentKey)
-    : null;
-  const attachment = foundAttachment || null;
+  const attachment = asItem(
+    libraryID
+      ? Zotero.Items.getByLibraryAndKey(libraryID, uri.attachmentKey)
+      : null,
+  );
   if (!attachment?.isFileAttachment?.()) {
-    const foundParent = attachment?.parentItemID
-      ? Zotero.Items.get(attachment.parentItemID)
-      : null;
-    const parent = foundParent || null;
+    const parent = asItem(
+      attachment?.parentItemID
+        ? Zotero.Items.get(attachment.parentItemID)
+        : null,
+    );
     if (parent) {
-      selectItemInMainWindow(parent);
+      await selectItemInMainWindow(parent);
       return { ok: false, message: getString("workspace-link-pdf-missing") };
     }
     return { ok: false, message: getString("workspace-link-not-found") };

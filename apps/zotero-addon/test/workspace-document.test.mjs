@@ -551,8 +551,18 @@ test("zotero uri links render as underlined anchors and navigate on click", () =
   assert.equal(view.includes("text-decoration: underline"), true);
 
   // Root-level click delegation hands anchors to the host's openLink.
-  assert.equal(view.includes('closest?.("a")'), true);
-  assert.equal(view.includes("boundHost.openLink(href)"), true);
+  // Firefox XHTML click targets are often the text node, so we walk the
+  // parent chain (hrefFromEvent) instead of event.target.closest("a").
+  assert.equal(view.includes("hrefFromEvent(event)"), true);
+  assert.equal(view.includes("node.innerHTML = renderMarkdownHtml(text)"), true);
+  assert.equal(view.includes("hydrateAnswerLinks(node)"), true);
+  assert.equal(view.includes("onWorkspaceLink"), true);
+  assert.equal(
+    view.includes('addEventListener("click", onWorkspaceLink, true)'),
+    true,
+  );
+  assert.equal(view.includes("openWorkspaceHref(start, href)"), true);
+  assert.equal(view.includes("pluginOpenLink()"), true);
   assert.equal(addonSource.includes("openLink(href: string)"), true);
 
   // Zotero.Reader.open(itemID, location, options) takes the location object
