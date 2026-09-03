@@ -1,4 +1,5 @@
 import type { ConfuciusEvent, PlanStep } from "./events";
+import type { ArtifactSummary } from "./research";
 import type { ToolResult } from "./tools";
 
 export type ReasoningFold = "preview" | "open" | "compact";
@@ -31,9 +32,10 @@ export type TimelineBlock =
       status: "proposed" | "applied" | "rejected";
       diff?: string;
     }
+  | { kind: "artifact"; artifact: ArtifactSummary }
   | {
       kind: "status";
-      tone: "info" | "artifact" | "memory" | "fail" | "abort";
+      tone: "info" | "memory" | "fail" | "abort";
       text: string;
     };
 
@@ -181,9 +183,8 @@ export function coalesceTimeline(events: ConfuciusEvent[]): TimelineBlock[] {
     if (event.type === "artifact_upserted") {
       flushAnswer();
       blocks.push({
-        kind: "status",
-        tone: "artifact",
-        text: `artifact r${event.payload.artifact.revision}: ${event.payload.artifact.title}`,
+        kind: "artifact",
+        artifact: event.payload.artifact,
       });
       continue;
     }

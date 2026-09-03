@@ -292,6 +292,27 @@ test("timeline is TUI-style: foldable thinking/tools, unfolded answers", () => {
   assert.equal(view.includes("timelinePane.scrollHeight"), true);
 });
 
+test("activity stream is the primary workspace and artifacts open as files", () => {
+  const view = readFileSync(
+    join(root, "src/modules/ui/WorkspaceView.ts"),
+    "utf8",
+  );
+  assert.equal(view.includes('id: "confucius-activity-stream"'), true);
+  assert.equal(view.includes("confucius-activity-shell"), true);
+  assert.equal(view.includes("renderActivityOverview"), true);
+  assert.equal(view.includes("renderArtifactFileBlock"), true);
+  assert.equal(view.includes("confucius-artifact-file"), true);
+  assert.equal(view.includes("openArtifactViewer"), true);
+  assert.equal(view.includes('role: "dialog"'), true);
+  assert.equal(view.includes('"aria-modal": "true"'), true);
+  assert.equal(view.includes("confucius-artifact-dialog-body"), true);
+  assert.equal(view.includes('key === "Escape"'), true);
+  assert.equal(view.includes("confucius-activity-toggle"), false);
+  assert.equal(view.includes("confucius-artifact-canvas"), false);
+  assert.equal(view.includes("setActivityOpen"), false);
+  assert.equal(view.includes("renderArtifactCanvas"), false);
+});
+
 test("composer model picker remains a cascading menu alongside Runtime choices", () => {
   const view = readFileSync(
     join(root, "src/modules/ui/WorkspaceView.ts"),
