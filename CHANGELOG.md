@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+## 0.3.0 — 2026-09-03
+
+### Research workbench
+
+- Conversations are now recoverable research tasks with a locked Zotero
+  context, source-aware templates, clear task states, and explicit controls
+  for adding or replacing a changed selection.
+- Research outputs are saved as structured, versioned artifacts with Zotero
+  citations. Notes, annotations, collections, and tags always show a
+  before/after preview before write-back.
+- Memory now defaults to review: proposed memories can be edited, accepted,
+  or rejected instead of being saved silently.
+
+### Agent runtimes
+
+- Added the local Agent sidecar with Native, Codex App Server, and Kimi ACP
+  runtimes. Runtime availability and login state are checked from the real
+  runtime session, while a missing sidecar never blocks Native mode.
+- External agents receive only task-scoped Zotero and artifact tools by
+  default. Shell and file writes stay disabled unless a working directory is
+  explicitly selected and approved.
+- The Zotero MCP endpoint now supports standard stateless Streamable HTTP and
+  a sidecar STDIO proxy.
+
+### Reliability and interface
+
+- Added restart-safe checkpoints, interrupted-task continuation, and
+  protection against replaying tool calls whose result is unknown.
+- Models that emit `<think>...</think>` now show that content as reasoning
+  instead of mixing it into the answer. Duplicate selection-change notices
+  and the extra PDF-toolbar button have been removed.
+
 ## 0.2.1 — 2026-09-03
 
 ### Workspace

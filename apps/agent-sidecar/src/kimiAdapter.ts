@@ -383,7 +383,7 @@ export class KimiAdapter implements RuntimeAdapter {
             fs: { readTextFile: false, writeTextFile: false },
             plan: {},
           },
-          clientInfo: { name: "confucius-zotero", version: "0.2.1" },
+          clientInfo: { name: "confucius-zotero", version: "0.3.0" },
         }),
         10_000,
         () =>
@@ -701,8 +701,7 @@ function errorMessage(error: unknown): string {
 
 function isAuthenticationError(error: unknown): boolean {
   const value = error as
-    | { code?: unknown; status?: unknown; message?: unknown }
-    | undefined;
+    { code?: unknown; status?: unknown; message?: unknown } | undefined;
   const code = String(value?.code ?? value?.status ?? "").toLowerCase();
   const message = errorMessage(error);
   return (
