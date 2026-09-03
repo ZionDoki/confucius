@@ -649,6 +649,50 @@ const TUI_CSS = `
   font-weight: 700;
   white-space: nowrap;
 }
+.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-file {
+  height: auto;
+  min-height: 50px;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 9px;
+  margin: 8px 0;
+  padding: 8px 9px;
+}
+.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-file-icon {
+  width: 28px;
+  height: 34px;
+}
+.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-file-copy {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "title title"
+    "kind meta";
+  align-items: center;
+  column-gap: 8px;
+}
+.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-file-kind {
+  grid-area: kind;
+  min-width: 0;
+  margin: 1px 0 0;
+  overflow: hidden;
+  font-size: 9px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-file-title {
+  grid-area: title;
+  line-height: 1.3;
+}
+.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-file-meta {
+  grid-area: meta;
+  margin: 1px 0 0;
+  font-size: 10px;
+  line-height: 1.25;
+}
+.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-file-open {
+  display: none;
+}
 .confucius-artifact-overlay {
   position: absolute;
   inset: 0;

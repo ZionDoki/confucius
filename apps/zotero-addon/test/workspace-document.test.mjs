@@ -336,6 +336,26 @@ test("artifact viewer uses unclipped custom menus instead of native selects", ()
   assert.equal(view.includes('id: "confucius-artifact-revision",'), false);
 });
 
+test("sidebar artifact files use a compact two-line layout", () => {
+  const view = readFileSync(
+    join(root, "src/modules/ui/WorkspaceView.ts"),
+    "utf8",
+  );
+  assert.equal(
+    view.includes(
+      '.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-file',
+    ),
+    true,
+  );
+  assert.equal(view.includes('"title title"\n    "kind meta"'), true);
+  assert.equal(
+    view.includes(
+      '[data-confucius-layout="sidebar"] .confucius-artifact-file-open {\n  display: none;',
+    ),
+    true,
+  );
+});
+
 test("composer model picker remains a cascading menu alongside Runtime choices", () => {
   const view = readFileSync(
     join(root, "src/modules/ui/WorkspaceView.ts"),
