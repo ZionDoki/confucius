@@ -190,6 +190,7 @@ confucius-workspace-template-freeform-help = Give the agent your own instruction
 confucius-workspace-no-artifacts = No artifact yet
 confucius-workspace-no-artifacts-help = Use a template or the command bar below. A successful turn always leaves a versioned artifact here.
 confucius-workspace-artifact-building = Building the first artifact…
+confucius-workspace-artifact-actions = Artifact actions
 confucius-workspace-artifact-citations = Sources and citations
 confucius-workspace-artifact-created = Artifact created
 confucius-workspace-artifact-updated = Artifact updated

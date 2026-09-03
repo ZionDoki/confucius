@@ -313,6 +313,29 @@ test("activity stream is the primary workspace and artifacts open as files", () 
   assert.equal(view.includes("renderArtifactCanvas"), false);
 });
 
+test("artifact viewer uses unclipped custom menus instead of native selects", () => {
+  const view = readFileSync(
+    join(root, "src/modules/ui/WorkspaceView.ts"),
+    "utf8",
+  );
+  const viewer = view.slice(
+    view.indexOf("function renderArtifactViewer"),
+    view.indexOf(
+      "const dialogBody",
+      view.indexOf("function renderArtifactViewer"),
+    ),
+  );
+  assert.equal(view.includes("confucius-artifact-choice-menu"), true);
+  assert.equal(view.includes("artifactMenuTrigger"), true);
+  assert.equal(view.includes('"aria-haspopup": "listbox"'), true);
+  assert.equal(view.includes('role: "option"'), true);
+  assert.equal(view.includes('key === "ArrowDown"'), true);
+  assert.equal(view.includes("placeMenu(anchor, menu"), true);
+  assert.equal(/,\s*"select"/.test(viewer), false);
+  assert.equal(view.includes('id: "confucius-artifact-switcher",'), false);
+  assert.equal(view.includes('id: "confucius-artifact-revision",'), false);
+});
+
 test("composer model picker remains a cascading menu alongside Runtime choices", () => {
   const view = readFileSync(
     join(root, "src/modules/ui/WorkspaceView.ts"),

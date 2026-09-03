@@ -190,6 +190,7 @@ confucius-workspace-template-freeform-help = 在保持当前来源范围的前�
 confucius-workspace-no-artifacts = 还没有研究产物
 confucius-workspace-no-artifacts-help = 选择模板或在下方输入指令。成功完成的任务会在这里留下可修订产物。
 confucius-workspace-artifact-building = 正在生成第一份产物…
+confucius-workspace-artifact-actions = 产物操作
 confucius-workspace-artifact-citations = 来源与引用
 confucius-workspace-artifact-created = 已创建产物
 confucius-workspace-artifact-updated = 已更新产物

@@ -23,6 +23,7 @@ export type FluentMessageId =
   | 'confucius-workspace-approval-allow-task'
   | 'confucius-workspace-approval-deny'
   | 'confucius-workspace-approval-params'
+  | 'confucius-workspace-artifact-actions'
   | 'confucius-workspace-artifact-building'
   | 'confucius-workspace-artifact-citations'
   | 'confucius-workspace-artifact-claim'

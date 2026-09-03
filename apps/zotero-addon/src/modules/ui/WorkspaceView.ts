@@ -656,11 +656,12 @@ const TUI_CSS = `
   display: flex;
   padding: 12px;
   box-sizing: border-box;
-  background: rgba(58, 51, 42, .42);
-  backdrop-filter: blur(2px);
+  background: rgba(45, 40, 34, .34);
+  backdrop-filter: blur(3px);
+  animation: confucius-artifact-overlay-in 130ms ease-out;
 }
 .confucius-artifact-dialog {
-  width: min(1120px, 100%);
+  width: min(1040px, 100%);
   height: 100%;
   min-width: 0;
   min-height: 0;
@@ -669,18 +670,22 @@ const TUI_CSS = `
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid #d8d2c6;
-  border-radius: 12px;
-  background: #f5f3ee;
-  box-shadow: 0 20px 60px rgba(40, 34, 27, .22);
+  border-radius: 10px;
+  background: #fffefa;
+  box-shadow: 0 24px 70px rgba(40, 34, 27, .2);
 }
 .confucius-artifact-dialog-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+  display: block;
   min-width: 0;
-  padding: 11px 14px;
   border-bottom: 1px solid #ddd8cc;
   background: #faf9f6;
+}
+.confucius-artifact-dialog-identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 13px 14px 11px 16px;
 }
 .confucius-artifact-dialog-copy { flex: 1 1 auto; min-width: 0; }
 .confucius-artifact-dialog-title {
@@ -690,12 +695,139 @@ const TUI_CSS = `
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.confucius-artifact-dialog-meta { color: #8a857c; font-size: 10px; }
-.confucius-artifact-dialog-actions {
+.confucius-artifact-dialog-meta {
+  margin-bottom: 2px;
+  color: #8a857c;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+.confucius-artifact-dialog-toolbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+  min-height: 42px;
+  padding: 5px 10px;
+  border-top: 1px solid #ebe7de;
+  background: #f7f5f0;
+  box-sizing: border-box;
+}
+.confucius-artifact-dialog-toolbar-spacer { flex: 1 1 auto; }
+.confucius-artifact-menu-trigger {
+  appearance: none;
+  min-width: 0;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
   gap: 7px;
+  padding: 0 9px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #4f4a42;
+  box-sizing: border-box;
+  font: inherit;
+  cursor: pointer;
+  transition: background 100ms ease, border-color 100ms ease, color 100ms ease;
+}
+.confucius-artifact-menu-trigger:hover {
+  border-color: #ddd8cc;
+  background: #fffefa;
+  color: #33302a;
+}
+.confucius-artifact-menu-trigger[aria-expanded="true"] {
+  border-color: #c9c1b3;
+  background: #fffefa;
+  color: #33302a;
+}
+.confucius-artifact-menu-trigger[data-kind="artifact"] {
+  max-width: min(330px, 42vw);
+}
+.confucius-artifact-menu-trigger-value {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.confucius-artifact-menu-trigger-chevron {
   flex: 0 0 auto;
+  color: #8a857c;
+  font-size: 10px;
+  transition: transform 100ms ease;
+}
+.confucius-artifact-menu-trigger[aria-expanded="true"] .confucius-artifact-menu-trigger-chevron {
+  transform: rotate(180deg);
+}
+.confucius-artifact-revision-badge {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  color: #777166;
+  box-sizing: border-box;
+  font-size: 11px;
+  font-weight: 650;
+}
+#confucius-artifact-writeback {
+  border-color: transparent !important;
+  background: transparent !important;
+  color: #8a5a2b !important;
+  font-weight: 650 !important;
+}
+#confucius-artifact-writeback:hover {
+  border-color: #ddd8cc !important;
+  background: #fffefa !important;
+}
+.confucius-artifact-choice-menu {
+  animation: confucius-artifact-menu-in 100ms ease-out;
+}
+.confucius-artifact-choice {
+  appearance: none;
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #33302a;
+  box-sizing: border-box;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.confucius-artifact-choice:hover,
+.confucius-artifact-choice:focus-visible {
+  outline: none;
+  background: #f0ece3;
+}
+.confucius-artifact-choice[data-selected="true"] { background: #ece7dd; }
+.confucius-artifact-choice-copy { min-width: 0; }
+.confucius-artifact-choice-title {
+  display: block;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.confucius-artifact-choice-meta {
+  display: block;
+  margin-top: 1px;
+  color: #8a857c;
+  font-size: 10px;
+}
+.confucius-artifact-choice-check {
+  color: #8a5a2b;
+  font-weight: 700;
+  text-align: center;
 }
 .confucius-artifact-dialog-body {
   min-width: 0;
@@ -712,10 +844,9 @@ const TUI_CSS = `
 .confucius-artifact-paper {
   min-width: 0;
   padding: 26px clamp(16px, 5vw, 52px) 42px;
-  border: 1px solid #e1ddd3;
-  border-radius: 3px;
-  background: #fffefa;
-  box-shadow: 0 8px 28px rgba(70, 59, 43, .07);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 .confucius-artifact-paper .tui-answer { font-size: 1.02em; line-height: 1.68; }
 .confucius-artifact-paper table {
@@ -802,14 +933,28 @@ const TUI_CSS = `
   .confucius-template-button { min-height: 70px; }
   .confucius-artifact-overlay { padding: 0; }
   .confucius-artifact-dialog { border: 0; border-radius: 0; }
-  .confucius-artifact-dialog-header { flex-wrap: wrap; gap: 7px; padding: 9px 10px; }
-  .confucius-artifact-dialog-actions { width: 100%; min-width: 0; justify-content: flex-end; }
-  .confucius-artifact-dialog-actions select { min-width: 0; }
-  #confucius-artifact-switcher { flex: 1 1 auto; }
+  .confucius-artifact-dialog-identity { padding: 10px 8px 9px 12px; }
+  .confucius-artifact-dialog-toolbar { padding: 5px 6px; }
+  .confucius-artifact-dialog-toolbar-spacer { display: none; }
+  .confucius-artifact-menu-trigger[data-kind="artifact"] { flex: 1 1 145px; max-width: none; }
+  #confucius-artifact-writeback { margin-left: auto; }
   .confucius-artifact-dialog-body { padding: 12px 8px 24px; }
   .confucius-artifact-file { grid-template-columns: 38px minmax(0, 1fr); gap: 9px; padding: 11px; }
   .confucius-artifact-file-open { display: none; }
   .confucius-artifact-paper { padding: 18px 14px 30px; }
+}
+@keyframes confucius-artifact-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes confucius-artifact-menu-in {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .confucius-artifact-overlay,
+  .confucius-artifact-choice-menu { animation: none; }
+  .confucius-artifact-menu-trigger-chevron { transition: none; }
 }
 `;
 
@@ -1418,6 +1563,7 @@ export function unmountWorkspace(root?: HTMLElement | null): void {
     "confucius-settings-overlay",
     "confucius-knowledge-overlay",
     "confucius-artifact-overlay",
+    "confucius-artifact-choice-menu",
     "confucius-writeback-overlay",
     "confucius-slash-menu",
     "confucius-plus-menu",
@@ -1566,6 +1712,10 @@ function bindWorkspace(
   let artifactViewerOpen = false;
   let artifactViewerReturnFocus: HTMLElement | null = null;
   let lastArtifactViewerSignature = "";
+  let artifactChoiceMenu: {
+    kind: "artifact" | "revision";
+    anchor: HTMLElement;
+  } | null = null;
   let endpointMenuOpen = false;
   let newApprovalsArrived = false;
   type EndpointSubmenu =
@@ -4391,7 +4541,212 @@ function bindWorkspace(
     return overview;
   }
 
+  function closeArtifactChoiceMenu(restoreFocus = false): void {
+    const current = artifactChoiceMenu;
+    artifactChoiceMenu = null;
+    doc.getElementById("confucius-artifact-choice-menu")?.remove();
+    doc
+      .getElementById("confucius-artifact-switcher-trigger")
+      ?.setAttribute("aria-expanded", "false");
+    doc
+      .getElementById("confucius-artifact-revision-trigger")
+      ?.setAttribute("aria-expanded", "false");
+    if (restoreFocus && current?.anchor.isConnected) current.anchor.focus();
+  }
+
+  function selectArtifactChoice(kind: "artifact" | "revision", value: string) {
+    if (kind === "artifact") {
+      const selected = state.artifacts.find((item) => item.id === value);
+      if (!selected) return;
+      state.selectedArtifactId = selected.id;
+      state.selectedArtifactRevision = selected.revision;
+    } else {
+      const revision = Number(value);
+      const selected = state.artifacts.find(
+        (item) => item.id === state.selectedArtifactId,
+      );
+      if (
+        !selected ||
+        !selected.revisions.some((item) => item.revision === revision)
+      ) {
+        return;
+      }
+      state.selectedArtifactRevision = revision;
+    }
+    closeArtifactChoiceMenu(false);
+    renderArtifactViewer(true);
+  }
+
+  function renderArtifactChoiceMenu(
+    kind: "artifact" | "revision",
+    anchor: HTMLElement,
+  ): void {
+    const artifact =
+      state.artifacts.find((item) => item.id === state.selectedArtifactId) ??
+      state.artifacts[0];
+    if (!artifact) {
+      closeArtifactChoiceMenu(false);
+      return;
+    }
+    const menu = el(
+      doc,
+      "div",
+      {
+        position: "fixed",
+        zIndex: "1300",
+        minWidth: "0px",
+        maxHeight: "340px",
+        padding: "5px",
+        overflow: "auto",
+        border: "1px solid #d7d1c5",
+        borderRadius: "9px",
+        background: "#fffefa",
+        boxSizing: "border-box",
+        boxShadow: "0 12px 34px rgba(45,40,34,.18)",
+      },
+      {
+        id: "confucius-artifact-choice-menu",
+        role: "listbox",
+        "aria-label": getString(
+          kind === "artifact"
+            ? "workspace-artifact-switch"
+            : "workspace-artifact-revision",
+        ),
+      },
+    );
+    menu.className = "confucius-artifact-choice-menu";
+    const choices =
+      kind === "artifact"
+        ? state.artifacts.map((item) => ({
+            value: item.id,
+            title: item.title,
+            meta: `${artifactKindLabel(item.kind)} · r${item.revision}`,
+            selected: item.id === artifact.id,
+          }))
+        : [...artifact.revisions].reverse().map((item) => ({
+            value: String(item.revision),
+            title: `r${item.revision}`,
+            meta: runtimeLabel(item.backend),
+            selected: item.revision === state.selectedArtifactRevision,
+          }));
+
+    for (const choice of choices) {
+      const row = el(doc, "button", undefined, {
+        type: "button",
+        role: "option",
+        "data-value": choice.value,
+        "data-selected": choice.selected ? "true" : "false",
+        "aria-selected": choice.selected ? "true" : "false",
+      });
+      row.className = "confucius-artifact-choice";
+      const copy = el(doc, "span");
+      copy.className = "confucius-artifact-choice-copy";
+      const title = el(doc, "span");
+      title.className = "confucius-artifact-choice-title";
+      title.textContent = choice.title;
+      const meta = el(doc, "span");
+      meta.className = "confucius-artifact-choice-meta";
+      meta.textContent = choice.meta;
+      const check = el(doc, "span", undefined, { "aria-hidden": "true" });
+      check.className = "confucius-artifact-choice-check";
+      check.textContent = choice.selected ? "✓" : "";
+      copy.appendChild(title);
+      copy.appendChild(meta);
+      row.appendChild(copy);
+      row.appendChild(check);
+      row.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        selectArtifactChoice(kind, choice.value);
+      });
+      menu.appendChild(row);
+    }
+
+    menu.addEventListener("keydown", (event) => {
+      const key = (event as KeyboardEvent).key;
+      if (key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeArtifactChoiceMenu(true);
+        return;
+      }
+      if (key === "Tab") {
+        closeArtifactChoiceMenu(false);
+        return;
+      }
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(key)) return;
+      event.preventDefault();
+      const rows = Array.from(
+        menu.querySelectorAll(".confucius-artifact-choice"),
+      ) as HTMLElement[];
+      if (!rows.length) return;
+      const current = rows.indexOf(doc.activeElement as HTMLElement);
+      const index =
+        key === "Home"
+          ? 0
+          : key === "End"
+            ? rows.length - 1
+            : key === "ArrowUp"
+              ? (current - 1 + rows.length) % rows.length
+              : (current + 1) % rows.length;
+      rows[index]?.focus();
+    });
+
+    placeMenu(anchor, menu, kind === "artifact" ? 320 : 176);
+    const selected = menu.querySelector(
+      '[data-selected="true"]',
+    ) as HTMLElement | null;
+    (selected ?? (menu.firstElementChild as HTMLElement | null))?.focus();
+  }
+
+  function artifactMenuTrigger(
+    kind: "artifact" | "revision",
+    value: string,
+  ): HTMLElement {
+    const trigger = el(doc, "button", undefined, {
+      id:
+        kind === "artifact"
+          ? "confucius-artifact-switcher-trigger"
+          : "confucius-artifact-revision-trigger",
+      type: "button",
+      "data-kind": kind,
+      "aria-haspopup": "listbox",
+      "aria-expanded": artifactChoiceMenu?.kind === kind ? "true" : "false",
+      "aria-label": getString(
+        kind === "artifact"
+          ? "workspace-artifact-switch"
+          : "workspace-artifact-revision",
+      ),
+    });
+    trigger.className = "confucius-artifact-menu-trigger";
+    const label = el(doc, "span");
+    label.className = "confucius-artifact-menu-trigger-value";
+    label.textContent = value;
+    const chevron = el(doc, "span", undefined, { "aria-hidden": "true" });
+    chevron.className = "confucius-artifact-menu-trigger-chevron";
+    chevron.textContent = "▾";
+    trigger.appendChild(label);
+    trigger.appendChild(chevron);
+    trigger.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (
+        artifactChoiceMenu?.kind === kind &&
+        doc.getElementById("confucius-artifact-choice-menu")
+      ) {
+        closeArtifactChoiceMenu(true);
+        return;
+      }
+      closeArtifactChoiceMenu(false);
+      artifactChoiceMenu = { kind, anchor: trigger };
+      trigger.setAttribute("aria-expanded", "true");
+      renderArtifactChoiceMenu(kind, trigger);
+    });
+    return trigger;
+  }
+
   function closeArtifactViewer(restoreFocus = true): void {
+    closeArtifactChoiceMenu(false);
     artifactViewerOpen = false;
     lastArtifactViewerSignature = "";
     doc.getElementById("confucius-artifact-overlay")?.remove();
@@ -4474,6 +4829,7 @@ function bindWorkspace(
     ) as HTMLElement | null;
     const previousScroll = previousBody?.scrollTop ?? 0;
     const wasOpen = Boolean(existing);
+    closeArtifactChoiceMenu(false);
     existing?.remove();
 
     const overlay = el(doc, "div", undefined, {
@@ -4498,90 +4854,57 @@ function bindWorkspace(
     dialog.className = "confucius-artifact-dialog";
     const header = el(doc, "header");
     header.className = "confucius-artifact-dialog-header";
-    const fileIcon = el(doc, "span", undefined, { "aria-hidden": "true" });
-    fileIcon.className = "confucius-artifact-file-icon";
-    fileIcon.textContent = "≡";
+
+    const identity = el(doc, "div");
+    identity.className = "confucius-artifact-dialog-identity";
     const copy = el(doc, "div");
     copy.className = "confucius-artifact-dialog-copy";
+    const headerMeta = el(doc, "div");
+    headerMeta.className = "confucius-artifact-dialog-meta";
+    headerMeta.textContent = `${artifactKindLabel(
+      artifact.kind,
+    )} · ${runtimeLabel(revision.backend)}`;
     const title = el(doc, "div", undefined, {
       id: "confucius-artifact-dialog-title",
     });
     title.className = "confucius-artifact-dialog-title";
     title.textContent = artifact.title;
-    const headerMeta = el(doc, "div");
-    headerMeta.className = "confucius-artifact-dialog-meta";
-    headerMeta.textContent = `${artifactKindLabel(artifact.kind)} · r${
-      revision.revision
-    }`;
-    copy.appendChild(title);
     copy.appendChild(headerMeta);
+    copy.appendChild(title);
 
-    const actions = el(doc, "div");
-    actions.className = "confucius-artifact-dialog-actions";
-    if (state.artifacts.length > 1) {
-      const artifactSelect = el(
-        doc,
-        "select",
-        {
-          maxWidth: "190px",
-          height: "32px",
-          border: "1px solid #d7d1c5",
-          borderRadius: "7px",
-          background: "#fff",
-          color: "#33302a",
-        },
-        {
-          id: "confucius-artifact-switcher",
-          title: getString("workspace-artifact-switch"),
-          "aria-label": getString("workspace-artifact-switch"),
-        },
-      ) as HTMLSelectElement;
-      for (const item of state.artifacts) {
-        const option = el(doc, "option", undefined, { value: item.id });
-        option.textContent = item.title;
-        artifactSelect.appendChild(option);
-      }
-      artifactSelect.value = artifact.id;
-      artifactSelect.addEventListener("change", () => {
-        const selected = state.artifacts.find(
-          (item) => item.id === artifactSelect.value,
-        );
-        if (!selected) return;
-        state.selectedArtifactId = selected.id;
-        state.selectedArtifactRevision = selected.revision;
-        renderArtifactViewer(true);
-      });
-      actions.appendChild(artifactSelect);
-    }
-
-    const revisionSelect = el(
-      doc,
-      "select",
-      {
-        height: "32px",
-        border: "1px solid #d7d1c5",
-        borderRadius: "7px",
-        background: "#fff",
-        color: "#33302a",
-      },
-      {
-        id: "confucius-artifact-revision",
-        title: getString("workspace-artifact-revision"),
-        "aria-label": getString("workspace-artifact-revision"),
-      },
-    ) as HTMLSelectElement;
-    for (const item of [...artifact.revisions].reverse()) {
-      const option = el(doc, "option", undefined, {
-        value: String(item.revision),
-      });
-      option.textContent = `r${item.revision}`;
-      revisionSelect.appendChild(option);
-    }
-    revisionSelect.value = String(revision.revision);
-    revisionSelect.addEventListener("change", () => {
-      state.selectedArtifactRevision = Number(revisionSelect.value);
-      renderArtifactViewer(true);
+    const closeButton = el(doc, "button", undefined, {
+      type: "button",
+      title: getString("workspace-artifact-close"),
+      "aria-label": getString("workspace-artifact-close"),
     });
+    closeButton.className = "confucius-icon-button";
+    closeButton.textContent = "×";
+    closeButton.style.fontSize = "24px";
+    closeButton.addEventListener("click", () => closeArtifactViewer());
+    identity.appendChild(copy);
+    identity.appendChild(closeButton);
+
+    const toolbar = el(doc, "div", undefined, {
+      role: "toolbar",
+      "aria-label": getString("workspace-artifact-actions"),
+    });
+    toolbar.className = "confucius-artifact-dialog-toolbar";
+    if (state.artifacts.length > 1) {
+      toolbar.appendChild(artifactMenuTrigger("artifact", artifact.title));
+    }
+    if (artifact.revisions.length > 1) {
+      toolbar.appendChild(
+        artifactMenuTrigger("revision", `r${revision.revision}`),
+      );
+    } else {
+      const revisionBadge = el(doc, "span");
+      revisionBadge.className = "confucius-artifact-revision-badge";
+      revisionBadge.textContent = `r${revision.revision}`;
+      toolbar.appendChild(revisionBadge);
+    }
+    const spacer = el(doc, "span", undefined, { "aria-hidden": "true" });
+    spacer.className = "confucius-artifact-dialog-toolbar-spacer";
+    toolbar.appendChild(spacer);
 
     const writeback = button(
       doc,
@@ -4602,22 +4925,9 @@ function bindWorkspace(
     writeback.addEventListener("click", () =>
       openWritebackPreview(artifact, revision.revision),
     );
-    const closeButton = el(doc, "button", undefined, {
-      type: "button",
-      title: getString("workspace-artifact-close"),
-      "aria-label": getString("workspace-artifact-close"),
-    });
-    closeButton.className = "confucius-icon-button";
-    closeButton.textContent = "×";
-    closeButton.style.fontSize = "24px";
-    closeButton.addEventListener("click", () => closeArtifactViewer());
-
-    actions.appendChild(revisionSelect);
-    actions.appendChild(writeback);
-    actions.appendChild(closeButton);
-    header.appendChild(fileIcon);
-    header.appendChild(copy);
-    header.appendChild(actions);
+    toolbar.appendChild(writeback);
+    header.appendChild(identity);
+    header.appendChild(toolbar);
     dialog.appendChild(header);
 
     const dialogBody = el(doc, "div", undefined, {
@@ -7523,10 +7833,20 @@ function bindWorkspace(
     toggleEndpointMenu();
   });
   doc.addEventListener("mousedown", (event) => {
+    const target = event.target as Node | null;
+    if (artifactChoiceMenu) {
+      const artifactMenu = doc.getElementById("confucius-artifact-choice-menu");
+      if (
+        !target ||
+        (!artifactChoiceMenu.anchor.contains(target) &&
+          !artifactMenu?.contains(target))
+      ) {
+        closeArtifactChoiceMenu(false);
+      }
+    }
     if (!endpointMenuOpen) {
       return;
     }
-    const target = event.target as Node | null;
     const menu = doc.getElementById("confucius-endpoint-menu");
     const submenu = doc.getElementById("confucius-endpoint-submenu");
     if (
