@@ -64,11 +64,20 @@ export class SidecarClient {
       }>(refresh ? "runtime/refresh" : "runtime/list", {});
       return {
         sidecarConnected: true,
+        runtimeHost: "sidecar",
+        runtimeHostEnabled: true,
+        runtimeHostConnected: true,
         runtimes: result.runtimes ?? [],
       };
     } catch {
       this.registeredDescriptorKey = "";
-      return { sidecarConnected: false, runtimes: unavailableRuntimes() };
+      return {
+        sidecarConnected: false,
+        runtimeHost: "sidecar",
+        runtimeHostEnabled: true,
+        runtimeHostConnected: false,
+        runtimes: unavailableRuntimes(),
+      };
     }
   }
 

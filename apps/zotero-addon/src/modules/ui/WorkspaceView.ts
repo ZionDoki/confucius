@@ -3,12 +3,16 @@ import type {
   ArtifactBody,
   ArtifactRecord,
   ConfuciusEvent,
+  ContextSearchItem,
+  ContextSearchItemsResult,
   LaunchIntent,
   LockedContextSnapshot,
   MemoryConsent,
   MemoryProposal,
   ResearchTaskRecord,
+  RuntimeListResult,
   RuntimeStatus,
+  TaskAttachment,
   TaskTemplate,
 } from "@confucius/protocol";
 import {
@@ -19,6 +23,7 @@ import {
   clampUiFontSize,
   coalesceTimeline,
   isUiFont,
+  mergeLockedContexts,
   nextReasoningFold,
   parseMindMapOutline,
   renderMarkdownHtml,
@@ -33,14 +38,23 @@ import {
   type LiveContextResult,
   templatesForContext,
   taskTemplate,
+  withLockedContextFingerprint,
 } from "@confucius/protocol";
 import { durableExcerpt } from "@confucius/memory";
 import { slashMenuToken, type ConfuciusSkill } from "@confucius/skill-format";
 import { renderToString as katexRender } from "katex";
 import { getString } from "../../utils/locale";
 import { hrefFromEvent } from "./anchorFromEvent";
+import { droppedFilePaths, droppedFilename, hasDroppedFiles } from "./fileDrop";
+import {
+  libraryMentionTokenAtCaret,
+  replaceLibraryMention,
+  type LibraryMentionToken,
+} from "./libraryMention";
+import { pickRuntimeExecutable } from "./runtimeExecutablePicker";
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
+const MAX_COMPOSER_ATTACHMENTS = 5;
 
 const linkHosts = new WeakMap<HTMLElement, WorkspaceHost | null>();
 const linkListeners = new WeakSet<HTMLElement>();
@@ -195,6 +209,7 @@ type ModelConfig = {
   streamResponses: boolean;
   memoryAutoExtract: boolean;
   memoryConsent: MemoryConsent;
+  pluginRuntimeHost: boolean;
   reasoningEffort: "auto" | "off" | "low" | "medium" | "high";
   contextWindowTokens: number;
   hasApiKey: boolean;
@@ -265,32 +280,50 @@ function el(
 }
 
 const TUI_CSS = `
-@keyframes confucius-shimmer {
-  0% { background-position: 200% 50%; }
-  100% { background-position: -200% 50%; }
+@keyframes confucius-waiting-turn {
+  0% { transform: rotate(0deg); opacity: 0.85; }
+  50% { opacity: 0.4; }
+  100% { transform: rotate(360deg); opacity: 0.85; }
+}
+.confucius-workspace-root {
+  min-width: 0;
+  max-width: 100%;
+}
+.confucius-workspace-root > .confucius-topbar,
+.confucius-workspace-root > .confucius-columns,
+.confucius-workspace-root > .confucius-composer {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-activity-shell,
+.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-task-overview,
+.confucius-workspace-root[data-confucius-layout="sidebar"] .tui-answer {
+  min-width: 0;
+  max-width: 100%;
 }
 .tui-waiting {
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  background-image: linear-gradient(90deg, #a19c92 0%, #33302a 35%, #8a857c 50%, #33302a 65%, #a19c92 100%);
-  background-size: 220% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: confucius-shimmer 1.5s linear infinite;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: #8a857c;
 }
-.tui-waiting-bar {
-  height: 2px;
-  margin-top: 6px;
-  border-radius: 1px;
-  background-image: linear-gradient(90deg, transparent 0%, #33302a 50%, transparent 100%);
-  background-size: 220% 100%;
-  animation: confucius-shimmer 1.5s linear infinite;
+.tui-waiting-mark {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  color: #55504a;
+  transform-origin: 50% 50%;
+  animation: confucius-waiting-turn 5.6s cubic-bezier(0.65, 0, 0.35, 1) infinite;
 }
 .tui-answer table { border-collapse: collapse; margin: 8px 0; width: auto; }
 .tui-answer {
   min-width: 0;
+  max-width: 100%;
   overflow-wrap: anywhere;
 }
 .tui-answer table {
@@ -317,9 +350,167 @@ const TUI_CSS = `
   font-family: ui-monospace, Consolas, monospace;
   font-size: 0.92em;
 }
+.tui-answer img { max-width: 100%; height: auto; }
+.tui-answer .katex-display { max-width: 100%; overflow-x: auto; overflow-y: hidden; }
 .tui-answer h1, .tui-answer h2, .tui-answer h3 { margin: 10px 0 6px; }
 .tui-answer p { margin: 0 0 8px; }
 .tui-answer math { font-size: 1.05em; }
+.confucius-answer-shell { position: relative; }
+.confucius-answer-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 26px;
+  margin: 1px 0 0 -3px;
+  opacity: .62;
+  transition: opacity 120ms ease;
+}
+.confucius-answer-shell:hover .confucius-answer-actions,
+.confucius-answer-shell:focus-within .confucius-answer-actions { opacity: 1; }
+.confucius-answer-action {
+  appearance: none;
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #777166;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, transform 120ms ease;
+}
+.confucius-answer-action:hover:not(:disabled) {
+  background: #eee9df;
+  color: #33302a;
+}
+.confucius-answer-action:active:not(:disabled) { transform: translateY(1px); }
+.confucius-answer-action:focus-visible {
+  outline: 2px solid #9a6842;
+  outline-offset: 1px;
+}
+.confucius-answer-action:disabled { cursor: default; opacity: .38; }
+.confucius-answer-action[data-state="success"] {
+  background: #e5eee5;
+  color: #3f6d49;
+}
+.confucius-answer-action svg { width: 15px; height: 15px; display: block; }
+.confucius-menu-row {
+  transition: background 90ms ease, color 90ms ease;
+}
+.confucius-menu-row:hover,
+.confucius-menu-row[data-highlighted="true"] { background: #f0ece3; }
+.confucius-menu-row[data-active="true"] { font-weight: 600; }
+.confucius-composer-row { width: 100%; min-width: 0; }
+.confucius-attachment-tray {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.confucius-attachment-chip {
+  max-width: min(310px, 100%);
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 6px 5px 8px;
+  border: 1px solid #d8d2c6;
+  border-radius: 8px;
+  background: #fffefa;
+  color: #33302a;
+  box-sizing: border-box;
+  box-shadow: 0 2px 8px rgba(70, 59, 43, .045);
+}
+.confucius-attachment-chip[data-status="preparing"] { color: #7a684e; }
+.confucius-attachment-chip[data-status="error"] {
+  border-color: #dfb3a6;
+  background: #fff8f5;
+  color: #9c3f2b;
+}
+.confucius-attachment-kind {
+  min-width: 30px;
+  padding: 3px 5px;
+  border-radius: 5px;
+  background: #eee8dc;
+  color: #795b36;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .06em;
+  text-align: center;
+}
+.confucius-attachment-chip[data-status="error"] .confucius-attachment-kind {
+  background: #f4dfd8;
+  color: #9c3f2b;
+}
+.confucius-attachment-copy { min-width: 0; }
+.confucius-attachment-name {
+  display: block;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.confucius-attachment-meta {
+  display: block;
+  overflow: hidden;
+  margin-top: 1px;
+  color: #8a857c;
+  font-size: 9px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.confucius-attachment-remove {
+  appearance: none;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #8a857c;
+  cursor: pointer;
+  font: 600 16px/1 system-ui, sans-serif;
+}
+.confucius-attachment-remove:hover { background: #eee9df; color: #33302a; }
+.confucius-drop-hint {
+  position: absolute;
+  inset: 6px;
+  z-index: 950;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  border: 1px dashed rgba(138, 90, 43, .72);
+  border-radius: 12px;
+  background: rgba(250, 248, 242, .91);
+  backdrop-filter: blur(4px);
+  color: #795b36;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .01em;
+  text-align: center;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 120ms ease, visibility 0s linear 120ms;
+}
+.confucius-workspace-root[data-file-drop-active="true"] .confucius-drop-hint {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 0s;
+}
 .confucius-icon-button {
   width: 34px !important;
   height: 34px !important;
@@ -535,8 +726,10 @@ const TUI_CSS = `
 .confucius-activity-shell {
   width: min(900px, 100%);
   min-width: 0;
+  max-width: 100%;
   margin: 0 auto;
   padding-bottom: 28px;
+  box-sizing: border-box;
 }
 .confucius-activity-head {
   display: flex;
@@ -663,7 +856,7 @@ const TUI_CSS = `
 }
 .confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-file-copy {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 45%);
   grid-template-areas:
     "title title"
     "kind meta";
@@ -686,9 +879,11 @@ const TUI_CSS = `
 }
 .confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-file-meta {
   grid-area: meta;
+  min-width: 0;
   margin: 1px 0 0;
   font-size: 10px;
   line-height: 1.25;
+  text-align: right;
 }
 .confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-file-open {
   display: none;
@@ -700,45 +895,58 @@ const TUI_CSS = `
   display: block;
   padding: 0;
   box-sizing: border-box;
-  background: #f7f5f0;
+  background:
+    radial-gradient(130% 100% at 50% 0%, rgba(252, 250, 245, 0.84) 0%, rgba(245, 242, 235, 0.72) 55%, rgba(238, 234, 225, 0.78) 100%);
+  backdrop-filter: blur(22px) saturate(1.06);
   animation: confucius-artifact-overlay-in 150ms ease-out;
 }
 .confucius-artifact-overlay[data-refresh="true"] { animation: none; }
+.confucius-artifact-overlay[data-mount="window"] { position: fixed; }
+.confucius-artifact-overlay a {
+  color: #8a5a2b;
+  text-decoration: underline;
+  text-decoration-color: #cbb890;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
 .confucius-artifact-dialog {
+  position: relative;
   width: 100%;
   height: 100%;
   min-width: 0;
   min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 58px;
-  grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
   border: 0;
   border-radius: 0;
-  background: #f7f5f0;
+  background: transparent;
   box-shadow: none;
 }
 .confucius-artifact-action-rail {
-  grid-column: 2;
-  grid-row: 1;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 12px;
+  z-index: 2;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 9px;
+  width: 40px;
   min-width: 0;
   min-height: 0;
-  padding: 10px 8px;
-  border-left: 1px solid #ded9cf;
-  background: #f1eee7;
+  padding: 14px 0;
+  border: 0;
+  background: transparent;
   box-sizing: border-box;
+  pointer-events: none;
 }
 .confucius-artifact-rail-spacer { flex: 1 1 auto; }
 .confucius-artifact-rail-divider {
-  width: 24px;
+  width: 16px;
   height: 1px;
   flex: 0 0 1px;
   margin: 1px 0 3px;
-  background: #d8d2c6;
+  background: rgba(51, 48, 42, 0.18);
 }
 .confucius-artifact-rail-button,
 .confucius-artifact-menu-trigger {
@@ -753,21 +961,25 @@ const TUI_CSS = `
   place-items: center;
   padding: 0;
   overflow: hidden;
-  border: 1px solid transparent;
-  border-radius: 9px;
-  background: transparent;
+  border: 1px solid rgba(215, 208, 196, 0.95);
+  border-radius: 50%;
+  background: rgba(255, 254, 250, 0.78);
+  backdrop-filter: blur(10px);
   color: #5d574d;
   box-sizing: border-box;
+  box-shadow: 0 2px 10px rgba(70, 59, 43, 0.1);
   font: inherit;
   cursor: pointer;
-  transition: background 110ms ease, border-color 110ms ease, color 110ms ease, transform 110ms ease;
+  pointer-events: auto;
+  transition: background 110ms ease, border-color 110ms ease, color 110ms ease, transform 110ms ease, box-shadow 110ms ease;
 }
 .confucius-artifact-rail-button:hover,
 .confucius-artifact-menu-trigger:hover {
-  border-color: #d7d0c4;
-  background: rgba(255, 254, 250, .84);
+  border-color: #c5b9a8;
+  background: rgba(255, 254, 250, 0.96);
   color: #33302a;
-  transform: translateX(-1px);
+  transform: translateY(-1px);
+  box-shadow: 0 5px 16px rgba(70, 59, 43, 0.16);
 }
 .confucius-artifact-menu-trigger[aria-expanded="true"] {
   border-color: #c5b9a8;
@@ -802,10 +1014,15 @@ const TUI_CSS = `
   display: grid;
   place-items: center;
   padding: 0;
-  color: #898277;
+  border: 1px solid rgba(215, 208, 196, 0.7);
+  border-radius: 50%;
+  background: rgba(255, 254, 250, 0.55);
+  backdrop-filter: blur(10px);
+  color: #6f695f;
   box-sizing: border-box;
   font-size: 11px;
   font-weight: 700;
+  pointer-events: auto;
 }
 #confucius-artifact-writeback {
   color: #8a5a2b;
@@ -869,32 +1086,38 @@ const TUI_CSS = `
   text-align: center;
 }
 .confucius-artifact-dialog-body {
-  grid-column: 1;
-  grid-row: 1;
+  height: 100%;
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: clamp(26px, 5vh, 54px) clamp(18px, 5vw, 68px) 64px;
-  background: #faf8f3;
+  padding: clamp(26px, 5vh, 54px) max(clamp(18px, 5vw, 68px), 68px) 64px clamp(18px, 5vw, 68px);
+  background: transparent;
   box-sizing: border-box;
 }
 .confucius-artifact-shell {
   width: min(780px, 100%);
   min-width: 0;
+  min-height: calc(100% - 50px);
   margin: 0 auto;
+  display: flex;
+  flex-direction: column;
 }
 .confucius-artifact-paper {
   min-width: 0;
-  padding: 10px 0 48px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-dialog {
-  grid-template-columns: minmax(0, 1fr) 46px;
+  flex: 1 0 auto;
+  margin: 20px 0 30px;
+  padding: clamp(26px, 4vw, 44px) clamp(22px, 4.5vw, 52px) 56px;
+  border: 1px solid rgba(215, 208, 196, 0.9);
+  border-radius: 10px;
+  background: rgba(255, 254, 250, 0.96);
+  box-shadow:
+    0 12px 36px rgba(70, 59, 43, 0.12),
+    0 1px 3px rgba(70, 59, 43, 0.06);
 }
 .confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-action-rail {
-  padding: 8px 4px;
+  right: 6px;
+  width: 36px;
+  padding: 10px 0;
 }
 .confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-rail-button,
 .confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-menu-trigger,
@@ -906,10 +1129,12 @@ const TUI_CSS = `
   flex-basis: 36px;
 }
 .confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-dialog-body {
-  padding: 18px 10px 40px;
+  padding: 18px 48px 40px 10px;
 }
 .confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-paper {
-  padding: 8px 2px 36px;
+  margin: 10px 0 18px;
+  padding: 18px 16px 34px;
+  border-radius: 8px;
 }
 .confucius-artifact-paper .tui-answer { font-size: 1.02em; line-height: 1.68; }
 .confucius-artifact-paper table {
@@ -954,14 +1179,6 @@ const TUI_CSS = `
 .confucius-template-button:hover { color: #9a4f25; }
 .confucius-template-title { display: block; margin-bottom: 3px; font-weight: 700; }
 .confucius-template-copy { display: block; color: #777166; font-size: .9em; line-height: 1.4; }
-.confucius-context-drift {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  color: #8a4b26;
-  font-size: .86em;
-}
 .confucius-runtime-dot {
   width: 7px;
   height: 7px;
@@ -994,8 +1211,7 @@ const TUI_CSS = `
   .confucius-before-after { grid-template-columns: minmax(0, 1fr); }
   .confucius-template-grid { grid-auto-rows: minmax(70px, auto); }
   .confucius-template-button { min-height: 70px; }
-  .confucius-artifact-dialog { grid-template-columns: minmax(0, 1fr) 46px; }
-  .confucius-artifact-action-rail { padding: 8px 4px; }
+  .confucius-artifact-action-rail { right: 6px; width: 36px; padding: 10px 0; }
   .confucius-artifact-rail-button,
   .confucius-artifact-menu-trigger,
   .confucius-artifact-revision-badge {
@@ -1005,10 +1221,10 @@ const TUI_CSS = `
     min-height: 36px;
     flex-basis: 36px;
   }
-  .confucius-artifact-dialog-body { padding: 18px 10px 40px; }
+  .confucius-artifact-dialog-body { padding: 18px 48px 40px 10px; }
   .confucius-artifact-file { grid-template-columns: 38px minmax(0, 1fr); gap: 9px; padding: 11px; }
   .confucius-artifact-file-open { display: none; }
-  .confucius-artifact-paper { padding: 8px 2px 36px; }
+  .confucius-artifact-paper { margin: 8px 0 14px; padding: 16px 12px 30px; border-radius: 8px; }
 }
 @keyframes confucius-artifact-overlay-in {
   from { opacity: 0; }
@@ -1021,7 +1237,8 @@ const TUI_CSS = `
 @media (prefers-reduced-motion: reduce) {
   .confucius-artifact-overlay,
   .confucius-artifact-choice-menu { animation: none; }
-  .confucius-artifact-menu-trigger-chevron { transition: none; }
+  .confucius-artifact-menu-trigger-chevron,
+  .confucius-drop-hint { transition: none; }
 }
 `;
 
@@ -1232,8 +1449,9 @@ function applyFill(node: HTMLElement, compact = false): void {
     flexDirection: "column",
     margin: "0px",
     padding: "0px",
-    width: compact ? "100%" : "auto",
-    height: compact ? "100%" : "auto",
+    width: "auto",
+    height: "auto",
+    maxWidth: compact ? "100%" : "none",
     minWidth: compact ? "0px" : "640px",
     minHeight: compact ? "0px" : "420px",
     overflow: "hidden",
@@ -1292,29 +1510,17 @@ function button(
 
 function brandMark(doc: Document): Element {
   const svg = doc.createElementNS(SVG_NS, "svg");
-  svg.setAttribute("viewBox", "0 0 32 32");
+  svg.setAttribute("viewBox", "0 0 256 256");
   svg.setAttribute("width", "18");
   svg.setAttribute("height", "18");
   svg.setAttribute("aria-hidden", "true");
-  const plate = doc.createElementNS(SVG_NS, "rect");
-  plate.setAttribute("width", "32");
-  plate.setAttribute("height", "32");
-  plate.setAttribute("rx", "7");
-  plate.setAttribute("fill", "#8a5a3b");
-  const arc = doc.createElementNS(SVG_NS, "path");
-  arc.setAttribute("d", "M25 10.5 A11.5 11.5 0 1 0 25 21.5");
-  arc.setAttribute("fill", "none");
-  arc.setAttribute("stroke", "#ffffff");
-  arc.setAttribute("stroke-width", "3.4");
-  const tick = doc.createElementNS(SVG_NS, "rect");
-  tick.setAttribute("x", "22");
-  tick.setAttribute("y", "14.6");
-  tick.setAttribute("width", "6");
-  tick.setAttribute("height", "2.8");
-  tick.setAttribute("fill", "#33302a");
-  svg.appendChild(plate);
-  svg.appendChild(arc);
-  svg.appendChild(tick);
+  const mark = doc.createElementNS(SVG_NS, "path");
+  mark.setAttribute(
+    "d",
+    "M200 76 A 90 90 0 1 0 200 180 Q 187 178 173 164 A 58 58 0 1 1 173 92 Q 187 80 200 76 Z",
+  );
+  mark.setAttribute("fill", "#201d1a");
+  svg.appendChild(mark);
   return svg;
 }
 
@@ -1432,6 +1638,55 @@ function artifactActionIcon(
     const path = doc.createElementNS(SVG_NS, "path");
     path.setAttribute("d", data);
     svg.appendChild(path);
+  }
+  return svg;
+}
+
+function replyActionIcon(
+  doc: Document,
+  kind: "copy" | "branch" | "note" | "check",
+): Element {
+  const svg = doc.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.8");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+
+  const paths =
+    kind === "copy"
+      ? [
+          "M8 8h10a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2z",
+          "M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h1",
+        ]
+      : kind === "note"
+        ? ["M6 3.5h8l4 4v13H6z", "M14 3.5v4h4", "M9 12h6", "M9 16h4"]
+        : kind === "check"
+          ? ["m5 12.5 4.2 4.2L19 7"]
+          : [
+              "M7.5 6h2.25A4.25 4.25 0 0 1 14 10.25V12",
+              "M7.5 18h2.25A4.25 4.25 0 0 0 14 13.75V12",
+              "M14 12h2.5",
+            ];
+  for (const data of paths) {
+    const path = doc.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", data);
+    svg.appendChild(path);
+  }
+  if (kind === "branch") {
+    for (const [cx, cy] of [
+      [5, 6],
+      [5, 18],
+      [19, 12],
+    ]) {
+      const circle = doc.createElementNS(SVG_NS, "circle");
+      circle.setAttribute("cx", String(cx));
+      circle.setAttribute("cy", String(cy));
+      circle.setAttribute("r", "2.2");
+      svg.appendChild(circle);
+    }
   }
   return svg;
 }
@@ -1659,6 +1914,7 @@ export function unmountWorkspace(root?: HTMLElement | null): void {
     "confucius-artifact-choice-menu",
     "confucius-writeback-overlay",
     "confucius-slash-menu",
+    "confucius-mention-menu",
     "confucius-plus-menu",
     "confucius-endpoint-menu",
     "confucius-endpoint-submenu",
@@ -1789,9 +2045,23 @@ function bindWorkspace(
     selectedArtifactRevision: null as number | null,
     memoryProposals: [] as MemoryProposal[],
     runtimes: [] as RuntimeStatus[],
-    sidecarConnected: false,
+    runtimeHostEnabled: true,
+    runtimeHostConnected: false,
   };
   let pendingPermissionUpdate: Promise<void> = Promise.resolve();
+  let pendingContextUpdate: Promise<void> = Promise.resolve();
+  const pendingMentionItems = new Map<string, ContextSearchItem>();
+  let mentionSearchTimer: number | null = null;
+  type PendingAttachment = {
+    uiId: string;
+    path: string;
+    name: string;
+    status: "preparing" | "ready" | "error";
+    record?: TaskAttachment;
+    error?: string;
+  };
+  const pendingAttachments: PendingAttachment[] = [];
+  let attachmentDragDepth = 0;
 
   type ModelListCache = {
     status: "idle" | "loading" | "ok" | "error";
@@ -1944,7 +2214,8 @@ function bindWorkspace(
     width: compact ? "160px" : "220px",
     minWidth: compact ? "140px" : "180px",
     padding: "14px",
-    overflow: "auto",
+    overflowX: "hidden",
+    overflowY: "auto",
     borderRight: "1px solid #e5e1d8",
     background: "#faf9f6",
     boxSizing: "border-box",
@@ -1970,7 +2241,8 @@ function bindWorkspace(
       flex: "1 1 0px",
       minWidth: "0px",
       minHeight: "0px",
-      overflow: "auto",
+      overflowX: "hidden",
+      overflowY: "auto",
       padding: compact ? "12px 10px" : "18px 24px",
       background: "#faf9f6",
       boxSizing: "border-box",
@@ -1987,7 +2259,8 @@ function bindWorkspace(
 
   const composer = el(doc, "form", {
     display: "flex",
-    alignItems: "center",
+    flexDirection: "column",
+    alignItems: "stretch",
     gap: "8px",
     padding: "12px 14px",
     borderTop: "1px solid #ddd8cc",
@@ -1995,8 +2268,32 @@ function bindWorkspace(
     minHeight: "64px",
     boxSizing: "border-box",
     flex: "0 0 auto",
+    position: "relative",
   });
   composer.className = "confucius-composer";
+  const attachmentTray = el(
+    doc,
+    "div",
+    { display: "none" },
+    {
+      id: "confucius-attachment-tray",
+      "aria-live": "polite",
+      "aria-label": getString("workspace-attachment-list"),
+    },
+  );
+  attachmentTray.className = "confucius-attachment-tray";
+  const composerRow = el(doc, "div", {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+  });
+  composerRow.className = "confucius-composer-row";
+  const dropHint = el(doc, "div", undefined, {
+    id: "confucius-drop-hint",
+    "aria-hidden": "true",
+  });
+  dropHint.className = "confucius-drop-hint";
+  dropHint.textContent = getString("workspace-attachment-drop");
   const prompt = el(
     doc,
     "input",
@@ -2106,30 +2403,19 @@ function bindWorkspace(
 
   const contextRing = buildContextRing(doc);
 
-  composer.appendChild(plusBtn);
-  composer.appendChild(prompt);
-  composer.appendChild(endpointBtn);
-  composer.appendChild(contextRing.node);
-  composer.appendChild(sendBtn);
-  composer.appendChild(stopBtn);
-
-  const contextBar = el(
-    doc,
-    "div",
-    {
-      display: "none",
-      flexWrap: "wrap",
-      gap: "6px",
-      alignItems: "center",
-      padding: "8px 14px 0",
-    },
-    { id: "confucius-context-bar" },
-  );
+  composerRow.appendChild(plusBtn);
+  composerRow.appendChild(prompt);
+  composerRow.appendChild(endpointBtn);
+  composerRow.appendChild(contextRing.node);
+  composerRow.appendChild(sendBtn);
+  composerRow.appendChild(stopBtn);
+  composer.appendChild(attachmentTray);
+  composer.appendChild(composerRow);
 
   root.appendChild(topbar);
   root.appendChild(columns);
-  root.appendChild(contextBar);
   root.appendChild(composer);
+  root.appendChild(dropHint);
 
   const sessionsLabel = getString("workspace-toggle-sessions");
   const sendLabel = getString("workspace-send");
@@ -2212,7 +2498,9 @@ function bindWorkspace(
     status.style.display = narrow ? "none" : "inline";
     Object.assign(topbarActions.style, {
       display: stacked ? "grid" : "flex",
-      gridTemplateColumns: stacked ? "repeat(6, minmax(0, 1fr))" : "",
+      gridTemplateColumns: stacked
+        ? `repeat(${narrow ? 3 : 5}, minmax(0, 1fr))`
+        : "",
       width: stacked ? "100%" : "auto",
       marginLeft: stacked ? "0px" : "auto",
       gap: stacked ? "4px" : "8px",
@@ -2236,6 +2524,11 @@ function bindWorkspace(
     const tinyComposer = measured < 250;
     if (stackedComposer) {
       Object.assign(composer.style, {
+        gap: "6px",
+        padding: "8px",
+        minHeight: "0px",
+      });
+      Object.assign(composerRow.style, {
         display: "grid",
         gridTemplateAreas: tinyComposer
           ? '"prompt prompt prompt" "plus endpoint action"'
@@ -2245,8 +2538,6 @@ function bindWorkspace(
           : "40px minmax(0, 1fr) 30px 40px",
         alignItems: "center",
         gap: "6px",
-        padding: "8px",
-        minHeight: "0px",
       });
       Object.assign(prompt.style, {
         gridArea: "prompt",
@@ -2280,12 +2571,16 @@ function bindWorkspace(
       }
     } else {
       Object.assign(composer.style, {
-        display: "flex",
-        gridTemplateAreas: "",
-        gridTemplateColumns: "",
         gap: "8px",
         padding: "12px 14px",
         minHeight: "64px",
+      });
+      Object.assign(composerRow.style, {
+        display: "flex",
+        gridTemplateAreas: "",
+        gridTemplateColumns: "",
+        alignItems: "center",
+        gap: "8px",
       });
       Object.assign(prompt.style, {
         gridArea: "",
@@ -2340,6 +2635,13 @@ function bindWorkspace(
   layoutCleanups.set(root, () => {
     resizeObserver?.disconnect();
     win?.removeEventListener("resize", onWindowResize);
+    root.removeEventListener("dragenter", onAttachmentDragEnter);
+    root.removeEventListener("dragover", onAttachmentDragOver);
+    root.removeEventListener("dragleave", onAttachmentDragLeave);
+    root.removeEventListener("drop", onAttachmentDrop);
+    resetAttachmentDrop();
+    if (mentionSearchTimer && win) win.clearTimeout(mentionSearchTimer);
+    clearPendingAttachments();
   });
   applyResponsiveLayout();
 
@@ -2351,6 +2653,229 @@ function bindWorkspace(
       throw new Error("Confucius host is not available");
     }
     return host.rpc(method, params);
+  }
+
+  function attachmentKindLabel(item: PendingAttachment): string {
+    if (item.record?.kind === "pdf" || /\.pdf$/iu.test(item.name)) return "PDF";
+    if (
+      item.record?.kind === "markdown" ||
+      /\.(?:md|markdown)$/iu.test(item.name)
+    ) {
+      return "MD";
+    }
+    return "TXT";
+  }
+
+  function formatAttachmentBytes(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  function attachmentMeta(item: PendingAttachment): string {
+    if (item.status === "preparing") {
+      return getString("workspace-attachment-reading");
+    }
+    if (item.status === "error") {
+      return item.error || getString("workspace-attachment-error");
+    }
+    const record = item.record!;
+    const parts = [formatAttachmentBytes(record.size)];
+    if (record.kind === "pdf" && typeof record.extractedPages === "number") {
+      parts.push(
+        typeof record.totalPages === "number"
+          ? `${record.extractedPages}/${record.totalPages} ${getString("workspace-attachment-pages")}`
+          : `${record.extractedPages} ${getString("workspace-attachment-pages")}`,
+      );
+    }
+    if (record.truncated) {
+      parts.push(getString("workspace-attachment-truncated"));
+    }
+    return parts.join(" · ");
+  }
+
+  function renderAttachmentTray(): void {
+    attachmentTray.textContent = "";
+    attachmentTray.style.display = pendingAttachments.length ? "flex" : "none";
+    for (const item of pendingAttachments) {
+      const chip = el(doc, "div", undefined, {
+        "data-status": item.status,
+        title: item.error || item.name,
+      });
+      chip.className = "confucius-attachment-chip";
+      const kind = el(doc, "span");
+      kind.className = "confucius-attachment-kind";
+      kind.textContent = attachmentKindLabel(item);
+      const copy = el(doc, "span");
+      copy.className = "confucius-attachment-copy";
+      const name = el(doc, "span");
+      name.className = "confucius-attachment-name";
+      name.textContent = item.name;
+      const meta = el(doc, "span");
+      meta.className = "confucius-attachment-meta";
+      meta.textContent = attachmentMeta(item);
+      copy.appendChild(name);
+      copy.appendChild(meta);
+      const remove = el(doc, "button", undefined, {
+        type: "button",
+        title: getString("workspace-attachment-remove"),
+        "aria-label": `${getString("workspace-attachment-remove")}: ${item.name}`,
+      });
+      remove.className = "confucius-attachment-remove";
+      remove.textContent = "×";
+      remove.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        removePendingAttachment(item.uiId);
+      });
+      chip.appendChild(kind);
+      chip.appendChild(copy);
+      chip.appendChild(remove);
+      attachmentTray.appendChild(chip);
+    }
+    updateRunningUI();
+  }
+
+  function removePendingAttachment(uiId: string): void {
+    const index = pendingAttachments.findIndex((item) => item.uiId === uiId);
+    if (index < 0) return;
+    const [removed] = pendingAttachments.splice(index, 1);
+    if (removed.record?.id) {
+      void rpc("attachment/release", { id: removed.record.id }).catch(
+        () => undefined,
+      );
+    }
+    renderAttachmentTray();
+  }
+
+  function clearPendingAttachments(): void {
+    const ids = pendingAttachments
+      .map((item) => item.record?.id)
+      .filter((id): id is string => Boolean(id));
+    pendingAttachments.splice(0);
+    for (const id of ids) {
+      void rpc("attachment/release", { id }).catch(() => undefined);
+    }
+    attachmentTray.textContent = "";
+    attachmentTray.style.display = "none";
+  }
+
+  async function prepareDroppedFiles(paths: string[]): Promise<void> {
+    if (!paths.length) {
+      state.sendError = getString("workspace-attachment-path-error");
+      renderLists();
+      return;
+    }
+    const existing = new Set(
+      pendingAttachments.map((item) =>
+        item.path.replaceAll("/", "\\").toLocaleLowerCase(),
+      ),
+    );
+    const accepted: PendingAttachment[] = [];
+    for (const path of paths) {
+      const key = path.replaceAll("/", "\\").toLocaleLowerCase();
+      if (existing.has(key)) continue;
+      if (pendingAttachments.length >= MAX_COMPOSER_ATTACHMENTS) {
+        state.sendError = getString("workspace-attachment-limit");
+        break;
+      }
+      existing.add(key);
+      const item: PendingAttachment = {
+        uiId: `drop_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+        path,
+        name: droppedFilename(path),
+        status: "preparing",
+      };
+      pendingAttachments.push(item);
+      accepted.push(item);
+    }
+    if (!accepted.length) {
+      renderAttachmentTray();
+      return;
+    }
+    state.sendError = "";
+    renderAttachmentTray();
+    await Promise.all(
+      accepted.map(async (item) => {
+        try {
+          const result = (await rpc("attachment/prepare", {
+            path: item.path,
+          })) as { attachment: TaskAttachment };
+          const current = pendingAttachments.find(
+            (entry) => entry.uiId === item.uiId,
+          );
+          if (!current) {
+            void rpc("attachment/release", {
+              id: result.attachment.id,
+            }).catch(() => undefined);
+            return;
+          }
+          current.record = result.attachment;
+          current.name = result.attachment.name;
+          current.status = "ready";
+        } catch (error) {
+          const current = pendingAttachments.find(
+            (entry) => entry.uiId === item.uiId,
+          );
+          if (!current) return;
+          current.status = "error";
+          current.error =
+            error instanceof Error ? error.message : String(error);
+        }
+        renderAttachmentTray();
+      }),
+    );
+    prompt.focus();
+  }
+
+  function showAttachmentDrop(active: boolean): void {
+    const visible = active && canAcceptFileDrop();
+    root.setAttribute("data-file-drop-active", visible ? "true" : "false");
+    dropHint.setAttribute("aria-hidden", visible ? "false" : "true");
+  }
+
+  function canAcceptFileDrop(): boolean {
+    if (!prompt.isConnected || !composer.isConnected || prompt.disabled) {
+      return false;
+    }
+    if (artifactViewerOpen || knowledgeUi.open) {
+      return false;
+    }
+    for (const id of [
+      "confucius-settings-overlay",
+      "confucius-knowledge-overlay",
+      "confucius-artifact-overlay",
+      "confucius-writeback-overlay",
+    ]) {
+      if (doc.getElementById(id)) return false;
+    }
+    try {
+      const promptStyle = win?.getComputedStyle(prompt);
+      const composerStyle = win?.getComputedStyle(composer);
+      if (
+        promptStyle?.display === "none" ||
+        promptStyle?.visibility === "hidden" ||
+        composerStyle?.display === "none" ||
+        composerStyle?.visibility === "hidden"
+      ) {
+        return false;
+      }
+    } catch {
+      // Geometry below remains a reliable fallback in embedded XUL documents.
+    }
+    const promptRect = prompt.getBoundingClientRect();
+    const composerRect = composer.getBoundingClientRect();
+    return (
+      promptRect.width > 0 &&
+      promptRect.height > 0 &&
+      composerRect.width > 0 &&
+      composerRect.height > 0
+    );
+  }
+
+  function resetAttachmentDrop(): void {
+    attachmentDragDepth = 0;
+    showAttachmentDrop(false);
   }
 
   const knowledgeKinds: KnowledgeEntryKind[] = [
@@ -3196,8 +3721,46 @@ function bindWorkspace(
     return row;
   }
 
-  function renderAnswer(targetDoc: Document, text: string): HTMLElement {
-    const row = tuiBlock(targetDoc, {
+  async function copyAnswerText(
+    targetDoc: Document,
+    text: string,
+  ): Promise<void> {
+    try {
+      Zotero.Utilities.Internal.copyTextToClipboard(text);
+      return;
+    } catch {
+      // Test pages and some unprivileged views do not expose Zotero globals.
+    }
+    const clipboard = targetDoc.defaultView?.navigator.clipboard;
+    if (!clipboard) throw new Error("Clipboard is unavailable");
+    await clipboard.writeText(text);
+  }
+
+  function flashReplyAction(
+    action: HTMLButtonElement,
+    kind: "copy" | "branch" | "note",
+    label: string,
+  ): void {
+    const actionDoc = action.ownerDocument ?? doc;
+    action.setAttribute("data-state", "success");
+    action.setAttribute("title", getString("workspace-reply-done"));
+    action.setAttribute("aria-label", getString("workspace-reply-done"));
+    action.replaceChildren(replyActionIcon(actionDoc, "check"));
+    actionDoc.defaultView?.setTimeout(() => {
+      if (!action.isConnected) return;
+      action.removeAttribute("data-state");
+      action.setAttribute("title", label);
+      action.setAttribute("aria-label", label);
+      action.replaceChildren(replyActionIcon(actionDoc, kind));
+    }, 1_200);
+  }
+
+  function renderAnswer(
+    targetDoc: Document,
+    text: string,
+    turnId?: string,
+  ): HTMLElement {
+    const shell = tuiBlock(targetDoc, {
       color: "#33302a",
       fontSize: "1.08em",
       lineHeight: "1.7",
@@ -3205,9 +3768,126 @@ function bindWorkspace(
       padding: "2px 4px",
       maxWidth: "78ch",
     });
-    row.classList.add("tui-answer");
-    fillAnswerHtml(row, text);
-    return row;
+    shell.classList.add("confucius-answer-shell");
+    if (turnId) shell.setAttribute("data-turn-id", turnId);
+    const body = el(targetDoc, "div");
+    body.classList.add("tui-answer");
+    fillAnswerHtml(body, text);
+    shell.appendChild(body);
+
+    const actions = el(targetDoc, "div", undefined, {
+      role: "group",
+      "aria-label": getString("workspace-reply-actions"),
+    });
+    actions.className = "confucius-answer-actions";
+    const actionButton = (
+      kind: "copy" | "branch" | "note",
+      label: string,
+      onClick: (button: HTMLButtonElement) => void,
+      disabled = false,
+    ): HTMLButtonElement => {
+      const action = el(targetDoc, "button", undefined, {
+        type: "button",
+        title: label,
+        "aria-label": label,
+        "data-action": kind,
+      }) as HTMLButtonElement;
+      action.className = "confucius-answer-action";
+      action.disabled = disabled;
+      action.appendChild(replyActionIcon(targetDoc, kind));
+      action.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!action.disabled) onClick(action);
+      });
+      actions.appendChild(action);
+      return action;
+    };
+
+    const copyLabel = getString("workspace-reply-copy");
+    actionButton("copy", copyLabel, (action) => {
+      action.disabled = true;
+      void copyAnswerText(targetDoc, text)
+        .then(() => flashReplyAction(action, "copy", copyLabel))
+        .catch((error) => {
+          state.sendError =
+            error instanceof Error ? error.message : String(error);
+          renderLists();
+        })
+        .finally(() => {
+          if (action.isConnected) action.disabled = false;
+        });
+    });
+
+    const turnFinished = Boolean(
+      turnId &&
+      state.events.some(
+        (event) =>
+          event.turnId === turnId &&
+          (event.type === "turn_completed" ||
+            event.type === "turn_failed" ||
+            event.type === "turn_aborted"),
+      ),
+    );
+    const branchLabel = turnFinished
+      ? getString("workspace-reply-branch")
+      : getString("workspace-reply-branch-wait");
+    actionButton(
+      "branch",
+      branchLabel,
+      (action) => {
+        const source = currentTask();
+        if (!source || !turnId) return;
+        action.disabled = true;
+        void (async () => {
+          try {
+            const branched = (await rpc("task/branch", {
+              taskId: source.id,
+              throughTurnId: turnId,
+              title: `${source.title || getString("workspace-untitled-task")} · ${getString("workspace-reply-branch-suffix")}`,
+            })) as ResearchTaskRecord;
+            await refreshSessions();
+            await loadTask(branched.id);
+            renderLists();
+            prompt.focus();
+          } catch (error) {
+            state.sendError =
+              error instanceof Error ? error.message : String(error);
+            renderLists();
+          } finally {
+            if (action.isConnected) action.disabled = false;
+          }
+        })();
+      },
+      !turnFinished,
+    );
+
+    const noteLabel = getString("workspace-reply-note");
+    actionButton(
+      "note",
+      noteLabel,
+      (action) => {
+        const taskId = state.sessionId;
+        if (!taskId || !turnId) return;
+        action.disabled = true;
+        void rpc("note/propose-from-reply", { taskId, turnId, text })
+          .then(async () => {
+            flashReplyAction(action, "note", noteLabel);
+            await poll();
+          })
+          .catch((error) => {
+            state.sendError =
+              error instanceof Error ? error.message : String(error);
+            renderLists();
+          })
+          .finally(() => {
+            if (action.isConnected) action.disabled = false;
+          });
+      },
+      !turnId,
+    );
+    shell.appendChild(actions);
+    return shell;
   }
 
   function renderReasoning(
@@ -3261,11 +3941,22 @@ function bindWorkspace(
     const wrap = tuiBlock(targetDoc, { margin: "10px 0 4px" });
     const label = el(targetDoc, "div");
     label.className = "tui-waiting";
-    label.textContent = getString("workspace-waiting-model");
-    const bar = el(targetDoc, "div");
-    bar.className = "tui-waiting-bar";
+    const mark = targetDoc.createElementNS(SVG_NS, "svg");
+    mark.setAttribute("viewBox", "0 0 256 256");
+    mark.setAttribute("aria-hidden", "true");
+    mark.classList.add("tui-waiting-mark");
+    const markPath = targetDoc.createElementNS(SVG_NS, "path");
+    markPath.setAttribute(
+      "d",
+      "M200 76 A 90 90 0 1 0 200 180 Q 187 178 173 164 A 58 58 0 1 1 173 92 Q 187 80 200 76 Z",
+    );
+    markPath.setAttribute("fill", "currentColor");
+    mark.appendChild(markPath);
+    const text = el(targetDoc, "span");
+    text.textContent = getString("workspace-waiting-model");
+    label.appendChild(mark);
+    label.appendChild(text);
     wrap.appendChild(label);
-    wrap.appendChild(bar);
     return wrap;
   }
 
@@ -3469,7 +4160,7 @@ function bindWorkspace(
       return renderUserLine(targetDoc, block.text);
     }
     if (block.kind === "text") {
-      return renderAnswer(targetDoc, block.text);
+      return renderAnswer(targetDoc, block.text, block.turnId);
     }
     if (block.kind === "reasoning") {
       return renderReasoning(targetDoc, block.text, `reasoning:${index}`);
@@ -3567,141 +4258,6 @@ function bindWorkspace(
     );
     root.style.fontFamily = UI_FONT_STACKS[font];
     root.style.fontSize = `${size}px`;
-  }
-
-  function renderContextBar(): void {
-    contextBar.textContent = "";
-    const task = currentTask();
-    const locked = task?.lockedContext;
-    const live = state.live?.lockedSnapshot;
-    type Chip = {
-      text: string;
-      title?: string;
-      onClick?: () => void;
-    };
-    const chips: Chip[] = [];
-    const source = locked ?? live;
-    if (source?.reader) {
-      chips.push({
-        text: `📖 ${source.reader.title}${source.reader.pageLabel ? ` · p${source.reader.pageLabel}` : ""}`,
-        title: getString("workspace-ctx-open"),
-        onClick: () => {
-          void rpc("reader/open", {
-            libraryID: source.reader?.libraryID,
-            key: source.reader?.attachmentKey,
-            pageIndex: source.reader?.pageIndex ?? undefined,
-          }).catch(() => undefined);
-        },
-      });
-    }
-    if (source?.selection) {
-      chips.push({
-        text: `✍️ ${source.selection.text.slice(0, 100)}`,
-        title: getString("workspace-ctx-open"),
-        onClick: source.reader
-          ? () => {
-              void rpc("reader/open", {
-                libraryID: source.reader?.libraryID,
-                key: source.reader?.attachmentKey,
-                pageIndex: source.selection?.pageIndex ?? undefined,
-              }).catch(() => undefined);
-            }
-          : undefined,
-      });
-    }
-    if (source?.items.length) {
-      chips.push({
-        text: `🗂 ${source.items.length} ${getString("workspace-ctx-items")}`,
-      });
-    }
-    if (source?.collection) {
-      chips.push({ text: `🗂 ${source.collection.name}` });
-    } else if (source?.savedSearch) {
-      chips.push({ text: `⌕ ${source.savedSearch.name}` });
-    }
-    contextBar.style.display = chips.length || task ? "flex" : "none";
-    if (task) {
-      const lock = el(doc, "div", {
-        color: "#7b766b",
-        fontSize: ".84em",
-        fontWeight: "650",
-      });
-      lock.textContent = `🔒 ${getString("workspace-locked-context")}`;
-      lock.title = new Date(task.lockedContext.capturedAt).toLocaleString();
-      contextBar.appendChild(lock);
-    }
-    for (const chip of chips) {
-      const node = el(doc, "div", {
-        display: "inline-flex",
-        alignItems: "center",
-        gap: "6px",
-        maxWidth: "280px",
-        padding: "3px 10px",
-        borderRadius: "8px",
-        background: "#f0ece3",
-        border: "1px solid #e5e1d8",
-        color: "#6b665c",
-        fontSize: "0.85em",
-        boxSizing: "border-box",
-      });
-      const label = el(doc, "span", {
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-      });
-      label.textContent = chip.text;
-      if (chip.title) {
-        node.title = chip.title;
-      }
-      if (chip.onClick) {
-        node.style.cursor = "pointer";
-      }
-      node.appendChild(label);
-      if (chip.onClick) {
-        node.addEventListener("click", () => chip.onClick?.());
-      }
-      contextBar.appendChild(node);
-    }
-    if (task && live && live.fingerprint !== task.lockedContext.fingerprint) {
-      const drift = el(doc, "div");
-      drift.className = "confucius-context-drift";
-      const message = el(doc, "span");
-      message.textContent = getString("workspace-context-changed");
-      const updateContext = (mode: "add" | "replace"): void => {
-        void (async () => {
-          try {
-            await rpc("task/setContext", {
-              taskId: task.id,
-              mode,
-              context: live,
-            });
-            await refreshSessions();
-            await loadTask(task.id);
-            renderLists();
-          } catch (error) {
-            state.sendError =
-              error instanceof Error ? error.message : String(error);
-            renderLists();
-          }
-        })();
-      };
-      const add = button(
-        doc,
-        "confucius-context-add",
-        getString("workspace-context-add"),
-      );
-      const replace = button(
-        doc,
-        "confucius-context-replace",
-        getString("workspace-context-replace"),
-      );
-      add.addEventListener("click", () => updateContext("add"));
-      replace.addEventListener("click", () => updateContext("replace"));
-      drift.appendChild(message);
-      drift.appendChild(add);
-      drift.appendChild(replace);
-      contextBar.appendChild(drift);
-    }
   }
 
   function renderApprovalCard(
@@ -3878,11 +4434,12 @@ function bindWorkspace(
       const listed = (await rpc(
         force ? "runtime/refresh" : "runtime/list",
         {},
-      )) as { sidecarConnected?: boolean; runtimes?: RuntimeStatus[] };
-      state.sidecarConnected = listed.sidecarConnected === true;
+      )) as RuntimeListResult;
+      state.runtimeHostEnabled = listed.runtimeHostEnabled;
+      state.runtimeHostConnected = listed.runtimeHostConnected;
       state.runtimes = listed.runtimes ?? [];
     } catch {
-      state.sidecarConnected = false;
+      state.runtimeHostConnected = false;
       state.runtimes = [];
     }
   }
@@ -3899,7 +4456,10 @@ function bindWorkspace(
   }
 
   async function loadTask(taskId: string): Promise<void> {
-    if (state.sessionId !== taskId) closeArtifactViewer();
+    if (state.sessionId !== taskId) {
+      closeArtifactViewer();
+      clearPendingAttachments();
+    }
     state.sessionId = taskId;
     state.lastEventId = null;
     state.running = false;
@@ -3945,12 +4505,17 @@ function bindWorkspace(
     } = {},
   ): Promise<ResearchTaskRecord> {
     const current = currentTask();
+    const initialContext = pendingMentionItems.size
+      ? contextWithPendingMentions(
+          options.context ?? state.live?.lockedSnapshot,
+        )
+      : options.context;
     const created = (await rpc("task/new", {
       title: options.title ?? "Untitled research task",
       // With no explicit launch context, let AgentHost capture the live Zotero
       // state while handling this click's RPC. The polled value can lag a
       // reader-tab or item-selection change.
-      context: options.context,
+      context: initialContext,
       backend: options.backend ?? current?.backend ?? "native",
       templateId: options.templateId,
       autoStart: false,
@@ -3959,6 +4524,7 @@ function bindWorkspace(
       created,
       ...state.sessions.filter((row) => row.id !== created.id),
     ];
+    pendingMentionItems.clear();
     await loadTask(created.id);
     if (options.skillSlug) {
       await rpc("skill/activate", {
@@ -4060,6 +4626,156 @@ function bindWorkspace(
     if (context.reader?.pageLabel)
       pieces.push(`p. ${context.reader.pageLabel}`);
     return pieces.join(" · ") || getString("workspace-source-empty");
+  }
+
+  function contextHasSources(context: LockedContextSnapshot): boolean {
+    return Boolean(
+      context.items.length ||
+      context.collection ||
+      context.savedSearch ||
+      context.reader ||
+      context.selection,
+    );
+  }
+
+  function contextDetail(context: LockedContextSnapshot): string {
+    const details = context.items
+      .map((item) => item.title || item.key)
+      .filter(Boolean);
+    if (context.reader?.title && !details.includes(context.reader.title)) {
+      details.push(context.reader.title);
+    }
+    return details.join("\n");
+  }
+
+  function mentionItemKey(item: Pick<ContextSearchItem, "libraryID" | "key">) {
+    return `${item.libraryID}:${item.key}`;
+  }
+
+  function contextForMentionItem(
+    item: ContextSearchItem,
+  ): LockedContextSnapshot {
+    return withLockedContextFingerprint({
+      version: 1,
+      capturedAt: Date.now(),
+      items: [
+        {
+          id: `item:${mentionItemKey(item)}`,
+          libraryID: item.libraryID,
+          key: item.key,
+          title: item.title,
+          source: "library",
+        },
+      ],
+    });
+  }
+
+  function contextWithPendingMentions(
+    base?: LockedContextSnapshot,
+  ): LockedContextSnapshot | undefined {
+    let merged = base;
+    for (const item of pendingMentionItems.values()) {
+      const incoming = contextForMentionItem(item);
+      merged = merged ? mergeLockedContexts(merged, incoming) : incoming;
+    }
+    return merged;
+  }
+
+  function taskHasMentionItem(item: ContextSearchItem): boolean {
+    const task = currentTask();
+    return Boolean(
+      task?.lockedContext.items.some(
+        (locked) => mentionItemKey(locked) === mentionItemKey(item),
+      ) || pendingMentionItems.has(mentionItemKey(item)),
+    );
+  }
+
+  async function addMentionContext(item: ContextSearchItem): Promise<void> {
+    const task = currentTask();
+    const key = mentionItemKey(item);
+    if (!task) {
+      pendingMentionItems.set(key, item);
+      flashContextUpdated();
+      return;
+    }
+    if (taskHasMentionItem(item)) {
+      flashContextUpdated();
+      return;
+    }
+    const taskId = task.id;
+    const update = pendingContextUpdate
+      .catch(() => undefined)
+      .then(async () => {
+        const updated = (await rpc("task/setContext", {
+          taskId,
+          mode: "add",
+          context: contextForMentionItem(item),
+        })) as ResearchTaskRecord;
+        const index = state.sessions.findIndex((entry) => entry.id === taskId);
+        if (index >= 0) state.sessions[index] = updated;
+        else state.sessions.unshift(updated);
+      });
+    pendingContextUpdate = update.then(
+      () => undefined,
+      () => undefined,
+    );
+    try {
+      await update;
+      state.sendError = "";
+      renderLists();
+      flashContextUpdated();
+    } catch (error) {
+      state.sendError = error instanceof Error ? error.message : String(error);
+      renderLists();
+    }
+  }
+
+  let contextFlashGeneration = 0;
+  function flashContextUpdated(): void {
+    const generation = ++contextFlashGeneration;
+    const label = getString("workspace-context-updated");
+    plusBtn.textContent = "✓";
+    plusBtn.setAttribute("data-state", "success");
+    plusBtn.setAttribute("title", label);
+    plusBtn.setAttribute("aria-label", label);
+    doc.defaultView?.setTimeout(() => {
+      if (generation !== contextFlashGeneration || !plusBtn.isConnected) {
+        return;
+      }
+      plusBtn.textContent = "+";
+      plusBtn.removeAttribute("data-state");
+      plusBtn.setAttribute("title", getString("workspace-plus"));
+      plusBtn.setAttribute("aria-label", getString("workspace-plus"));
+    }, 1_200);
+  }
+
+  async function updateTaskContext(mode: "add" | "replace"): Promise<void> {
+    const task = currentTask();
+    if (!task) return;
+    closePlusMenu();
+    try {
+      // Capture again at action time. A polled live snapshot may be stale if
+      // the Zotero selection changed while this menu was open.
+      const live = (await rpc("context/live", {})) as LiveContextResult;
+      state.live = live;
+      const current = live.lockedSnapshot;
+      if (!current || !contextHasSources(current)) {
+        throw new Error(getString("workspace-context-current-empty"));
+      }
+      await rpc("task/setContext", {
+        taskId: task.id,
+        mode,
+        context: current,
+      });
+      await refreshSessions();
+      await loadTask(task.id);
+      state.sendError = "";
+      renderLists();
+      flashContextUpdated();
+    } catch (error) {
+      state.sendError = error instanceof Error ? error.message : String(error);
+      renderLists();
+    }
   }
 
   function renderTemplatePicker(
@@ -4533,59 +5249,14 @@ function bindWorkspace(
     headerCopy.appendChild(title);
     headerCopy.appendChild(source);
 
-    const controls = el(doc, "div", {
-      display: "flex",
-      alignItems: "center",
-      flexWrap: "wrap",
-      gap: "7px",
-    });
-    const runtimeSelect = el(
-      doc,
-      "select",
-      {
-        height: "32px",
-        maxWidth: "150px",
-        border: "1px solid #d7d1c5",
-        borderRadius: "7px",
-        background: "#fff",
-        color: "#33302a",
-      },
-      { id: "confucius-task-runtime", title: getString("workspace-runtime") },
-    ) as HTMLSelectElement;
-    for (const backend of ["native", "codex", "kimi"] as const) {
-      const runtime = runtimeStatus(backend);
-      const option = el(doc, "option", undefined, { value: backend });
-      option.textContent = `${runtimeLabel(backend)}${
-        backend !== "native" && runtime?.state !== "ready" ? " · !" : ""
-      }`;
-      option.setAttribute("data-state", runtime?.state ?? "unavailable");
-      runtimeSelect.appendChild(option);
-    }
-    runtimeSelect.value = task.backend;
-    runtimeSelect.disabled = state.running;
-    runtimeSelect.addEventListener("change", () => {
-      const backend = runtimeSelect.value as AgentBackendKind;
-      void (async () => {
-        try {
-          await rpc("task/setBackend", {
-            taskId: task.id,
-            backend,
-            capabilityProfile: task.capabilityProfile,
-            workingDirectory: task.workingDirectory,
-          });
-          await refreshSessions();
-          await loadTask(task.id);
-          renderLists();
-        } catch (error) {
-          state.sendError =
-            error instanceof Error ? error.message : String(error);
-          runtimeSelect.value = task.backend;
-          renderLists();
-        }
-      })();
-    });
-    controls.appendChild(runtimeSelect);
+    header.appendChild(headerCopy);
     if (task.status === "interrupted") {
+      const controls = el(doc, "div", {
+        display: "flex",
+        alignItems: "center",
+        flexWrap: "wrap",
+        gap: "7px",
+      });
       const resume = button(
         doc,
         "confucius-task-continue",
@@ -4607,9 +5278,8 @@ function bindWorkspace(
         })();
       });
       controls.appendChild(resume);
+      header.appendChild(controls);
     }
-    header.appendChild(headerCopy);
-    header.appendChild(controls);
     overview.appendChild(header);
 
     if (!state.artifacts.length) {
@@ -4939,6 +5609,11 @@ function bindWorkspace(
     closeArtifactChoiceMenu(false);
     existing?.remove();
 
+    // Sidebar layout: the pane is too narrow for the mask to show, so the
+    // viewer mounts on the main document root and covers the whole window.
+    // The Zotero main window is a XUL document: doc.body may not exist.
+    const mountToWindow = compact;
+
     const overlay = el(doc, "div", undefined, {
       id: "confucius-artifact-overlay",
       role: "dialog",
@@ -5061,7 +5736,7 @@ function bindWorkspace(
       "h2",
       {
         margin: "10px 0 20px",
-        fontSize: compact ? "23px" : "30px",
+        fontSize: compact && !mountToWindow ? "23px" : "30px",
         lineHeight: "1.16",
         letterSpacing: "-.025em",
       },
@@ -5107,7 +5782,15 @@ function bindWorkspace(
     dialogBody.appendChild(shell);
     dialog.appendChild(dialogBody);
     overlay.appendChild(dialog);
-    root.appendChild(overlay);
+    const windowHost = mountToWindow
+      ? ((doc.body ?? doc.documentElement) as HTMLElement | null)
+      : null;
+    if (windowHost) {
+      overlay.setAttribute("data-mount", "window");
+      windowHost.appendChild(overlay);
+    } else {
+      root.appendChild(overlay);
+    }
     dialogBody.scrollTop = previousScroll;
     lastArtifactViewerSignature = signature;
     if (!wasOpen) closeButton.focus();
@@ -5142,7 +5825,6 @@ function bindWorkspace(
 
   function renderLists(): void {
     applyAppearance();
-    renderContextBar();
     syncEndpointButton();
     lastListSignature = listSignature();
     sessionPane.textContent = "";
@@ -5280,21 +5962,6 @@ function bindWorkspace(
         }`,
       ),
     );
-    if (session) {
-      const noteBtn = button(doc, "", getString("workspace-note-propose"));
-      noteBtn.style.fontSize = "11px";
-      noteBtn.addEventListener("click", () => {
-        if (!state.sessionId) {
-          return;
-        }
-        void rpc("note/propose-from-session", {
-          sessionId: state.sessionId,
-        }).catch(() => {
-          /* outcome shows up as an approval card or an error banner */
-        });
-      });
-      timelineHead.appendChild(noteBtn);
-    }
     activityStream.appendChild(timelineHead);
     activityStream.appendChild(renderActivityOverview());
     if (
@@ -5488,10 +6155,34 @@ function bindWorkspace(
   }
 
   async function sendPrompt(): Promise<void> {
-    const text = prompt.value.trim();
-    if (!text || state.sending || state.running) {
+    const enteredText = prompt.value.trim();
+    if (state.sending || state.running) {
       return;
     }
+    if (pendingAttachments.some((item) => item.status === "preparing")) {
+      status.style.color = "#8c6a3f";
+      status.textContent = getString("workspace-attachment-wait");
+      return;
+    }
+    if (pendingAttachments.some((item) => item.status === "error")) {
+      state.sendError = getString("workspace-attachment-failed");
+      renderLists();
+      return;
+    }
+    const submittedAttachments = pendingAttachments.filter(
+      (item): item is PendingAttachment & { record: TaskAttachment } =>
+        item.status === "ready" && Boolean(item.record),
+    );
+    const text =
+      enteredText ||
+      (submittedAttachments.length
+        ? getString("workspace-attachment-default-prompt")
+        : "");
+    if (!text) return;
+    const submittedUiIds = new Set(
+      submittedAttachments.map((item) => item.uiId),
+    );
+    const attachmentIds = submittedAttachments.map((item) => item.record.id);
     const selectedTask = currentTask();
     if (
       (selectedTask?.backend ?? "native") === "native" &&
@@ -5512,26 +6203,40 @@ function bindWorkspace(
     renderLists();
     try {
       if (!state.sessionId) {
+        const lockedContext = contextWithPendingMentions(
+          state.live?.lockedSnapshot,
+        );
         const created = (await rpc("task/new", {
-          title: text.slice(0, 72),
-          context: state.live?.lockedSnapshot,
+          title: (enteredText || submittedAttachments[0]?.name || text).slice(
+            0,
+            72,
+          ),
+          lockedContext,
         })) as SessionRow;
         state.sessionId = created.id;
         state.events = [];
         state.lastEventId = null;
         state.running = false;
+        pendingMentionItems.clear();
       }
       // A user can select a permission mode and immediately press Send. Wait
       // for the queued session update so the visible mode is the mode used by
       // the turn that follows.
-      await pendingPermissionUpdate;
+      await Promise.all([pendingPermissionUpdate, pendingContextUpdate]);
       const promptSessionId = state.sessionId;
       await refreshSessions();
       renderLists();
       const started = (await rpc("task/prompt", {
         taskId: promptSessionId,
         text,
+        attachmentIds,
       })) as { superseded?: boolean };
+      for (let index = pendingAttachments.length - 1; index >= 0; index -= 1) {
+        if (submittedUiIds.has(pendingAttachments[index].uiId)) {
+          pendingAttachments.splice(index, 1);
+        }
+      }
+      renderAttachmentTray();
       if (state.sessionId !== promptSessionId) {
         if (state.pendingUserText === text) {
           state.pendingUserText = "";
@@ -5540,7 +6245,7 @@ function bindWorkspace(
       }
       // Keep text typed while the request was in flight; only clear the
       // submitted value when the composer was not edited concurrently.
-      if (prompt.value.trim() === text) {
+      if (prompt.value.trim() === enteredText) {
         prompt.value = "";
       }
       state.pendingUserText = "";
@@ -5578,7 +6283,6 @@ function bindWorkspace(
       renderLists();
     } finally {
       state.sending = false;
-      sendBtn.removeAttribute("disabled");
       updateRunningUI();
     }
   }
@@ -5798,6 +6502,7 @@ function bindWorkspace(
       streamResponses: true,
       memoryAutoExtract: false,
       memoryConsent: "review",
+      pluginRuntimeHost: true,
       reasoningEffort: "auto",
       contextWindowTokens: 32768,
       hasApiKey: false,
@@ -5949,7 +6654,24 @@ function bindWorkspace(
     };
 
     sectionIntro(runtimeTab, getString("workspace-runtime-help"));
-    const sidecarLine = el(doc, "div", {
+    const runtimeHostRow = el(doc, "label", {
+      display: "grid",
+      gridTemplateColumns: "18px minmax(0, 1fr)",
+      gap: "8px",
+      alignItems: "start",
+      marginBottom: "10px",
+      cursor: "pointer",
+    });
+    const runtimeHostToggle = el(doc, "input", undefined, {
+      id: "confucius-runtime-host-enabled",
+      type: "checkbox",
+    }) as HTMLInputElement;
+    runtimeHostToggle.checked = live.pluginRuntimeHost !== false;
+    const runtimeHostCopy = el(doc, "span");
+    runtimeHostCopy.textContent = getString("workspace-runtime-host-toggle");
+    runtimeHostRow.appendChild(runtimeHostToggle);
+    runtimeHostRow.appendChild(runtimeHostCopy);
+    const runtimeHostLine = el(doc, "div", {
       marginBottom: "10px",
       fontWeight: "650",
     });
@@ -5968,37 +6690,126 @@ function bindWorkspace(
       "confucius-runtime-refresh",
       getString("workspace-runtime-refresh"),
     );
-    const kimiExecutable = el(
-      doc,
-      "input",
-      {
-        width: "100%",
-        height: "32px",
-        margin: "4px 0 7px",
-        padding: "0 8px",
-        boxSizing: "border-box",
-        border: "1px solid #ddd8cc",
-        borderRadius: "7px",
-      },
-      {
-        id: "confucius-runtime-kimi-path",
-        type: "text",
-        placeholder: getString("workspace-runtime-kimi-path"),
-      },
-    ) as HTMLInputElement;
-    const kimiSave = button(
-      doc,
-      "confucius-runtime-kimi-save",
-      getString("workspace-runtime-kimi-save"),
-    );
     const runtimeError = el(doc, "div", {
       minHeight: "18px",
       color: "#b3452f",
     });
+    const executableInputs = new Map<
+      Exclude<AgentBackendKind, "native">,
+      HTMLInputElement
+    >();
+
+    const configureExecutable = async (
+      backend: Exclude<AgentBackendKind, "native">,
+      input: HTMLInputElement,
+    ): Promise<void> => {
+      runtimeError.textContent = "";
+      await rpc("runtime/configure", {
+        backend,
+        executable: input.value.trim(),
+      });
+      await refreshRuntimes(true);
+      paintRuntimePanel();
+    };
+
+    const executableEditor = (
+      backend: Exclude<AgentBackendKind, "native">,
+    ): HTMLElement => {
+      const wrap = el(doc, "div", {
+        marginBottom: "12px",
+        padding: "10px",
+        border: "1px solid #e5e1d8",
+        borderRadius: "8px",
+      });
+      const label = el(doc, "label", {
+        display: "block",
+        color: "#6b665c",
+        fontSize: "11px",
+        marginBottom: "5px",
+      });
+      label.textContent = getString(`workspace-runtime-${backend}-label`);
+      const input = el(
+        doc,
+        "input",
+        {
+          width: "100%",
+          height: "32px",
+          padding: "0 8px",
+          boxSizing: "border-box",
+          border: "1px solid #ddd8cc",
+          borderRadius: "7px",
+        },
+        {
+          id: `confucius-runtime-${backend}-path`,
+          type: "text",
+          placeholder: getString("workspace-runtime-path-auto"),
+        },
+      ) as HTMLInputElement;
+      const actions = el(doc, "div", {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: "7px",
+        marginTop: "7px",
+      });
+      const browse = button(
+        doc,
+        `confucius-runtime-${backend}-browse`,
+        getString("workspace-runtime-browse"),
+      );
+      const apply = button(
+        doc,
+        `confucius-runtime-${backend}-save`,
+        getString("workspace-runtime-save"),
+      );
+      const automatic = button(
+        doc,
+        `confucius-runtime-${backend}-auto`,
+        getString("workspace-runtime-auto"),
+      );
+      browse.addEventListener("click", () => {
+        if (!win) return;
+        void pickRuntimeExecutable(
+          win,
+          getString(`workspace-runtime-${backend}-label`),
+        )
+          .then(async (path) => {
+            if (!path) return;
+            input.value = path;
+            await configureExecutable(backend, input);
+          })
+          .catch((error) => {
+            runtimeError.textContent =
+              error instanceof Error ? error.message : String(error);
+          });
+      });
+      apply.addEventListener("click", () => {
+        void configureExecutable(backend, input).catch((error) => {
+          runtimeError.textContent =
+            error instanceof Error ? error.message : String(error);
+        });
+      });
+      automatic.addEventListener("click", () => {
+        input.value = "";
+        void configureExecutable(backend, input).catch((error) => {
+          runtimeError.textContent =
+            error instanceof Error ? error.message : String(error);
+        });
+      });
+      actions.appendChild(browse);
+      actions.appendChild(apply);
+      actions.appendChild(automatic);
+      wrap.appendChild(label);
+      wrap.appendChild(input);
+      wrap.appendChild(actions);
+      executableInputs.set(backend, input);
+      return wrap;
+    };
+
     const paintRuntimePanel = (): void => {
-      sidecarLine.textContent = state.sidecarConnected
-        ? getString("workspace-sidecar-connected")
-        : getString("workspace-sidecar-offline");
+      runtimeHostToggle.checked = state.runtimeHostEnabled;
+      runtimeHostLine.textContent = state.runtimeHostEnabled
+        ? getString("workspace-runtime-host-enabled")
+        : getString("workspace-runtime-host-disabled");
       runtimeList.textContent = "";
       const runtimes: RuntimeStatus[] = [
         runtimeStatus("native")!,
@@ -6007,7 +6818,7 @@ function bindWorkspace(
             runtimeStatus(backend) ?? {
               backend,
               state: "unavailable" as const,
-              message: getString("workspace-sidecar-start-help"),
+              message: getString("workspace-runtime-not-detected"),
               checkedAt: Date.now(),
             },
         ),
@@ -6035,16 +6846,48 @@ function bindWorkspace(
         });
         detail.textContent = `${getString(
           `workspace-runtime-state-${runtime.state.replace(/_/g, "-")}`,
-        )}${runtime.message ? ` · ${runtime.message}` : ""}`;
+        )}${runtime.message ? ` · ${runtime.message}` : ""}${
+          runtime.executable
+            ? ` · ${getString("workspace-runtime-resolved")}: ${runtime.executable}`
+            : ""
+        }`;
         row.appendChild(dot);
         row.appendChild(identity);
         row.appendChild(detail);
         runtimeList.appendChild(row);
-        if (runtime.backend === "kimi" && runtime.executable) {
-          kimiExecutable.value = runtime.executable;
+        if (runtime.backend === "codex" || runtime.backend === "kimi") {
+          const input = executableInputs.get(runtime.backend);
+          if (input && doc.activeElement !== input) {
+            input.value = runtime.configuredExecutable ?? "";
+          }
         }
       }
     };
+    runtimeHostToggle.addEventListener("change", () => {
+      void (async () => {
+        runtimeHostToggle.disabled = true;
+        runtimeError.textContent = "";
+        const listed = (await rpc("runtime/setPluginHost", {
+          enabled: runtimeHostToggle.checked,
+        })) as RuntimeListResult;
+        state.runtimeHostEnabled = listed.runtimeHostEnabled;
+        state.runtimeHostConnected = listed.runtimeHostConnected;
+        state.runtimes = listed.runtimes;
+        live.pluginRuntimeHost = listed.runtimeHostEnabled;
+        if (state.config) {
+          state.config.pluginRuntimeHost = listed.runtimeHostEnabled;
+        }
+        paintRuntimePanel();
+      })()
+        .catch((error) => {
+          runtimeHostToggle.checked = !runtimeHostToggle.checked;
+          runtimeError.textContent =
+            error instanceof Error ? error.message : String(error);
+        })
+        .finally(() => {
+          runtimeHostToggle.disabled = false;
+        });
+    });
     runtimeRefresh.addEventListener("click", () => {
       void (async () => {
         runtimeRefresh.setAttribute("disabled", "true");
@@ -6058,33 +6901,13 @@ function bindWorkspace(
         runtimeRefresh.removeAttribute("disabled");
       });
     });
-    kimiSave.addEventListener("click", () => {
-      void (async () => {
-        runtimeError.textContent = "";
-        await rpc("runtime/configure", {
-          backend: "kimi",
-          executable: kimiExecutable.value.trim(),
-        });
-        await refreshRuntimes(true);
-        paintRuntimePanel();
-      })().catch((error) => {
-        runtimeError.textContent =
-          error instanceof Error ? error.message : String(error);
-      });
-    });
     runtimeActions.appendChild(runtimeRefresh);
-    runtimeTab.appendChild(sidecarLine);
+    runtimeTab.appendChild(runtimeHostRow);
+    runtimeTab.appendChild(runtimeHostLine);
     runtimeTab.appendChild(runtimeList);
     runtimeTab.appendChild(runtimeActions);
-    const kimiLabel = el(doc, "label", {
-      display: "block",
-      color: "#6b665c",
-      fontSize: "11px",
-    });
-    kimiLabel.textContent = getString("workspace-runtime-kimi-label");
-    runtimeTab.appendChild(kimiLabel);
-    runtimeTab.appendChild(kimiExecutable);
-    runtimeTab.appendChild(kimiSave);
+    runtimeTab.appendChild(executableEditor("codex"));
+    runtimeTab.appendChild(executableEditor("kimi"));
     runtimeTab.appendChild(runtimeError);
     paintRuntimePanel();
 
@@ -6821,6 +7644,349 @@ function bindWorkspace(
     index: 0,
   };
 
+  const mentionState = {
+    open: false,
+    token: null as LibraryMentionToken | null,
+    query: "",
+    items: [] as ContextSearchItem[],
+    index: 0,
+    nextOffset: 0 as number | null,
+    total: 0,
+    libraryID: 0,
+    libraryName: "",
+    loading: false,
+    error: "",
+    requestId: 0,
+  };
+  const MENTION_PAGE_SIZE = 10;
+
+  function closeMentionMenu(): void {
+    mentionState.open = false;
+    mentionState.token = null;
+    mentionState.items = [];
+    mentionState.loading = false;
+    mentionState.error = "";
+    mentionState.requestId += 1;
+    if (mentionSearchTimer && win) {
+      win.clearTimeout(mentionSearchTimer);
+      mentionSearchTimer = null;
+    }
+    doc.getElementById("confucius-mention-menu")?.remove();
+  }
+
+  function updateComposerMenus(): void {
+    const token = libraryMentionTokenAtCaret(
+      prompt.value,
+      prompt.selectionStart ?? prompt.value.length,
+    );
+    if (!token) {
+      closeMentionMenu();
+      updateSlashMenu(prompt.value);
+      return;
+    }
+    closeSlashMenu();
+    closePlusMenu();
+    closeEndpointMenu();
+    const queryChanged =
+      !mentionState.open || mentionState.query !== token.query;
+    mentionState.open = true;
+    mentionState.token = token;
+    if (!queryChanged) {
+      return;
+    }
+    mentionState.query = token.query;
+    mentionState.items = [];
+    mentionState.index = 0;
+    mentionState.nextOffset = 0;
+    mentionState.total = 0;
+    mentionState.libraryID = 0;
+    mentionState.libraryName = "";
+    mentionState.error = "";
+    mentionState.loading = true;
+    mentionState.requestId += 1;
+    const requestId = mentionState.requestId;
+    if (mentionSearchTimer && win) win.clearTimeout(mentionSearchTimer);
+    renderMentionMenu(false);
+    const start = () => {
+      mentionSearchTimer = null;
+      if (!mentionState.open || requestId !== mentionState.requestId) return;
+      mentionState.loading = false;
+      void loadMentionItems(true, requestId);
+    };
+    if (win) {
+      mentionSearchTimer = win.setTimeout(start, token.query ? 160 : 0);
+    } else {
+      start();
+    }
+  }
+
+  async function loadMentionItems(
+    reset: boolean,
+    requestId = mentionState.requestId,
+  ): Promise<void> {
+    if (
+      !mentionState.open ||
+      mentionState.loading ||
+      requestId !== mentionState.requestId
+    ) {
+      return;
+    }
+    const offset = reset ? 0 : mentionState.nextOffset;
+    if (offset === null) return;
+    mentionState.loading = true;
+    mentionState.error = "";
+    renderMentionMenu(!reset);
+    try {
+      const result = (await rpc("context/search-items", {
+        query: mentionState.query,
+        offset,
+        limit: MENTION_PAGE_SIZE,
+        libraryID: reset ? undefined : mentionState.libraryID || undefined,
+      })) as ContextSearchItemsResult;
+      if (!mentionState.open || requestId !== mentionState.requestId) return;
+      const combined = reset
+        ? result.items
+        : [...mentionState.items, ...result.items];
+      const unique = new Map<string, ContextSearchItem>();
+      for (const item of combined) unique.set(mentionItemKey(item), item);
+      mentionState.items = [...unique.values()];
+      mentionState.nextOffset = result.nextOffset;
+      mentionState.total = result.total;
+      mentionState.libraryID = result.libraryID;
+      mentionState.libraryName = result.libraryName;
+      mentionState.index = Math.min(
+        mentionState.index,
+        Math.max(0, mentionState.items.length - 1),
+      );
+    } catch (error) {
+      if (!mentionState.open || requestId !== mentionState.requestId) return;
+      mentionState.error =
+        error instanceof Error ? error.message : String(error);
+    } finally {
+      if (mentionState.open && requestId === mentionState.requestId) {
+        mentionState.loading = false;
+        renderMentionMenu(!reset);
+      }
+    }
+  }
+
+  function renderMentionMenu(preserveScroll = true): void {
+    const previousList = doc.getElementById(
+      "confucius-mention-results",
+    ) as HTMLElement | null;
+    const previousScrollTop = preserveScroll ? previousList?.scrollTop || 0 : 0;
+    doc.getElementById("confucius-mention-menu")?.remove();
+    if (!mentionState.open) return;
+    const menu = el(
+      doc,
+      "div",
+      {
+        position: "fixed",
+        background: "#ffffff",
+        border: "1px solid #d8d1c4",
+        borderRadius: "12px",
+        boxShadow: "0 12px 32px rgba(28,25,23,0.2)",
+        padding: "8px",
+        overflow: "hidden",
+        zIndex: "930",
+        boxSizing: "border-box",
+      },
+      {
+        id: "confucius-mention-menu",
+        role: "listbox",
+        "aria-label": getString("workspace-mention-heading"),
+      },
+    );
+    const header = el(doc, "div", {
+      display: "flex",
+      alignItems: "baseline",
+      justifyContent: "space-between",
+      gap: "10px",
+      padding: "5px 7px 8px",
+      borderBottom: "1px solid #eee9df",
+    });
+    const heading = el(doc, "strong", {
+      color: "#33302a",
+      fontSize: "12px",
+      letterSpacing: ".01em",
+    });
+    heading.textContent = getString("workspace-mention-heading");
+    const scope = el(doc, "span", {
+      minWidth: "0",
+      color: "#8a857c",
+      fontSize: "11px",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+    });
+    scope.textContent = mentionState.libraryName
+      ? `${mentionState.libraryName} · ${mentionState.items.length}/${mentionState.total}`
+      : getString("workspace-mention-hint");
+    header.appendChild(heading);
+    header.appendChild(scope);
+    menu.appendChild(header);
+
+    const list = el(doc, "div", {
+      maxHeight: "258px",
+      overflowY: "auto",
+      overscrollBehavior: "contain",
+      padding: "4px 0",
+      boxSizing: "border-box",
+    });
+    list.id = "confucius-mention-results";
+    for (const [index, item] of mentionState.items.entries()) {
+      const active = index === mentionState.index;
+      const included = taskHasMentionItem(item);
+      const row = el(doc, "div", {
+        display: "flex",
+        alignItems: "center",
+        gap: "9px",
+        minHeight: "50px",
+        padding: "5px 8px",
+        borderRadius: "8px",
+        background: active ? "#f0ece3" : "transparent",
+        cursor: "pointer",
+        boxSizing: "border-box",
+      });
+      row.setAttribute("role", "option");
+      row.setAttribute("data-mention-index", String(index));
+      row.setAttribute("aria-selected", active ? "true" : "false");
+      const glyph = el(doc, "span", {
+        flex: "0 0 auto",
+        width: "25px",
+        height: "31px",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        border: "1px solid #d8d1c4",
+        borderRadius: "5px",
+        background: "#faf8f3",
+        color: "#8c6a3f",
+        fontSize: "13px",
+      });
+      glyph.textContent = "▤";
+      const copy = el(doc, "span", {
+        flex: "1 1 auto",
+        minWidth: "0",
+      });
+      const title = el(doc, "span", {
+        display: "block",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        color: "#33302a",
+        fontWeight: "600",
+        fontSize: "12px",
+      });
+      title.textContent = item.title || getString("workspace-mention-untitled");
+      const meta = el(doc, "span", {
+        display: "block",
+        marginTop: "2px",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        color: "#8a857c",
+        fontSize: "11px",
+      });
+      meta.textContent = [
+        item.creators.slice(0, 2).join(", "),
+        item.year,
+        item.itemType,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      copy.appendChild(title);
+      copy.appendChild(meta);
+      row.appendChild(glyph);
+      row.appendChild(copy);
+      if (included) {
+        const mark = el(doc, "span", {
+          flex: "0 0 auto",
+          color: "#6b665c",
+          fontSize: "11px",
+        });
+        mark.textContent = `✓ ${getString("workspace-mention-added")}`;
+        row.appendChild(mark);
+      }
+      row.addEventListener("mousedown", (event) => event.preventDefault());
+      row.addEventListener("mouseenter", () => {
+        mentionState.index = index;
+        highlightMentionRows(menu);
+      });
+      row.addEventListener("click", () => {
+        mentionState.index = index;
+        runMentionSelection();
+      });
+      list.appendChild(row);
+    }
+    if (mentionState.error) {
+      const error = el(doc, "div", {
+        padding: "12px 9px",
+        color: "#b3452f",
+        fontSize: "12px",
+      });
+      error.textContent = mentionState.error;
+      list.appendChild(error);
+    } else if (!mentionState.loading && mentionState.items.length === 0) {
+      const empty = el(doc, "div", {
+        padding: "14px 9px",
+        color: "#8a857c",
+        fontSize: "12px",
+      });
+      empty.textContent = getString("workspace-mention-empty");
+      list.appendChild(empty);
+    }
+    if (mentionState.loading) {
+      const loading = el(doc, "div", {
+        padding: "9px",
+        color: "#8a857c",
+        fontSize: "11px",
+        textAlign: "center",
+      });
+      loading.textContent = getString("workspace-mention-loading");
+      list.appendChild(loading);
+    }
+    list.addEventListener("scroll", () => {
+      if (
+        list.scrollHeight - list.scrollTop - list.clientHeight < 28 &&
+        mentionState.nextOffset !== null &&
+        !mentionState.loading
+      ) {
+        void loadMentionItems(false);
+      }
+    });
+    menu.appendChild(list);
+    placeMenu(prompt, menu, Math.min(520, Math.max(280, responsiveWidth - 16)));
+    const availableListHeight = Math.max(
+      86,
+      menu.clientHeight - header.offsetHeight - 16,
+    );
+    list.style.maxHeight = `${Math.min(258, availableListHeight)}px`;
+    list.scrollTop = previousScrollTop;
+  }
+
+  function highlightMentionRows(menu: Element): void {
+    menu.querySelectorAll("[data-mention-index]").forEach((node: Element) => {
+      const row = node as HTMLElement;
+      const active =
+        Number(row.getAttribute("data-mention-index")) === mentionState.index;
+      row.style.background = active ? "#f0ece3" : "transparent";
+      row.setAttribute("aria-selected", active ? "true" : "false");
+    });
+  }
+
+  function runMentionSelection(): void {
+    const item = mentionState.items[mentionState.index];
+    const token = mentionState.token;
+    if (!item || !token) return;
+    const replacement = replaceLibraryMention(prompt.value, token, item.title);
+    prompt.value = replacement.value;
+    closeMentionMenu();
+    prompt.focus();
+    prompt.setSelectionRange(replacement.caret, replacement.caret);
+    void addMentionContext(item);
+  }
+
   function slashCommands(): SlashCommand[] {
     const commands: SlashCommand[] = [
       {
@@ -7120,6 +8286,17 @@ function bindWorkspace(
     endpointBtn.setAttribute("aria-expanded", "false");
   }
 
+  function clearEndpointSubmenuHighlight(): void {
+    if (!endpointSubmenu) return;
+    endpointSubmenu = null;
+    doc.getElementById("confucius-endpoint-submenu")?.remove();
+    doc
+      .querySelectorAll(
+        "#confucius-endpoint-menu .confucius-menu-row[data-highlighted='true']",
+      )
+      .forEach((row: Element) => row.setAttribute("data-highlighted", "false"));
+  }
+
   function menuPanel(id: string, extra?: Styles): HTMLElement {
     return el(
       doc,
@@ -7146,6 +8323,7 @@ function bindWorkspace(
     label: string,
     opts: {
       active?: boolean;
+      highlighted?: boolean;
       hint?: string;
       onClick?: () => void;
       onEnter?: () => void;
@@ -7159,8 +8337,10 @@ function bindWorkspace(
       alignItems: "center",
       justifyContent: "space-between",
       gap: "8px",
-      background: opts.active ? "#f0ece3" : "transparent",
     });
+    row.className = "confucius-menu-row";
+    row.setAttribute("data-active", opts.active ? "true" : "false");
+    row.setAttribute("data-highlighted", opts.highlighted ? "true" : "false");
     const text = el(doc, "span", {
       flex: "1 1 auto",
       overflow: "hidden",
@@ -7491,6 +8671,7 @@ function bindWorkspace(
                 ? ""
                 : getString("workspace-runtime-unavailable"),
         onClick: () => void applyTaskBackend(backend),
+        onEnter: clearEndpointSubmenuHighlight,
       });
       row.setAttribute("data-runtime", backend);
       row.setAttribute("role", "menuitem");
@@ -7507,7 +8688,8 @@ function bindWorkspace(
       const row = menuRow(
         ep.name || ep.model || endpointHost(ep.baseUrl) || ep.id,
         {
-          active: active || open,
+          active,
+          highlighted: open,
           hint: "›",
           onClick: () => {
             void applyEndpointSwitch(ep.id);
@@ -7528,7 +8710,7 @@ function bindWorkspace(
 
     const thinkingOpen = endpointSubmenu?.kind === "effort";
     const thinkingRow = menuRow(getString("workspace-thinking"), {
-      active: thinkingOpen,
+      highlighted: thinkingOpen,
       hint: `${state.config?.reasoningEffort ?? "auto"} ›`,
       onClick: () => {
         endpointSubmenu = { kind: "effort" };
@@ -7550,6 +8732,7 @@ function bindWorkspace(
         closeEndpointMenu();
         void refreshConfig().then(() => openSettings());
       },
+      onEnter: clearEndpointSubmenuHighlight,
     });
     manage.setAttribute("data-submenu", "manage");
     manage.setAttribute("role", "menuitem");
@@ -7635,6 +8818,7 @@ function bindWorkspace(
     }
     closePlusMenu();
     closeSlashMenu();
+    closeMentionMenu();
     endpointMenuOpen = true;
     const activeId = state.config?.activeEndpointId || "";
     endpointSubmenu = activeId
@@ -7658,6 +8842,7 @@ function bindWorkspace(
     }
     closeEndpointMenu();
     closeSlashMenu();
+    closeMentionMenu();
     const menu = el(
       doc,
       "div",
@@ -7707,6 +8892,42 @@ function bindWorkspace(
       row.addEventListener("click", onClick);
       menu.appendChild(row);
     };
+
+    const task = currentTask();
+    if (task) {
+      section(getString("workspace-context-heading"));
+      const summary = el(doc, "div", {
+        margin: "2px 8px 6px",
+        color: "#6b665c",
+        fontSize: "12px",
+        lineHeight: "1.4",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      });
+      summary.textContent = contextSummary(task.lockedContext);
+      const detail = contextDetail(task.lockedContext);
+      if (detail) summary.title = detail;
+      menu.appendChild(summary);
+      if (
+        state.live?.lockedSnapshot &&
+        state.live.lockedSnapshot.fingerprint !== task.lockedContext.fingerprint
+      ) {
+        const changed = el(doc, "div", {
+          margin: "0 8px 5px",
+          color: "#8a4b26",
+          fontSize: "11px",
+        });
+        changed.textContent = getString("workspace-context-changed");
+        menu.appendChild(changed);
+      }
+      option(getString("workspace-context-add"), false, () => {
+        void updateTaskContext("add");
+      });
+      option(getString("workspace-context-replace"), false, () => {
+        void updateTaskContext("replace");
+      });
+    }
 
     section(getString("workspace-mode"));
     option("Agent", state.mode === "agent", () => {
@@ -7788,6 +9009,14 @@ function bindWorkspace(
     const working = state.running || state.sending;
     sendBtn.style.display = working ? "none" : "";
     stopBtn.style.display = working ? "" : "none";
+    if (
+      state.sending ||
+      pendingAttachments.some((item) => item.status === "preparing")
+    ) {
+      sendBtn.setAttribute("disabled", "true");
+    } else {
+      sendBtn.removeAttribute("disabled");
+    }
   }
 
   let pollInFlight = false;
@@ -7886,7 +9115,6 @@ function bindWorkspace(
         renderLists();
       } else {
         applyAppearance();
-        renderContextBar();
         syncEndpointButton();
       }
       if (state.sending) {
@@ -7923,8 +9151,64 @@ function bindWorkspace(
   knowledgeBtn.addEventListener("click", () => {
     void openKnowledgeWindow();
   });
+  function onAttachmentDragEnter(event: Event): void {
+    const drag = event as DragEvent;
+    if (!hasDroppedFiles(drag.dataTransfer) || !canAcceptFileDrop()) {
+      showAttachmentDrop(false);
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    attachmentDragDepth += 1;
+    showAttachmentDrop(true);
+  }
+  function onAttachmentDragOver(event: Event): void {
+    const drag = event as DragEvent;
+    if (!hasDroppedFiles(drag.dataTransfer) || !canAcceptFileDrop()) {
+      resetAttachmentDrop();
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (drag.dataTransfer) drag.dataTransfer.dropEffect = "copy";
+    showAttachmentDrop(true);
+  }
+  function onAttachmentDragLeave(event: Event): void {
+    const drag = event as DragEvent;
+    if (
+      !hasDroppedFiles(drag.dataTransfer) &&
+      root.getAttribute("data-file-drop-active") !== "true"
+    ) {
+      return;
+    }
+    event.preventDefault();
+    attachmentDragDepth = Math.max(0, attachmentDragDepth - 1);
+    if (attachmentDragDepth === 0) showAttachmentDrop(false);
+  }
+  function onAttachmentDrop(event: Event): void {
+    const drag = event as DragEvent;
+    if (!hasDroppedFiles(drag.dataTransfer)) return;
+    if (!canAcceptFileDrop()) {
+      resetAttachmentDrop();
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    resetAttachmentDrop();
+    closeMentionMenu();
+    closeSlashMenu();
+    void prepareDroppedFiles(droppedFilePaths(drag.dataTransfer));
+  }
+  root.addEventListener("dragenter", onAttachmentDragEnter);
+  root.addEventListener("dragover", onAttachmentDragOver);
+  root.addEventListener("dragleave", onAttachmentDragLeave);
+  root.addEventListener("drop", onAttachmentDrop);
   composer.addEventListener("submit", (event) => {
     event.preventDefault();
+    if (mentionState.open) {
+      runMentionSelection();
+      return;
+    }
     if (slashState.open) {
       runSlashSelection();
       return;
@@ -7933,6 +9217,10 @@ function bindWorkspace(
   });
   sendBtn.addEventListener("click", (event) => {
     event.preventDefault();
+    if (mentionState.open) {
+      runMentionSelection();
+      return;
+    }
     if (slashState.open) {
       runSlashSelection();
       return;
@@ -7972,6 +9260,27 @@ function bindWorkspace(
         closeArtifactChoiceMenu(false);
       }
     }
+    const plusMenu = doc.getElementById("confucius-plus-menu");
+    if (
+      plusMenu &&
+      (!target || (!plusBtn.contains(target) && !plusMenu.contains(target)))
+    ) {
+      closePlusMenu();
+    }
+    const slashMenu = doc.getElementById("confucius-slash-menu");
+    if (
+      slashState.open &&
+      (!target || (!prompt.contains(target) && !slashMenu?.contains(target)))
+    ) {
+      closeSlashMenu();
+    }
+    const mentionMenu = doc.getElementById("confucius-mention-menu");
+    if (
+      mentionState.open &&
+      (!target || (!prompt.contains(target) && !mentionMenu?.contains(target)))
+    ) {
+      closeMentionMenu();
+    }
     if (!endpointMenuOpen) {
       return;
     }
@@ -7987,9 +9296,29 @@ function bindWorkspace(
     closeEndpointMenu();
   });
   contextRing.node.addEventListener("click", () => void compactNow());
-  prompt.addEventListener("input", () => updateSlashMenu(prompt.value));
+  prompt.addEventListener("input", updateComposerMenus);
+  prompt.addEventListener("click", updateComposerMenus);
   prompt.addEventListener("keydown", (event) => {
     const key = (event as KeyboardEvent).key;
+    if (
+      mentionState.open &&
+      mentionState.items.length > 0 &&
+      (key === "ArrowDown" || key === "ArrowUp")
+    ) {
+      event.preventDefault();
+      mentionState.index +=
+        key === "ArrowDown" ? 1 : -1 + mentionState.items.length * 2;
+      mentionState.index %= mentionState.items.length;
+      const menu = doc.getElementById("confucius-mention-menu");
+      if (menu) {
+        highlightMentionRows(menu);
+        const activeRow = menu.querySelector(
+          `[data-mention-index="${mentionState.index}"]`,
+        ) as HTMLElement | null;
+        activeRow?.scrollIntoView({ block: "nearest" });
+      }
+      return;
+    }
     if (slashState.open && (key === "ArrowDown" || key === "ArrowUp")) {
       event.preventDefault();
       slashState.index +=
@@ -8012,6 +9341,16 @@ function bindWorkspace(
       runSlashSelection();
       return;
     }
+    if (mentionState.open && key === "Tab") {
+      event.preventDefault();
+      runMentionSelection();
+      return;
+    }
+    if (key === "Escape" && mentionState.open) {
+      event.preventDefault();
+      closeMentionMenu();
+      return;
+    }
     if (key === "Escape" && endpointMenuOpen) {
       event.preventDefault();
       closeEndpointMenu();
@@ -8024,6 +9363,10 @@ function bindWorkspace(
     }
     if (key === "Enter") {
       event.preventDefault();
+      if (mentionState.open) {
+        runMentionSelection();
+        return;
+      }
       if (slashState.open) {
         runSlashSelection();
         return;

@@ -26,7 +26,13 @@ export interface CheckpointStore {
 export interface TurnLoopInput {
   session: SessionRecord;
   turnId: string;
+  /** User-authored text shown in the activity stream and durable logs. */
   userText: string;
+  /**
+   * Optional model-only form of the same turn (for example, with extracted
+   * read-only attachments). It is checkpointed, but never emitted as UI text.
+   */
+  modelUserText?: string;
   /**
    * Prior conversation for this session, WITHOUT the system message.
    * Replayed before the new user text so turns build on each other.
@@ -73,7 +79,7 @@ export class TurnLoop {
           this.deps.systemPrompt ?? "You are Confucius, a research agent.",
       },
       ...(input.history ?? []),
-      { role: "user", content: input.userText },
+      { role: "user", content: input.modelUserText ?? input.userText },
     ];
 
     const toolExecutions: ToolExecutionCheckpoint[] = [];

@@ -7,6 +7,7 @@ import {
 } from "@confucius/zotero-tools";
 
 const PAIRING_TOKEN = "pairing-token-for-test";
+const TASK_TOKEN = "task-capability-for-test";
 const endpoints = {};
 const previousZotero = globalThis.Zotero;
 const previousToolkit = globalThis.ztoolkit;
@@ -25,12 +26,36 @@ const { registerHttpBridge, unregisterHttpBridge } =
 
 describe("public Zotero MCP bridge", () => {
   const calls = [];
+  const taskCalls = [];
+  let capabilityActive = true;
   let endpoint;
 
   before(() => {
     registerHttpBridge({
       health: () => ({ ok: true }),
-      rpc: async () => ({}),
+      resolveRuntimeCapability(token) {
+        return capabilityActive && token === TASK_TOKEN
+          ? { taskId: "task-bound" }
+          : null;
+      },
+      rpc: async (method, params) => {
+        taskCalls.push({ method, params });
+        if (method === "task/toolList") {
+          return {
+            tools: [
+              { name: "search_items", inputSchema: { type: "object" } },
+              { name: "artifact_upsert", inputSchema: { type: "object" } },
+            ],
+          };
+        }
+        if (method === "task/toolCall") {
+          return {
+            content: [{ type: "text", text: '{"ok":true}' }],
+            isError: false,
+          };
+        }
+        return {};
+      },
       async executeReadOnlyTool(name, args) {
         calls.push({ name, args });
         return { ok: true, toolName: name, data: { accepted: true } };
@@ -155,5 +180,45 @@ describe("public Zotero MCP bridge", () => {
       name: "search_items",
       args: { query: "evidence" },
     });
+  });
+
+  it("binds task capabilities to their task and rejects them after revocation", async () => {
+    const [, , listJson] = await request(
+      "POST",
+      { jsonrpc: "2.0", id: 6, method: "tools/list" },
+      TASK_TOKEN,
+    );
+    const listed = JSON.parse(listJson).result.tools.map((tool) => tool.name);
+    assert.deepEqual(listed, ["search_items", "artifact_upsert"]);
+    assert.deepEqual(taskCalls.at(-1), {
+      method: "task/toolList",
+      params: { taskId: "task-bound" },
+    });
+
+    const [, , callJson] = await request(
+      "POST",
+      {
+        jsonrpc: "2.0",
+        id: 7,
+        method: "tools/call",
+        params: {
+          taskId: "forged-task",
+          name: "artifact_upsert",
+          arguments: { title: "Evidence" },
+        },
+      },
+      TASK_TOKEN,
+    );
+    assert.equal(JSON.parse(callJson).result.isError, false);
+    assert.equal(taskCalls.at(-1).params.taskId, "task-bound");
+    assert.equal(taskCalls.at(-1).params.name, "artifact_upsert");
+
+    capabilityActive = false;
+    const [revokedStatus] = await request(
+      "POST",
+      { jsonrpc: "2.0", id: 8, method: "tools/list" },
+      TASK_TOKEN,
+    );
+    assert.equal(revokedStatus, 401);
   });
 });

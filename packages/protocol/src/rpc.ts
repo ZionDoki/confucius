@@ -14,6 +14,7 @@ import type {
   MemoryConsent,
   MemoryProposal,
   RuntimeStatus,
+  TaskAttachment,
 } from "./research";
 import { isMemoryConsent } from "./research";
 import type { TaskTemplateId } from "./templates";
@@ -76,13 +77,18 @@ export const RPC_METHODS = {
   sessionCompact: "session/compact",
   sessionContext: "session/context",
   contextLive: "context/live",
+  contextSearchItems: "context/search-items",
+  attachmentPrepare: "attachment/prepare",
+  attachmentRelease: "attachment/release",
   readerOpen: "reader/open",
   launchConsume: "workspace/launch-consume",
   noteProposeFromSession: "note/propose-from-session",
+  noteProposeFromReply: "note/propose-from-reply",
   logsList: "logs/list",
   logsSearch: "logs/search",
   logsRead: "logs/read",
   taskNew: "task/new",
+  taskBranch: "task/branch",
   taskLoad: "task/load",
   taskList: "task/list",
   taskPrompt: "task/prompt",
@@ -107,6 +113,7 @@ export const RPC_METHODS = {
   runtimeList: "runtime/list",
   runtimeRefresh: "runtime/refresh",
   runtimeConfigure: "runtime/configure",
+  runtimeSetPluginHost: "runtime/setPluginHost",
   memoryProposalList: "memory/proposal/list",
   memoryProposalResolve: "memory/proposal/resolve",
 } as const;
@@ -136,6 +143,26 @@ export interface TaskNewParams {
 export interface TaskPromptParams {
   taskId: string;
   text: string;
+  attachmentIds?: string[];
+}
+
+export interface AttachmentPrepareParams {
+  /** Absolute local path captured from an explicit file drop. */
+  path: string;
+}
+
+export interface AttachmentPrepareResult {
+  attachment: TaskAttachment;
+}
+
+export interface AttachmentReleaseParams {
+  id: string;
+}
+
+export interface TaskBranchParams {
+  taskId: string;
+  throughTurnId: string;
+  title?: string;
 }
 
 export interface TaskSetContextParams {
@@ -196,13 +223,21 @@ export interface ArtifactWritebackParams {
 }
 
 export interface RuntimeListResult {
+  /** @deprecated Compatibility alias; true means the selected runtime host is usable. */
   sidecarConnected: boolean;
+  runtimeHost: "plugin" | "disabled" | "sidecar";
+  runtimeHostEnabled: boolean;
+  runtimeHostConnected: boolean;
   runtimes: RuntimeStatus[];
 }
 
 export interface RuntimeConfigureParams {
   backend: Exclude<AgentBackendKind, "native">;
   executable?: string;
+}
+
+export interface RuntimeSetPluginHostParams {
+  enabled: boolean;
 }
 
 export interface MemoryProposalListResult {
@@ -219,6 +254,7 @@ export interface SessionPromptParams {
   sessionId: string;
   text: string;
   context?: PromptContextOptions;
+  attachmentIds?: string[];
 }
 
 export interface PromptContextOptions {
@@ -256,6 +292,31 @@ export interface LiveContextResult {
   lockedSnapshot?: LockedContextSnapshot;
 }
 
+export interface ContextSearchItem {
+  libraryID: number;
+  key: string;
+  title: string;
+  itemType: string;
+  creators: string[];
+  year: string;
+}
+
+export interface ContextSearchItemsParams {
+  query?: string;
+  offset?: number;
+  limit?: number;
+  libraryID?: number;
+}
+
+export interface ContextSearchItemsResult {
+  query: string;
+  libraryID: number;
+  libraryName: string;
+  items: ContextSearchItem[];
+  total: number;
+  nextOffset: number | null;
+}
+
 export interface ReaderOpenParams {
   libraryID: number;
   key: string;
@@ -279,6 +340,12 @@ export interface LaunchIntent {
 
 export interface NoteProposeFromSessionParams {
   sessionId: string;
+}
+
+export interface NoteProposeFromReplyParams {
+  taskId: string;
+  turnId: string;
+  text: string;
 }
 
 export interface SessionIdParams {
@@ -397,7 +464,7 @@ export function isReasoningEffort(value: unknown): value is ReasoningEffort {
   );
 }
 
-export const DEFAULT_MAX_ITERATIONS = 48;
+export const DEFAULT_MAX_ITERATIONS = 128;
 export const DEFAULT_MAX_TOOL_CALLS = 96;
 export const MAX_MAX_ITERATIONS = 200;
 export const MAX_MAX_TOOL_CALLS = 500;
@@ -452,6 +519,8 @@ export interface ModelConfigView {
   streamResponses: boolean;
   memoryAutoExtract: boolean;
   memoryConsent: MemoryConsent;
+  /** Run Codex/Kimi directly inside the Zotero add-on. */
+  pluginRuntimeHost: boolean;
   /** "auto" leaves the server default; "off" disables thinking where the API allows it. */
   reasoningEffort: ReasoningEffort;
   /** Context window in tokens, used for the composer usage ring and compaction target. */

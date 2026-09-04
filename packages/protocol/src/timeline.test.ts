@@ -6,6 +6,7 @@ import {
   nextReasoningFold,
   toolLineStatus,
   toolsSummary,
+  type TimelineBlock,
 } from "./timeline";
 
 function event(
@@ -16,7 +17,7 @@ function event(
   return {
     id: extra.id || type,
     sessionId: "s",
-    turnId: "t",
+    turnId: extra.turnId ?? "t",
     ts: 1,
     type,
     payload,
@@ -74,7 +75,29 @@ describe("coalesceTimeline", () => {
     assert.equal(blocks[3]?.kind, "text");
     if (blocks[3]?.kind === "text") {
       assert.equal(blocks[3].text, "Here is the answer.");
+      assert.equal(blocks[3].turnId, "t");
     }
+  });
+
+  it("keeps the owning turn id on each assistant response", () => {
+    const blocks = coalesceTimeline([
+      event("turn_started", { userText: "first" }, { turnId: "turn-1" }),
+      event("text_delta", { text: "One" }, { turnId: "turn-1" }),
+      event("turn_completed", { phase: "done" }, { turnId: "turn-1" }),
+      event("turn_started", { userText: "second" }, { turnId: "turn-2" }),
+      event("text_delta", { text: "Two" }, { turnId: "turn-2" }),
+    ]);
+    const answers = blocks.filter(
+      (block): block is Extract<TimelineBlock, { kind: "text" }> =>
+        block.kind === "text",
+    );
+    assert.deepEqual(
+      answers.map(({ text, turnId }) => ({ text, turnId })),
+      [
+        { text: "One", turnId: "turn-1" },
+        { text: "Two", turnId: "turn-2" },
+      ],
+    );
   });
 
   it("keeps mid-turn visible text out of the tool group", () => {
@@ -183,7 +206,7 @@ describe("coalesceTimeline", () => {
     );
   });
 
-  it("leaves context drift to the single interactive context-bar notice", () => {
+  it("leaves context drift to the on-demand task context menu", () => {
     const drift = (liveFingerprint: string) =>
       event("context_drifted", {
         lockedFingerprint: "ctx_locked",

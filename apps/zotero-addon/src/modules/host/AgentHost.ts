@@ -9,6 +9,8 @@ import type {
   ArtifactWriteback,
   ConfuciusEvent,
   ConfuciusHealthResponse,
+  ContextSearchItem,
+  ContextSearchItemsResult,
   LaunchConsumeResult,
   LaunchIntent,
   LockedContextSnapshot,
@@ -139,17 +141,60 @@ import {
 import { SkillStore } from "./SkillStore";
 import { SkillToolProvider } from "./SkillToolProvider";
 import { ZoteroToolProvider } from "./ZoteroToolProvider";
-import { SidecarClient } from "./SidecarClient";
+import { PluginRuntimeHost } from "./PluginRuntimeHost";
 import {
   normalizeCapabilityRequest,
   previewCapabilityRequest,
   repairPersistedCapabilities,
 } from "./TaskCapabilities";
+import { createTaskBranchSnapshot } from "./TaskBranch";
+import {
+  TaskAttachmentStore,
+  buildTaskAttachmentUserText,
+  type ExtractedPdfText,
+} from "./TaskAttachments";
 
 const MAX_SESSIONS = 60;
 const MAX_EVENTS_PER_SESSION = 400;
 const MEMORY_INJECT_LIMIT = 6;
 const PINNED_INJECT_LIMIT = 3;
+const CONTEXT_ITEM_SEARCH_CACHE_MS = 15_000;
+
+interface ZoteroPdfWorkerBridge {
+  _enqueue?<T>(operation: () => Promise<T>, priority?: boolean): Promise<T>;
+  _query?<T>(
+    action: string,
+    data: Record<string, unknown>,
+    transfer: ArrayBuffer[],
+  ): Promise<T>;
+}
+
+async function extractDroppedPdfText(
+  bytes: Uint8Array,
+  maxPages: number,
+): Promise<ExtractedPdfText> {
+  const worker = Zotero.PDFWorker as ZoteroPdfWorkerBridge;
+  if (!worker?._enqueue || !worker._query) {
+    throw new Error(
+      "This Zotero version cannot extract text from an external PDF",
+    );
+  }
+  // Give Zotero's own document worker an isolated transferable buffer. This
+  // uses the same read-only extractor as Zotero full-text indexing without
+  // creating a temporary library attachment.
+  const buffer = Uint8Array.from(bytes).buffer;
+  try {
+    return await worker._enqueue(
+      () =>
+        worker._query!("pdf.getFulltext", { buf: buffer, maxPages }, [buffer]),
+      false,
+    );
+  } catch (error) {
+    throw new Error(`Unable to extract PDF text: ${errorMessage(error)}`, {
+      cause: error,
+    });
+  }
+}
 
 // Event cursors are persisted by the UIs across polling cycles.  The factory
 // must outlive an individual turn; resetting it for every prompt creates ids
@@ -185,6 +230,11 @@ interface PendingApproval {
   toolName: string;
 }
 
+interface ContextItemSearchCache {
+  expiresAt: number;
+  items: ContextSearchItem[];
+}
+
 export class AgentHost {
   readonly skills = new SkillStore();
   readonly tools = new ZoteroToolHost();
@@ -193,12 +243,29 @@ export class AgentHost {
   readonly knowledge = new KnowledgeBaseService(this.memory);
   readonly artifacts = createArtifactStore();
   private readonly promotion = new MemoryPromotion(this.memory, this.logs);
-  private readonly sidecar = new SidecarClient();
+  private readonly pluginRuntime = new PluginRuntimeHost();
   private readonly sessions = new Map<string, SessionState>();
   private readonly pendingApprovals = new Map<string, PendingApproval>();
   /** One-shot queue for entry points (item menu); consumed by the poll. */
   private pendingLaunch: LaunchIntent | null = null;
   private readonly memoryProposals = new Map<string, MemoryProposal>();
+  private readonly attachments = new TaskAttachmentStore({
+    normalizePath: (path) => PathUtils.normalize(path),
+    isAbsolutePath: (path) => PathUtils.isAbsolute(path),
+    filename: (path) => PathUtils.filename(path),
+    stat: (path) => IOUtils.stat(path),
+    read: (path) => IOUtils.read(path),
+    decodeUtf8: (bytes) =>
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+    extractPdf: extractDroppedPdfText,
+    now: () => Date.now(),
+    createId: () =>
+      `att_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
+  });
+  private readonly contextItemSearchCache = new Map<
+    string,
+    ContextItemSearchCache
+  >();
   private mcpProviders: McpToolProvider[] = [];
   private listeners = new Set<(event: ConfuciusEvent) => void>();
   private persistTimer: number | null = null;
@@ -222,14 +289,23 @@ export class AgentHost {
     Exclude<AgentBackendKind, "native">,
     ExternalBackend
   > = {
-    codex: new ExternalBackend("codex", this.sidecar),
-    kimi: new ExternalBackend("kimi", this.sidecar),
+    codex: new ExternalBackend("codex", this.pluginRuntime),
+    kimi: new ExternalBackend("kimi", this.pluginRuntime),
   };
 
   async start(): Promise<void> {
     this.skills.loadBuiltins();
     await this.restore();
     await this.reloadMcp();
+  }
+
+  async shutdown(): Promise<void> {
+    await this.pluginRuntime.shutdown();
+  }
+
+  /** Resolve an in-memory task MCP capability without exposing its token. */
+  resolveRuntimeCapability(token: string): { taskId: string } | null {
+    return this.pluginRuntime.resolveCapability(token);
   }
 
   private statePath(): string {
@@ -525,6 +601,8 @@ export class AgentHost {
         return this.health();
       case RPC_METHODS.taskNew:
         return this.taskNew(params);
+      case RPC_METHODS.taskBranch:
+        return this.taskBranch(params);
       case RPC_METHODS.taskLoad:
         return this.sessionLoad(
           String(params.taskId ?? params.sessionId ?? ""),
@@ -537,6 +615,8 @@ export class AgentHost {
         return this.sessionPrompt(
           String(params.taskId ?? params.sessionId ?? ""),
           String(params.text ?? ""),
+          undefined,
+          attachmentIds(params.attachmentIds),
         );
       case RPC_METHODS.taskAbort:
         return this.sessionAbort(
@@ -594,11 +674,13 @@ export class AgentHost {
       case RPC_METHODS.artifactWritebackCommit:
         return this.artifactWritebackCommit(params);
       case RPC_METHODS.runtimeList:
-        return this.sidecar.listRuntimes(false);
+        return this.pluginRuntime.listRuntimes(false);
       case RPC_METHODS.runtimeRefresh:
-        return this.sidecar.listRuntimes(true);
+        return this.pluginRuntime.listRuntimes(true);
       case RPC_METHODS.runtimeConfigure:
-        return this.sidecar.rpc("runtime/configure", params);
+        return this.pluginRuntime.rpc("runtime/configure", params);
+      case RPC_METHODS.runtimeSetPluginHost:
+        return this.pluginRuntime.setEnabled(params.enabled !== false);
       case RPC_METHODS.memoryProposalList:
         return { proposals: [...this.memoryProposals.values()] };
       case RPC_METHODS.memoryProposalResolve:
@@ -616,6 +698,7 @@ export class AgentHost {
           String(params.sessionId ?? ""),
           String(params.text ?? ""),
           params.context as PromptContextOptions | undefined,
+          attachmentIds(params.attachmentIds),
         );
       case RPC_METHODS.sessionAbort:
         return this.sessionAbort(String(params.sessionId ?? ""));
@@ -685,12 +768,23 @@ export class AgentHost {
         return this.sessionCompact(String(params.sessionId ?? ""));
       case RPC_METHODS.contextLive:
         return this.liveContext();
+      case RPC_METHODS.contextSearchItems:
+        return this.contextSearchItems(params);
+      case RPC_METHODS.attachmentPrepare:
+        return {
+          attachment: await this.attachments.prepare(String(params.path ?? "")),
+        };
+      case RPC_METHODS.attachmentRelease:
+        this.attachments.release(String(params.id ?? ""));
+        return { released: true };
       case RPC_METHODS.readerOpen:
         return this.readerOpen(params);
       case RPC_METHODS.launchConsume:
         return this.launchConsume();
       case RPC_METHODS.noteProposeFromSession:
         return this.noteProposeFromSession(params);
+      case RPC_METHODS.noteProposeFromReply:
+        return this.noteProposeFromReply(params);
       case RPC_METHODS.logsList:
         return this.logsRpcList(params);
       case RPC_METHODS.logsSearch:
@@ -744,7 +838,9 @@ export class AgentHost {
     }
   }
 
-  private configSet(params: Record<string, unknown>): ModelConfigView {
+  private async configSet(
+    params: Record<string, unknown>,
+  ): Promise<ModelConfigView> {
     const { store } = this.readEndpointStore();
     const patched = applyEndpointPatch(store, params);
     if (!patched.ok) {
@@ -764,6 +860,9 @@ export class AgentHost {
     }
     if (isMemoryConsent(params.memoryConsent)) {
       setPref("memoryConsent", params.memoryConsent);
+    }
+    if (typeof params.pluginRuntimeHost === "boolean") {
+      await this.pluginRuntime.setEnabled(params.pluginRuntimeHost);
     }
     if (params.maxIterations !== undefined) {
       setPref("maxIterations", clampMaxIterations(params.maxIterations));
@@ -838,6 +937,7 @@ export class AgentHost {
       streamResponses: getPref("streamResponses") !== false,
       memoryAutoExtract: memoryConsent === "auto",
       memoryConsent,
+      pluginRuntimeHost: this.pluginRuntime.enabled,
       reasoningEffort: isReasoningEffort(effort) ? effort : "auto",
       contextWindowTokens: active?.contextWindowTokens ?? 32_768,
       hasApiKey: Boolean(active?.apiKey),
@@ -1002,6 +1102,65 @@ export class AgentHost {
       if (prompt) await this.sessionPrompt(record.id, prompt);
     }
     return record;
+  }
+
+  private async taskBranch(
+    params: Record<string, unknown>,
+  ): Promise<ResearchTaskRecord> {
+    const source = this.requireSession(String(params.taskId ?? ""));
+    const throughTurnId = String(params.throughTurnId ?? "").trim();
+    if (!throughTurnId) throw new Error("Missing response turn id");
+    const requestedTitle =
+      typeof params.title === "string" ? params.title.trim() : "";
+    const record = this.sessionNew({
+      title: requestedTitle || `${source.record.title || "Untitled"} · Branch`,
+      mode: source.record.mode,
+      backend: source.record.backend,
+      lockedContext: JSON.parse(
+        JSON.stringify(source.record.lockedContext),
+      ) as LockedContextSnapshot,
+      activeKnowledgeBaseId: source.record.activeKnowledgeBaseId,
+      capabilityProfile: source.record.capabilityProfile,
+      workingDirectory: source.record.workingDirectory,
+      confirmed: true,
+      templateId: source.record.templateId,
+    });
+    const branch = this.requireSession(record.id);
+    try {
+      const snapshot = createTaskBranchSnapshot(
+        source.events,
+        throughTurnId,
+        record.id,
+        this.ids,
+      );
+      branch.events = snapshot.events;
+      branch.messages = snapshot.messages;
+      branch.record.artifactIds = snapshot.artifactIds;
+      branch.record.permissionMode = source.record.permissionMode;
+      branch.loadedSkills = new Set(source.loadedSkills);
+      // A new task does not inherit one-off or session-scoped tool grants.
+      branch.sessionGrants.clear();
+      branch.terminalTurnIds = new Set(
+        snapshot.events
+          .filter(
+            (event) =>
+              event.turnId &&
+              (event.type === "turn_completed" ||
+                event.type === "turn_failed" ||
+                event.type === "turn_aborted"),
+          )
+          .map((event) => event.turnId as string),
+      );
+      branch.record.status = "ready";
+      branch.record.recoverableTurn = undefined;
+      branch.record.externalSessionId = undefined;
+      branch.record.externalTurnId = undefined;
+      await this.persistNow();
+      return branch.record;
+    } catch (error) {
+      this.sessions.delete(record.id);
+      throw error;
+    }
   }
 
   private sessionLoad(
@@ -1383,11 +1542,7 @@ export class AgentHost {
     return provider.call(name, args);
   }
 
-  /**
-   * Review-pane "write note" entry: assemble the session's answers into a
-   * Markdown draft and surface it as a propose_note approval card. The write
-   * only happens after the user allows the card.
-   */
+  /** Legacy whole-session entry retained for older clients. */
   private noteProposeFromSession(params: Record<string, unknown>) {
     const sessionId = String(params.sessionId ?? "");
     const state = this.requireSession(sessionId);
@@ -1416,15 +1571,51 @@ export class AgentHost {
     if (!answers.length) {
       throw new Error("Session has no answers to write into a note yet");
     }
+    return this.queueReplyNote(state, answers.join("\n\n---\n\n"));
+  }
+
+  /** A deliberate reply action writes immediately; the click is the consent. */
+  private async noteProposeFromReply(params: Record<string, unknown>) {
+    const taskId = String(params.taskId ?? params.sessionId ?? "");
+    const turnId = String(params.turnId ?? "").trim();
+    const markdown = String(params.text ?? "").trim();
+    const state = this.requireSession(taskId);
+    if (!turnId || !markdown) {
+      throw new Error("Missing response text");
+    }
+    const recorded = state.events
+      .filter((event) => event.turnId === turnId && event.type === "text_delta")
+      .map((event) => (event.type === "text_delta" ? event.payload.text : ""))
+      .join("")
+      .trim();
+    if (!recorded || !recorded.includes(markdown)) {
+      throw new Error("This response is no longer available in the task");
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const result = (await this.executeTool("propose_note", {
+      title: `Confucius · ${state.record.title || "Untitled"} · ${today}`,
+      markdown,
+    })) as ToolSuccess<unknown> | ToolFailure;
+    if (!result.ok) {
+      throw new Error(result.message);
+    }
+    return { saved: true, note: result.data };
+  }
+
+  /**
+   * Surface Markdown as a propose_note approval card. The Zotero write only
+   * happens after the user reviews and allows the card.
+   */
+  private queueReplyNote(state: SessionState, markdown: string) {
     const today = new Date().toISOString().slice(0, 10);
     const sessionTitle = state.record.title || "Untitled";
     const args = {
       title: `Confucius · ${sessionTitle} · ${today}`,
-      markdown: answers.join("\n\n---\n\n"),
+      markdown,
     };
     const request: ApprovalRequest = {
       id: this.ids(),
-      sessionId,
+      sessionId: state.record.id,
       turnId: `note_${this.ids()}`,
       toolName: "propose_note",
       args,
@@ -1438,7 +1629,7 @@ export class AgentHost {
     void new Promise<ApprovalResolution>((resolve) => {
       this.pendingApprovals.set(request.id, {
         resolve,
-        sessionId,
+        sessionId: state.record.id,
         toolName: "propose_note",
       });
     }).then(async (resolution) => {
@@ -2457,6 +2648,7 @@ export class AgentHost {
       input.prompt,
       input.promptContext,
       input.turnId,
+      input.modelPrompt,
     );
     return {
       externalTurnId: input.turnId,
@@ -2579,7 +2771,7 @@ export class AgentHost {
       externalTurnId: state.record.externalTurnId,
     };
     this.emitSessionEvent(state, turnId, "turn_aborted", {
-      reason: `sidecar disconnected: ${error.message}`,
+      reason: `external Runtime disconnected: ${error.message}`,
     });
     this.emitSessionEvent(state, turnId, "task_status_changed", {
       status: "interrupted",
@@ -2711,11 +2903,40 @@ export class AgentHost {
     );
   }
 
-  private externalPrompt(task: ResearchTaskRecord, prompt: string): string {
+  private externalPrompt(
+    task: ResearchTaskRecord,
+    prompt: string,
+    history: ModelMessage[] = [],
+  ): string {
     const context = task.lockedContext;
     const expectedArtifact =
       taskTemplate(task.templateId)?.artifactKind ?? "report";
-    const lines = [
+    const inherited = task.externalSessionId
+      ? ""
+      : history
+          .filter(
+            (message) =>
+              message.role === "user" || message.role === "assistant",
+          )
+          .map(
+            (message) =>
+              `${message.role === "user" ? "USER" : "ASSISTANT"}:\n${message.content}`,
+          )
+          .join("\n\n");
+    const inheritedTail =
+      inherited.length > 16_000
+        ? `[Earlier inherited messages omitted]\n${inherited.slice(-16_000)}`
+        : inherited;
+    const lines: string[] = [];
+    if (inheritedTail) {
+      lines.push(
+        "Conversation inherited from the source task. Continue from this exact point:",
+        inheritedTail,
+        "",
+        "Current user request:",
+      );
+    }
+    lines.push(
       prompt,
       "",
       `Required artifact kind: ${expectedArtifact}. Call ${ARTIFACT_UPSERT_TOOL} with this kind before completing.`,
@@ -2727,7 +2948,7 @@ export class AgentHost {
         (item) =>
           `- ${item.title || item.key} [libraryID=${item.libraryID}, key=${item.key}, contextId=${item.id}]`,
       ),
-    ];
+    );
     if (context.collection) {
       lines.push(
         `Locked collection: ${context.collection.name} [libraryID=${context.collection.libraryID}, key=${context.collection.key}, contextId=${context.collection.id}]`,
@@ -2759,15 +2980,26 @@ export class AgentHost {
     sessionId: string,
     text: string,
     promptContext?: PromptContextOptions,
+    requestedAttachmentIds: string[] = [],
   ): Promise<unknown> {
     const state = this.requireSession(sessionId);
-    const trimmed = text.trim();
+    const preparedAttachments = this.attachments.resolve(
+      requestedAttachmentIds,
+    );
+    const trimmed =
+      text.trim() ||
+      (preparedAttachments.length ? "Analyze the attached file(s)." : "");
     if (!trimmed) throw new Error("Empty prompt");
+    const modelPrompt = buildTaskAttachmentUserText(
+      trimmed,
+      preparedAttachments,
+    );
     const turnId = newTurnId();
     const input: BackendTurnInput = {
       task: state.record,
       turnId,
       prompt: trimmed,
+      modelPrompt,
       mode: state.record.mode,
       capabilityProfile: state.record.capabilityProfile,
       workingDirectory: state.record.workingDirectory,
@@ -2784,6 +3016,7 @@ export class AgentHost {
     };
     if (state.record.backend === "native") {
       const handle = await this.nativeBackend.startTurn(input, callbacks);
+      this.attachments.consume(requestedAttachmentIds);
       return { sessionId, taskId: sessionId, turnId, ...handle };
     }
 
@@ -2808,9 +3041,17 @@ export class AgentHost {
     });
     try {
       const handle = await this.backendFor(state.record.backend).startTurn(
-        { ...input, prompt: this.externalPrompt(state.record, trimmed) },
+        {
+          ...input,
+          prompt: this.externalPrompt(
+            state.record,
+            modelPrompt,
+            state.messages,
+          ),
+        },
         callbacks,
       );
+      this.attachments.consume(requestedAttachmentIds);
       if (!state.record.title || state.record.title === "Untitled") {
         state.record.title = trimmed.slice(0, 72);
       }
@@ -2836,6 +3077,7 @@ export class AgentHost {
     text: string,
     promptContext?: PromptContextOptions,
     forcedTurnId?: string,
+    modelUserText?: string,
   ) {
     const state = this.requireSession(sessionId);
     const trimmed = text.trim();
@@ -3034,6 +3276,7 @@ export class AgentHost {
           session: state.record,
           turnId,
           userText: trimmed,
+          modelUserText,
           history: state.messages,
           signal: abort.signal,
         })
@@ -3398,10 +3641,130 @@ export class AgentHost {
     return parts.join("\n");
   }
 
+  private async contextSearchItems(
+    params: Record<string, unknown>,
+  ): Promise<ContextSearchItemsResult> {
+    const query = String(params.query ?? "").trim();
+    const requestedLibraryID = Number(params.libraryID);
+    let libraryID =
+      Number.isInteger(requestedLibraryID) &&
+      requestedLibraryID > 0 &&
+      Zotero.Libraries.exists(requestedLibraryID)
+        ? requestedLibraryID
+        : 0;
+    if (!libraryID) {
+      try {
+        libraryID = Number(
+          Zotero.getActiveZoteroPane?.()?.getSelectedLibraryID?.(),
+        );
+      } catch {
+        // The workspace may own focus while the picker is open.
+      }
+    }
+    if (!Number.isInteger(libraryID) || !Zotero.Libraries.exists(libraryID)) {
+      libraryID = Zotero.Libraries.userLibraryID;
+    }
+
+    const offset = Math.max(0, Math.floor(Number(params.offset) || 0));
+    const limit = Math.min(
+      25,
+      Math.max(1, Math.floor(Number(params.limit) || 10)),
+    );
+    const cacheKey = `${libraryID}\u0000${query.toLocaleLowerCase()}`;
+    let cached = this.contextItemSearchCache.get(cacheKey);
+    if (!cached || cached.expiresAt <= Date.now()) {
+      let candidates: Zotero.Item[];
+      if (query) {
+        const search = new Zotero.Search({ libraryID });
+        search.addCondition("quicksearch-titleCreatorYear", "contains", query);
+        const ids = await search.search();
+        candidates = await Zotero.Items.getAsync(ids);
+      } else {
+        candidates = await Zotero.Items.getAll(libraryID, true);
+      }
+      const needle = query.toLocaleLowerCase();
+      const ranked = candidates
+        .filter((item) => item.isRegularItem?.() && !item.deleted)
+        .map((item) => {
+          const creators = (item.getCreators?.() || [])
+            .map((creator) =>
+              creator.lastName
+                ? `${creator.lastName}${
+                    creator.firstName ? `, ${creator.firstName}` : ""
+                  }`
+                : String((creator as { name?: string }).name || ""),
+            )
+            .filter(Boolean);
+          const summary: ContextSearchItem = {
+            libraryID: item.libraryID,
+            key: item.key,
+            title: String(
+              item.getDisplayTitle?.() || item.getField?.("title") || "",
+            ),
+            itemType: String(
+              Zotero.ItemTypes.getLocalizedString(item.itemType) ||
+                item.itemType ||
+                "",
+            ),
+            creators,
+            year: String(item.getField?.("year") || ""),
+          };
+          const title = summary.title.toLocaleLowerCase();
+          const creatorText = creators.join(" ").toLocaleLowerCase();
+          const score = !needle
+            ? 0
+            : title === needle
+              ? 0
+              : title.startsWith(needle)
+                ? 1
+                : title.includes(needle)
+                  ? 2
+                  : creatorText.startsWith(needle)
+                    ? 3
+                    : creatorText.includes(needle)
+                      ? 4
+                      : summary.year.includes(needle)
+                        ? 5
+                        : 6;
+          return {
+            summary,
+            score,
+            modified: String(item.dateModified || ""),
+          };
+        });
+      ranked.sort(
+        (left, right) =>
+          left.score - right.score ||
+          right.modified.localeCompare(left.modified) ||
+          left.summary.title.localeCompare(right.summary.title),
+      );
+      cached = {
+        expiresAt: Date.now() + CONTEXT_ITEM_SEARCH_CACHE_MS,
+        items: ranked.map((entry) => entry.summary),
+      };
+      this.contextItemSearchCache.set(cacheKey, cached);
+      if (this.contextItemSearchCache.size > 40) {
+        const oldestKey = this.contextItemSearchCache.keys().next().value;
+        if (typeof oldestKey === "string") {
+          this.contextItemSearchCache.delete(oldestKey);
+        }
+      }
+    }
+    const items = cached.items.slice(offset, offset + limit);
+    const nextOffset = offset + items.length;
+    return {
+      query,
+      libraryID,
+      libraryName: Zotero.Libraries.getName(libraryID),
+      items,
+      total: cached.items.length,
+      nextOffset: nextOffset < cached.items.length ? nextOffset : null,
+    };
+  }
+
   /**
    * Live snapshot of what the user is looking at: open reader, current
-   * selection, library-pane selection or browsed collection. Feeds both the
-   * composer chip bar and the system-prompt "Live context" section.
+   * selection, library-pane selection or browsed collection.
    */
   liveContext(): LiveContextResult {
     const lockedSnapshot = this.captureLockedContext();
@@ -3809,6 +4172,14 @@ function legacyContextForLocked(
         }
       : undefined,
   };
+}
+
+function attachmentIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((id): id is string => typeof id === "string")
+    .map((id) => id.trim())
+    .filter(Boolean);
 }
 
 function mcpToolResult(result: ToolSuccess<unknown> | ToolFailure): {

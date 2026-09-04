@@ -83,7 +83,12 @@ async function onMainWindowUnload(win: Window): Promise<void> {
   closeWorkspaceSidebar(win);
 }
 
-function onShutdown(): void {
+async function onShutdown(): Promise<void> {
+  try {
+    await host.shutdown();
+  } catch (error) {
+    ztoolkit.log("[Confucius] Runtime Host shutdown failed", error);
+  }
   closeWorkspaceWindow();
   unregisterReaderContextMenu();
   unregisterHttpBridge();

@@ -13,10 +13,15 @@ pref("mcpServersJson", "");
 pref("streamResponses", true);
 pref("memoryAutoExtract", false);
 pref("memoryConsent", "review");
-pref("maxIterations", 48);
+pref("maxIterations", 128);
 pref("maxToolCalls", 96);
 pref("alwaysAllowedTools", "[]");
 pref("reasoningEffort", "auto");
 pref("contextWindowTokens", 32768);
 pref("uiFont", "sans");
 pref("uiFontSize", 13);
+// External Agent runtimes are hosted directly by the privileged add-on.
+// Empty executable preferences mean "detect automatically".
+pref("pluginRuntimeHost", true);
+pref("codexExecutable", "");
+pref("kimiExecutable", "");

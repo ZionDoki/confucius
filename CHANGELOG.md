@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Codex App Server and Kimi ACP now run through an in-add-on Runtime Host. No
+  Node sidecar, descriptor file, port, or separate startup command is needed.
+- Runtime discovery now covers provider-owned Windows install directories,
+  user bin directories, WinGet, npm's packaged native Codex binary, and PATH.
+  Codex and Kimi can also be selected explicitly in either settings surface.
+- The Runtime Host can be disabled from Settings and remains enabled by
+  default. Kimi login status is verified by opening a real ACP session.
+- New Agent runs now default to a maximum of 128 model steps.
+
 ## 0.3.1 — 2026-09-04
 
 - The activity stream is now the permanent main workspace; the separate

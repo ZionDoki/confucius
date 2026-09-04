@@ -5,8 +5,10 @@ import {
   clampMaxIterations,
   clampMaxToolCalls,
   isMemoryConsent,
-  type RuntimeStatus,
+  type AgentBackendKind,
+  type RuntimeListResult,
 } from "@confucius/protocol";
+import { pickRuntimeExecutable } from "../ui/runtimeExecutablePicker";
 
 export async function registerPreferencePane(): Promise<void> {
   const paneId = "confucius-prefpane";
@@ -124,13 +126,23 @@ function bindRuntimeStatus(win: Window): void {
   const refresh = doc.getElementById(
     "confucius-pref-runtime-refresh",
   ) as HTMLButtonElement | null;
+  const hostToggle = doc.getElementById(
+    "confucius-pref-pluginRuntimeHost",
+  ) as HTMLInputElement | null;
+  const codexPath = doc.getElementById(
+    "confucius-pref-codexExecutable",
+  ) as HTMLInputElement | null;
   const kimiPath = doc.getElementById(
     "confucius-pref-kimiExecutable",
   ) as HTMLInputElement | null;
-  const kimiSave = doc.getElementById(
-    "confucius-pref-runtime-kimi-save",
-  ) as HTMLButtonElement | null;
-  if (!status || !refresh) return;
+  const errorLine = doc.getElementById(
+    "confucius-pref-runtime-error",
+  ) as HTMLElement | null;
+  if (!status || !refresh || !hostToggle || !codexPath || !kimiPath) return;
+
+  hostToggle.checked = getPref("pluginRuntimeHost") !== false;
+  codexPath.value = String(getPref("codexExecutable") || "");
+  kimiPath.value = String(getPref("kimiExecutable") || "");
 
   const host = (
     Zotero as unknown as {
@@ -147,22 +159,20 @@ function bindRuntimeStatus(win: Window): void {
     }
   ).Confucius?.hooks?.host;
 
-  const paint = (
-    sidecarConnected: boolean,
-    runtimes: RuntimeStatus[],
-  ): void => {
+  const paint = (result: RuntimeListResult): void => {
     status.textContent = "";
     const summary = doc.createElementNS(
       "http://www.w3.org/1999/xhtml",
       "div",
     ) as HTMLElement;
-    summary.textContent = sidecarConnected
-      ? getString("workspace-sidecar-connected")
-      : getString("workspace-sidecar-offline");
+    summary.textContent = result.runtimeHostEnabled
+      ? getString("pref-runtime-host-connected")
+      : getString("pref-runtime-host-offline");
     summary.style.fontWeight = "600";
     summary.style.marginBottom = "6px";
     status.appendChild(summary);
-    for (const runtime of runtimes) {
+    hostToggle.checked = result.runtimeHostEnabled;
+    for (const runtime of result.runtimes) {
       const row = doc.createElementNS(
         "http://www.w3.org/1999/xhtml",
         "div",
@@ -171,45 +181,117 @@ function bindRuntimeStatus(win: Window): void {
       row.style.overflowWrap = "anywhere";
       row.textContent = `${runtime.backend} · ${runtime.state}${
         runtime.version ? ` · ${runtime.version}` : ""
-      }${runtime.message ? ` · ${runtime.message}` : ""}`;
+      }${runtime.executable ? ` · ${runtime.executable}` : ""}${
+        runtime.message ? ` · ${runtime.message}` : ""
+      }`;
       status.appendChild(row);
-      if (runtime.backend === "kimi" && runtime.executable && kimiPath) {
-        kimiPath.value = runtime.executable;
-      }
     }
   };
 
   const load = async (force: boolean): Promise<void> => {
     refresh.disabled = true;
+    if (errorLine) errorLine.textContent = "";
     try {
       if (!host) throw new Error("Confucius host is unavailable");
       const result = (await host.rpc(
         force ? "runtime/refresh" : "runtime/list",
         {},
-      )) as { sidecarConnected?: boolean; runtimes?: RuntimeStatus[] };
-      paint(result.sidecarConnected === true, result.runtimes ?? []);
+      )) as RuntimeListResult;
+      paint(result);
     } catch (error) {
-      paint(false, []);
-      status.title = error instanceof Error ? error.message : String(error);
+      const message = error instanceof Error ? error.message : String(error);
+      if (errorLine) errorLine.textContent = message;
+      status.title = message;
     } finally {
       refresh.disabled = false;
     }
   };
 
   refresh.addEventListener("click", () => void load(true));
-  kimiSave?.addEventListener("click", () => {
+
+  hostToggle.addEventListener("change", () => {
     void (async () => {
       if (!host) throw new Error("Confucius host is unavailable");
-      await host.rpc("runtime/configure", {
-        backend: "kimi",
-        executable: kimiPath?.value.trim() ?? "",
+      hostToggle.disabled = true;
+      const result = (await host.rpc("runtime/setPluginHost", {
+        enabled: hostToggle.checked,
+      })) as RuntimeListResult;
+      paint(result);
+    })()
+      .catch((error) => {
+        hostToggle.checked = !hostToggle.checked;
+        if (errorLine) {
+          errorLine.textContent =
+            error instanceof Error ? error.message : String(error);
+        }
+      })
+      .finally(() => {
+        hostToggle.disabled = false;
       });
-      await load(true);
-    })().catch((error) => {
-      status.title = error instanceof Error ? error.message : String(error);
-    });
   });
-  // Login can change while Zotero and the sidecar stay open. Probe the ACP
+
+  const configure = async (
+    backend: Exclude<AgentBackendKind, "native">,
+    input: HTMLInputElement,
+  ): Promise<void> => {
+    if (!host) throw new Error("Confucius host is unavailable");
+    if (errorLine) errorLine.textContent = "";
+    await host.rpc("runtime/configure", {
+      backend,
+      executable: input.value.trim(),
+    });
+    await load(true);
+  };
+
+  const bindExecutableControls = (
+    backend: Exclude<AgentBackendKind, "native">,
+    input: HTMLInputElement,
+  ): void => {
+    const save = doc.getElementById(
+      `confucius-pref-runtime-${backend}-save`,
+    ) as HTMLButtonElement | null;
+    const browse = doc.getElementById(
+      `confucius-pref-runtime-${backend}-browse`,
+    ) as HTMLButtonElement | null;
+    const auto = doc.getElementById(
+      `confucius-pref-runtime-${backend}-auto`,
+    ) as HTMLButtonElement | null;
+    save?.addEventListener("click", () => {
+      void configure(backend, input).catch((error) => {
+        if (errorLine) {
+          errorLine.textContent =
+            error instanceof Error ? error.message : String(error);
+        }
+      });
+    });
+    browse?.addEventListener("click", () => {
+      void pickRuntimeExecutable(win, getString(`pref-runtime-${backend}-path`))
+        .then(async (path) => {
+          if (!path) return;
+          input.value = path;
+          await configure(backend, input);
+        })
+        .catch((error) => {
+          if (errorLine) {
+            errorLine.textContent =
+              error instanceof Error ? error.message : String(error);
+          }
+        });
+    });
+    auto?.addEventListener("click", () => {
+      input.value = "";
+      void configure(backend, input).catch((error) => {
+        if (errorLine) {
+          errorLine.textContent =
+            error instanceof Error ? error.message : String(error);
+        }
+      });
+    });
+  };
+
+  bindExecutableControls("codex", codexPath);
+  bindExecutableControls("kimi", kimiPath);
+  // Login can change while Zotero stays open. Probe the actual runtime
   // session boundary whenever this pane opens instead of showing stale state.
   void load(true);
 }

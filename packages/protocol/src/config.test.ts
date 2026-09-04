@@ -51,7 +51,7 @@ describe("validateConfigPatch", () => {
 
   it("accepts global budget fields and rejects out-of-range values", () => {
     assert.equal(
-      validateConfigPatch({ maxIterations: 48, maxToolCalls: 96 }).ok,
+      validateConfigPatch({ maxIterations: 128, maxToolCalls: 96 }).ok,
       true,
     );
     assert.equal(validateConfigPatch({ maxIterations: 0 }).ok, false);
@@ -69,7 +69,7 @@ describe("budget clamps", () => {
   it("falls back to the raised defaults", () => {
     assert.equal(clampMaxIterations(undefined), DEFAULT_MAX_ITERATIONS);
     assert.equal(clampMaxToolCalls(""), DEFAULT_MAX_TOOL_CALLS);
-    assert.equal(DEFAULT_MAX_ITERATIONS, 48);
+    assert.equal(DEFAULT_MAX_ITERATIONS, 128);
     assert.equal(DEFAULT_MAX_TOOL_CALLS, 96);
   });
 });

@@ -110,6 +110,30 @@ describe("TurnLoop", () => {
     }
   });
 
+  it("keeps model-only attachment text out of the visible turn event", async () => {
+    const { loop, events } = createHarness({ script: [{ text: "done" }] });
+    const result = await loop.run({
+      session: session(),
+      turnId: "turn_attachment",
+      userText: "Summarize this file",
+      modelUserText: "Summarize this file\n\nSECRET ATTACHMENT BODY",
+    });
+    const started = events.events.find(
+      (event) => event.type === "turn_started",
+    );
+    assert.equal(started?.type, "turn_started");
+    if (started?.type === "turn_started") {
+      assert.equal(started.payload.userText, "Summarize this file");
+    }
+    assert.equal(
+      result.messages.some(
+        (message) =>
+          message.content === "Summarize this file\n\nSECRET ATTACHMENT BODY",
+      ),
+      true,
+    );
+  });
+
   it("stamps the host summary onto approval requests", async () => {
     const { loop, events } = createHarness({
       script: [

@@ -29,6 +29,9 @@ declare namespace _ZoteroTypes {
       "contextWindowTokens": number;
       "uiFont": string;
       "uiFontSize": number;
+      "pluginRuntimeHost": boolean;
+      "codexExecutable": string;
+      "kimiExecutable": string;
     };
   }
 }
