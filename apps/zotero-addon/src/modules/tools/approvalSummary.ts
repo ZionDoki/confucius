@@ -83,6 +83,7 @@ export function describeCallForApproval(
   toolName: string,
   args: Record<string, unknown>,
   resolveItem?: TitleResolver,
+  language: "en-US" | "zh-CN" = "en-US",
 ): string | undefined {
   const ref = refParts(args);
   const refTitle =
@@ -92,8 +93,19 @@ export function describeCallForApproval(
 
   const highlights = args.highlights ?? args.annotations;
   const highlightText = firstHighlightText(highlights);
-  if (itemCount(highlights) > 0 && highlightText) {
-    const batch = `${itemCount(highlights)} × ${quoted(highlightText)}`;
+  const annotationCount = itemCount(highlights);
+  if (annotationCount > 0) {
+    const countLabel =
+      language === "zh-CN"
+        ? `${annotationCount} 条标注`
+        : `${annotationCount} annotation${annotationCount === 1 ? "" : "s"}`;
+    // For a batch, the first quote is not representative and made summaries
+    // such as “3 × ALPHA” look like three duplicate annotations. Keep the
+    // quote only when it describes the sole write; full args remain expandable.
+    const batch =
+      annotationCount === 1 && highlightText
+        ? `${countLabel} · ${quoted(highlightText)}`
+        : countLabel;
     return refTitle ? `${clip(refTitle)} · ${batch}` : batch;
   }
 

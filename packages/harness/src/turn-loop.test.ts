@@ -6,6 +6,46 @@ import { createHarness, session } from "./test-kit";
 import { MemoryToolProvider } from "./MemoryToolProvider";
 import { assertParallelSafeInvariant } from "./ConcurrencyScheduler";
 
+function registerPageInspector(tools: MemoryToolProvider): void {
+  tools.register(
+    {
+      name: "inspect_pdf_page",
+      description: "Inspect a PDF page",
+      inputSchema: {
+        type: "object",
+        properties: {
+          libraryID: { type: "number" },
+          key: { type: "string" },
+          page: { type: "number" },
+        },
+        required: ["libraryID", "key", "page"],
+      },
+    },
+    {
+      name: "inspect_pdf_page",
+      catalog: "paper.read",
+      concurrency: "serial",
+      mutatesState: false,
+    },
+    (args) => ({
+      ok: true,
+      toolName: "inspect_pdf_page",
+      data: {
+        page: Number(args.page),
+        lineAnchors: [{ text: `Page ${String(args.page)}` }],
+        visualAvailable: true,
+      },
+      transientMedia: [
+        {
+          type: "image",
+          mimeType: "image/png",
+          data: `PAGE-${String(args.page)}`,
+        },
+      ],
+    }),
+  );
+}
+
 describe("TurnLoop", () => {
   it("persists a started tool record before executing the provider", async () => {
     const snapshots: Array<{ status?: string }> = [];
@@ -33,6 +73,7 @@ describe("TurnLoop", () => {
     });
 
     assert.equal(result.phase, "failed");
+    assert.equal(result.failureMessage, "checkpoint unavailable");
     assert.equal(
       snapshots.some((entry) => entry.status === "started"),
       true,
@@ -593,6 +634,385 @@ describe("TurnLoop", () => {
 
     assert.equal(result.phase, "done");
     assert.deepEqual(imagePresence, [false, true, false]);
+  });
+
+  it("sends at most one transient PDF page per model round", async () => {
+    let call = 0;
+    let visualMessages: Array<{ page: number; data: Record<string, unknown> }> =
+      [];
+    const { loop, tools } = createHarness({
+      model: {
+        async complete(request) {
+          call += 1;
+          if (call === 1) {
+            return {
+              toolCalls: [1, 2, 3].map((page) => ({
+                id: `inspect-${page}`,
+                name: "inspect_pdf_page",
+                args: { libraryID: 1, key: "PAPER", page },
+              })),
+            };
+          }
+          const images = request.messages.flatMap(
+            (message) => message.images ?? [],
+          );
+          assert.deepEqual(
+            images.map((image) => image.data),
+            ["PAGE-1"],
+          );
+          visualMessages = request.messages
+            .filter((message) => message.role === "tool")
+            .map((message) => {
+              const result = JSON.parse(message.content) as {
+                data: Record<string, unknown>;
+              };
+              return {
+                page: Number(result.data.page),
+                data: result.data,
+              };
+            });
+          return { text: "Used one visual page and three text anchors." };
+        },
+      },
+    });
+    registerPageInspector(tools);
+
+    const result = await loop.run({
+      session: session(),
+      turnId: "turn_many_pages",
+      userText: "Inspect pages 1, 2, and 3",
+    });
+
+    assert.equal(result.phase, "done");
+    assert.equal(visualMessages.length, 3);
+    assert.equal(visualMessages[0].data.visualAvailable, true);
+    for (const page of visualMessages.slice(1)) {
+      assert.equal(page.data.visualAvailable, false);
+      assert.equal(page.data.visualOmitted, true);
+      assert.match(String(page.data.regionGuidance), /do not guess/i);
+    }
+  });
+
+  it("cancels a stalled page-image request and retries with text anchors", async () => {
+    const imagePresence: boolean[] = [];
+    let call = 0;
+    let mediaRequestCancelled = false;
+    const { loop, events, tools } = createHarness({
+      transientMediaTimeoutMs: 10,
+      model: {
+        async complete(request, signal) {
+          call += 1;
+          imagePresence.push(
+            request.messages.some((message) => Boolean(message.images?.length)),
+          );
+          if (call === 1) {
+            return {
+              toolCalls: [
+                {
+                  id: "inspect-timeout",
+                  name: "inspect_pdf_page",
+                  args: { libraryID: 1, key: "PAPER", page: 4 },
+                },
+              ],
+            };
+          }
+          if (call === 2) {
+            return new Promise((_resolve, reject) => {
+              signal?.addEventListener(
+                "abort",
+                () => {
+                  mediaRequestCancelled = true;
+                  const error = new Error("cancelled");
+                  error.name = "AbortError";
+                  reject(error);
+                },
+                { once: true },
+              );
+            });
+          }
+          return { text: "Recovered from durable anchors." };
+        },
+      },
+    });
+    registerPageInspector(tools);
+
+    const result = await loop.run({
+      session: session(),
+      turnId: "turn_media_timeout",
+      userText: "Inspect page 4",
+    });
+
+    assert.equal(result.phase, "done");
+    assert.equal(mediaRequestCancelled, true);
+    assert.deepEqual(imagePresence, [false, true, false]);
+    assert.equal(
+      events.events.some(
+        (event) =>
+          event.type === "reasoning_delta" &&
+          /timed out/i.test(event.payload.text),
+      ),
+      true,
+    );
+  });
+
+  it("does not retry transient media after the user aborts", async () => {
+    let call = 0;
+    let markMediaStarted: (() => void) | undefined;
+    const mediaStarted = new Promise<void>((resolve) => {
+      markMediaStarted = resolve;
+    });
+    const controller = new AbortController();
+    const { loop, events, tools } = createHarness({
+      transientMediaTimeoutMs: 1_000,
+      model: {
+        async complete(_request, signal) {
+          call += 1;
+          if (call === 1) {
+            return {
+              toolCalls: [
+                {
+                  id: "inspect-stop",
+                  name: "inspect_pdf_page",
+                  args: { libraryID: 1, key: "PAPER", page: 5 },
+                },
+              ],
+            };
+          }
+          markMediaStarted?.();
+          return new Promise((_resolve, reject) => {
+            signal?.addEventListener(
+              "abort",
+              () => {
+                const error = new Error("stopped");
+                error.name = "AbortError";
+                reject(error);
+              },
+              { once: true },
+            );
+          });
+        },
+      },
+    });
+    registerPageInspector(tools);
+
+    const running = loop.run({
+      session: session(),
+      turnId: "turn_media_stop",
+      userText: "Inspect page 5",
+      signal: controller.signal,
+    });
+    await mediaStarted;
+    controller.abort();
+    const result = await running;
+
+    assert.equal(result.phase, "aborted");
+    assert.equal(call, 2);
+    assert.equal(
+      events.events.some((event) => event.type === "reasoning_delta"),
+      false,
+    );
+  });
+
+  it("gives an incomplete deep-reading workflow one guarded model round", async () => {
+    let call = 0;
+    const { loop, events } = createHarness({
+      completionGuard: () => ({
+        instruction: "Write the required PDF annotations.",
+        statusText: "Continuing with annotation approval.",
+      }),
+      model: {
+        async complete(request) {
+          call += 1;
+          if (call === 1) return { text: "Report only." };
+          assert.equal(request.messages.at(-1)?.role, "system");
+          assert.match(request.messages.at(-1)?.content ?? "", /annotations/i);
+          return { text: "Annotation approval requested." };
+        },
+      },
+    });
+    const result = await loop.run({
+      session: session(),
+      turnId: "turn_completion_guard",
+      userText: "Deep read this paper",
+    });
+
+    assert.equal(result.phase, "done");
+    assert.equal(call, 2);
+    assert.equal(
+      events.events.some(
+        (event) =>
+          event.type === "reasoning_delta" &&
+          event.payload.text === "Continuing with annotation approval.",
+      ),
+      true,
+    );
+  });
+
+  it("keeps required workflow completion tools available after discovery budget", async () => {
+    let call = 0;
+    let committed = 0;
+    const { loop, tools } = createHarness({
+      maxToolCalls: 0,
+      completionToolNames: new Set(["commit_annotations"]),
+      model: {
+        async complete() {
+          call += 1;
+          return call === 1
+            ? {
+                toolCalls: [
+                  {
+                    id: "commit-required",
+                    name: "commit_annotations",
+                    args: { libraryID: 1, key: "PAPER", annotations: [] },
+                  },
+                ],
+              }
+            : { text: "Committed." };
+        },
+      },
+    });
+    tools.register(
+      {
+        name: "commit_annotations",
+        description: "Commit annotations",
+        inputSchema: {
+          type: "object",
+          properties: {
+            libraryID: { type: "integer" },
+            key: { type: "string" },
+            annotations: { type: "array" },
+          },
+          required: ["libraryID", "key"],
+        },
+      },
+      {
+        name: "commit_annotations",
+        catalog: "paper.write",
+        concurrency: "serial",
+        mutatesState: true,
+      },
+      () => {
+        committed += 1;
+        return {
+          ok: true,
+          toolName: "commit_annotations",
+          data: { annotationKeys: [] },
+        };
+      },
+    );
+
+    const result = await loop.run({
+      session: session(),
+      turnId: "turn_completion_reserve",
+      userText: "Complete the required write",
+    });
+
+    assert.equal(result.phase, "done");
+    assert.equal(committed, 1);
+  });
+
+  it("rejects a hallucinated phase tool before consuming tool budget", async () => {
+    let call = 0;
+    const { loop, events, budget } = createHarness({
+      maxToolCalls: 0,
+      model: {
+        async complete(request) {
+          call += 1;
+          if (call === 1) {
+            return {
+              toolCalls: [
+                {
+                  id: "premature-artifact",
+                  name: "artifact_upsert",
+                  args: { kind: "deep_read" },
+                },
+              ],
+            };
+          }
+          assert.match(
+            request.messages.at(-1)?.content ?? "",
+            /not available in the active workflow stage/i,
+          );
+          return { text: "Returning to the annotation stage." };
+        },
+      },
+    });
+
+    const result = await loop.run({
+      session: session(),
+      turnId: "turn_hallucinated_phase_tool",
+      userText: "Deep read",
+    });
+
+    assert.equal(result.phase, "done");
+    assert.equal(budget.toolCallsUsed, 0);
+    const toolResult = events.events.find(
+      (event) => event.type === "tool_result",
+    );
+    const rejectedResult =
+      toolResult?.type === "tool_result" && !toolResult.payload.result.ok
+        ? toolResult.payload.result
+        : undefined;
+    assert.equal(
+      rejectedResult?.code ?? "missing",
+      "not_found",
+    );
+  });
+
+  it("tells the model once to stop exploring after the tool budget is spent", async () => {
+    let call = 0;
+    const { loop, tools } = createHarness({
+      maxToolCalls: 0,
+      toolBudgetExhaustedMessage:
+        "Exploration is complete. Return the structured handoff now.",
+      model: {
+        async complete(request) {
+          call += 1;
+          if (call === 1) {
+            return {
+              toolCalls: [
+                {
+                  id: "extra-search",
+                  name: "search_items",
+                  args: { query: "more" },
+                },
+              ],
+            };
+          }
+          const notices = request.messages.filter(
+            (message) =>
+              message.role === "system" &&
+              message.content.includes("structured handoff"),
+          );
+          assert.equal(notices.length, 1);
+          return { text: "handoff" };
+        },
+      },
+    });
+    tools.register(
+      {
+        name: "search_items",
+        description: "Search",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+        },
+      },
+      {
+        name: "search_items",
+        catalog: "library.read",
+        concurrency: "parallel_safe",
+        mutatesState: false,
+      },
+      () => ({ ok: true, toolName: "search_items", data: {} }),
+    );
+
+    const result = await loop.run({
+      session: session(),
+      turnId: "turn_budget_handoff",
+      userText: "Research",
+    });
+    assert.equal(result.phase, "done");
   });
 });
 

@@ -17,8 +17,10 @@ import type { ModelAdapter, ModelMessage, ModelToolCall } from "./ModelAdapter";
 import type { PermissionGate } from "./PermissionGate";
 import { validateArgs } from "./SchemaValidate";
 import type { ToolProvider } from "./ToolProvider";
-import { errorMessage, isAbortError } from "./abort";
+import { abortError, errorMessage, isAbortError } from "./abort";
 import { truncateToolResult } from "./truncate";
+
+const DEFAULT_TRANSIENT_MEDIA_TIMEOUT_MS = 45_000;
 
 export interface CheckpointStore {
   save(checkpoint: TurnCheckpoint): Promise<void> | void;
@@ -47,6 +49,8 @@ export interface TurnLoopResult {
   text: string;
   /** Final conversation of this turn (system prompt excluded) for persistence. */
   messages: ModelMessage[];
+  /** Host-only failure detail used to retry an isolated workflow phase. */
+  failureMessage?: string;
 }
 
 export interface TurnLoopDeps {
@@ -67,6 +71,25 @@ export interface TurnLoopDeps {
     toolName: string,
     args: Record<string, unknown>,
   ) => string | undefined;
+  /** Deadline for the one model request that receives transient tool media. */
+  transientMediaTimeoutMs?: number;
+  /** Host-safe AbortController factory (Zotero sandboxes inject their own). */
+  createAbortController?: () => AbortController;
+  scheduleTimeout?: (callback: () => void, delayMs: number) => unknown;
+  cancelTimeout?: (handle: unknown) => void;
+  transientMediaFallbackMessage?: (reason: "timeout" | "unavailable") => string;
+  completionGuard?: (
+    toolExecutions: readonly ToolExecutionCheckpoint[],
+    messages: readonly ModelMessage[],
+  ) => string | { instruction: string; statusText?: string } | undefined;
+  completionGuardMaxReminders?: number;
+  /**
+   * Workflow completion calls must remain available after the exploratory
+   * tool budget is spent. They are still bounded by the iteration budget.
+   */
+  completionToolNames?: ReadonlySet<string>;
+  /** Injected once after exploratory calls hit their configured budget. */
+  toolBudgetExhaustedMessage?: string;
 }
 
 export class TurnLoop {
@@ -89,11 +112,16 @@ export class TurnLoop {
     await this.checkpoint(input.turnId, 0, messages, toolExecutions);
 
     let delivered = "";
+    let completionGuardReminders = 0;
 
-    const resultOf = (phase: TurnLoopResult["phase"]): TurnLoopResult => ({
+    const resultOf = (
+      phase: TurnLoopResult["phase"],
+      failureMessage?: string,
+    ): TurnLoopResult => ({
       phase,
       text: delivered,
       messages: durableMessages(messages.slice(1)),
+      ...(failureMessage ? { failureMessage } : {}),
     });
 
     try {
@@ -104,22 +132,7 @@ export class TurnLoop {
         }
 
         this.deps.budget.recordIteration();
-        let modelTurn;
-        try {
-          modelTurn = await this.deps.model.complete(
-            { messages, tools: this.deps.tools.listTools() },
-            input.signal,
-          );
-        } catch (error) {
-          if (!messages.some((message) => message.images?.length)) throw error;
-          // Some OpenAI-compatible and Ollama endpoints are text-only. Retry
-          // once using the durable line anchors returned by the tool.
-          removeTransientMessages(messages);
-          modelTurn = await this.deps.model.complete(
-            { messages, tools: this.deps.tools.listTools() },
-            input.signal,
-          );
-        }
+        const modelTurn = await this.completeModelTurn(input, messages);
         removeTransientMessages(messages);
         // Some adapters return a partial turn when a streaming request is
         // aborted after data has arrived. Do not deliver that stale response
@@ -147,6 +160,29 @@ export class TurnLoop {
         });
 
         if (toolCalls.length === 0) {
+          const guarded =
+            completionGuardReminders <
+            (this.deps.completionGuardMaxReminders ?? 1)
+              ? this.deps.completionGuard?.(toolExecutions, messages)
+              : undefined;
+          if (guarded) {
+            completionGuardReminders += 1;
+            const instruction =
+              typeof guarded === "string" ? guarded : guarded.instruction;
+            const statusText =
+              typeof guarded === "string" ? undefined : guarded.statusText;
+            messages.push({ role: "system", content: instruction });
+            if (statusText) {
+              this.emit(input, "reasoning_delta", { text: statusText });
+            }
+            await this.checkpoint(
+              input.turnId,
+              this.deps.budget.iterationsUsed,
+              messages,
+              toolExecutions,
+            );
+            continue;
+          }
           this.emit(input, "turn_completed", { phase: "done" });
           await this.checkpoint(
             input.turnId,
@@ -182,8 +218,94 @@ export class TurnLoop {
         this.emit(input, "turn_aborted", { reason: "signal" });
         return resultOf("aborted");
       }
-      this.emit(input, "turn_failed", { message: errorMessage(error) });
-      return resultOf("failed");
+      const failureMessage = errorMessage(error);
+      this.emit(input, "turn_failed", { message: failureMessage });
+      return resultOf("failed", failureMessage);
+    }
+  }
+
+  private async completeModelTurn(
+    input: TurnLoopInput,
+    messages: ModelMessage[],
+  ) {
+    const tools = this.deps.tools.listTools();
+    const hasTransientMedia = messages.some(
+      (message) => message.transient && Boolean(message.images?.length),
+    );
+    try {
+      return hasTransientMedia
+        ? await this.completeWithTransientMediaDeadline(
+            { messages, tools },
+            input.signal,
+          )
+        : await this.deps.model.complete({ messages, tools }, input.signal);
+    } catch (error) {
+      // A user Stop owns the turn boundary. Never turn it into an automatic
+      // text-only retry after the caller has explicitly cancelled the work.
+      if (!hasTransientMedia || input.signal?.aborted) throw error;
+
+      // Vision support varies across OpenAI-compatible and Ollama endpoints,
+      // and a gateway can accept an image request without ever answering it.
+      // The durable line anchors remain in the tool messages, so retry once
+      // without model-only media rather than leaving the task running forever.
+      removeTransientMessages(messages);
+      const fallbackReason =
+        error instanceof TransientMediaTimeoutError
+          ? ("timeout" as const)
+          : ("unavailable" as const);
+      this.emit(input, "reasoning_delta", {
+        text:
+          this.deps.transientMediaFallbackMessage?.(fallbackReason) ??
+          (fallbackReason === "timeout"
+            ? "Page-image analysis timed out. Retrying once with the durable text anchors."
+            : "Page-image analysis was unavailable. Retrying once with the durable text anchors."),
+      });
+      return this.deps.model.complete({ messages, tools }, input.signal);
+    }
+  }
+
+  private async completeWithTransientMediaDeadline(
+    request: Parameters<ModelAdapter["complete"]>[0],
+    callerSignal?: AbortSignal,
+  ) {
+    const controller =
+      this.deps.createAbortController?.() ?? new AbortController();
+    const timeoutMs = Math.max(
+      1,
+      this.deps.transientMediaTimeoutMs ?? DEFAULT_TRANSIENT_MEDIA_TIMEOUT_MS,
+    );
+    const schedule =
+      this.deps.scheduleTimeout ??
+      ((callback: () => void, delayMs: number) =>
+        globalThis.setTimeout(callback, delayMs));
+    const cancel =
+      this.deps.cancelTimeout ??
+      ((handle: unknown) =>
+        globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>));
+
+    let rejectDeadline: (reason: unknown) => void = () => undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      rejectDeadline = reject;
+    });
+    const onCallerAbort = () => {
+      controller.abort(abortError());
+      rejectDeadline(abortError());
+    };
+    callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
+    const timer = schedule(() => {
+      rejectDeadline(new TransientMediaTimeoutError());
+      controller.abort(abortError("Transient page image request timed out"));
+    }, timeoutMs);
+
+    try {
+      if (callerSignal?.aborted) onCallerAbort();
+      return await Promise.race([
+        this.deps.model.complete(request, controller.signal),
+        deadline,
+      ]);
+    } finally {
+      cancel(timer);
+      callerSignal?.removeEventListener("abort", onCallerAbort);
     }
   }
 
@@ -194,6 +316,14 @@ export class TurnLoop {
     toolExecutions: ToolExecutionCheckpoint[],
   ): Promise<"ok" | "aborted"> {
     const allowed: ScheduledCall[] = [];
+    let toolBudgetExhausted = false;
+    const availableToolNames = new Set(
+      this.deps.tools.listTools().map((tool) => tool.name),
+    );
+    // A model may request several pages in one tool turn. Sending all rendered
+    // pages in the next request can wedge otherwise healthy compatible APIs,
+    // so keep exactly one visual page and preserve text anchors for the rest.
+    let transientImageAttached = false;
 
     for (const call of toolCalls) {
       // Model backends such as Ollama restart tool-call ids every round
@@ -207,7 +337,27 @@ export class TurnLoop {
         args: call.args,
       });
 
-      if (!this.deps.budget.canRunTools(1)) {
+      if (!availableToolNames.has(call.name)) {
+        const result: ToolResult = {
+          ok: false,
+          toolName: call.name,
+          code: "not_found",
+          message:
+            "Tool is not available in the active workflow stage. Follow the current stage instruction and use only the advertised tools.",
+        };
+        this.emit(input, "tool_result", { callId: eventId, result });
+        messages.push({
+          role: "tool",
+          content: JSON.stringify(result),
+          toolCallId: call.id,
+        });
+        continue;
+      }
+
+      const completionTool =
+        this.deps.completionToolNames?.has(call.name) === true;
+      if (!completionTool && !this.deps.budget.canRunTools(1)) {
+        toolBudgetExhausted = true;
         const result: ToolResult = {
           ok: false,
           toolName: call.name,
@@ -270,7 +420,9 @@ export class TurnLoop {
         continue;
       }
 
-      this.deps.budget.recordToolCalls(1);
+      if (!completionTool) {
+        this.deps.budget.recordToolCalls(1);
+      }
       allowed.push({
         callId: eventId,
         modelCallId: call.id,
@@ -304,7 +456,7 @@ export class TurnLoop {
         messages,
         toolExecutions,
       );
-      const results = await Promise.all(
+      const rawResults = await Promise.all(
         batch.map(async (call) => {
           let result: ToolResult;
           let transientMedia: ToolTransientMedia[] = [];
@@ -315,7 +467,7 @@ export class TurnLoop {
               input.signal,
             );
             transientMedia = raw.ok ? (raw.transientMedia ?? []) : [];
-            result = truncateToolResult(durableToolResult(raw));
+            result = durableToolResult(raw);
           } catch (error) {
             result = {
               ok: false,
@@ -327,6 +479,27 @@ export class TurnLoop {
           return { call, result, transientMedia };
         }),
       );
+      const results = rawResults.map(({ call, result, transientMedia }) => {
+        const acceptedMedia: ToolTransientMedia[] = [];
+        let omittedMedia = false;
+        for (const media of transientMedia) {
+          if (!transientImageAttached) {
+            transientImageAttached = true;
+            acceptedMedia.push(media);
+          } else {
+            omittedMedia = true;
+          }
+        }
+        const durable =
+          omittedMedia && call.toolName === "inspect_pdf_page"
+            ? markPageVisualOmitted(result)
+            : result;
+        return {
+          call,
+          result: truncateToolResult(durable),
+          transientMedia: acceptedMedia,
+        };
+      });
       for (const { call, result } of results) {
         const execution = [...toolExecutions]
           .reverse()
@@ -365,6 +538,18 @@ export class TurnLoop {
       );
     }
 
+    const budgetMessage = this.deps.toolBudgetExhaustedMessage?.trim();
+    if (
+      toolBudgetExhausted &&
+      budgetMessage &&
+      !messages.some(
+        (message) =>
+          message.role === "system" && message.content === budgetMessage,
+      )
+    ) {
+      messages.push({ role: "system", content: budgetMessage });
+    }
+
     return "ok";
   }
 
@@ -398,6 +583,29 @@ export class TurnLoop {
     } as ConfuciusEvent;
     this.deps.events.append(event);
   }
+}
+
+class TransientMediaTimeoutError extends Error {
+  constructor() {
+    super("Transient page image request timed out");
+    this.name = "TransientMediaTimeoutError";
+  }
+}
+
+function markPageVisualOmitted(result: ToolResult): ToolResult {
+  if (!result.ok || !result.data || typeof result.data !== "object") {
+    return result;
+  }
+  return {
+    ...result,
+    data: {
+      ...(result.data as Record<string, unknown>),
+      visualAvailable: false,
+      visualOmitted: true,
+      regionGuidance:
+        "This page's transient image was omitted because only one visual PDF page is sent per model round. Use the durable text anchors only and do not guess image-region coordinates. Inspect this page alone in a later round if visual grounding is required.",
+    },
+  };
 }
 
 function durableToolResult(result: ToolResult): ToolResult {

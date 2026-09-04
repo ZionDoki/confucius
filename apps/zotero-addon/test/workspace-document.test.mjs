@@ -439,6 +439,49 @@ test("settings are tabbed with font appearance controls", () => {
   assert.equal(view.includes("mask-image"), true);
 });
 
+test("settings use Zotero's native updater for checks and automatic updates", () => {
+  const view = readFileSync(
+    join(root, "src/modules/ui/WorkspaceView.ts"),
+    "utf8",
+  );
+  const host = readFileSync(
+    join(root, "src/modules/host/AgentHost.ts"),
+    "utf8",
+  );
+  const updater = readFileSync(
+    join(root, "src/modules/update/UpdateService.ts"),
+    "utf8",
+  );
+  const manifest = readFileSync(join(root, "addon/manifest.json"), "utf8");
+  assert.equal(view.includes('"confucius-cfg-tab-update"'), true);
+  assert.equal(view.includes('runUpdateAction("update/check")'), true);
+  assert.equal(view.includes('"update/check" | "update/install"'), true);
+  assert.equal(view.includes('rpc("update/setAuto"'), true);
+  assert.equal(host.includes("case RPC_METHODS.updateStatus"), true);
+  assert.equal(host.includes("case RPC_METHODS.updateInstall"), true);
+  assert.equal(updater.includes("AddonManager.sys.mjs"), true);
+  assert.equal(updater.includes("applyBackgroundUpdates"), true);
+  assert.equal(manifest.includes('"update_url": "__updateURL__"'), true);
+});
+
+test("long model rounds expose their real stage after tool results", () => {
+  const view = readFileSync(
+    join(root, "src/modules/ui/WorkspaceView.ts"),
+    "utf8",
+  );
+  const host = readFileSync(
+    join(root, "src/modules/host/AgentHost.ts"),
+    "utf8",
+  );
+  assert.equal(view.includes("function runningStageText"), true);
+  assert.equal(view.includes('event.type === "tool_result"'), true);
+  assert.equal(view.includes('"workspace-working-pdf-vision"'), true);
+  assert.equal(view.includes('className = "tui-waiting-text"'), true);
+  assert.equal(host.includes("suppressParallelVisual"), true);
+  assert.equal(host.includes("omitParallelPageVisual"), true);
+  assert.equal(host.includes("visualOmitted: true"), true);
+});
+
 test("timeline is TUI-style: foldable thinking/tools, unfolded answers", () => {
   const view = readFileSync(
     join(root, "src/modules/ui/WorkspaceView.ts"),

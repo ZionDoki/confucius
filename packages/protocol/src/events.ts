@@ -71,7 +71,11 @@ type EventPayloads = {
   approval_resolved: { resolution: ApprovalResolution };
   artifact_upserted: { artifact: ArtifactSummary };
   text_delta: { text: string };
-  reasoning_delta: { text: string };
+  reasoning_delta: {
+    text: string;
+    /** Host-authored workflow phase shown while a long turn is running. */
+    statusText?: string;
+  };
   citation: { citation: Citation };
   context_updated: { context: SessionContext };
   memory_updated: {

@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+## 0.3.6 — 2026-09-05
+
+### Updates
+
+- Added a bilingual Update settings tab backed by Zotero's native add-on
+  manager, with manual checks, explicit install status, and an automatic-update
+  toggle.
+
+### Research presets and annotations
+
+- The three featured presets now run end to end with sensible defaults instead
+  of interviewing the user about optional delivery preferences. Their hints
+  show the controls that can be added directly to the prompt.
+- Each preset now runs as an isolated research context followed by a fresh
+  delivery context. The user's edited brief is injected into both stages, the
+  handoff is bounded and treated as untrusted evidence, and stage-specific
+  tool allowlists prevent premature artifacts or restarted research across
+  Native, Codex, and Kimi backends.
+- Deep reading now treats the `commit_annotations` approval dialog as the
+  consent step. It must attempt PDF highlights, underlines, and region notes;
+  a denied or failed write falls back to the completed report without retrying
+  the mutation.
+- Annotation artifacts tolerate MiniMax-style string encoding for page,
+  library, and rectangle numbers while retaining strict schema validation.
+
+### Long-running turns
+
+- Multi-page inspection now sends at most one transient page image per model
+  round while keeping durable text anchors for every requested page.
+- Parallel external Runtime page inspections likewise return at most one
+  transient image at a time; the remaining calls retain text anchors and are
+  explicitly marked as visually omitted.
+- Page-image model calls have a cancellable 45-second deadline and retry once
+  with text anchors. User-initiated Stop never triggers that retry.
+- The workspace now shows the live post-tool phase and elapsed time, including
+  PDF image analysis and text-anchor fallback, instead of an opaque working
+  state.
+
 ## 0.3.5 — 2026-09-04
 
 ### Deep reading and PDF annotations

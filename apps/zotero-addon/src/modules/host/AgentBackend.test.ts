@@ -139,6 +139,7 @@ describe("ExternalBackend", () => {
     const terminal = new Promise<void>((resolve) => {
       terminalSeen = resolve;
     });
+    let startParams: Record<string, unknown> | undefined;
     const sidecar = {
       events: async (): Promise<SidecarEventPage> => {
         eventReads += 1;
@@ -152,7 +153,10 @@ describe("ExternalBackend", () => {
           cursorFound: true,
         };
       },
-      rpc: async () => ({ externalSessionId: "provider-session" }),
+      rpc: async (_method: string, params: Record<string, unknown>) => {
+        startParams = params;
+        return { externalSessionId: "provider-session" };
+      },
     } as unknown as SidecarClient;
     const backend = new ExternalBackend("codex", sidecar);
     const seen: ConfuciusEvent[] = [];
@@ -172,6 +176,8 @@ describe("ExternalBackend", () => {
         prompt: "Audit the evidence",
         mode: "agent",
         capabilityProfile: "zotero_only",
+        includeArtifactGuidance: false,
+        workflowInstruction: "RESEARCH PHASE ONLY",
       },
       wrapped,
     );
@@ -185,6 +191,8 @@ describe("ExternalBackend", () => {
     assert.equal(observed.handles(), 1);
     assert.equal(observed.disconnects(), 0);
     assert.equal(eventReads, 2);
+    assert.equal(startParams?.includeArtifactGuidance, false);
+    assert.equal(startParams?.workflowInstruction, "RESEARCH PHASE ONLY");
   });
 
   it("keeps polling when a terminal from the superseded turn arrives late", async () => {

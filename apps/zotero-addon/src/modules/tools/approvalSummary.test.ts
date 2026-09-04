@@ -17,7 +17,7 @@ describe("describeCallForApproval", () => {
         },
         resolve,
       ),
-      "Item 1:KNOWN · 1 × “first quote”",
+      "Item 1:KNOWN · 1 annotation · “first quote”",
     );
   });
 
@@ -34,7 +34,7 @@ describe("describeCallForApproval", () => {
         },
         resolve,
       ),
-      "Item 1:KNOWN · 1 × “read this closely”",
+      "Item 1:KNOWN · 1 annotation · “read this closely”",
     );
     assert.equal(
       describeCallForApproval("propose_annotations", {
@@ -47,7 +47,27 @@ describe("describeCallForApproval", () => {
           },
         ],
       }),
-      "1 × “Figure establishes the baseline”",
+      "1 annotation · “Figure establishes the baseline”",
+    );
+  });
+
+  it("summarizes a batch by count instead of repeating its first quote", () => {
+    const args = {
+      libraryID: 1,
+      key: "KNOWN",
+      annotations: [
+        { type: "highlight", quote: "ALPHA", page: 1 },
+        { type: "underline", quote: "BETA", page: 2 },
+        { type: "highlight", quote: "GAMMA", page: 3 },
+      ],
+    };
+    assert.equal(
+      describeCallForApproval("commit_annotations", args, resolve),
+      "Item 1:KNOWN · 3 annotations",
+    );
+    assert.equal(
+      describeCallForApproval("commit_annotations", args, resolve, "zh-CN"),
+      "Item 1:KNOWN · 3 条标注",
     );
   });
 

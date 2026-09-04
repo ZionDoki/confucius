@@ -38,6 +38,10 @@ export interface BackendTurnInput {
   capabilityProfile: CapabilityProfile;
   workingDirectory?: string;
   promptContext?: PromptContextOptions;
+  /** Strong phase contract installed as provider developer instructions. */
+  workflowInstruction?: string;
+  /** Research phases suppress generic durable-product guidance. */
+  includeArtifactGuidance?: boolean;
 }
 
 export interface BackendTurnHandle {
@@ -149,6 +153,8 @@ export class ExternalBackend implements AgentBackend {
         capabilityProfile: input.capabilityProfile,
         workingDirectory: input.workingDirectory,
         externalSessionId: input.task.externalSessionId,
+        workflowInstruction: input.workflowInstruction,
+        includeArtifactGuidance: input.includeArtifactGuidance,
       });
     } catch (error) {
       // Runtime startup failures are buffered by the host before the RPC

@@ -14,6 +14,7 @@ import type {
   RuntimeStatus,
   TaskAttachment,
   TaskTemplate,
+  UpdateStatus,
 } from "@confucius/protocol";
 import {
   DEFAULT_MAX_ITERATIONS,
@@ -4095,7 +4096,10 @@ function bindWorkspace(
     return row;
   }
 
-  function renderWaiting(targetDoc: Document): HTMLElement {
+  function renderWaiting(
+    targetDoc: Document,
+    events: ConfuciusEvent[],
+  ): HTMLElement {
     const wrap = tuiBlock(targetDoc, { margin: "10px 0 4px" });
     const label = el(targetDoc, "div");
     label.className = "tui-waiting";
@@ -4111,7 +4115,8 @@ function bindWorkspace(
     markPath.setAttribute("fill", "currentColor");
     mark.appendChild(markPath);
     const text = el(targetDoc, "span");
-    text.textContent = getString("workspace-waiting-model");
+    text.className = "tui-waiting-text";
+    text.textContent = runningStageText(events);
     label.appendChild(mark);
     label.appendChild(text);
     wrap.appendChild(label);
@@ -5104,19 +5109,37 @@ function bindWorkspace(
       return node;
     };
     if (body.type === "evidence_audit") {
+      const fourColumn = body.claims.some(
+        (claim) => claim.evidence !== undefined || claim.risk !== undefined,
+      );
       container.appendChild(
-        table(
-          [
-            getString("workspace-artifact-claim"),
-            getString("workspace-artifact-verdict"),
-            getString("workspace-artifact-rationale"),
-          ],
-          body.claims.map((claim) => [
-            claim.claim,
-            claim.verdict,
-            claim.rationale,
-          ]),
-        ),
+        fourColumn
+          ? table(
+              [
+                getString("workspace-artifact-claim"),
+                getString("workspace-artifact-evidence"),
+                getString("workspace-artifact-verdict"),
+                getString("workspace-artifact-risk"),
+              ],
+              body.claims.map((claim) => [
+                claim.claim,
+                claim.evidence ?? claim.rationale ?? "",
+                claim.verdict,
+                claim.risk ?? "",
+              ]),
+            )
+          : table(
+              [
+                getString("workspace-artifact-claim"),
+                getString("workspace-artifact-verdict"),
+                getString("workspace-artifact-rationale"),
+              ],
+              body.claims.map((claim) => [
+                claim.claim,
+                claim.verdict,
+                claim.rationale ?? "",
+              ]),
+            ),
       );
     } else if (body.type === "literature_map") {
       const nodes = el(doc, "div", { marginBottom: "18px" });
@@ -6430,7 +6453,7 @@ function bindWorkspace(
       activityStream.appendChild(renderApprovalCard(doc, item));
     }
     if (state.sending || turnAwaitingReply(state.events)) {
-      activityStream.appendChild(renderWaiting(doc));
+      activityStream.appendChild(renderWaiting(doc, state.events));
     }
     timelinePane.appendChild(activityStream);
     renderedTimelineTaskId = timelineTaskId;
@@ -6808,6 +6831,12 @@ function bindWorkspace(
       { display: "none" },
       { id: "confucius-cfg-appearance-tab" },
     );
+    const updateTab = el(
+      doc,
+      "div",
+      { display: "none" },
+      { id: "confucius-cfg-update-tab" },
+    );
     const makeTabButton = (id: string, label: string): HTMLElement => {
       const node = el(
         doc,
@@ -6858,20 +6887,27 @@ function bindWorkspace(
       "confucius-cfg-tab-security",
       getString("workspace-settings-tab-security"),
     );
+    const updateTabBtn = makeTabButton(
+      "confucius-cfg-tab-update",
+      getString("workspace-settings-tab-update"),
+    );
     const setSettingsTab = (
-      tab: "model" | "runtime" | "memory" | "security" | "appearance",
+      tab:
+        "model" | "runtime" | "memory" | "security" | "appearance" | "update",
     ): void => {
       modelTab.style.display = tab === "model" ? "block" : "none";
       runtimeTab.style.display = tab === "runtime" ? "block" : "none";
       memoryTab.style.display = tab === "memory" ? "block" : "none";
       securityTab.style.display = tab === "security" ? "block" : "none";
       appearanceTab.style.display = tab === "appearance" ? "block" : "none";
+      updateTab.style.display = tab === "update" ? "block" : "none";
       const pairs: Array<[HTMLElement, boolean]> = [
         [modelTabBtn, tab === "model"],
         [runtimeTabBtn, tab === "runtime"],
         [memoryTabBtn, tab === "memory"],
         [securityTabBtn, tab === "security"],
         [appearanceTabBtn, tab === "appearance"],
+        [updateTabBtn, tab === "update"],
       ];
       for (const [btn, active] of pairs) {
         btn.style.color = active ? "#33302a" : "#6b665c";
@@ -6886,12 +6922,14 @@ function bindWorkspace(
     appearanceTabBtn.addEventListener("click", () =>
       setSettingsTab("appearance"),
     );
+    updateTabBtn.addEventListener("click", () => setSettingsTab("update"));
     panel.appendChild(tabBar);
     panel.appendChild(modelTab);
     panel.appendChild(runtimeTab);
     panel.appendChild(memoryTab);
     panel.appendChild(securityTab);
     panel.appendChild(appearanceTab);
+    panel.appendChild(updateTab);
     setSettingsTab("model");
 
     let live: ModelConfig = config ?? {
@@ -7951,6 +7989,147 @@ function bindWorkspace(
     paintSegmented(lineHeightPicker.buttons, lineHeightChoice);
     repaintFontPreview();
 
+    const updateHeading = el(doc, "div", {
+      fontWeight: "700",
+      fontSize: "14px",
+      marginBottom: "5px",
+    });
+    updateHeading.textContent = getString("workspace-update-title");
+    const updateHelp = el(doc, "div", {
+      color: "#6b665c",
+      fontSize: "12px",
+      marginBottom: "14px",
+    });
+    updateHelp.textContent = getString("workspace-update-help");
+    const updateVersion = el(doc, "div", {
+      padding: "10px 0",
+      borderTop: "1px solid #eee9df",
+      borderBottom: "1px solid #eee9df",
+      fontWeight: "600",
+    });
+    const autoUpdateRow = el(doc, "label", {
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      padding: "13px 0 8px",
+      cursor: "pointer",
+    });
+    const autoUpdateToggle = el(
+      doc,
+      "input",
+      {},
+      { id: "confucius-cfg-auto-update", type: "checkbox" },
+    ) as HTMLInputElement;
+    const autoUpdateCopy = el(doc, "span");
+    autoUpdateCopy.textContent = getString("workspace-update-auto");
+    autoUpdateRow.appendChild(autoUpdateToggle);
+    autoUpdateRow.appendChild(autoUpdateCopy);
+    const updateStateLine = el(doc, "div", {
+      minHeight: "20px",
+      margin: "5px 0 10px",
+      color: "#6b665c",
+    });
+    const updateButtons = el(doc, "div", {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: "8px",
+    });
+    const checkUpdate = button(
+      doc,
+      "confucius-cfg-check-update",
+      getString("workspace-update-check"),
+    );
+    const installUpdate = button(
+      doc,
+      "confucius-cfg-install-update",
+      getString("workspace-update-install"),
+      "primary",
+    );
+    updateButtons.appendChild(checkUpdate);
+    updateButtons.appendChild(installUpdate);
+    updateTab.appendChild(updateHeading);
+    updateTab.appendChild(updateHelp);
+    updateTab.appendChild(updateVersion);
+    updateTab.appendChild(autoUpdateRow);
+    updateTab.appendChild(updateStateLine);
+    updateTab.appendChild(updateButtons);
+
+    let updateView: UpdateStatus | null = null;
+    let updateBusy = false;
+    const paintUpdate = (): void => {
+      updateVersion.textContent = `${getString("workspace-update-current")} ${
+        updateView?.currentVersion ?? "—"
+      }`;
+      autoUpdateToggle.checked = updateView?.autoUpdate !== false;
+      autoUpdateToggle.disabled = updateBusy || !updateView;
+      (checkUpdate as HTMLButtonElement).disabled = updateBusy;
+      (installUpdate as HTMLButtonElement).disabled =
+        updateBusy || !updateView?.canInstall;
+      const stateName = updateView?.state ?? "idle";
+      const version = updateView?.availableVersion
+        ? ` · v${updateView.availableVersion}`
+        : "";
+      updateStateLine.textContent = `${getString(
+        `workspace-update-state-${stateName}`,
+      )}${version}${updateView?.message ? ` · ${updateView.message}` : ""}`;
+      updateStateLine.style.color =
+        stateName === "error" ? "#b3452f" : "#6b665c";
+    };
+    const runUpdateAction = async (
+      method: "update/status" | "update/check" | "update/install",
+    ): Promise<void> => {
+      updateBusy = true;
+      if (updateView && method === "update/check") {
+        updateView = { ...updateView, state: "checking", canInstall: false };
+      } else if (updateView && method === "update/install") {
+        updateView = { ...updateView, state: "downloading", canInstall: false };
+      }
+      paintUpdate();
+      try {
+        updateView = (await rpc(method, {})) as UpdateStatus;
+      } catch (error) {
+        updateView = {
+          currentVersion: updateView?.currentVersion ?? "—",
+          autoUpdate: updateView?.autoUpdate !== false,
+          state: "error",
+          canInstall: false,
+          message: error instanceof Error ? error.message : String(error),
+        };
+      } finally {
+        updateBusy = false;
+        paintUpdate();
+      }
+    };
+    checkUpdate.addEventListener("click", () => {
+      void runUpdateAction("update/check");
+    });
+    installUpdate.addEventListener("click", () => {
+      void runUpdateAction("update/install");
+    });
+    autoUpdateToggle.addEventListener("change", () => {
+      const enabled = autoUpdateToggle.checked;
+      updateBusy = true;
+      paintUpdate();
+      void rpc("update/setAuto", { enabled })
+        .then((next) => {
+          updateView = next as UpdateStatus;
+        })
+        .catch((error) => {
+          updateView = {
+            currentVersion: updateView?.currentVersion ?? "—",
+            autoUpdate: !enabled,
+            state: "error",
+            canInstall: updateView?.canInstall ?? false,
+            message: error instanceof Error ? error.message : String(error),
+          };
+        })
+        .finally(() => {
+          updateBusy = false;
+          paintUpdate();
+        });
+    });
+    paintUpdate();
+
     const errorLine = el(doc, "div", {
       color: "#b3452f",
       minHeight: "18px",
@@ -8228,13 +8407,15 @@ function bindWorkspace(
       })();
     });
     root.appendChild(overlay);
-    void Promise.all([refreshRuntimes(true), refreshMemoryProposals()]).then(
-      () => {
-        if (!overlay.parentElement) return;
-        paintRuntimePanel();
-        paintMemoryProposals();
-      },
-    );
+    void Promise.all([
+      refreshRuntimes(true),
+      refreshMemoryProposals(),
+      runUpdateAction("update/status"),
+    ]).then(() => {
+      if (!overlay.parentElement) return;
+      paintRuntimePanel();
+      paintMemoryProposals();
+    });
   }
 
   async function refreshMemories(): Promise<void> {
@@ -9714,19 +9895,139 @@ function bindWorkspace(
       if (event.type === "turn_started") {
         latestTurnId = event.turnId;
         awaiting = true;
-      } else if (
-        event.turnId === latestTurnId &&
-        (event.type === "text_delta" ||
+      } else if (event.turnId === latestTurnId) {
+        if (event.type === "tool_result") {
+          // The provider is done and the next model round has started. This
+          // was the invisible gap after inspect_pdf_page in long deep reads.
+          awaiting = true;
+        } else if (
+          event.type === "text_delta" ||
           event.type === "reasoning_delta" ||
           event.type === "tool_requested" ||
+          event.type === "approval_required" ||
           event.type === "turn_completed" ||
           event.type === "turn_failed" ||
-          event.type === "turn_aborted")
-      ) {
-        awaiting = false;
+          event.type === "turn_aborted"
+        ) {
+          awaiting = false;
+        }
       }
     }
     return awaiting;
+  }
+
+  function runningStageText(events: ConfuciusEvent[]): string {
+    let activeTurnId: string | undefined;
+    let startedAt = Date.now();
+    let workflowStatus = "";
+    let workflowStartedAt = startedAt;
+    let stage:
+      | Extract<
+          ConfuciusEvent,
+          {
+            type:
+              | "turn_started"
+              | "tool_requested"
+              | "tool_result"
+              | "approval_required"
+              | "approval_resolved"
+              | "reasoning_delta"
+              | "text_delta";
+          }
+        >
+      | undefined;
+    for (const event of events) {
+      if (event.type === "turn_started") {
+        activeTurnId = event.turnId;
+        startedAt = event.ts;
+        workflowStatus = "";
+        workflowStartedAt = event.ts;
+        stage = event;
+        continue;
+      }
+      if (!activeTurnId || event.turnId !== activeTurnId) continue;
+      if (
+        event.type === "turn_completed" ||
+        event.type === "turn_failed" ||
+        event.type === "turn_aborted"
+      ) {
+        activeTurnId = undefined;
+        workflowStatus = "";
+        stage = undefined;
+        continue;
+      }
+      if (
+        event.type === "reasoning_delta" &&
+        event.payload.statusText &&
+        event.payload.statusText !== workflowStatus
+      ) {
+        workflowStatus = event.payload.statusText;
+        workflowStartedAt = event.ts;
+      }
+      if (
+        event.type === "tool_requested" ||
+        event.type === "tool_result" ||
+        event.type === "approval_required" ||
+        event.type === "approval_resolved" ||
+        event.type === "reasoning_delta" ||
+        event.type === "text_delta"
+      ) {
+        stage = event;
+      }
+    }
+
+    if (!activeTurnId || !stage) {
+      return getString("workspace-waiting-model");
+    }
+    let label = getString("workspace-working-model");
+    if (stage.type === "tool_requested") {
+      label = `${getString("workspace-working-tool")} · ${stage.payload.toolName}`;
+    } else if (stage.type === "tool_result") {
+      if (stage.payload.result.toolName === "inspect_pdf_page") {
+        const data =
+          stage.payload.result.ok &&
+          stage.payload.result.data &&
+          typeof stage.payload.result.data === "object"
+            ? (stage.payload.result.data as Record<string, unknown>)
+            : undefined;
+        label =
+          data?.visualAvailable === true
+            ? getString("workspace-working-pdf-vision")
+            : getString("workspace-working-pdf-anchors");
+      } else {
+        label = getString("workspace-working-tool-results");
+      }
+    } else if (stage.type === "approval_required") {
+      label = getString("workspace-awaiting-approval");
+    } else if (stage.type === "approval_resolved") {
+      label = getString("workspace-working-approved-tool");
+    } else if (stage.type === "reasoning_delta") {
+      label = getString("workspace-working-reasoning");
+    } else if (stage.type === "text_delta") {
+      label = getString("workspace-working-response");
+    }
+    if (workflowStatus) {
+      label =
+        stage.type === "tool_requested" ||
+        stage.type === "tool_result" ||
+        stage.type === "approval_required" ||
+        stage.type === "approval_resolved"
+          ? `${workflowStatus} · ${label}`
+          : workflowStatus;
+    }
+    const seconds = Math.max(
+      0,
+      Math.floor(
+        (Date.now() -
+          (workflowStatus
+            ? workflowStartedAt
+            : Math.max(startedAt, stage.ts))) /
+          1000,
+      ),
+    );
+    const minutes = Math.floor(seconds / 60);
+    const remainder = String(seconds % 60).padStart(2, "0");
+    return `${label} · ${String(minutes).padStart(2, "0")}:${remainder}`;
   }
 
   function isRunningFromEvents(events: ConfuciusEvent[]): boolean {
@@ -9865,7 +10166,12 @@ function bindWorkspace(
         status.textContent = getString("workspace-sending");
       } else if (state.running) {
         status.style.color = "#8c6a3f";
-        status.textContent = getString("workspace-waiting-model");
+        const workText = runningStageText(state.events);
+        status.textContent = workText;
+        const waitingText = timelinePane.querySelector(
+          ".tui-waiting-text",
+        ) as HTMLElement | null;
+        if (waitingText) waitingText.textContent = workText;
       } else {
         status.style.color = "#33302a";
         status.textContent = getString("workspace-host-zotero");

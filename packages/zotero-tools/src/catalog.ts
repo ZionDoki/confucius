@@ -403,7 +403,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   def("get_pdf_selection", "Current PDF reader selection, if any.", itemRef),
   def(
     "inspect_pdf_page",
-    "Inspect one PDF page. Returns durable normalized text-line anchors and, when vision is supported, a transient page PNG that is never persisted. Never guess an image-region rect when no page image is available.",
+    "Inspect one PDF page. Returns durable normalized text-line anchors and, when vision is supported, a transient page PNG that is never persisted. Inspect at most one visual page per model round; request additional pages in later rounds. Never guess an image-region rect when no page image is available.",
     {
       ...itemRef,
       page: { type: "integer", minimum: 1 },

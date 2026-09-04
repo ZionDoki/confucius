@@ -115,11 +115,35 @@ export const RPC_METHODS = {
   runtimeRefresh: "runtime/refresh",
   runtimeConfigure: "runtime/configure",
   runtimeSetPluginHost: "runtime/setPluginHost",
+  updateStatus: "update/status",
+  updateCheck: "update/check",
+  updateInstall: "update/install",
+  updateSetAuto: "update/setAuto",
   memoryProposalList: "memory/proposal/list",
   memoryProposalResolve: "memory/proposal/resolve",
 } as const;
 
 export type RpcMethod = (typeof RPC_METHODS)[keyof typeof RPC_METHODS];
+
+export type UpdateState =
+  | "idle"
+  | "checking"
+  | "up-to-date"
+  | "available"
+  | "downloading"
+  | "ready"
+  | "error";
+
+export interface UpdateStatus {
+  currentVersion: string;
+  availableVersion?: string;
+  autoUpdate: boolean;
+  state: UpdateState;
+  canInstall: boolean;
+  restartRequired?: boolean;
+  checkedAt?: number;
+  message?: string;
+}
 
 export interface SessionNewParams {
   title?: string;

@@ -37,4 +37,36 @@ describe("artifact turn policy", () => {
     assert.match(zh, /不会自动变成产物/);
     assert.equal(zh.includes("成功完成的任务会在这里留下可修订产物"), false);
   });
+
+  it("keeps write-tool consent inside the deep-reading research phase", () => {
+    const prompt = source("../../packages/protocol/src/artifactPrompt.ts");
+    const skill = source("../../skills/paper-deep-reading/SKILL.md");
+    const host = source("src/modules/host/AgentHost.ts");
+    const workflow = source("src/modules/host/PresetWorkflow.ts");
+    assert.doesNotMatch(prompt, /commit_annotations/);
+    assert.match(workflow, /commit_annotations approval dialog/);
+    assert.match(workflow, /This stage must not draft/);
+    assert.match(workflow, /Do not restart broad reading/);
+    assert.match(skill, /immediately call `commit_annotations`/);
+    assert.match(skill, /Do not ask the user to approve in chat/);
+    assert.match(host, /toolWasRequested\(messages, "commit_annotations"\)/);
+    assert.match(host, /new PresetResearchToolProvider/);
+    assert.match(host, /presetResearchToolNames\(workflow\)/);
+    assert.match(host, /presetResearchToolCallInScope/);
+    assert.match(host, /new Set\(\[ARTIFACT_UPSERT_TOOL\]\)/);
+    assert.match(host, /startExternalPresetWorkflow/);
+    assert.match(host, /buildWorkflowHandoffFromEvents/);
+    assert.match(host, /externalToolNames/);
+  });
+
+  it("removes recall content and recall tools from both preset phases", () => {
+    const host = source("src/modules/host/AgentHost.ts");
+    const workflow = source("src/modules/host/PresetWorkflow.ts");
+    assert.match(host, /includeRecallContext: !workflow/);
+    assert.match(host, /includeRecallContext: false/);
+    assert.match(host, /ISOLATED WORKFLOW CONTEXT/);
+    assert.match(workflow, /Preset research is deliberately narrower/);
+    assert.doesNotMatch(workflow, /"memory_search"/);
+    assert.match(workflow, /presetResearchToolNames/);
+  });
 });

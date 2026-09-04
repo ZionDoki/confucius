@@ -56,12 +56,23 @@ Lock sources → Agent analysis → Structured artifact → Review the diff → 
 | A PDF reader selection         | Explain, verify a claim, save an insight            | A note or annotation draft with a page-level citation        |
 | PDF, MD, or TXT files          | Read, organize, cross-analyze                       | External material combined with the locked Zotero context    |
 
+The three featured presets—Deep read, Evidence audit, and Synthesis—are
+host-orchestrated workflows rather than canned prompts. You can edit the task
+brief before sending; Confucius injects that same brief into an isolated
+research context and then a fresh delivery context, connected only by a
+bounded structured handoff. Each stage exposes only the tools it needs, so
+research cannot prematurely generate an artifact and delivery cannot restart
+the investigation.
+
 ### Read past the abstract
 
 Confucius organizes a paper around its question, method, evidence, and
 limitations. Citations can lead back to a Zotero item, PDF page, or reader
 selection, which makes checking a claim much faster than searching through the
-paper again.
+paper again. A Deep read also prepares highlights, underlines, and grounded
+region notes, then requests permission to write them directly into the PDF.
+If that write is denied, the report is still delivered without changing the
+document.
 
 ### Compare papers on the same axes
 
@@ -135,6 +146,9 @@ research preferences instead of starting with an empty conversation.
 3. Open the gear menu, choose **Install Add-on From File**, and select the
    downloaded file.
 4. Click the Confucius toolbar button to open the workspace.
+
+After installation, open **Confucius Settings → Update** to check immediately
+or let Zotero's native updater install future releases automatically.
 
 For the Native Runtime, add a Base URL, model name, and API key under
 **Zotero → Settings → Confucius**. A local Ollama endpoint usually needs no API

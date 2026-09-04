@@ -172,8 +172,18 @@ test("workspace turns require an absolute real path and shutdown releases them",
       prompt: "x",
       capabilityProfile: "workspace",
       workingDirectory: selected,
+      includeArtifactGuidance: false,
+      workflowInstruction: "RESEARCH PHASE ONLY",
     });
     assert.equal(inputs[0]?.cwd, await realpath(selected));
+    assert.match(
+      inputs[0]?.developerInstructions ?? "",
+      /RESEARCH PHASE ONLY/,
+    );
+    assert.doesNotMatch(
+      inputs[0]?.developerInstructions ?? "",
+      /artifact_upsert/,
+    );
     await service.shutdown();
     assert.deepEqual(disposed, ["task_workspace"]);
   } finally {

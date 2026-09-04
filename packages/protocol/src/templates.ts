@@ -31,21 +31,23 @@ export const TASK_TEMPLATES: readonly TaskTemplate[] = [
     id: "deep-read",
     title: "Deep read",
     description:
-      "Trace the question, method, evidence, limits, and implications.",
+      "Customize annotation colors and meanings, method summaries, note voice, or focus in the prompt; otherwise sensible defaults are used.",
     artifactKind: "deep_read",
     additionalArtifactKinds: ["annotation_set"],
     skillSlug: "paper-deep-reading",
     source: "single",
     prompt:
-      "Deep-read the locked paper. Plan the delivery details I want, then produce both a cited deep-reading report and a detailed annotation set. Use the default annotation legend unless I override its colors, meanings, method-section summary style, note voice, or focus.",
+      "Deep-read the locked paper. Use the default annotation meanings, method-summary style, note voice, and focus unless I specify changes here.",
   },
   {
     id: "evidence-audit",
     title: "Evidence audit",
-    description: "Separate claims from the evidence that supports them.",
+    description:
+      "Customize scope, evidence thresholds, counterexample priority, or output structure in the prompt; otherwise audit the full paper.",
     artifactKind: "evidence_audit",
     source: "single",
-    prompt: "Audit the major claims in the locked paper against its evidence.",
+    prompt:
+      "Audit the locked paper's major claims against its evidence. Use sensible defaults unless I specify scope, thresholds, counterexample priorities, or structure here.",
   },
   {
     id: "related-work",
@@ -85,10 +87,12 @@ export const TASK_TEMPLATES: readonly TaskTemplate[] = [
   {
     id: "synthesis",
     title: "Synthesis",
-    description: "Synthesize consensus, disagreement, and open questions.",
+    description:
+      "Customize the question, source scope, treatment of disagreements, or delivery format in the prompt; otherwise use sensible defaults.",
     artifactKind: "report",
     source: "multi",
-    prompt: "Synthesize the locked sources into a cited research report.",
+    prompt:
+      "Synthesize the locked sources into a cited research report. Use sensible defaults unless I specify the question, source scope, disagreement emphasis, or format here.",
   },
   {
     id: "literature-map",
@@ -182,10 +186,18 @@ export function taskTemplate(id: unknown): TaskTemplate | undefined {
   return TASK_TEMPLATES.find((template) => template.id === id);
 }
 
-export interface TemplateContextValidation {
-  ok: boolean;
-  message?: string;
-}
+export type TemplateContextFailureReason =
+  "selection_required" | "single_required" | "multi_required";
+
+export type TemplateContextValidation =
+  | { ok: true }
+  | {
+      ok: false;
+      /** Stable code for hosts that localize the user-facing validation. */
+      reason: TemplateContextFailureReason;
+      /** English compatibility text for callers that do not localize yet. */
+      message: string;
+    };
 
 /** Validate a staged template at send time, after mention/context updates land. */
 export function validateTemplateContext(
@@ -198,6 +210,7 @@ export function validateTemplateContext(
       ? { ok: true }
       : {
           ok: false,
+          reason: "selection_required",
           message:
             "This task needs a PDF text selection. The draft was kept so you can select text or update the task context and send again.",
         };
@@ -217,6 +230,7 @@ export function validateTemplateContext(
       ? { ok: true }
       : {
           ok: false,
+          reason: "single_required",
           message:
             "This task needs exactly one paper. The draft was kept so you can update the task context and send again.",
         };
@@ -226,6 +240,7 @@ export function validateTemplateContext(
     ? { ok: true }
     : {
         ok: false,
+        reason: "multi_required",
         message:
           "This task needs multiple papers, a collection, or a saved search. The draft was kept so you can add sources and send again.",
       };

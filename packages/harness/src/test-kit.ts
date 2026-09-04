@@ -37,6 +37,13 @@ export function createHarness(options: {
   resolve?: ConstructorParameters<typeof PermissionGate>[0]["resolve"];
   describeCall?: ConstructorParameters<typeof TurnLoop>[0]["describeCall"];
   checkpointStore?: ConstructorParameters<typeof TurnLoop>[0]["checkpoints"];
+  transientMediaTimeoutMs?: number;
+  completionGuard?: ConstructorParameters<
+    typeof TurnLoop
+  >[0]["completionGuard"];
+  completionGuardMaxReminders?: number;
+  completionToolNames?: ReadonlySet<string>;
+  toolBudgetExhaustedMessage?: string;
 }) {
   const ids = createIdFactory("id");
   const now = createClock(1000);
@@ -117,6 +124,11 @@ export function createHarness(options: {
     checkpoints: options.checkpointStore ?? checkpoints,
     ids,
     now,
+    transientMediaTimeoutMs: options.transientMediaTimeoutMs,
+    completionGuard: options.completionGuard,
+    completionGuardMaxReminders: options.completionGuardMaxReminders,
+    completionToolNames: options.completionToolNames,
+    toolBudgetExhaustedMessage: options.toolBudgetExhaustedMessage,
   });
 
   return { loop, events, checkpoints, budget, tools, ids, now };

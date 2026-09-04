@@ -74,10 +74,19 @@ const artifactBodySchemas = [
               type: "string",
               enum: ["supported", "mixed", "unsupported", "unclear"],
             },
-            rationale: { type: "string" },
+            evidence: {
+              type: "string",
+              description:
+                "Source-grounded evidence for the claim. This is the Evidence column shown to the user.",
+            },
+            risk: {
+              type: "string",
+              description:
+                "Residual uncertainty, counterevidence, or validation risk. This is the Risk column shown to the user.",
+            },
             citationIds: { type: "array", items: { type: "string" } },
           },
-          required: ["claim", "verdict", "rationale", "citationIds"],
+          required: ["claim", "evidence", "verdict", "risk", "citationIds"],
           additionalProperties: false,
         },
       },
@@ -264,21 +273,93 @@ export function artifactBodyShapeHint(kind: unknown): string {
  * authoritative kind/body validation before anything is persisted.
  */
 export function normalizeArtifactBodyArgument(body: unknown): unknown {
-  if (typeof body !== "string") {
-    return body;
+  let decoded = body;
+  if (typeof body === "string") {
+    const text = body.trim();
+    if (!text.startsWith("{") || !text.endsWith("}")) {
+      return body;
+    }
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      decoded =
+        parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? parsed
+          : body;
+    } catch {
+      return body;
+    }
   }
-  const text = body.trim();
-  if (!text.startsWith("{") || !text.endsWith("}")) {
-    return body;
+  return normalizeRuntimeArtifactScalars(unwrapRuntimeArrayItems(decoded));
+}
+
+/**
+ * MiniMax and a few XML-backed OpenAI-compatible runtimes encode arrays that
+ * sit inside a oneOf object as { item: [...] }. Normalize only that exact
+ * single-key wire shape, recursively; ordinary artifact item references have
+ * libraryID/key fields and are therefore never changed.
+ */
+function unwrapRuntimeArrayItems(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(unwrapRuntimeArrayItems);
   }
-  try {
-    const parsed = JSON.parse(text) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed
-      : body;
-  } catch {
-    return body;
+  if (!value || typeof value !== "object") {
+    return value;
   }
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (keys.length === 1 && keys[0] === "item" && Array.isArray(record.item)) {
+    return record.item.map(unwrapRuntimeArrayItems);
+  }
+  return Object.fromEntries(
+    Object.entries(record).map(([key, child]) => [
+      key,
+      unwrapRuntimeArrayItems(child),
+    ]),
+  );
+}
+
+/**
+ * MiniMax can also stringify numeric values that are nested inside the
+ * artifact body's `oneOf` branch even though the advertised schema declares
+ * them as numbers. Coerce only numeric fields whose artifact semantics are
+ * unambiguous; leave user-authored prose, identifiers, and arbitrary strings
+ * untouched. The protocol validator still enforces positivity, integer-ness,
+ * tuple length, and coordinate bounds after this compatibility pass.
+ */
+function normalizeRuntimeArtifactScalars(
+  value: unknown,
+  field?: "libraryID" | "page" | "rect" | string,
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map((child) =>
+      normalizeRuntimeArtifactScalars(
+        child,
+        field === "rect" ? "rect" : undefined,
+      ),
+    );
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, child]) => [
+        key,
+        normalizeRuntimeArtifactScalars(child, key),
+      ]),
+    );
+  }
+  if (typeof value !== "string") {
+    return value;
+  }
+  if (field === "libraryID" || field === "page") {
+    if (!/^\d+$/.test(value)) return value;
+    const integer = Number(value);
+    return Number.isSafeInteger(integer) ? integer : value;
+  }
+  if (field === "rect") {
+    if (!/^-?(?:\d+\.?\d*|\.\d+)$/.test(value)) return value;
+    const coordinate = Number(value);
+    return Number.isFinite(coordinate) ? coordinate : value;
+  }
+  return value;
 }
 
 function artifactBodyDiagnostic(body: unknown): string {

@@ -409,4 +409,137 @@ describe("artifact_upsert contract", () => {
     assert.equal(result.ok, true);
     assert.equal(fs.files.size, 1);
   });
+
+  it("normalizes MiniMax item-wrapped nested arrays", async () => {
+    const fs = new MemoryFileSystem();
+    const provider = new ArtifactToolProvider(
+      new ArtifactStore(
+        "artifacts",
+        fs,
+        () => 1,
+        () => "art_minimax_audit",
+      ),
+      "task_a",
+      "native",
+      [],
+      () => {},
+    );
+    const wrapped = {
+      type: "evidence_audit",
+      claims: {
+        item: [
+          {
+            claim: "Reader annotations are visible",
+            evidence: "The PDF contains a grounded highlight.",
+            verdict: "supported",
+            risk: "Requires visual confirmation.",
+            citationIds: { item: ["cite-1"] },
+          },
+        ],
+      },
+    };
+    assert.deepEqual(normalizeArtifactBodyArgument(wrapped), {
+      type: "evidence_audit",
+      claims: [
+        {
+          claim: "Reader annotations are visible",
+          evidence: "The PDF contains a grounded highlight.",
+          verdict: "supported",
+          risk: "Requires visual confirmation.",
+          citationIds: ["cite-1"],
+        },
+      ],
+    });
+
+    const result = await provider.call("artifact_upsert", {
+      kind: "evidence_audit",
+      title: "Audit",
+      body: wrapped,
+      citations: [
+        {
+          id: "cite-1",
+          itemLibraryID: 1,
+          itemKey: "ITEM",
+        },
+      ],
+    });
+    assert.equal(result.ok, true);
+    assert.equal(fs.files.size, 1);
+  });
+
+  it("normalizes MiniMax numeric strings in annotation artifacts", async () => {
+    const fs = new MemoryFileSystem();
+    const provider = new ArtifactToolProvider(
+      new ArtifactStore(
+        "artifacts",
+        fs,
+        () => 1,
+        () => "art_minimax_annotations",
+      ),
+      "task_a",
+      "native",
+      [],
+      () => {},
+    );
+    const encoded = {
+      type: "annotation_set",
+      item: { libraryID: "1", key: "ITEM" },
+      annotations: [
+        {
+          type: "highlight",
+          page: "3",
+          quote: "Grounded conclusion",
+          color: "#ffd400",
+        },
+        {
+          type: "image",
+          page: "2",
+          rect: ["100", "125.5", "300", "250"],
+          comment: "Figure evidence",
+          color: "#a28ae5",
+        },
+      ],
+      legend: [
+        {
+          type: "highlight",
+          color: "#ffd400",
+          meaning: "Core conclusion",
+        },
+      ],
+    };
+    assert.deepEqual(normalizeArtifactBodyArgument(encoded), {
+      type: "annotation_set",
+      item: { libraryID: 1, key: "ITEM" },
+      annotations: [
+        {
+          type: "highlight",
+          page: 3,
+          quote: "Grounded conclusion",
+          color: "#ffd400",
+        },
+        {
+          type: "image",
+          page: 2,
+          rect: [100, 125.5, 300, 250],
+          comment: "Figure evidence",
+          color: "#a28ae5",
+        },
+      ],
+      legend: [
+        {
+          type: "highlight",
+          color: "#ffd400",
+          meaning: "Core conclusion",
+        },
+      ],
+    });
+
+    const result = await provider.call("artifact_upsert", {
+      kind: "annotation_set",
+      title: "Annotations",
+      body: encoded,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(fs.files.size, 1);
+  });
 });

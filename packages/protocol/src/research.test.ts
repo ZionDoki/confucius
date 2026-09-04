@@ -233,6 +233,21 @@ describe("artifact bodies", () => {
       }),
       true,
     );
+    assert.equal(
+      artifactBodyMatchesKind("evidence_audit", {
+        type: "evidence_audit",
+        claims: [
+          {
+            claim: "Claim",
+            evidence: "Grounded evidence",
+            verdict: "supported",
+            risk: "Residual risk",
+            citationIds: ["c1"],
+          },
+        ],
+      }),
+      true,
+    );
   });
 
   it("validates persisted citation locations", () => {

@@ -24,16 +24,37 @@ describe("task templates", () => {
     );
   });
 
+  it("keeps featured preset drafts editable instead of encoding the workflow", () => {
+    for (const template of FEATURED_TASK_TEMPLATES) {
+      assert.match(template.description, /customize/i);
+      assert.doesNotMatch(template.prompt, /artifact_upsert|approval dialog/i);
+    }
+    assert.doesNotMatch(
+      taskTemplate("deep-read")!.prompt,
+      /commit_annotations/,
+    );
+    assert.match(taskTemplate("deep-read")!.prompt, /unless I specify/i);
+  });
+
   it("validates staged context only when the user sends", () => {
     const empty = emptyLockedContext(1);
-    assert.equal(
-      validateTemplateContext(taskTemplate("deep-read")!, empty).ok,
-      false,
+    assert.deepEqual(
+      validateTemplateContext(taskTemplate("deep-read")!, empty),
+      {
+        ok: false,
+        reason: "single_required",
+        message:
+          "This task needs exactly one paper. The draft was kept so you can update the task context and send again.",
+      },
     );
-    assert.equal(
-      validateTemplateContext(taskTemplate("explain-selection")!, empty).ok,
-      false,
+    const selectionRequired = validateTemplateContext(
+      taskTemplate("explain-selection")!,
+      empty,
     );
+    assert.equal(selectionRequired.ok, false);
+    if (!selectionRequired.ok) {
+      assert.equal(selectionRequired.reason, "selection_required");
+    }
 
     const onePaper = withLockedContextFingerprint({
       ...empty,
@@ -51,10 +72,14 @@ describe("task templates", () => {
       validateTemplateContext(taskTemplate("deep-read")!, onePaper).ok,
       true,
     );
-    assert.equal(
-      validateTemplateContext(taskTemplate("compare")!, onePaper).ok,
-      false,
+    const multiRequired = validateTemplateContext(
+      taskTemplate("compare")!,
+      onePaper,
     );
+    assert.equal(multiRequired.ok, false);
+    if (!multiRequired.ok) {
+      assert.equal(multiRequired.reason, "multi_required");
+    }
 
     const selection = withLockedContextFingerprint({
       ...onePaper,

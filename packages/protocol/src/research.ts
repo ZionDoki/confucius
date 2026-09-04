@@ -137,7 +137,11 @@ export interface EvidenceAuditArtifactBody {
   claims: Array<{
     claim: string;
     verdict: "supported" | "mixed" | "unsupported" | "unclear";
-    rationale: string;
+    /** Canonical v0.3.6 four-column audit fields. */
+    evidence?: string;
+    risk?: string;
+    /** @deprecated Compatibility with audits created before v0.3.6. */
+    rationale?: string;
     citationIds: string[];
   }>;
 }
@@ -497,7 +501,12 @@ export function artifactBodyMatchesKind(
           ["supported", "mixed", "unsupported", "unclear"].includes(
             String(claim.verdict),
           ) &&
-          typeof claim.rationale === "string" &&
+          optionalString(claim.evidence) &&
+          optionalString(claim.risk) &&
+          optionalString(claim.rationale) &&
+          (typeof claim.rationale === "string" ||
+            (typeof claim.evidence === "string" &&
+              typeof claim.risk === "string")) &&
           stringArray(claim.citationIds),
         );
       })

@@ -23,6 +23,8 @@ describe("artifact upsert guidance", () => {
     assert.match(text, /kind deep_read/);
     assert.match(text, /kind annotation_set/);
     assert.match(text, /Follow-ups and clarifications do not need an artifact/);
+    assert.doesNotMatch(text, /commit_annotations/);
+    assert.doesNotMatch(text, /approval dialog/i);
     assert.doesNotMatch(text, /before completing/i);
   });
 

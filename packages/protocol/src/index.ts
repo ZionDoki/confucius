@@ -106,6 +106,7 @@ export {
 export type {
   TaskTemplate,
   TaskTemplateId,
+  TemplateContextFailureReason,
   TemplateContextValidation,
 } from "./templates";
 export {
@@ -274,6 +275,8 @@ export type {
   UiFont,
   UiLanguage,
   UiLineHeight,
+  UpdateState,
+  UpdateStatus,
   ArtifactGetParams,
   AttachmentPrepareParams,
   AttachmentPrepareResult,
