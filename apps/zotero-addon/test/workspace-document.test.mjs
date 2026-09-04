@@ -350,8 +350,7 @@ test("settings effort control is a button group, not a native select", () => {
     join(root, "src/modules/ui/WorkspaceView.ts"),
     "utf8",
   );
-  // The effort control stays a paintable button group even though Runtime,
-  // revision, and safety choices now legitimately use native selects.
+  // The effort control stays a paintable button group in Zotero chrome.
   const effortBlock = view.slice(
     view.indexOf("const effortRow"),
     view.indexOf("const stream = check"),
@@ -360,6 +359,27 @@ test("settings effort control is a button group, not a native select", () => {
   assert.equal(view.includes("effortPicker"), true);
   assert.equal(view.includes('"confucius-cfg-effort"'), true);
   assert.equal(view.includes('role: "radiogroup"'), true);
+});
+
+test("settings security profile uses a styled custom listbox", () => {
+  const view = readFileSync(
+    join(root, "src/modules/ui/WorkspaceView.ts"),
+    "utf8",
+  );
+  const security = view.slice(
+    view.indexOf("const settingsTask = currentTask()"),
+    view.indexOf("let fontChoice"),
+  );
+  assert.equal(/,\s*"select"/.test(security), false);
+  assert.equal(security.includes('id: "confucius-security-profile"'), true);
+  assert.equal(security.includes('"aria-haspopup": "listbox"'), true);
+  assert.equal(security.includes('menu.setAttribute("role", "listbox")'), true);
+  assert.equal(security.includes('role: "option"'), true);
+  assert.equal(security.includes("confucius-settings-choice"), true);
+  assert.equal(security.includes('key === "Escape"'), true);
+  assert.equal(security.includes('"ArrowDown", "ArrowUp"'), true);
+  assert.equal(security.includes("placeMenu("), true);
+  assert.equal(security.includes("overlay,"), true);
 });
 
 test("settings are tabbed with font appearance controls", () => {

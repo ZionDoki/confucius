@@ -1040,7 +1040,62 @@ const TUI_CSS = `
 .confucius-artifact-choice-menu {
   animation: confucius-artifact-menu-in 110ms ease-out;
 }
-.confucius-artifact-choice {
+.confucius-settings-choice-menu {
+  animation: confucius-settings-menu-in 110ms ease-out;
+}
+.confucius-settings-select {
+  appearance: none;
+  width: 100%;
+  height: 34px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 0 9px 0 10px;
+  border: 1px solid #ddd8cc;
+  border-radius: 7px;
+  background: #fff;
+  color: #33302a;
+  box-sizing: border-box;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 100ms ease, background 100ms ease,
+    box-shadow 100ms ease;
+}
+.confucius-settings-select:hover:not(:disabled) {
+  border-color: #c4bbad;
+  background: #fffefa;
+}
+.confucius-settings-select:focus-visible,
+.confucius-settings-select[aria-expanded="true"] {
+  outline: none;
+  border-color: #9a6430;
+  box-shadow: 0 0 0 2px rgba(154, 100, 48, 0.14);
+}
+.confucius-settings-select:disabled {
+  opacity: .48;
+  cursor: default;
+}
+.confucius-settings-select-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.confucius-settings-select-chevron {
+  color: #8a857c;
+  font-size: 12px;
+  line-height: 1;
+  text-align: center;
+  transition: transform 100ms ease;
+}
+.confucius-settings-select[aria-expanded="true"]
+  .confucius-settings-select-chevron {
+  transform: rotate(180deg);
+}
+.confucius-artifact-choice,
+.confucius-settings-choice {
   appearance: none;
   width: 100%;
   min-width: 0;
@@ -1059,13 +1114,27 @@ const TUI_CSS = `
   cursor: pointer;
 }
 .confucius-artifact-choice:hover,
-.confucius-artifact-choice:focus-visible {
+.confucius-artifact-choice:focus-visible,
+.confucius-settings-choice:hover,
+.confucius-settings-choice:focus-visible {
   outline: none;
   background: #f2eee6;
 }
-.confucius-artifact-choice[data-selected="true"] {
+.confucius-artifact-choice[data-selected="true"],
+.confucius-settings-choice[data-selected="true"] {
   background: #eee8dd;
   box-shadow: inset 2px 0 #9a6430;
+}
+.confucius-settings-choice-label {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.confucius-settings-choice-check {
+  color: #8a5a2b;
+  font-weight: 700;
+  text-align: center;
 }
 .confucius-artifact-choice-copy { min-width: 0; }
 .confucius-artifact-choice-title {
@@ -1235,10 +1304,16 @@ const TUI_CSS = `
   from { opacity: 0; transform: translateX(4px); }
   to { opacity: 1; transform: translateX(0); }
 }
+@keyframes confucius-settings-menu-in {
+  from { opacity: 0; transform: scale(.985); }
+  to { opacity: 1; transform: scale(1); }
+}
 @media (prefers-reduced-motion: reduce) {
   .confucius-artifact-overlay,
-  .confucius-artifact-choice-menu { animation: none; }
+  .confucius-artifact-choice-menu,
+  .confucius-settings-choice-menu { animation: none; }
   .confucius-artifact-menu-trigger-chevron,
+  .confucius-settings-select-chevron,
   .confucius-drop-hint { transition: none; }
 }
 `;
@@ -1913,6 +1988,7 @@ export function unmountWorkspace(root?: HTMLElement | null): void {
     "confucius-knowledge-overlay",
     "confucius-artifact-overlay",
     "confucius-artifact-choice-menu",
+    "confucius-security-profile-menu",
     "confucius-writeback-overlay",
     "confucius-slash-menu",
     "confucius-mention-menu",
@@ -7115,36 +7191,48 @@ function bindWorkspace(
     paintMemoryProposals();
 
     const settingsTask = currentTask();
-    let securityProfile = settingsTask?.capabilityProfile ?? "zotero_only";
+    type SecurityProfile = "zotero_only" | "workspace";
+    const securityProfileOptions: Array<{
+      value: SecurityProfile;
+      label: string;
+    }> = [
+      {
+        value: "zotero_only",
+        label: getString("workspace-security-zotero-only"),
+      },
+      {
+        value: "workspace",
+        label: getString("workspace-security-workspace"),
+      },
+    ];
+    let securityProfile: SecurityProfile =
+      settingsTask?.capabilityProfile === "workspace"
+        ? "workspace"
+        : "zotero_only";
     sectionIntro(securityTab, getString("workspace-security-help"));
     if (!settingsTask) {
       securityTab.appendChild(
         muted(doc, getString("workspace-security-no-task")),
       );
     }
-    const profileSelect = el(
-      doc,
-      "select",
-      {
-        width: "100%",
-        height: "34px",
-        marginBottom: "10px",
-        border: "1px solid #ddd8cc",
-        borderRadius: "7px",
-        background: "#fff",
-      },
-      { id: "confucius-security-profile" },
-    ) as HTMLSelectElement;
-    for (const [value, label] of [
-      ["zotero_only", getString("workspace-security-zotero-only")],
-      ["workspace", getString("workspace-security-workspace")],
-    ]) {
-      const option = el(doc, "option", undefined, { value });
-      option.textContent = label;
-      profileSelect.appendChild(option);
-    }
-    profileSelect.value = securityProfile;
-    profileSelect.disabled = !settingsTask;
+    const profileTrigger = el(doc, "button", undefined, {
+      id: "confucius-security-profile",
+      type: "button",
+      "aria-haspopup": "listbox",
+      "aria-controls": "confucius-security-profile-menu",
+      "aria-expanded": "false",
+    }) as HTMLButtonElement;
+    profileTrigger.className = "confucius-settings-select";
+    profileTrigger.disabled = !settingsTask;
+    const profileValue = el(doc, "span");
+    profileValue.className = "confucius-settings-select-value";
+    const profileChevron = el(doc, "span", undefined, {
+      "aria-hidden": "true",
+    });
+    profileChevron.className = "confucius-settings-select-chevron";
+    profileChevron.textContent = "▾";
+    profileTrigger.appendChild(profileValue);
+    profileTrigger.appendChild(profileChevron);
     const workingDirectory = el(
       doc,
       "input",
@@ -7231,14 +7319,32 @@ function bindWorkspace(
       return pending;
     };
     const paintSecurity = (): void => {
-      securityProfile =
-        profileSelect.value === "workspace" ? "workspace" : "zotero_only";
       const workspace = securityProfile === "workspace";
       workingDirectory.style.display = workspace ? "block" : "none";
       securityPathStatus.style.display = workspace ? "block" : "none";
       confirmLabel.style.display = workspace ? "flex" : "none";
     };
-    profileSelect.addEventListener("change", () => {
+    const syncSecurityProfileTrigger = (): void => {
+      const selected =
+        securityProfileOptions.find(
+          (option) => option.value === securityProfile,
+        ) ?? securityProfileOptions[0];
+      profileValue.textContent = selected.label;
+      profileTrigger.title = selected.label;
+      profileTrigger.setAttribute(
+        "aria-label",
+        `${getString("workspace-settings-tab-security")}: ${selected.label}`,
+      );
+    };
+    const closeSecurityProfileMenu = (restoreFocus = false): void => {
+      doc.getElementById("confucius-security-profile-menu")?.remove();
+      profileTrigger.setAttribute("aria-expanded", "false");
+      if (restoreFocus && profileTrigger.isConnected) profileTrigger.focus();
+    };
+    const selectSecurityProfile = (value: SecurityProfile): void => {
+      securityProfile = value;
+      syncSecurityProfileTrigger();
+      closeSecurityProfileMenu(true);
       paintSecurity();
       securityPathStatus.textContent = "";
       if (
@@ -7247,7 +7353,119 @@ function bindWorkspace(
       ) {
         confirmDirectory.checked = false;
       }
+    };
+    const renderSecurityProfileMenu = (): void => {
+      closeSecurityProfileMenu(false);
+      const menu = menuPanel("confucius-security-profile-menu", {
+        zIndex: "1100",
+        padding: "5px",
+        borderRadius: "9px",
+        background: "#fffefa",
+        boxShadow: "0 12px 34px rgba(45,40,34,.18)",
+      });
+      menu.className = "confucius-settings-choice-menu";
+      menu.setAttribute("role", "listbox");
+      menu.setAttribute("aria-labelledby", profileTrigger.id);
+      for (const option of securityProfileOptions) {
+        const selected = option.value === securityProfile;
+        const row = el(doc, "button", undefined, {
+          type: "button",
+          role: "option",
+          "data-security-profile": option.value,
+          "data-selected": selected ? "true" : "false",
+          "aria-selected": selected ? "true" : "false",
+        });
+        row.className = "confucius-settings-choice";
+        const label = el(doc, "span");
+        label.className = "confucius-settings-choice-label";
+        label.textContent = option.label;
+        const checkmark = el(doc, "span", undefined, {
+          "aria-hidden": "true",
+        });
+        checkmark.className = "confucius-settings-choice-check";
+        checkmark.textContent = selected ? "✓" : "";
+        row.appendChild(label);
+        row.appendChild(checkmark);
+        row.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          selectSecurityProfile(option.value);
+        });
+        menu.appendChild(row);
+      }
+      menu.addEventListener("keydown", (event) => {
+        const key = (event as KeyboardEvent).key;
+        if (key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          closeSecurityProfileMenu(true);
+          return;
+        }
+        if (key === "Tab") {
+          closeSecurityProfileMenu(false);
+          return;
+        }
+        if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(key)) return;
+        event.preventDefault();
+        const rows = Array.from(
+          menu.querySelectorAll(".confucius-settings-choice"),
+        ) as HTMLElement[];
+        if (!rows.length) return;
+        const current = rows.indexOf(doc.activeElement as HTMLElement);
+        const index =
+          key === "Home"
+            ? 0
+            : key === "End"
+              ? rows.length - 1
+              : key === "ArrowUp"
+                ? (current - 1 + rows.length) % rows.length
+                : (current + 1) % rows.length;
+        rows[index]?.focus();
+      });
+      profileTrigger.setAttribute("aria-expanded", "true");
+      const triggerWidth = profileTrigger.getBoundingClientRect().width;
+      placeMenu(
+        profileTrigger,
+        menu,
+        Math.max(180, triggerWidth),
+        "auto",
+        overlay,
+      );
+      const selected = menu.querySelector(
+        '[data-selected="true"]',
+      ) as HTMLElement | null;
+      (selected ?? (menu.firstElementChild as HTMLElement | null))?.focus();
+    };
+    profileTrigger.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (doc.getElementById("confucius-security-profile-menu")) {
+        closeSecurityProfileMenu(true);
+      } else {
+        renderSecurityProfileMenu();
+      }
     });
+    profileTrigger.addEventListener("keydown", (event) => {
+      const key = (event as KeyboardEvent).key;
+      if (!["ArrowDown", "ArrowUp", "Enter", " "].includes(key)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!doc.getElementById("confucius-security-profile-menu")) {
+        renderSecurityProfileMenu();
+      }
+    });
+    overlay.addEventListener("mousedown", (event) => {
+      const menu = doc.getElementById("confucius-security-profile-menu");
+      const target = event.target as Node | null;
+      if (
+        menu &&
+        (!target ||
+          (!profileTrigger.contains(target) && !menu.contains(target)))
+      ) {
+        closeSecurityProfileMenu(false);
+      }
+    });
+    panel.addEventListener("scroll", () => closeSecurityProfileMenu(false));
     workingDirectory.addEventListener("input", () => {
       confirmDirectory.checked = false;
       securityPathStatus.textContent = "";
@@ -7255,7 +7473,8 @@ function bindWorkspace(
     confirmDirectory.addEventListener("change", () => {
       if (confirmDirectory.checked) void previewSecurityDirectory();
     });
-    securityTab.appendChild(profileSelect);
+    syncSecurityProfileTrigger();
+    securityTab.appendChild(profileTrigger);
     securityTab.appendChild(workingDirectory);
     securityTab.appendChild(securityPathStatus);
     securityTab.appendChild(confirmLabel);
@@ -8497,6 +8716,7 @@ function bindWorkspace(
     menu: HTMLElement,
     preferredWidth = 220,
     placement: "auto" | "left" = "auto",
+    portal?: HTMLElement,
   ): void {
     const view = doc.defaultView;
     const rect = anchor.getBoundingClientRect();
@@ -8533,8 +8753,8 @@ function bindWorkspace(
     menu.style.top = "0px";
     menu.style.bottom = "auto";
     menu.style.visibility = "hidden";
-    const host = doc.body ?? doc.documentElement;
-    host?.appendChild(menu);
+    const menuHost = portal ?? doc.body ?? doc.documentElement;
+    menuHost?.appendChild(menu);
     const box = menu.getBoundingClientRect();
     if (placement === "left") {
       const topBound = Math.max(8, rootRect.height ? rootRect.top + 8 : 8);
