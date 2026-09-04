@@ -12,6 +12,7 @@ import {
   requireItemRef,
   splitPages,
 } from "@confucius/zotero-tools";
+import { normalizePdfMatchPositions, type PdfPosition } from "./pdfPosition";
 
 const MAX_NOTE = 20_000;
 
@@ -201,12 +202,6 @@ async function pdfText(item: Zotero.Item): Promise<string | null> {
   return text || null;
 }
 
-interface PdfPosition {
-  pageIndex: number;
-  rects: number[][];
-  nextPageRects?: number[][];
-}
-
 interface PdfFindController {
   find(state: {
     type: "find";
@@ -217,7 +212,7 @@ interface PdfFindController {
     highlightAll: boolean;
     findPrevious: boolean;
   }): void | Promise<void>;
-  getMatchPositionsAsync(pageIndex: number): Promise<PdfPosition[]>;
+  getMatchPositionsAsync(pageIndex: number): Promise<unknown>;
   pageMatches?: Array<number[] | undefined>;
   _pageMatches?: Array<number[] | undefined>;
   _pendingFindMatches?: Set<number>;
@@ -278,9 +273,11 @@ interface PdfPrimaryView {
 interface PdfReaderInstance {
   itemID?: number;
   _isTabClosed?: boolean;
+  _instanceID: string;
   _initPromise?: Promise<unknown>;
   _waitForReader?: () => Promise<void>;
   _internalReader?: { _primaryView?: PdfPrimaryView };
+  setAnnotations: (items: Zotero.Item[]) => Promise<void>;
   navigate?: (location: Record<string, unknown>) => void | Promise<void>;
 }
 
@@ -604,7 +601,10 @@ async function locateHighlight(
     let pagePositions: PdfPosition[] = [];
     if (findReady) {
       try {
-        pagePositions = await controller.getMatchPositionsAsync(pageIndex);
+        pagePositions = normalizePdfMatchPositions(
+          pageIndex,
+          await controller.getMatchPositionsAsync(pageIndex),
+        );
       } catch {
         pagePositions = [];
       }
@@ -623,7 +623,19 @@ async function locateHighlight(
     );
   }
   await view._ensureBasicPageData?.(position.pageIndex);
-  const meta = view.getAnnotationMeta?.(position);
+  let meta: { sortIndex?: string; pageLabel?: string } | undefined;
+  try {
+    const readerPosition = Components.utils.cloneInto(
+      position,
+      view._iframeWindow,
+    );
+    meta = view.getAnnotationMeta?.(readerPosition);
+  } catch (error) {
+    throw new Error(
+      `Unable to derive PDF highlight metadata: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
   const pageLabel =
     String(
       meta?.pageLabel || view._getPageLabel?.(position.pageIndex, true) || "",
@@ -1996,22 +2008,49 @@ export class ZoteroToolHost {
     const created: Zotero.Item[] = [];
     try {
       for (const highlight of located) {
-        const annotation = await Zotero.Annotations.saveFromJSON(pdf, {
-          key: (
-            Zotero as typeof Zotero & {
-              DataObjectUtilities: { generateKey: () => string };
-            }
-          ).DataObjectUtilities.generateKey(),
-          type: "highlight",
-          text: highlight.text,
-          comment: highlight.comment,
-          color: Zotero.Annotations.DEFAULT_COLOR,
-          pageLabel: highlight.pageLabel,
-          sortIndex: highlight.sortIndex,
-          position: highlight.position,
-          readOnly: false,
-        } as unknown as _ZoteroTypes.Annotations.AnnotationJson);
+        let annotation: Zotero.Item;
+        try {
+          annotation = await Zotero.Annotations.saveFromJSON(
+            pdf,
+            {
+              key: (
+                Zotero as typeof Zotero & {
+                  DataObjectUtilities: { generateKey: () => string };
+                }
+              ).DataObjectUtilities.generateKey(),
+              type: "highlight",
+              text: highlight.text,
+              comment: highlight.comment,
+              color: Zotero.Annotations.DEFAULT_COLOR,
+              pageLabel: highlight.pageLabel,
+              sortIndex: highlight.sortIndex,
+              position: highlight.position,
+              readOnly: false,
+            } as unknown as _ZoteroTypes.Annotations.AnnotationJson,
+            {
+              // The current reader is updated explicitly after the whole batch.
+              // Other readers still receive the normal item notification.
+              notifierData: { instanceID: reader._instanceID },
+            },
+          );
+        } catch (error) {
+          throw new Error(
+            `Unable to save PDF highlight: ${error instanceof Error ? error.message : String(error)}`,
+            { cause: error },
+          );
+        }
         created.push(annotation);
+      }
+      // Waiting for the item notifier alone can leave the already-open PDF on
+      // a stale annotation snapshot. Match Zotero's own reader save path by
+      // synchronizing this instance before reporting a successful commit.
+      try {
+        await reader.setAnnotations(created);
+      } catch (error) {
+        throw new Error(
+          `Unable to refresh PDF highlights in the reader: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        );
       }
     } catch (error) {
       for (const annotation of created.reverse()) {
@@ -2025,11 +2064,12 @@ export class ZoteroToolHost {
     }
     this.proposals.delete(id);
     const first = located[0];
-    if (first?.position) {
+    const firstAnnotationKey = created[0]?.key;
+    if (firstAnnotationKey) {
       try {
         // Commit landed while the reader is open: jump to the first new
         // highlight so the write-back is visible right away (one-shot).
-        await reader.navigate?.({ position: first.position });
+        await reader.navigate?.({ annotationID: firstAnnotationKey });
       } catch {
         // Navigation is cosmetic; the committed annotations are the result.
       }

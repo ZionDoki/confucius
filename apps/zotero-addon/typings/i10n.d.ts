@@ -249,6 +249,8 @@ export type FluentMessageId =
   | 'confucius-workspace-settings-tab-runtime'
   | 'confucius-workspace-settings-tab-security'
   | 'confucius-workspace-skill-none'
+  | 'confucius-workspace-slash-heading'
+  | 'confucius-workspace-slash-hint'
   | 'confucius-workspace-source-empty'
   | 'confucius-workspace-source-selection'
   | 'confucius-workspace-status-idle'

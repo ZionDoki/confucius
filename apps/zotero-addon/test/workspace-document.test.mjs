@@ -618,6 +618,29 @@ test("composer @ picker searches and incrementally adds library papers", () => {
   assert.equal(view.includes('rpc("task/setContext"'), true);
 });
 
+test("composer slash picker shares the @ picker panel and placement", () => {
+  const view = readFileSync(
+    join(root, "src/modules/ui/WorkspaceView.ts"),
+    "utf8",
+  );
+  const slashStart = view.indexOf("function renderSlashMenu");
+  const slashEnd = view.indexOf("function highlightSlashRows", slashStart);
+  const slash = view.slice(slashStart, slashEnd);
+
+  assert.equal(slash.includes('borderRadius: "12px"'), true);
+  assert.equal(
+    slash.includes('boxShadow: "0 12px 32px rgba(28,25,23,0.2)"'),
+    true,
+  );
+  assert.equal(slash.includes('id = "confucius-slash-results"'), true);
+  assert.equal(slash.includes('minHeight: "50px"'), true);
+  assert.equal(slash.includes("placeComposerMenu(menu, header, list)"), true);
+  assert.equal(
+    view.match(/placeComposerMenu\(menu, header, list\)/g)?.length,
+    2,
+  );
+});
+
 test("reading loop: selection menu, locate links and write-back navigation", () => {
   const entry = readFileSync(
     join(root, "src/modules/ui/readerContextMenu.ts"),
@@ -674,9 +697,19 @@ test("reading loop: selection menu, locate links and write-back navigation", () 
   );
   assert.equal(tools.includes("export async function findPdf"), true);
 
-  // Commit write-back auto-navigates to the first new highlight.
+  // Commit write-back synchronizes the active reader and navigates to the
+  // actual annotation, instead of relying on a delayed item notification.
+  assert.equal(tools.includes("await reader.setAnnotations(created)"), true);
   assert.equal(
-    tools.includes("reader.navigate?.({ position: first.position })"),
+    tools.includes("notifierData: { instanceID: reader._instanceID }"),
+    true,
+  );
+  assert.equal(
+    tools.includes("Components.utils.cloneInto(\n      position"),
+    true,
+  );
+  assert.equal(
+    tools.includes("reader.navigate?.({ annotationID: firstAnnotationKey })"),
     true,
   );
   assert.equal(tools.includes("pageIndex: first?.position?.pageIndex"), true);

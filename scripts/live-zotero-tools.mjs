@@ -50,9 +50,9 @@ const READ_ONLY_TOOLS = [
   ...MEMORY_READ_TOOLS,
 ];
 
-if (ALL_TOOLS.length !== 57 || new Set(ALL_TOOLS).size !== 57) {
+if (ALL_TOOLS.length !== 58 || new Set(ALL_TOOLS).size !== 58) {
   throw new Error(
-    `Expected 57 unique built-in tools, found ${ALL_TOOLS.length}`,
+    `Expected 58 unique built-in tools, found ${ALL_TOOLS.length}`,
   );
 }
 

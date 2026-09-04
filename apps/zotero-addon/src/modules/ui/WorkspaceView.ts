@@ -8014,12 +8014,7 @@ function bindWorkspace(
       }
     });
     menu.appendChild(list);
-    placeMenu(prompt, menu, Math.min(520, Math.max(280, responsiveWidth - 16)));
-    const availableListHeight = Math.max(
-      86,
-      menu.clientHeight - header.offsetHeight - 16,
-    );
-    list.style.maxHeight = `${Math.min(258, availableListHeight)}px`;
+    placeComposerMenu(menu, header, list);
     list.scrollTop = previousScrollTop;
   }
 
@@ -8232,51 +8227,113 @@ function bindWorkspace(
       {
         position: "fixed",
         background: "#ffffff",
-        border: "1px solid #ddd8cc",
-        borderRadius: "8px",
-        boxShadow: "0 6px 18px rgba(28,25,23,0.18)",
-        maxHeight: "260px",
-        overflow: "auto",
-        zIndex: "900",
+        border: "1px solid #d8d1c4",
+        borderRadius: "12px",
+        boxShadow: "0 12px 32px rgba(28,25,23,0.2)",
+        padding: "8px",
+        overflow: "hidden",
+        zIndex: "930",
         boxSizing: "border-box",
       },
       {
         id: "confucius-slash-menu",
         role: "listbox",
-        "aria-label": "Commands and skills",
+        "aria-label": getString("workspace-slash-heading"),
       },
     );
+    const header = el(doc, "div", {
+      display: "flex",
+      alignItems: "baseline",
+      justifyContent: "space-between",
+      gap: "10px",
+      padding: "5px 7px 8px",
+      borderBottom: "1px solid #eee9df",
+    });
+    const heading = el(doc, "strong", {
+      color: "#33302a",
+      fontSize: "12px",
+      letterSpacing: ".01em",
+    });
+    heading.textContent = getString("workspace-slash-heading");
+    const scope = el(doc, "span", {
+      minWidth: "0",
+      color: "#8a857c",
+      fontSize: "11px",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+    });
+    scope.textContent = getString("workspace-slash-hint");
+    header.appendChild(heading);
+    header.appendChild(scope);
+    menu.appendChild(header);
+
+    const list = el(doc, "div", {
+      maxHeight: "258px",
+      overflowY: "auto",
+      overscrollBehavior: "contain",
+      padding: "4px 0",
+      boxSizing: "border-box",
+    });
+    list.id = "confucius-slash-results";
     slashState.items.forEach((command, index) => {
       const active = index === slashState.index;
       const row = el(doc, "div", {
         display: "flex",
-        justifyContent: "space-between",
         alignItems: "center",
-        gap: "12px",
-        padding: "7px 10px",
-        cursor: "pointer",
+        gap: "9px",
+        minHeight: "50px",
+        padding: "5px 8px",
+        borderRadius: "8px",
         background: active ? "#f0ece3" : "transparent",
+        cursor: "pointer",
+        boxSizing: "border-box",
       });
       row.setAttribute("role", "option");
       row.setAttribute("data-slash-index", String(index));
       row.setAttribute("aria-selected", active ? "true" : "false");
-      const label = el(doc, "span", {
-        fontWeight: "600",
+      const glyph = el(doc, "span", {
         flex: "0 0 auto",
+        width: "25px",
+        height: "31px",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        border: "1px solid #d8d1c4",
+        borderRadius: "5px",
+        background: "#faf8f3",
+        color: "#8c6a3f",
+        fontSize: "13px",
       });
-      label.textContent = command.label;
-      const hint = el(doc, "span", {
-        color: "#6b665c",
-        fontSize: "12px",
+      glyph.textContent = "/";
+      const copy = el(doc, "span", {
         flex: "1 1 auto",
+        minWidth: "0",
+      });
+      const label = el(doc, "span", {
+        display: "block",
         overflow: "hidden",
         textOverflow: "ellipsis",
         whiteSpace: "nowrap",
-        textAlign: "right",
+        color: "#33302a",
+        fontWeight: "600",
+        fontSize: "12px",
+      });
+      label.textContent = command.label;
+      const hint = el(doc, "span", {
+        display: "block",
+        marginTop: "2px",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        color: "#8a857c",
+        fontSize: "11px",
       });
       hint.textContent = command.description;
-      row.appendChild(label);
-      row.appendChild(hint);
+      copy.appendChild(label);
+      copy.appendChild(hint);
+      row.appendChild(glyph);
+      row.appendChild(copy);
       row.addEventListener("mousedown", (event) => {
         event.preventDefault();
       });
@@ -8291,9 +8348,10 @@ function bindWorkspace(
         slashState.index = index;
         runSlashSelection();
       });
-      menu.appendChild(row);
+      list.appendChild(row);
     });
-    placeMenu(prompt, menu, Math.min(560, Math.max(220, responsiveWidth - 16)));
+    menu.appendChild(list);
+    placeComposerMenu(menu, header, list);
     const activeRow = menu.querySelector(
       `[data-slash-index="${slashState.index}"]`,
     ) as HTMLElement | null;
@@ -8509,6 +8567,19 @@ function bindWorkspace(
       : Math.min(height - measuredHeight - 8, rect.bottom + 6);
     menu.style.top = `${top}px`;
     menu.style.visibility = "visible";
+  }
+
+  function placeComposerMenu(
+    menu: HTMLElement,
+    header: HTMLElement,
+    list: HTMLElement,
+  ): void {
+    placeMenu(prompt, menu, Math.min(520, Math.max(280, responsiveWidth - 16)));
+    const availableListHeight = Math.max(
+      86,
+      menu.clientHeight - header.offsetHeight - 16,
+    );
+    list.style.maxHeight = `${Math.min(258, availableListHeight)}px`;
   }
 
   function placeSubmenu(

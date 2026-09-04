@@ -23,6 +23,11 @@
   into another conversation.
 - Conversation Markdown, including tables and code blocks, now follows the
   configured interface font size.
+- The `/` command picker now matches the `@` paper picker in panel styling,
+  row layout, responsive width, available-height handling, and placement.
+- PDF search coordinates are normalized and cloned into the reader window;
+  committed highlights are then pushed into the active Zotero reader and
+  opened by annotation ID so they are immediately visible on the page.
 
 ### Docs
 
