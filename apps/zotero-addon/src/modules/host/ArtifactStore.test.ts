@@ -338,6 +338,14 @@ describe("artifact_upsert contract", () => {
       ["markdown"],
     );
     assert.match(ARTIFACT_UPSERT_DEFINITION.description, /deep_read/);
+    assert.match(
+      ARTIFACT_UPSERT_DEFINITION.description,
+      /Do not call this just to finish a turn/,
+    );
+    assert.doesNotMatch(
+      ARTIFACT_UPSERT_DEFINITION.description,
+      /before finishing/,
+    );
     assert.equal(
       artifactBodyShapeHint("deep_read"),
       '{"type":"markdown","markdown":"..."}',

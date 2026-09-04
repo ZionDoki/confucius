@@ -3,6 +3,7 @@ import type {
   ApprovalResolution,
   AgentBackendKind,
   ArtifactBody,
+  ArtifactPromptRef,
   ArtifactRecord,
   ArtifactRevision,
   ArtifactUpsertInput,
@@ -31,6 +32,7 @@ import {
   RPC_METHODS,
   activeEndpoint,
   applyEndpointPatch,
+  artifactUpsertGuidance,
   buildHealthResponse,
   clampMaxIterations,
   clampMaxToolCalls,
@@ -220,8 +222,6 @@ interface SessionState {
   /** The current locked snapshot has emitted at most one drift notice. */
   driftReportedForLockedFingerprint?: string;
   terminalTurnIds: Set<string>;
-  /** Successful artifact writes by turn, independent of the bounded event log. */
-  producedArtifactTurnIds: Set<string>;
 }
 
 interface PendingApproval {
@@ -395,13 +395,6 @@ export class AgentHost {
                   (event.type === "turn_completed" ||
                     event.type === "turn_failed" ||
                     event.type === "turn_aborted"),
-              )
-              .map((event) => event.turnId as string),
-          ),
-          producedArtifactTurnIds: new Set(
-            events
-              .filter(
-                (event) => event.turnId && event.type === "artifact_upserted",
               )
               .map((event) => event.turnId as string),
           ),
@@ -1079,7 +1072,6 @@ export class AgentHost {
       abort: null,
       activeTurnId: null,
       terminalTurnIds: new Set(),
-      producedArtifactTurnIds: new Set(),
     });
     this.pruneSessions();
     this.persistSoon();
@@ -1512,9 +1504,6 @@ export class AgentHost {
     type: ConfuciusEvent["type"],
     payload: ConfuciusEvent["payload"],
   ): void {
-    if (type === "artifact_upserted" && turnId) {
-      state.producedArtifactTurnIds.add(turnId);
-    }
     const event = compactArtifactEvent({
       id: this.ids(),
       sessionId: state.record.id,
@@ -2328,29 +2317,6 @@ export class AgentHost {
       .join(",");
   }
 
-  private async saveFallbackArtifact(
-    state: SessionState,
-    text: string,
-    turnId: string,
-  ): Promise<ArtifactRecord> {
-    const artifact = await this.artifacts.upsert(
-      {
-        taskId: state.record.id,
-        kind: "report",
-        title: state.record.title || "Research report",
-        body: { type: "markdown", markdown: text },
-        status: "ready",
-        sourceContextIds: lockedContextSourceIds(state.record.lockedContext),
-      },
-      state.record.backend,
-    );
-    if (!state.record.artifactIds.includes(artifact.id)) {
-      state.record.artifactIds.push(artifact.id);
-    }
-    this.emitSessionEvent(state, turnId, "artifact_upserted", { artifact });
-    return artifact;
-  }
-
   private async memoryRpcList(params: Record<string, unknown>) {
     const records = await this.memory.list({
       type: isMemoryType(params.type) ? params.type : undefined,
@@ -2699,9 +2665,6 @@ export class AgentHost {
       event.type === "turn_completed" ||
       event.type === "turn_failed" ||
       event.type === "turn_aborted";
-    if (event.type === "artifact_upserted" && event.turnId) {
-      state.producedArtifactTurnIds.add(event.turnId);
-    }
     if (terminal && event.turnId) {
       if (state.terminalTurnIds.has(event.turnId)) return;
       state.terminalTurnIds.add(event.turnId);
@@ -2819,24 +2782,10 @@ export class AgentHost {
           ztoolkit.log("[Confucius] external conversation log skipped", error),
         );
     }
-    // Logging, fallback artifact creation, and memory extraction are all
-    // asynchronous. A user can start the next turn while any one of them is
-    // pending, so the old finalizer must never clear or overwrite that turn.
+    // Logging and memory extraction are asynchronous. A user can start the
+    // next turn while either is pending, so the old finalizer must never
+    // clear or overwrite that turn.
     if (!isCurrent()) {
-      state.producedArtifactTurnIds.delete(turnId);
-      return;
-    }
-    const producedArtifact =
-      state.producedArtifactTurnIds.has(turnId) ||
-      state.events.some(
-        (event) =>
-          event.turnId === turnId && event.type === "artifact_upserted",
-      );
-    if (completed && !producedArtifact && text) {
-      await this.saveFallbackArtifact(state, text, turnId);
-    }
-    if (!isCurrent()) {
-      state.producedArtifactTurnIds.delete(turnId);
       return;
     }
     const consent = this.memoryConsent();
@@ -2856,7 +2805,6 @@ export class AgentHost {
         ztoolkit.log("[Confucius] external memory extraction skipped", error);
       }
     }
-    state.producedArtifactTurnIds.delete(turnId);
     if (!isCurrent()) return;
     state.activeTurnId = null;
     state.record.externalTurnId = undefined;
@@ -2907,10 +2855,9 @@ export class AgentHost {
     task: ResearchTaskRecord,
     prompt: string,
     history: ModelMessage[] = [],
+    events: ConfuciusEvent[] = [],
   ): string {
     const context = task.lockedContext;
-    const expectedArtifact =
-      taskTemplate(task.templateId)?.artifactKind ?? "report";
     const inherited = task.externalSessionId
       ? ""
       : history
@@ -2939,7 +2886,10 @@ export class AgentHost {
     lines.push(
       prompt,
       "",
-      `Required artifact kind: ${expectedArtifact}. Call ${ARTIFACT_UPSERT_TOOL} with this kind before completing.`,
+      artifactUpsertGuidance({
+        templateId: task.templateId,
+        artifacts: artifactPromptRefsFromEvents(task.artifactIds, events),
+      }),
       "",
       `Locked Zotero context (${context.fingerprint}, captured ${new Date(
         context.capturedAt,
@@ -3047,6 +2997,7 @@ export class AgentHost {
             state.record,
             modelPrompt,
             state.messages,
+            state.events,
           ),
         },
         callbacks,
@@ -3193,7 +3144,11 @@ export class AgentHost {
         loadedSkills: this.loadedSkillRecords(state),
         suppressSelection: promptContext?.suppressSelection === true,
         lockedContext: state.record.lockedContext,
-        expectedArtifact: taskTemplate(state.record.templateId)?.artifactKind,
+        templateId: state.record.templateId,
+        artifacts: artifactPromptRefsFromEvents(
+          state.record.artifactIds,
+          state.events,
+        ),
       });
       if (state.activeTurnId !== turnId || abort.signal.aborted) {
         if (state.activeTurnId === turnId) {
@@ -3379,22 +3334,6 @@ export class AgentHost {
       if (result.phase === "done" || result.phase === "failed") {
         state.record.recoverableTurn = undefined;
       }
-      if (
-        result.phase === "done" &&
-        !state.producedArtifactTurnIds.has(context.turnId) &&
-        !state.events.some(
-          (event) =>
-            event.turnId === context.turnId &&
-            event.type === "artifact_upserted",
-        ) &&
-        result.text.trim()
-      ) {
-        await this.saveFallbackArtifact(
-          state,
-          result.text.trim(),
-          context.turnId,
-        );
-      }
       context.emit("task_status_changed", { status: state.record.status });
       this.persistSoon();
 
@@ -3423,7 +3362,6 @@ export class AgentHost {
         await this.memory.flush().catch(() => undefined);
       }
     } finally {
-      state.producedArtifactTurnIds.delete(context.turnId);
       // A superseding prompt owns the session now; never clear its abort
       // controller or active id from this older callback.
       if (isCurrent()) {
@@ -3515,7 +3453,8 @@ export class AgentHost {
       loadedSkills: ConfuciusSkill[];
       suppressSelection?: boolean;
       lockedContext: LockedContextSnapshot;
-      expectedArtifact?: ArtifactRecord["kind"];
+      templateId?: string;
+      artifacts?: ArtifactPromptRef[];
     },
   ): Promise<string> {
     const parts = [
@@ -3536,9 +3475,10 @@ export class AgentHost {
       "knowledge_base_search before adding material, then organize durable papers,",
       "notes, insights, attempted methods, discussion results, and Markdown mind maps",
       "with knowledge_base_save_entry. Knowledge-base writes require user approval.",
-      `Before completing, call ${ARTIFACT_UPSERT_TOOL} with a structured, cited ${
-        options.expectedArtifact ?? "report"
-      } artifact.`,
+      artifactUpsertGuidance({
+        templateId: options.templateId,
+        artifacts: options.artifacts,
+      }),
     ];
     if (options.planMode) {
       parts.push(
@@ -4130,6 +4070,26 @@ function checkpointMessages(
       ),
   );
   return messages[0]?.role === "system" ? messages.slice(1) : messages;
+}
+
+function artifactPromptRefsFromEvents(
+  artifactIds: readonly string[],
+  events: readonly ConfuciusEvent[],
+): ArtifactPromptRef[] {
+  const byId = new Map<string, ArtifactPromptRef>();
+  for (const event of events) {
+    if (event.type !== "artifact_upserted") continue;
+    const artifact = event.payload.artifact;
+    byId.set(artifact.id, {
+      id: artifact.id,
+      kind: artifact.kind,
+      title: artifact.title,
+      revision: artifact.revision,
+    });
+  }
+  return artifactIds
+    .map((id) => byId.get(id))
+    .filter((artifact): artifact is ArtifactPromptRef => Boolean(artifact));
 }
 
 /** Keep large bodies and revision history in ArtifactStore, not state events. */

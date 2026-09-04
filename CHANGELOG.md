@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Research workflow
+
+- Ordinary agent replies stay in the activity stream. A completed turn no
+  longer auto-saves the assistant text as a report artifact.
+  `artifact_upsert` is only for durable research products such as deep
+  reads, audits, maps, and note drafts.
+
 ## 0.3.2 — 2026-09-04
 
 ### Agent runtimes

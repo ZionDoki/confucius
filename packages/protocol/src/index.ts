@@ -85,6 +85,14 @@ export {
 } from "./research";
 export { TASK_TEMPLATES, taskTemplate, templatesForContext } from "./templates";
 export type { TaskTemplate, TaskTemplateId } from "./templates";
+export {
+  MCP_TASK_GATEWAY_INSTRUCTIONS,
+  artifactUpsertGuidance,
+} from "./artifactPrompt";
+export type {
+  ArtifactPromptRef,
+  ArtifactUpsertGuidanceInput,
+} from "./artifactPrompt";
 export type {
   AgentBackendKind,
   AnnotationSetArtifactBody,

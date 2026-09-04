@@ -94,10 +94,22 @@ describe("task MCP gateway", () => {
       }),
     });
     const body = (await response.json()) as {
-      result?: { protocolVersion?: string; capabilities?: unknown };
+      result?: {
+        protocolVersion?: string;
+        capabilities?: unknown;
+        instructions?: string;
+      };
     };
     assert.equal(body.result?.protocolVersion, "2025-06-18");
     assert.ok(body.result?.capabilities);
+    assert.match(
+      String(body.result?.instructions),
+      /only for a durable research product/,
+    );
+    assert.doesNotMatch(
+      String(body.result?.instructions),
+      /before completing the task/,
+    );
 
     for (const protocolVersion of ["2025-11-25", "2024-10-07"]) {
       const negotiated = await fetch(origin, {

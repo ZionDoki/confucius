@@ -1,5 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { negotiateMcpProtocolVersion } from "@confucius/protocol";
+import {
+  MCP_TASK_GATEWAY_INSTRUCTIONS,
+  negotiateMcpProtocolVersion,
+} from "@confucius/protocol";
 import type { CapabilityStore } from "./capabilities.js";
 import type { HostClient } from "./hostClient.js";
 
@@ -79,8 +82,7 @@ export async function handleMcp(
             protocolVersion,
             serverInfo: { name: "confucius-task-gateway", version: "0.3.2" },
             capabilities: { tools: { listChanged: false } },
-            instructions:
-              "Use Zotero sources as evidence and call artifact_upsert before completing the task. All Zotero writes remain user-approved.",
+            instructions: MCP_TASK_GATEWAY_INSTRUCTIONS,
           },
         });
         return;
