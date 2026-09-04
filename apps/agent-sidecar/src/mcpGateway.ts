@@ -77,7 +77,7 @@ export async function handleMcp(
           id,
           result: {
             protocolVersion,
-            serverInfo: { name: "confucius-task-gateway", version: "0.3.1" },
+            serverInfo: { name: "confucius-task-gateway", version: "0.3.2" },
             capabilities: { tools: { listChanged: false } },
             instructions:
               "Use Zotero sources as evidence and call artifact_upsert before completing the task. All Zotero writes remain user-approved.",

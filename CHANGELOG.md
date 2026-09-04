@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.3.2 — 2026-09-04
+
+### Agent runtimes
+
 - Codex App Server and Kimi ACP now run through an in-add-on Runtime Host. No
   Node sidecar, descriptor file, port, or separate startup command is needed.
 - Runtime discovery now covers provider-owned Windows install directories,
@@ -9,7 +13,24 @@
   Codex and Kimi can also be selected explicitly in either settings surface.
 - The Runtime Host can be disabled from Settings and remains enabled by
   default. Kimi login status is verified by opening a real ACP session.
-- New Agent runs now default to a maximum of 128 model steps.
+- OpenAI-compatible and Ollama endpoints now separate streamed
+  `<think>...</think>` reasoning. New Agent runs default to 128 model steps.
+
+### Research workflow
+
+- The composer can add Zotero papers through a searchable, incremental `@`
+  picker. PDF, Markdown, and TXT files can be dropped anywhere in the
+  Confucius workspace while the composer is available.
+- Assistant responses now expose copy, branch, and save-to-note actions. The
+  composer uses one Runtime/model picker and closes menus when focus moves
+  elsewhere.
+- Locked context remains stable as Zotero selection changes, with one
+  deduplicated notice and explicit add/replace controls.
+- Artifact reading now uses a full-bleed overlay with a right action rail,
+  reliable custom menus, compact sidebar files, and corrected narrow-width
+  overflow.
+- English and Simplified Chinese product READMEs now include the product film,
+  installation guidance, Runtime options, and security boundaries.
 
 ## 0.3.1 — 2026-09-04
 
