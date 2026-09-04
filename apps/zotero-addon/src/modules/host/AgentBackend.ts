@@ -8,13 +8,32 @@ import type {
   SessionMode,
   PromptContextOptions,
 } from "@confucius/protocol";
-import type { SidecarClient } from "./SidecarClient";
-import { sidecarAbortController } from "./SidecarClient";
+import { createAbortController } from "../../utils/webPlatform";
+
+export interface RuntimeEventPage {
+  events: ConfuciusEvent[];
+  cursorFound: boolean;
+}
+
+/** Transport-neutral surface for an external Agent Runtime host. */
+export interface ExternalRuntimeClient {
+  listRuntimes(refresh?: boolean): Promise<{ runtimes: RuntimeStatus[] }>;
+  rpc<T>(method: string, params: Record<string, unknown>): Promise<T>;
+  events(
+    taskId: string,
+    afterId?: string,
+    waitMs?: number,
+    signal?: AbortSignal,
+  ): Promise<RuntimeEventPage>;
+  resolveApproval(resolution: ApprovalResolution): Promise<unknown>;
+}
 
 export interface BackendTurnInput {
   task: ResearchTaskRecord;
   turnId: string;
   prompt: string;
+  /** Prompt enriched by the host with extracted, path-free attachment text. */
+  modelPrompt?: string;
   mode: SessionMode;
   capabilityProfile: CapabilityProfile;
   workingDirectory?: string;
@@ -86,17 +105,17 @@ export class NativeBackend implements AgentBackend {
   }
 }
 
-/** One provider-specific view over the shared local sidecar connection. */
+/** One provider-specific view over the shared external Runtime host. */
 export class ExternalBackend implements AgentBackend {
   private readonly polls = new Map<string, AbortController>();
 
   constructor(
     readonly kind: Exclude<AgentBackendKind, "native">,
-    private readonly sidecar: SidecarClient,
+    private readonly runtime: ExternalRuntimeClient,
   ) {}
 
   async probe(): Promise<RuntimeStatus> {
-    const listed = await this.sidecar.listRuntimes(true);
+    const listed = await this.runtime.listRuntimes(true);
     return (
       listed.runtimes.find((runtime) => runtime.backend === this.kind) ?? {
         backend: this.kind,
@@ -112,16 +131,16 @@ export class ExternalBackend implements AgentBackend {
     callbacks: BackendCallbacks,
   ): Promise<BackendTurnHandle> {
     this.polls.get(input.task.id)?.abort();
-    const controller = sidecarAbortController();
+    const controller = createAbortController();
     this.polls.set(input.task.id, controller);
 
     // Establish a cursor before starting so retained events from an earlier
     // turn are not appended a second time after resume.
-    const before = await this.sidecar.events(input.task.id, undefined, 0);
+    const before = await this.runtime.events(input.task.id, undefined, 0);
     const cursor = before.events.at(-1)?.id;
     let handle: BackendTurnHandle;
     try {
-      handle = await this.sidecar.rpc<BackendTurnHandle>("task/startTurn", {
+      handle = await this.runtime.rpc<BackendTurnHandle>("task/startTurn", {
         backend: this.kind,
         taskId: input.task.id,
         turnId: input.turnId,
@@ -132,10 +151,10 @@ export class ExternalBackend implements AgentBackend {
         externalSessionId: input.task.externalSessionId,
       });
     } catch (error) {
-      // Runtime startup failures are buffered by the sidecar before the RPC
+      // Runtime startup failures are buffered by the host before the RPC
       // error is returned. Deliver them so the host can distinguish an auth
       // or provider failure from a disconnected companion.
-      const failed = await this.sidecar
+      const failed = await this.runtime
         .events(input.task.id, cursor, 0)
         .catch(() => null);
       for (const event of failed?.events ?? []) {
@@ -151,14 +170,14 @@ export class ExternalBackend implements AgentBackend {
   async interrupt(taskId: string): Promise<void> {
     this.polls.get(taskId)?.abort();
     this.polls.delete(taskId);
-    await this.sidecar.rpc("task/interrupt", {
+    await this.runtime.rpc("task/interrupt", {
       backend: this.kind,
       taskId,
     });
   }
 
   async analyze(prompt: string): Promise<string> {
-    const result = await this.sidecar.rpc<{ text?: string }>(
+    const result = await this.runtime.rpc<{ text?: string }>(
       "runtime/analyze",
       { backend: this.kind, prompt },
     );
@@ -168,14 +187,14 @@ export class ExternalBackend implements AgentBackend {
   async dispose(taskId: string): Promise<void> {
     this.polls.get(taskId)?.abort();
     this.polls.delete(taskId);
-    await this.sidecar.rpc("task/dispose", {
+    await this.runtime.rpc("task/dispose", {
       backend: this.kind,
       taskId,
     });
   }
 
   resolveApproval(resolution: ApprovalResolution): Promise<unknown> {
-    return this.sidecar.resolveApproval(resolution);
+    return this.runtime.resolveApproval(resolution);
   }
 
   private async poll(
@@ -188,7 +207,7 @@ export class ExternalBackend implements AgentBackend {
     let cursor = initialCursor;
     try {
       while (!controller.signal.aborted) {
-        const page = await this.sidecar.events(
+        const page = await this.runtime.events(
           taskId,
           cursor,
           25_000,

@@ -15,7 +15,7 @@ export interface TimelineToolCall {
 export type TimelineBlock =
   | { kind: "user"; text: string }
   | { kind: "reasoning"; text: string }
-  | { kind: "text"; text: string }
+  | { kind: "text"; text: string; turnId?: string }
   | { kind: "tools"; calls: TimelineToolCall[] }
   | { kind: "plan"; steps: PlanStep[] }
   | {
@@ -52,10 +52,14 @@ export function nextReasoningFold(
   return "open";
 }
 
-function flushText(blocks: TimelineBlock[], text: { value: string }): void {
+function flushText(
+  blocks: TimelineBlock[],
+  text: { value: string; turnId?: string },
+): void {
   if (text.value) {
-    blocks.push({ kind: "text", text: text.value });
+    blocks.push({ kind: "text", text: text.value, turnId: text.turnId });
     text.value = "";
+    text.turnId = undefined;
   }
 }
 
@@ -93,7 +97,7 @@ function attachCall(
 export function coalesceTimeline(events: ConfuciusEvent[]): TimelineBlock[] {
   const blocks: TimelineBlock[] = [];
   const reasoning = { text: "" };
-  const text = { value: "" };
+  const text: { value: string; turnId?: string } = { value: "" };
   const tools: { calls: TimelineToolCall[] } = { calls: [] };
 
   const flushAnswer = () => {
@@ -104,6 +108,10 @@ export function coalesceTimeline(events: ConfuciusEvent[]): TimelineBlock[] {
   for (const event of events) {
     if (event.type === "text_delta") {
       flushPending(blocks, reasoning, tools);
+      if (text.value && text.turnId !== event.turnId) {
+        flushText(blocks, text);
+      }
+      text.turnId = event.turnId;
       text.value += event.payload.text;
       continue;
     }

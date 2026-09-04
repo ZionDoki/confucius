@@ -17,6 +17,26 @@ export type MemoryConsent = "off" | "review" | "auto";
 
 export type CapabilityProfile = "zotero_only" | "workspace";
 
+export type TaskAttachmentKind = "pdf" | "markdown" | "text";
+
+/**
+ * Public metadata for a read-only file prepared by the Zotero host. The local
+ * path and extracted body deliberately never cross the UI/runtime boundary.
+ */
+export interface TaskAttachment {
+  id: string;
+  name: string;
+  kind: TaskAttachmentKind;
+  mediaType: "application/pdf" | "text/markdown" | "text/plain";
+  size: number;
+  originalCharacters: number;
+  includedCharacters: number;
+  truncated: boolean;
+  preparedAt: number;
+  extractedPages?: number;
+  totalPages?: number;
+}
+
 export interface LockedItemContext extends ItemRef {
   id: string;
   title: string;
@@ -80,7 +100,10 @@ export interface RuntimeStatus {
   state: "ready" | "unavailable" | "auth_required" | "error";
   version?: string;
   message?: string;
+  /** Resolved executable that was actually probed. */
   executable?: string;
+  /** User override; empty means automatic detection. */
+  configuredExecutable?: string;
   checkedAt: number;
 }
 

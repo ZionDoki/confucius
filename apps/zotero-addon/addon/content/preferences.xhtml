@@ -33,19 +33,63 @@
   <groupbox>
     <label><html:h2 data-l10n-id="pref-runtime-title"></html:h2></label>
     <html:p data-l10n-id="pref-runtime-help"></html:p>
+    <html:label>
+      <html:input id="confucius-pref-pluginRuntimeHost" type="checkbox" />
+      <html:span data-l10n-id="pref-runtime-host-enabled"></html:span>
+    </html:label>
     <html:div id="confucius-pref-runtime-status"></html:div>
     <html:button
       id="confucius-pref-runtime-refresh"
       type="button"
       data-l10n-id="pref-runtime-refresh"
     ></html:button>
+    <label data-l10n-id="pref-runtime-codex-path" />
+    <html:div style="display: flex; gap: 6px; align-items: center">
+      <html:input
+        id="confucius-pref-codexExecutable"
+        type="text"
+        style="flex: 1 1 auto; min-width: 0"
+      />
+      <html:button
+        id="confucius-pref-runtime-codex-browse"
+        type="button"
+        data-l10n-id="pref-runtime-browse"
+      ></html:button>
+      <html:button
+        id="confucius-pref-runtime-codex-save"
+        type="button"
+        data-l10n-id="pref-runtime-save"
+      ></html:button>
+      <html:button
+        id="confucius-pref-runtime-codex-auto"
+        type="button"
+        data-l10n-id="pref-runtime-auto"
+      ></html:button>
+    </html:div>
     <label data-l10n-id="pref-runtime-kimi-path" />
-    <html:input id="confucius-pref-kimiExecutable" type="text" width="400" />
-    <html:button
-      id="confucius-pref-runtime-kimi-save"
-      type="button"
-      data-l10n-id="pref-runtime-kimi-save"
-    ></html:button>
+    <html:div style="display: flex; gap: 6px; align-items: center">
+      <html:input
+        id="confucius-pref-kimiExecutable"
+        type="text"
+        style="flex: 1 1 auto; min-width: 0"
+      />
+      <html:button
+        id="confucius-pref-runtime-kimi-browse"
+        type="button"
+        data-l10n-id="pref-runtime-browse"
+      ></html:button>
+      <html:button
+        id="confucius-pref-runtime-kimi-save"
+        type="button"
+        data-l10n-id="pref-runtime-save"
+      ></html:button>
+      <html:button
+        id="confucius-pref-runtime-kimi-auto"
+        type="button"
+        data-l10n-id="pref-runtime-auto"
+      ></html:button>
+    </html:div>
+    <html:p id="confucius-pref-runtime-error"></html:p>
   </groupbox>
   <groupbox>
     <label><html:h2 data-l10n-id="pref-agent-title"></html:h2></label>

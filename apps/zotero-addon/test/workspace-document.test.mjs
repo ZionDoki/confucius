@@ -113,6 +113,43 @@ test("HTTP bridge registers health, RPC, events, and MCP, not Chrome pair/probe"
   );
 });
 
+test("external runtimes are hosted in the add-on with auto and manual paths", () => {
+  const host = readFileSync(
+    join(root, "src/modules/host/AgentHost.ts"),
+    "utf8",
+  );
+  const runtime = readFileSync(
+    join(root, "src/modules/host/RuntimeProcess.ts"),
+    "utf8",
+  );
+  const view = readFileSync(
+    join(root, "src/modules/ui/WorkspaceView.ts"),
+    "utf8",
+  );
+  const prefs = readFileSync(join(root, "addon/prefs.js"), "utf8");
+  const prefsPane = readFileSync(
+    join(root, "addon/content/preferences.xhtml"),
+    "utf8",
+  );
+  const readme = readFileSync(join(root, "../../README.md"), "utf8");
+
+  assert.equal(host.includes('from "./PluginRuntimeHost"'), true);
+  assert.equal(host.includes('from "./SidecarClient"'), false);
+  assert.equal(prefs.includes('pref("pluginRuntimeHost", true)'), true);
+  assert.equal(prefs.includes('pref("codexExecutable", "")'), true);
+  assert.equal(prefs.includes('pref("kimiExecutable", "")'), true);
+  assert.equal(prefsPane.includes("confucius-pref-pluginRuntimeHost"), true);
+  assert.equal(prefsPane.includes("confucius-pref-codexExecutable"), true);
+  assert.equal(prefsPane.includes("confucius-pref-kimiExecutable"), true);
+  assert.equal(view.includes("pickRuntimeExecutable"), true);
+  assert.equal(
+    runtime.includes('PathUtils.join(localAppData, "OpenAI", "Codex", "bin")'),
+    true,
+  );
+  assert.equal(runtime.includes('".kimi-code", "bin", "kimi.exe"'), true);
+  assert.equal(readme.includes("npm run sidecar"), false);
+});
+
 test("dev server does not launch the Firefox debugger toolbox", () => {
   const config = readFileSync(join(root, "zotero-plugin.config.ts"), "utf8");
   assert.equal(config.includes("devtools: false"), true);
@@ -155,6 +192,15 @@ test("composer has plus menu, slash commands, context ring, single send/stop", (
   assert.equal(view.includes("toggleEndpointMenu"), true);
   assert.equal(view.includes('id: "confucius-context-ring"'), true);
   assert.equal(view.includes('id: "confucius-slash-menu"'), true);
+  assert.equal(view.includes('id: "confucius-attachment-tray"'), true);
+  assert.equal(view.includes('rpc("attachment/prepare"'), true);
+  assert.equal(view.includes('rpc("attachment/release"'), true);
+  assert.equal(view.includes('root.addEventListener("drop"'), true);
+  assert.equal(view.includes('composer.addEventListener("drop"'), false);
+  assert.equal(view.includes("function canAcceptFileDrop"), true);
+  assert.equal(view.includes("root.appendChild(dropHint)"), true);
+  assert.equal(view.includes('data-file-drop-active="true"'), true);
+  assert.equal(view.includes("droppedFilePaths"), true);
   assert.equal(view.includes('kind: "skill"'), true);
   assert.equal(view.includes("slashMenuToken"), true);
   const skillSelect = view.slice(view.indexOf('command.kind === "skill"'));
@@ -169,6 +215,16 @@ test("composer has plus menu, slash commands, context ring, single send/stop", (
   assert.equal(view.includes("updateRunningUI"), true);
   assert.equal(view.includes("workspace-waiting-model"), true);
   assert.equal(view.includes("turnAwaitingReply"), true);
+  assert.equal(
+    view.includes('const plusMenu = doc.getElementById("confucius-plus-menu")'),
+    true,
+  );
+  assert.equal(
+    view.includes(
+      'const slashMenu = doc.getElementById("confucius-slash-menu")',
+    ),
+    true,
+  );
 });
 
 test("pending approvals render as timeline cards", () => {
@@ -228,7 +284,10 @@ test("permission changes are committed before prompts and gate auto memory", () 
     "utf8",
   );
   assert.equal(view.includes("pendingPermissionUpdate"), true);
-  assert.equal(view.includes("await pendingPermissionUpdate"), true);
+  assert.equal(
+    view.includes("pendingPermissionUpdate, pendingContextUpdate"),
+    true,
+  );
   assert.equal(
     host.includes('state.record.permissionMode === "auto_allow"'),
     true,
@@ -288,6 +347,7 @@ test("timeline is TUI-style: foldable thinking/tools, unfolded answers", () => {
   assert.equal(view.includes("justifyContent"), true);
   assert.equal(view.includes("renderMarkdownHtml"), true);
   assert.equal(view.includes("tui-waiting"), true);
+  assert.equal(view.includes("tui-waiting-bar"), false);
   assert.equal(view.includes("followTimeline"), true);
   assert.equal(view.includes("timelinePane.scrollHeight"), true);
 });
@@ -313,7 +373,73 @@ test("activity stream is the primary workspace and artifacts open as files", () 
   assert.equal(view.includes("renderArtifactCanvas"), false);
 });
 
-test("composer model picker remains a cascading menu alongside Runtime choices", () => {
+test("artifact viewer uses unclipped custom menus instead of native selects", () => {
+  const view = readFileSync(
+    join(root, "src/modules/ui/WorkspaceView.ts"),
+    "utf8",
+  );
+  const viewer = view.slice(
+    view.indexOf("function renderArtifactViewer"),
+    view.indexOf(
+      "const dialogBody",
+      view.indexOf("function renderArtifactViewer"),
+    ),
+  );
+  assert.equal(view.includes("confucius-artifact-choice-menu"), true);
+  assert.equal(view.includes("artifactMenuTrigger"), true);
+  assert.equal(view.includes('"aria-haspopup": "listbox"'), true);
+  assert.equal(view.includes('role: "option"'), true);
+  assert.equal(view.includes('key === "ArrowDown"'), true);
+  assert.equal(view.includes("placeMenu(anchor, menu"), true);
+  assert.equal(view.includes('kind === "artifact" ? 320 : 176, "left"'), true);
+  assert.equal(/,\s*"select"/.test(viewer), false);
+  assert.equal(view.includes('id: "confucius-artifact-switcher",'), false);
+  assert.equal(view.includes('id: "confucius-artifact-revision",'), false);
+});
+
+test("artifact viewer is a full-bleed reading surface with a right action rail", () => {
+  const view = readFileSync(
+    join(root, "src/modules/ui/WorkspaceView.ts"),
+    "utf8",
+  );
+  const viewer = view.slice(
+    view.indexOf("function renderArtifactViewer"),
+    view.indexOf("let lastListSignature"),
+  );
+  assert.equal(view.includes("backdrop-filter: blur(22px)"), true);
+  assert.equal(view.includes("right: 12px;"), true);
+  assert.equal(viewer.includes("confucius-artifact-action-rail"), true);
+  assert.equal(viewer.includes('"aria-orientation": "vertical"'), true);
+  assert.equal(viewer.includes('artifactActionIcon(doc, "close")'), true);
+  assert.equal(viewer.includes('artifactActionIcon(doc, "writeback")'), true);
+  assert.equal(viewer.includes("confucius-artifact-dialog-header"), false);
+  assert.equal(view.includes("box-shadow: none;"), true);
+});
+
+test("sidebar artifact files use a compact two-line layout", () => {
+  const view = readFileSync(
+    join(root, "src/modules/ui/WorkspaceView.ts"),
+    "utf8",
+  );
+  assert.equal(
+    view.includes(
+      '.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-file',
+    ),
+    true,
+  );
+  assert.equal(view.includes('"title title"\n    "kind meta"'), true);
+  assert.equal(view.includes("minmax(0, 1fr) minmax(0, 45%)"), true);
+  assert.equal(
+    view.includes(
+      '[data-confucius-layout="sidebar"] .confucius-artifact-file-open {\n  display: none;',
+    ),
+    true,
+  );
+  assert.equal(view.includes("repeat(6, minmax(0, 1fr))"), false);
+  assert.equal(view.includes('width: compact ? "100%" : "auto"'), false);
+});
+
+test("composer model picker is the single cascading Runtime/model control", () => {
   const view = readFileSync(
     join(root, "src/modules/ui/WorkspaceView.ts"),
     "utf8",
@@ -330,7 +456,9 @@ test("composer model picker remains a cascading menu alongside Runtime choices",
     view.indexOf("const contextRing"),
   );
   assert.equal(/,\s*"select"/.test(composerBlock), false);
-  assert.equal(view.includes('id: "confucius-task-runtime"'), true);
+  assert.equal(view.includes('id: "confucius-task-runtime"'), false);
+  assert.equal(view.includes("onEnter: clearEndpointSubmenuHighlight"), true);
+  assert.equal(view.includes("highlighted: open"), true);
 });
 
 test("settings can add and save multiple model endpoints", () => {
@@ -369,7 +497,7 @@ test("workspace exposes an editable research knowledge base and mind maps", () =
   assert.equal(view.includes("workspaceKnowledgeIcon"), true);
 });
 
-test("tasks lock context and expose explicit add or replace on drift", () => {
+test("tasks lock context and expose on-demand context controls", () => {
   const view = readFileSync(
     join(root, "src/modules/ui/WorkspaceView.ts"),
     "utf8",
@@ -399,13 +527,44 @@ test("tasks lock context and expose explicit add or replace on drift", () => {
   );
   assert.equal(host.includes("firstSelectedItem"), false);
   assert.equal(host.includes("Current Zotero selection"), false);
-  assert.equal(view.includes('id: "confucius-context-bar"'), true);
+  assert.equal(view.includes('id: "confucius-context-bar"'), false);
   assert.equal(view.includes('rpc("context/live"'), true);
   assert.equal(view.includes('rpc("reader/open"'), true);
   assert.equal(view.includes('rpc("task/setContext"'), true);
-  assert.equal(view.includes('updateContext("add")'), true);
-  assert.equal(view.includes('updateContext("replace")'), true);
+  assert.equal(
+    view.includes('section(getString("workspace-context-heading"))'),
+    true,
+  );
+  assert.equal(view.includes('updateTaskContext("add")'), true);
+  assert.equal(view.includes('updateTaskContext("replace")'), true);
   assert.equal(view.includes("suppressedSelectionKey"), false);
+});
+
+test("composer @ picker searches and incrementally adds library papers", () => {
+  const view = readFileSync(
+    join(root, "src/modules/ui/WorkspaceView.ts"),
+    "utf8",
+  );
+  const host = readFileSync(
+    join(root, "src/modules/host/AgentHost.ts"),
+    "utf8",
+  );
+  const rpc = readFileSync(
+    join(root, "../../packages/protocol/src/rpc.ts"),
+    "utf8",
+  );
+  assert.equal(
+    rpc.includes('contextSearchItems: "context/search-items"'),
+    true,
+  );
+  assert.equal(host.includes("case RPC_METHODS.contextSearchItems"), true);
+  assert.equal(host.includes('"quicksearch-titleCreatorYear"'), true);
+  assert.equal(host.includes("Zotero.Items.getAll(libraryID, true)"), true);
+  assert.equal(view.includes('id: "confucius-mention-menu"'), true);
+  assert.equal(view.includes("const MENTION_PAGE_SIZE = 10"), true);
+  assert.equal(view.includes('maxHeight: "258px"'), true);
+  assert.equal(view.includes('list.addEventListener("scroll"'), true);
+  assert.equal(view.includes('rpc("task/setContext"'), true);
 });
 
 test("reading loop: selection menu, locate links and write-back navigation", () => {
@@ -576,16 +735,17 @@ test("triage entry and knowledge output: item menu, launch queue, propose_note",
   assert.equal(host.includes("this.pendingLaunch = null"), true);
   assert.equal(rpc.includes('launchConsume: "workspace/launch-consume"'), true);
   assert.equal(view.includes('"workspace/launch-consume"'), true);
-  assert.equal(view.includes("context: options.context,"), true);
+  assert.equal(view.includes("context: initialContext,"), true);
   assert.equal(
-    view.includes("context: options.context ?? state.live?.lockedSnapshot"),
-    false,
+    view.includes("const initialContext = pendingMentionItems.size"),
+    true,
   );
   assert.equal(host.includes("pane?.getCollectionTreeRows?.()"), true);
   assert.equal(host.includes("pane?.getSelectedCollections?.()?.[0]"), true);
   assert.equal(host.includes("pane?.getSelectedSavedSearches?.()?.[0]"), true);
 
-  // Slice 3: propose_note approval pipeline and the timeline write-note button.
+  // Slice 3: each assistant response owns its actions. A deliberate click
+  // saves directly; autonomous Agent note writes keep the normal tool gate.
   assert.equal(catalog.includes('"propose_note"'), true);
   assert.equal(tools.includes('"propose_note"'), true);
   assert.equal(
@@ -597,10 +757,26 @@ test("triage entry and knowledge output: item menu, launch queue, propose_note",
     rpc.includes('noteProposeFromSession: "note/propose-from-session"'),
     true,
   );
-  assert.equal(view.includes('rpc("note/propose-from-session"'), true);
-  assert.equal(view.includes('getString("workspace-note-propose")'), true);
-  assert.equal(enFtl.includes("confucius-workspace-note-propose"), true);
-  assert.equal(zhFtl.includes("confucius-workspace-note-propose"), true);
+  assert.equal(host.includes("noteProposeFromReply"), true);
+  assert.equal(
+    rpc.includes('noteProposeFromReply: "note/propose-from-reply"'),
+    true,
+  );
+  assert.equal(rpc.includes('taskBranch: "task/branch"'), true);
+  const directReplyNote = host.slice(
+    host.indexOf("private async noteProposeFromReply"),
+    host.indexOf("private queueReplyNote"),
+  );
+  assert.equal(directReplyNote.includes('executeTool("propose_note"'), true);
+  assert.equal(directReplyNote.includes("queueReplyNote"), false);
+  assert.equal(directReplyNote.includes("approval_required"), false);
+  assert.equal(view.includes('rpc("note/propose-from-session"'), false);
+  assert.equal(view.includes('rpc("note/propose-from-reply"'), true);
+  assert.equal(view.includes('rpc("task/branch"'), true);
+  assert.equal(view.includes("data-action: kind"), false);
+  assert.equal(view.includes('"data-action": kind'), true);
+  assert.equal(enFtl.includes("confucius-workspace-reply-copy"), true);
+  assert.equal(zhFtl.includes("confucius-workspace-reply-copy"), true);
 });
 
 test("zotero uri links render as underlined anchors and navigate on click", () => {
@@ -629,7 +805,7 @@ test("zotero uri links render as underlined anchors and navigate on click", () =
 
   // Answers render markdown (fillAnswerHtml) and anchors get prominent
   // underlined styling inside the workspace root.
-  assert.equal(view.includes("fillAnswerHtml(row, text)"), true);
+  assert.equal(view.includes("fillAnswerHtml(body, text)"), true);
   assert.equal(view.includes(".confucius-workspace-root a {"), true);
   assert.equal(view.includes("text-decoration: underline"), true);
 
