@@ -346,7 +346,7 @@ export class CodexAdapter implements RuntimeAdapter {
       clientInfo: {
         name: "confucius_zotero",
         title: "Confucius for Zotero",
-        version: "0.3.2",
+        version: "0.3.3",
       },
       capabilities: {
         experimentalApi: true,

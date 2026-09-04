@@ -1,13 +1,13 @@
 # Confucius
 
-[![Confucius 44 秒产品短片：从文献出发，把研究向前推进](docs/media/confucius-promo-cover.png)](docs/media/confucius-promo.mp4)
-
 <p align="center">
-  <a href="README.md">English</a> · <strong>简体中文</strong>
+  <video src="https://github.com/ZionDoki/confucius/raw/master/docs/media/confucius-promo.mp4" poster="docs/media/confucius-promo-cover.png" width="720" controls muted playsinline>
+    <a href="docs/media/confucius-promo.mp4">播放 44 秒产品短片</a>
+  </video>
 </p>
 
 <p align="center">
-  <a href="docs/media/confucius-promo.mp4"><strong>播放 44 秒产品短片</strong></a>
+  <a href="README.md">English</a> · <strong>简体中文</strong>
 </p>
 
 <p align="center">

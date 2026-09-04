@@ -1,6 +1,6 @@
 {
   "name": "@confucius/agent-sidecar",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "private": true,
   "description": "Local runtime bridge for Confucius research agents",
   "license": "AGPL-3.0-or-later",

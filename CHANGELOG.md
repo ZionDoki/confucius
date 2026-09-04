@@ -2,12 +2,19 @@
 
 ## Unreleased
 
+## 0.3.3 — 2026-09-04
+
 ### Research workflow
 
 - Ordinary agent replies stay in the activity stream. A completed turn no
   longer auto-saves the assistant text as a report artifact.
   `artifact_upsert` is only for durable research products such as deep
   reads, audits, maps, and note drafts.
+
+### Docs
+
+- Product READMEs now embed the promo film with a `<video>` player instead of
+  a cover image that links out.
 
 ## 0.3.2 — 2026-09-04
 

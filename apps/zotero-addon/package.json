@@ -1,6 +1,6 @@
 {
   "name": "@confucius/zotero-addon",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Confucius for Zotero — native research agent host",
   "config": {
     "addonName": "Confucius",

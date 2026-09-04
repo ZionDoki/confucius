@@ -1,13 +1,13 @@
 # Confucius
 
-[![Confucius product film: move research forward from the literature](docs/media/confucius-promo-cover.png)](docs/media/confucius-promo.mp4)
-
 <p align="center">
-  <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
+  <video src="https://github.com/ZionDoki/confucius/raw/master/docs/media/confucius-promo.mp4" poster="docs/media/confucius-promo-cover.png" width="720" controls muted playsinline>
+    <a href="docs/media/confucius-promo.mp4">Watch the 44-second product film</a>
+  </video>
 </p>
 
 <p align="center">
-  <a href="docs/media/confucius-promo.mp4"><strong>Watch the 44-second product film</strong></a>
+  <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
 </p>
 
 <p align="center">

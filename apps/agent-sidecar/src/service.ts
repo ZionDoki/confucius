@@ -64,7 +64,7 @@ export class SidecarService {
   async rpc(method: string, params: Record<string, unknown>): Promise<unknown> {
     switch (method) {
       case "health":
-        return { ok: true, name: "confucius-agent-sidecar", version: "0.3.2" };
+        return { ok: true, name: "confucius-agent-sidecar", version: "0.3.3" };
       case "host/register":
         this.host.register(
           String(params.baseUrl ?? ""),

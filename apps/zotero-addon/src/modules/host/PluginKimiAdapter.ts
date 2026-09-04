@@ -392,7 +392,7 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
             fs: { readTextFile: false, writeTextFile: false },
             plan: {},
           },
-          clientInfo: { name: "confucius-zotero", version: "0.3.2" },
+          clientInfo: { name: "confucius-zotero", version: "0.3.3" },
         }),
         10_000,
         "Kimi ACP initialization timed out",
