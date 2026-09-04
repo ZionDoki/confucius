@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.3.4 — 2026-09-04
+
+### Reliability
+
+- Exhausted model retries now report the final HTTP status and provider
+  response body instead of a generic failure message.
+- Failed Native Runtime turns roll back their in-flight history and
+  checkpoints, so the same task can accept a new prompt without carrying a
+  broken turn forward. Failed turns also skip follow-up history compaction.
+
+### Docs
+
+- Product READMEs now link to the GitHub-hosted promo film with Markdown. The
+  bundled video has been removed from the repository.
+
 ## 0.3.3 — 2026-09-04
 
 ### Research workflow

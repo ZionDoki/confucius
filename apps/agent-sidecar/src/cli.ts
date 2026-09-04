@@ -15,7 +15,7 @@ const descriptor: SidecarDescriptor = {
   pid: process.pid,
   baseUrl: running.baseUrl,
   token: running.token,
-  version: "0.3.3",
+  version: "0.3.4",
   startedAt: Date.now(),
 };
 

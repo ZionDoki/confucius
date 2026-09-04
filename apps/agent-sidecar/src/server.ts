@@ -54,7 +54,7 @@ async function route(
       send(response, 200, {
         ok: true,
         name: "confucius-agent-sidecar",
-        version: "0.3.3",
+        version: "0.3.4",
       });
       return;
     }

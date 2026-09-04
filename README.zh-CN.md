@@ -1,10 +1,6 @@
 # Confucius
 
-<p align="center">
-  <video src="https://github.com/ZionDoki/confucius/raw/master/docs/media/confucius-promo.mp4" poster="docs/media/confucius-promo-cover.png" width="720" controls muted playsinline>
-    <a href="docs/media/confucius-promo.mp4">播放 44 秒产品短片</a>
-  </video>
-</p>
+[播放 44 秒产品短片](https://github.com/user-attachments/assets/3a39a858-3aa5-4198-a4b5-4f13002d19e4)
 
 <p align="center">
   <a href="README.md">English</a> · <strong>简体中文</strong>

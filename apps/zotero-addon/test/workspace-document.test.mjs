@@ -294,6 +294,22 @@ test("permission changes are committed before prompts and gate auto memory", () 
   );
 });
 
+test("failed native turns keep the last committed conversation recoverable", () => {
+  const host = readFileSync(
+    join(root, "src/modules/host/AgentHost.ts"),
+    "utf8",
+  );
+  assert.equal(
+    host.includes("state.messages = checkpointMessages(checkpoint)"),
+    false,
+  );
+  assert.equal(
+    host.includes("state.messages = context.committedBeforeTurn"),
+    true,
+  );
+  assert.equal(host.includes('result.phase !== "failed" &&'), true);
+});
+
 test("settings effort control is a button group, not a native select", () => {
   const view = readFileSync(
     join(root, "src/modules/ui/WorkspaceView.ts"),

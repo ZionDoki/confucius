@@ -80,7 +80,7 @@ export async function handleMcp(
           id,
           result: {
             protocolVersion,
-            serverInfo: { name: "confucius-task-gateway", version: "0.3.3" },
+            serverInfo: { name: "confucius-task-gateway", version: "0.3.4" },
             capabilities: { tools: { listChanged: false } },
             instructions: MCP_TASK_GATEWAY_INSTRUCTIONS,
           },

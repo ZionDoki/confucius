@@ -2640,7 +2640,6 @@ export class AgentHost {
       .map((entry) => entry.callId);
     if (unknown.length === 0) {
       state.safeCheckpoint = checkpoint;
-      state.messages = checkpointMessages(checkpoint) ?? state.messages;
     }
     if (state.record.recoverableTurn?.turnId === checkpoint.turnId) {
       state.record.recoverableTurn.checkpointAt = checkpoint.savedAt;
@@ -3037,6 +3036,12 @@ export class AgentHost {
     }
     this.requireEndpoint();
 
+    // Checkpoints describe in-flight recovery state. Keep the committed
+    // conversation separate so a failed request cannot poison the next turn.
+    const committedBeforeTurn = state.messages;
+    const latestCheckpointBeforeTurn = state.latestCheckpoint;
+    const safeCheckpointBeforeTurn = state.safeCheckpoint;
+
     state.abort?.abort();
     this.rejectPendingApprovals(sessionId, "superseded by a new prompt");
     const abort = createAbortController();
@@ -3240,6 +3245,9 @@ export class AgentHost {
             turnId,
             userText: trimmed,
             emit,
+            committedBeforeTurn,
+            latestCheckpointBeforeTurn,
+            safeCheckpointBeforeTurn,
           }),
         )
         .catch((error) => {
@@ -3279,6 +3287,9 @@ export class AgentHost {
         type: ConfuciusEvent["type"],
         payload: ConfuciusEvent["payload"],
       ) => void;
+      committedBeforeTurn: ModelMessage[];
+      latestCheckpointBeforeTurn?: TurnCheckpoint;
+      safeCheckpointBeforeTurn?: TurnCheckpoint;
     },
   ): Promise<void> {
     const isCurrent = () => state.activeTurnId === context.turnId;
@@ -3286,7 +3297,11 @@ export class AgentHost {
       return;
     }
     try {
-      if (result.phase !== "failed") {
+      if (result.phase === "failed") {
+        state.messages = context.committedBeforeTurn;
+        state.latestCheckpoint = context.latestCheckpointBeforeTurn;
+        state.safeCheckpoint = context.safeCheckpointBeforeTurn;
+      } else {
         // Even aborted turns leave usable partial context worth keeping.
         state.messages = result.messages;
       }
@@ -3309,7 +3324,10 @@ export class AgentHost {
         return;
       }
       try {
-        if (estimateChars(state.messages) > this.maxHistoryChars()) {
+        if (
+          result.phase !== "failed" &&
+          estimateChars(state.messages) > this.maxHistoryChars()
+        ) {
           const compacted = await compactHistory(
             quietAdapter,
             state.messages,

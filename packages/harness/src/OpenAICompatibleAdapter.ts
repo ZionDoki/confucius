@@ -203,7 +203,11 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         body: JSON.stringify(body),
         signal,
       });
-      if (response.ok || !RETRYABLE_STATUS.has(response.status)) {
+      if (
+        response.ok ||
+        !RETRYABLE_STATUS.has(response.status) ||
+        attempt === MAX_ATTEMPTS
+      ) {
         return response;
       }
       await response.text().catch(() => "");
@@ -211,7 +215,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         await delay(800 * attempt, signal);
       }
     }
-    throw new Error("Model request failed after retries");
+    throw new Error("Model request retry loop exited unexpectedly");
   }
 
   private buildOpenAIBody(

@@ -236,6 +236,33 @@ describe("OpenAICompatibleAdapter streaming", () => {
     assert.equal(turn.text, "ok");
     assert.equal(calls, 2);
   });
+
+  it("reports the final HTTP status and body after retries are exhausted", async () => {
+    let calls = 0;
+    const adapter = new OpenAICompatibleAdapter({
+      apiKey: "sk-test",
+      baseUrl: "https://api.example.test/v1",
+      model: "demo",
+      stream: false,
+      fetchImpl: (async () => {
+        calls += 1;
+        return new Response(
+          JSON.stringify({
+            error: { message: "upstream capacity exhausted" },
+          }),
+          { status: 503 },
+        );
+      }) as unknown as typeof fetch,
+    });
+
+    await assert.rejects(
+      adapter.complete({
+        messages: [{ role: "user", content: "hi" }],
+      }),
+      /Model HTTP 503:.*upstream capacity exhausted/,
+    );
+    assert.equal(calls, 2);
+  });
 });
 
 describe("validateArgs types", () => {
