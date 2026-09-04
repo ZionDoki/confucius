@@ -3,9 +3,13 @@ import { describe, it } from "node:test";
 import {
   DEFAULT_MAX_ITERATIONS,
   DEFAULT_MAX_TOOL_CALLS,
+  DEFAULT_UI_LINE_HEIGHT,
   clampMaxIterations,
   clampMaxToolCalls,
+  isUiLanguage,
+  isUiLineHeight,
   RPC_METHODS,
+  UI_LINE_HEIGHT_VALUES,
   validateConfigPatch,
 } from "./rpc";
 
@@ -71,5 +75,24 @@ describe("budget clamps", () => {
     assert.equal(clampMaxToolCalls(""), DEFAULT_MAX_TOOL_CALLS);
     assert.equal(DEFAULT_MAX_ITERATIONS, 128);
     assert.equal(DEFAULT_MAX_TOOL_CALLS, 96);
+  });
+});
+
+describe("workspace appearance presets", () => {
+  it("supports explicit Chinese and English interface languages", () => {
+    assert.equal(isUiLanguage("zh-CN"), true);
+    assert.equal(isUiLanguage("en-US"), true);
+    assert.equal(isUiLanguage("fr-FR"), false);
+  });
+
+  it("keeps the current line height as the standard midpoint", () => {
+    assert.equal(DEFAULT_UI_LINE_HEIGHT, "standard");
+    assert.deepEqual(UI_LINE_HEIGHT_VALUES, {
+      compact: 1.45,
+      standard: 1.6,
+      relaxed: 1.75,
+    });
+    assert.equal(isUiLineHeight("relaxed"), true);
+    assert.equal(isUiLineHeight("wide"), false);
   });
 });

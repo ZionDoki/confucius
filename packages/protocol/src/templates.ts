@@ -20,6 +20,7 @@ export interface TaskTemplate {
   title: string;
   description: string;
   artifactKind: ArtifactKind;
+  additionalArtifactKinds?: ArtifactKind[];
   skillSlug?: string;
   source: "single" | "multi" | "selection" | "any";
   prompt: string;
@@ -32,9 +33,11 @@ export const TASK_TEMPLATES: readonly TaskTemplate[] = [
     description:
       "Trace the question, method, evidence, limits, and implications.",
     artifactKind: "deep_read",
+    additionalArtifactKinds: ["annotation_set"],
     skillSlug: "paper-deep-reading",
     source: "single",
-    prompt: "Deep-read the locked paper and produce a cited research artifact.",
+    prompt:
+      "Deep-read the locked paper. Plan the delivery details I want, then produce both a cited deep-reading report and a detailed annotation set. Use the default annotation legend unless I override its colors, meanings, method-section summary style, note voice, or focus.",
   },
   {
     id: "evidence-audit",
@@ -141,6 +144,25 @@ export const TASK_TEMPLATES: readonly TaskTemplate[] = [
   },
 ] as const;
 
+/**
+ * The three representative workflows shown in the workspace and slash menu.
+ * Keep TASK_TEMPLATES complete so persisted tasks and legacy entry points can
+ * continue resolving every historical template id.
+ */
+export const FEATURED_TASK_TEMPLATES: readonly TaskTemplate[] = [
+  taskTemplateFromList("deep-read"),
+  taskTemplateFromList("evidence-audit"),
+  taskTemplateFromList("synthesis"),
+];
+
+function taskTemplateFromList(id: TaskTemplateId): TaskTemplate {
+  const template = TASK_TEMPLATES.find((candidate) => candidate.id === id);
+  if (!template) {
+    throw new Error(`Missing task template: ${id}`);
+  }
+  return template;
+}
+
 export function templatesForContext(
   context: LockedContextSnapshot,
 ): TaskTemplate[] {
@@ -158,4 +180,53 @@ export function templatesForContext(
 
 export function taskTemplate(id: unknown): TaskTemplate | undefined {
   return TASK_TEMPLATES.find((template) => template.id === id);
+}
+
+export interface TemplateContextValidation {
+  ok: boolean;
+  message?: string;
+}
+
+/** Validate a staged template at send time, after mention/context updates land. */
+export function validateTemplateContext(
+  template: TaskTemplate,
+  context: LockedContextSnapshot,
+): TemplateContextValidation {
+  if (template.source === "any") return { ok: true };
+  if (template.source === "selection") {
+    return context.selection?.text.trim()
+      ? { ok: true }
+      : {
+          ok: false,
+          message:
+            "This task needs a PDF text selection. The draft was kept so you can select text or update the task context and send again.",
+        };
+  }
+  const itemKeys = new Set(
+    context.items.map((item) => `${item.libraryID}:${item.key}`),
+  );
+  if (context.reader?.parentKey) {
+    itemKeys.add(`${context.reader.libraryID}:${context.reader.parentKey}`);
+  } else if (context.reader?.attachmentKey) {
+    itemKeys.add(
+      `${context.reader.libraryID}:attachment:${context.reader.attachmentKey}`,
+    );
+  }
+  if (template.source === "single") {
+    return itemKeys.size === 1
+      ? { ok: true }
+      : {
+          ok: false,
+          message:
+            "This task needs exactly one paper. The draft was kept so you can update the task context and send again.",
+        };
+  }
+  return itemKeys.size >= 2 ||
+    Boolean(context.collection || context.savedSearch)
+    ? { ok: true }
+    : {
+        ok: false,
+        message:
+          "This task needs multiple papers, a collection, or a saved search. The draft was kept so you can add sources and send again.",
+      };
 }

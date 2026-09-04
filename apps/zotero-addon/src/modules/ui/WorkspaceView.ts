@@ -20,9 +20,17 @@ import {
   DEFAULT_MAX_TOOL_CALLS,
   DEFAULT_UI_FONT,
   DEFAULT_UI_FONT_SIZE,
+  DEFAULT_UI_LINE_HEIGHT,
+  DEFAULT_ANNOTATION_COLORS,
+  FEATURED_TASK_TEMPLATES,
+  UI_LINE_HEIGHT_VALUES,
+  annotationsFromBody,
   clampUiFontSize,
   coalesceTimeline,
+  emptyLockedContext,
   isUiFont,
+  isUiLanguage,
+  isUiLineHeight,
   mergeLockedContexts,
   nextReasoningFold,
   parseMindMapOutline,
@@ -34,9 +42,10 @@ import {
   type TimelineToolCall,
   type MindMapNode,
   type UiFont,
+  type UiLanguage,
+  type UiLineHeight,
   type LaunchConsumeResult,
   type LiveContextResult,
-  templatesForContext,
   taskTemplate,
   withLockedContextFingerprint,
 } from "@confucius/protocol";
@@ -220,6 +229,8 @@ type ModelConfig = {
   maxToolCalls?: number;
   uiFont?: UiFont;
   uiFontSize?: number;
+  uiLanguage?: UiLanguage;
+  uiLineHeight?: UiLineHeight;
 };
 
 /** Local font stacks for the three UI font presets (no web fonts, offline-safe). */
@@ -326,6 +337,7 @@ const TUI_CSS = `
   max-width: 100%;
   overflow-wrap: anywhere;
   font-size: var(--confucius-markdown-font-size, 13px);
+  line-height: var(--confucius-reading-line-height, 1.6);
 }
 .tui-answer table {
   display: block;
@@ -401,11 +413,23 @@ const TUI_CSS = `
 }
 .confucius-answer-action svg { width: 15px; height: 15px; display: block; }
 .confucius-menu-row {
-  transition: background 90ms ease, color 90ms ease;
+  transition: background 90ms ease, box-shadow 90ms ease, color 90ms ease;
 }
 .confucius-menu-row:hover,
-.confucius-menu-row[data-highlighted="true"] { background: #f0ece3; }
-.confucius-menu-row[data-active="true"] { font-weight: 600; }
+.confucius-menu-row[data-highlighted="true"] { background: #fff1ed; }
+.confucius-menu-row[data-active="true"] {
+  background: #fff1ed;
+  box-shadow: inset 2px 0 #b44732;
+  color: #8f2f20;
+  font-weight: 600;
+}
+.confucius-composer-menu-row {
+  transition: background 90ms ease, box-shadow 90ms ease;
+}
+.confucius-composer-menu-row[aria-selected="true"] {
+  background: #fff1ed;
+  box-shadow: inset 2px 0 #b44732;
+}
 .confucius-composer-row { width: 100%; min-width: 0; }
 .confucius-attachment-tray {
   width: 100%;
@@ -1118,12 +1142,12 @@ const TUI_CSS = `
 .confucius-settings-choice:hover,
 .confucius-settings-choice:focus-visible {
   outline: none;
-  background: #f2eee6;
+  background: #fff1ed;
 }
 .confucius-artifact-choice[data-selected="true"],
 .confucius-settings-choice[data-selected="true"] {
-  background: #eee8dd;
-  box-shadow: inset 2px 0 #9a6430;
+  background: #fff1ed;
+  box-shadow: inset 2px 0 #b44732;
 }
 .confucius-settings-choice-label {
   overflow: hidden;
@@ -1132,7 +1156,7 @@ const TUI_CSS = `
   white-space: nowrap;
 }
 .confucius-settings-choice-check {
-  color: #8a5a2b;
+  color: #a43b29;
   font-weight: 700;
   text-align: center;
 }
@@ -1206,7 +1230,10 @@ const TUI_CSS = `
   padding: 18px 16px 34px;
   border-radius: 8px;
 }
-.confucius-artifact-paper .tui-answer { font-size: 1.02em; line-height: 1.68; }
+.confucius-artifact-paper .tui-answer {
+  font-size: 1.02em;
+  line-height: var(--confucius-reading-line-height, 1.6);
+}
 .confucius-artifact-paper table {
   width: 100%;
   border-collapse: collapse;
@@ -1494,18 +1521,24 @@ function locateFromApproval(
   toolName: string,
   args: Record<string, unknown>,
 ): LocateTarget | null {
-  if (toolName !== "commit_annotations" && toolName !== "propose_highlights") {
+  if (
+    toolName !== "commit_annotations" &&
+    toolName !== "propose_highlights" &&
+    toolName !== "propose_annotations"
+  ) {
     return null;
   }
   const key = typeof args.key === "string" ? args.key.trim() : "";
   if (!key) {
     return null;
   }
-  const highlights = Array.isArray(args.highlights)
-    ? (args.highlights as Array<{ page?: unknown }>)
-    : [];
-  const firstPage = highlights
-    .map((highlight) => Number(highlight?.page))
+  const annotations = Array.isArray(args.annotations)
+    ? (args.annotations as Array<{ page?: unknown }>)
+    : Array.isArray(args.highlights)
+      ? (args.highlights as Array<{ page?: unknown }>)
+      : [];
+  const firstPage = annotations
+    .map((annotation) => Number(annotation?.page))
     .find((page) => Number.isInteger(page) && page > 0);
   return {
     libraryID: typeof args.libraryID === "number" ? args.libraryID : undefined,
@@ -2213,7 +2246,7 @@ function bindWorkspace(
   brandGroup.appendChild(brandMark(doc));
   brandGroup.appendChild(brand);
   brandGroup.appendChild(status);
-  const newSessionLabel = getString("workspace-new-session");
+  let newSessionLabel = getString("workspace-new-session");
   const newSessionBtn = button(doc, "confucius-new-session", newSessionLabel);
   newSessionBtn.setAttribute("aria-label", newSessionLabel);
   newSessionBtn.setAttribute("title", newSessionLabel);
@@ -2501,12 +2534,53 @@ function bindWorkspace(
   root.appendChild(composer);
   root.appendChild(dropHint);
 
-  const sessionsLabel = getString("workspace-toggle-sessions");
-  const sendLabel = getString("workspace-send");
-  const stopLabel = getString("workspace-stop");
+  let sessionsLabel = getString("workspace-toggle-sessions");
+  let sendLabel = getString("workspace-send");
+  let stopLabel = getString("workspace-stop");
   let auxiliaryOverlay = compact;
   let responsiveWidth = 0;
   let density: "wide" | "compact" | "narrow" = compact ? "compact" : "wide";
+
+  function applyLocalizedChrome(): void {
+    if (!compact) {
+      doc.title = getString("workspace-title");
+    }
+    newSessionLabel = getString("workspace-new-session");
+    newSessionBtn.setAttribute("aria-label", newSessionLabel);
+    newSessionBtn.setAttribute("title", newSessionLabel);
+    const nextSettingsLabel = getString("workspace-settings");
+    settingsBtn.setAttribute("aria-label", nextSettingsLabel);
+    settingsBtn.setAttribute("title", nextSettingsLabel);
+    const nextKnowledgeLabel = getString("workspace-knowledge");
+    knowledgeBtn.setAttribute("aria-label", nextKnowledgeLabel);
+    knowledgeBtn.setAttribute("title", nextKnowledgeLabel);
+    const nextLayoutLabel = compact
+      ? getString("workspace-layout-window")
+      : getString("workspace-layout-sidebar");
+    layoutBtn.setAttribute("aria-label", nextLayoutLabel);
+    layoutBtn.setAttribute("title", nextLayoutLabel);
+    sessionsLabel = getString("workspace-toggle-sessions");
+    sendLabel = getString("workspace-send");
+    stopLabel = getString("workspace-stop");
+    sessionPane.setAttribute("aria-label", sessionsLabel);
+    timelinePane.setAttribute("aria-label", getString("workspace-activity"));
+    attachmentTray.setAttribute(
+      "aria-label",
+      getString("workspace-attachment-list"),
+    );
+    dropHint.textContent = getString("workspace-attachment-drop");
+    prompt.setAttribute(
+      "placeholder",
+      getString("workspace-composer-placeholder"),
+    );
+    sendBtn.setAttribute("aria-label", sendLabel);
+    stopBtn.setAttribute("aria-label", stopLabel);
+    const nextPlusLabel = getString("workspace-plus");
+    plusBtn.setAttribute("aria-label", nextPlusLabel);
+    plusBtn.setAttribute("title", nextPlusLabel);
+    endpointBtn.setAttribute("title", getString("workspace-model"));
+    applyResponsiveLayout();
+  }
 
   function paintToggle(node: HTMLElement, active: boolean): void {
     node.setAttribute("aria-pressed", active ? "true" : "false");
@@ -4340,9 +4414,16 @@ function bindWorkspace(
     const size = clampUiFontSize(
       state.config?.uiFontSize ?? DEFAULT_UI_FONT_SIZE,
     );
+    const lineHeight = isUiLineHeight(state.config?.uiLineHeight)
+      ? state.config.uiLineHeight
+      : DEFAULT_UI_LINE_HEIGHT;
     root.style.fontFamily = UI_FONT_STACKS[font];
     root.style.fontSize = `${size}px`;
     root.style.setProperty("--confucius-markdown-font-size", `${size}px`);
+    root.style.setProperty(
+      "--confucius-reading-line-height",
+      String(UI_LINE_HEIGHT_VALUES[lineHeight]),
+    );
   }
 
   function renderApprovalCard(
@@ -4616,7 +4697,6 @@ function bindWorkspace(
       backend?: AgentBackendKind;
       templateId?: string;
       prompt?: string;
-      autoStart?: boolean;
       skillSlug?: string;
     } = {},
   ): Promise<ResearchTaskRecord> {
@@ -4633,6 +4713,11 @@ function bindWorkspace(
       // reader-tab or item-selection change.
       context: initialContext,
       backend: options.backend ?? current?.backend ?? "native",
+      mode: current?.mode ?? state.mode,
+      activeKnowledgeBaseId: current?.activeKnowledgeBaseId,
+      capabilityProfile: current?.capabilityProfile ?? "zotero_only",
+      workingDirectory: current?.workingDirectory,
+      confirmed: current?.capabilityProfile === "workspace",
       templateId: options.templateId,
       autoStart: false,
     })) as ResearchTaskRecord;
@@ -4648,29 +4733,76 @@ function bindWorkspace(
         slug: options.skillSlug,
       });
     }
-    const startText = String(options.prompt ?? "").trim();
-    if (options.autoStart && startText) {
-      await rpc("task/prompt", { taskId: created.id, text: startText });
-      await refreshSessions();
-      await loadTask(created.id);
+    if (current && created.permissionMode !== current.permissionMode) {
+      await rpc("task/setPermissions", {
+        taskId: created.id,
+        permissionMode: current.permissionMode,
+      });
     }
     return created;
   }
 
-  async function runTemplate(
+  function taskHasConversation(): boolean {
+    return state.events.some((event) => event.type === "turn_started");
+  }
+
+  function localizedTemplateTitle(template: TaskTemplate): string {
+    return getString(`workspace-template-${template.id}`);
+  }
+
+  function localizedTemplatePrompt(template: TaskTemplate): string {
+    return getString(`workspace-template-${template.id}-prompt`);
+  }
+
+  async function stageTemplate(
     template: TaskTemplate,
     context?: LockedContextSnapshot,
+    promptOverride?: string,
   ): Promise<void> {
     state.sendError = "";
     try {
-      await createTask({
-        title: template.title,
-        context,
-        templateId: template.id,
-        prompt: template.prompt,
-        autoStart: true,
-        skillSlug: template.skillSlug,
-      });
+      const existing = currentTask();
+      const stagedContext = context ?? existing?.lockedContext;
+      const reuse = Boolean(
+        existing &&
+        !state.running &&
+        !taskHasConversation() &&
+        state.artifacts.length === 0,
+      );
+      let task: ResearchTaskRecord;
+      if (reuse && existing) {
+        if (stagedContext) {
+          task = (await rpc("task/setContext", {
+            taskId: existing.id,
+            mode: "replace",
+            context: stagedContext,
+          })) as ResearchTaskRecord;
+        } else {
+          task = existing;
+        }
+        task = (await rpc("task/stageTemplate", {
+          taskId: task.id,
+          templateId: template.id,
+        })) as ResearchTaskRecord;
+        const index = state.sessions.findIndex((row) => row.id === task.id);
+        if (index >= 0) state.sessions[index] = task;
+      } else {
+        task = await createTask({
+          title: localizedTemplateTitle(template),
+          context: stagedContext,
+          templateId: template.id,
+          skillSlug: template.skillSlug,
+        });
+      }
+      const draft = String(
+        promptOverride ?? localizedTemplatePrompt(template),
+      ).trim();
+      prompt.value = draft;
+      composerDrafts.set(task.id, draft);
+      closeSlashMenu();
+      closeMentionMenu();
+      prompt.focus();
+      prompt.setSelectionRange(prompt.value.length, prompt.value.length);
       await refreshArtifacts();
       renderLists();
     } catch (error) {
@@ -4681,17 +4813,21 @@ function bindWorkspace(
 
   async function consumeLaunchIntent(intent: LaunchIntent): Promise<void> {
     const template = taskTemplate(intent.templateId);
-    const promptText = String(intent.prompt ?? template?.prompt ?? "").trim();
-    await createTask({
-      title: template?.title ?? (promptText.slice(0, 72) || "Research task"),
-      context: intent.context,
-      templateId: template?.id,
-      prompt: promptText,
-      autoStart: intent.autoStart,
-      skillSlug: intent.skillSlug ?? template?.skillSlug,
-    });
-    if (!intent.autoStart && intent.skillSlug) {
-      prompt.value = `/${intent.skillSlug} `;
+    const promptText = String(
+      intent.prompt ?? (template ? localizedTemplatePrompt(template) : ""),
+    ).trim();
+    if (template) {
+      await stageTemplate(template, intent.context, promptText);
+    } else {
+      const created = await createTask({
+        title: promptText || "Research task",
+        context: intent.context,
+        skillSlug: intent.skillSlug,
+      });
+      const draft =
+        promptText || (intent.skillSlug ? `/${intent.skillSlug} ` : "");
+      prompt.value = draft;
+      composerDrafts.set(created.id, draft);
       prompt.focus();
     }
     await refreshSessions();
@@ -4910,7 +5046,7 @@ function bindWorkspace(
     target.appendChild(heading);
     const grid = el(doc, "div");
     grid.className = "confucius-template-grid";
-    for (const template of templatesForContext(context)) {
+    for (const template of FEATURED_TASK_TEMPLATES) {
       const templateButton = el(doc, "button", undefined, {
         type: "button",
         "data-template-id": template.id,
@@ -4925,7 +5061,7 @@ function bindWorkspace(
       templateButton.appendChild(name);
       templateButton.appendChild(copy);
       templateButton.addEventListener("click", () => {
-        void runTemplate(template, context);
+        void stageTemplate(template, context);
       });
       grid.appendChild(templateButton);
     }
@@ -5034,21 +5170,151 @@ function bindWorkspace(
         ),
       );
     } else if (body.type === "annotation_set") {
-      for (const highlight of body.highlights) {
-        const quote = el(doc, "blockquote", {
-          margin: "0 0 14px",
-          padding: "4px 0 4px 14px",
-          borderLeft: `3px solid ${highlight.color || "#c89b65"}`,
+      const legend = body.legend?.length
+        ? body.legend
+        : [
+            {
+              type: "highlight" as const,
+              color: DEFAULT_ANNOTATION_COLORS.highlight,
+              meaning: getString(
+                "workspace-artifact-annotation-highlight-default",
+              ),
+            },
+            {
+              type: "underline" as const,
+              color: DEFAULT_ANNOTATION_COLORS.underline,
+              meaning: getString(
+                "workspace-artifact-annotation-underline-default",
+              ),
+            },
+            {
+              type: "image" as const,
+              color: DEFAULT_ANNOTATION_COLORS.image,
+              meaning: getString("workspace-artifact-annotation-image-default"),
+            },
+          ];
+      const legendHeading = el(doc, "div", {
+        marginBottom: "7px",
+        color: "#6b665c",
+        fontSize: "11px",
+        fontWeight: "700",
+        letterSpacing: ".06em",
+        textTransform: "uppercase",
+      });
+      legendHeading.textContent = getString(
+        "workspace-artifact-annotation-legend",
+      );
+      container.appendChild(legendHeading);
+      const legendList = el(doc, "div", {
+        marginBottom: "18px",
+        borderTop: "1px solid #e5e1d8",
+      });
+      for (const entry of legend) {
+        const row = el(doc, "div", {
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          padding: "7px 0",
+          borderBottom: "1px solid #eeeae2",
+          color: "#575249",
+          fontSize: ".9em",
         });
-        const text = el(doc, "div");
-        text.textContent = `“${highlight.quote}”`;
-        quote.appendChild(text);
-        const meta = el(doc, "div", { color: "#777166", fontSize: ".86em" });
-        meta.textContent = [`p. ${highlight.page}`, highlight.comment]
-          .filter(Boolean)
-          .join(" · ");
-        quote.appendChild(meta);
-        container.appendChild(quote);
+        const swatch = el(doc, "span", {
+          width: "10px",
+          height: "10px",
+          flex: "0 0 10px",
+          borderRadius: "3px",
+          background: entry.color ?? DEFAULT_ANNOTATION_COLORS[entry.type],
+          boxShadow: "inset 0 0 0 1px rgba(28,25,23,.12)",
+        });
+        const label = el(doc, "strong", { color: "#33302a" });
+        label.textContent = getString(
+          `workspace-artifact-annotation-${entry.type}`,
+        );
+        row.appendChild(swatch);
+        row.appendChild(label);
+        row.appendChild(doc.createTextNode(entry.meaning));
+        legendList.appendChild(row);
+      }
+      container.appendChild(legendList);
+
+      for (const annotation of annotationsFromBody(body)) {
+        const color =
+          annotation.color ?? DEFAULT_ANNOTATION_COLORS[annotation.type];
+        const annotationNode = el(doc, "section", {
+          marginBottom: "16px",
+          padding: "0 0 16px 14px",
+          borderLeft: `3px solid ${color}`,
+          borderBottom: "1px solid #eeeae2",
+        });
+        const meta = el(doc, "div", {
+          display: "flex",
+          alignItems: "center",
+          gap: "7px",
+          marginBottom: "7px",
+          color: "#777166",
+          fontSize: ".82em",
+        });
+        const type = el(doc, "strong", { color: "#4b4740" });
+        type.textContent = getString(
+          `workspace-artifact-annotation-${annotation.type}`,
+        );
+        meta.appendChild(type);
+        meta.appendChild(doc.createTextNode(`p. ${annotation.page}`));
+        annotationNode.appendChild(meta);
+        if (annotation.type === "image") {
+          const region = el(doc, "div", {
+            position: "relative",
+            width: "112px",
+            height: "148px",
+            margin: "4px 0 9px",
+            overflow: "hidden",
+            border: "1px solid #d8d1c4",
+            borderRadius: "4px",
+            background:
+              "repeating-linear-gradient(0deg,#faf9f6,#faf9f6 11px,#f0ece3 12px)",
+          });
+          const [x, y, width, height] = annotation.rect;
+          const crop = el(doc, "span", {
+            position: "absolute",
+            left: `${x / 10}%`,
+            top: `${y / 10}%`,
+            width: `${width / 10}%`,
+            height: `${height / 10}%`,
+            boxSizing: "border-box",
+            border: `2px solid ${color}`,
+            background: `${color}2b`,
+          });
+          region.appendChild(crop);
+          region.setAttribute(
+            "title",
+            `${getString("workspace-artifact-annotation-region")}: ${annotation.rect.join(", ")}`,
+          );
+          annotationNode.appendChild(region);
+        } else {
+          const quote = el(doc, "div", {
+            marginBottom: annotation.comment ? "7px" : "0",
+            padding: annotation.type === "highlight" ? "2px 4px" : "2px 0",
+            background:
+              annotation.type === "highlight" ? `${color}38` : "transparent",
+            textDecoration:
+              annotation.type === "underline" ? "underline" : "none",
+            textDecorationColor: color,
+            textDecorationThickness: "2px",
+            textUnderlineOffset: "3px",
+          });
+          quote.textContent = `“${annotation.quote}”`;
+          annotationNode.appendChild(quote);
+        }
+        if (annotation.comment) {
+          const comment = el(doc, "div", {
+            color: "#575249",
+            lineHeight: "1.5",
+          });
+          comment.textContent = annotation.comment;
+          annotationNode.appendChild(comment);
+        }
+        container.appendChild(annotationNode);
       }
     } else if (body.type === "collection_diff") {
       container.appendChild(
@@ -5332,7 +5598,7 @@ function bindWorkspace(
       overview.appendChild(eyebrow);
       overview.appendChild(heading);
       overview.appendChild(copy);
-      const context = state.live?.lockedSnapshot;
+      const context = state.live?.lockedSnapshot ?? emptyLockedContext();
       if (context) {
         const source = el(doc, "div", {
           marginTop: "12px",
@@ -7484,6 +7750,12 @@ function bindWorkspace(
       ? live.uiFont
       : DEFAULT_UI_FONT;
     let sizeChoice = clampUiFontSize(live.uiFontSize ?? DEFAULT_UI_FONT_SIZE);
+    let languageChoice: UiLanguage = isUiLanguage(live.uiLanguage)
+      ? live.uiLanguage
+      : "en-US";
+    let lineHeightChoice: UiLineHeight = isUiLineHeight(live.uiLineHeight)
+      ? live.uiLineHeight
+      : DEFAULT_UI_LINE_HEIGHT;
 
     const appearanceLabel = (text: string): void => {
       const name = el(doc, "label", {
@@ -7524,6 +7796,38 @@ function bindWorkspace(
         btn.setAttribute("aria-checked", active ? "true" : "false");
       }
     };
+
+    appearanceLabel(getString("workspace-ui-language"));
+    const languagePicker = segmentedRow("confucius-cfg-language");
+    for (const language of ["zh-CN", "en-US"] as UiLanguage[]) {
+      const btn = el(
+        doc,
+        "button",
+        {
+          appearance: "none",
+          padding: "4px 10px",
+          borderRadius: "8px",
+          cursor: "pointer",
+          font: "inherit",
+          minHeight: "28px",
+          lineHeight: "1.2",
+        },
+        { type: "button", role: "radio", "data-language": language },
+      );
+      btn.textContent = getString(
+        language === "zh-CN"
+          ? "workspace-ui-language-zh"
+          : "workspace-ui-language-en",
+      );
+      btn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        languageChoice = language;
+        paintSegmented(languagePicker.buttons, languageChoice);
+      });
+      languagePicker.buttons.set(language, btn);
+      languagePicker.row.appendChild(btn);
+    }
 
     appearanceLabel(getString("workspace-font-family"));
     const fontPicker = segmentedRow("confucius-cfg-font");
@@ -7590,6 +7894,39 @@ function bindWorkspace(
       sizePicker.row.appendChild(btn);
     }
 
+    appearanceLabel(getString("workspace-line-height"));
+    const lineHeightPicker = segmentedRow("confucius-cfg-line-height");
+    for (const lineHeight of [
+      "compact",
+      "standard",
+      "relaxed",
+    ] as UiLineHeight[]) {
+      const btn = el(
+        doc,
+        "button",
+        {
+          appearance: "none",
+          padding: "4px 10px",
+          borderRadius: "8px",
+          cursor: "pointer",
+          font: "inherit",
+          minHeight: "28px",
+          lineHeight: "1.2",
+        },
+        { type: "button", role: "radio", "data-line-height": lineHeight },
+      );
+      btn.textContent = getString(`workspace-line-height-${lineHeight}`);
+      btn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        lineHeightChoice = lineHeight;
+        paintSegmented(lineHeightPicker.buttons, lineHeightChoice);
+        repaintFontPreview();
+      });
+      lineHeightPicker.buttons.set(lineHeight, btn);
+      lineHeightPicker.row.appendChild(btn);
+    }
+
     const fontPreview = el(doc, "div", {
       border: "1px solid #e5e1d8",
       borderRadius: "8px",
@@ -7604,9 +7941,14 @@ function bindWorkspace(
     const repaintFontPreview = (): void => {
       fontPreview.style.fontFamily = UI_FONT_STACKS[fontChoice];
       fontPreview.style.fontSize = `${sizeChoice}px`;
+      fontPreview.style.lineHeight = String(
+        UI_LINE_HEIGHT_VALUES[lineHeightChoice],
+      );
     };
+    paintSegmented(languagePicker.buttons, languageChoice);
     paintSegmented(fontPicker.buttons, fontChoice);
     paintSegmented(sizePicker.buttons, String(sizeChoice));
+    paintSegmented(lineHeightPicker.buttons, lineHeightChoice);
     repaintFontPreview();
 
     const errorLine = el(doc, "div", {
@@ -7844,7 +8186,10 @@ function bindWorkspace(
               Number(toolCallsInput.value) || DEFAULT_MAX_TOOL_CALLS,
             uiFont: fontChoice,
             uiFontSize: sizeChoice,
+            uiLanguage: languageChoice,
+            uiLineHeight: lineHeightChoice,
           })) as ModelConfig;
+          const languageChanged = live.uiLanguage !== next.uiLanguage;
           applyLive(next);
           editingId = next.activeEndpointId ?? "";
           fillForm(
@@ -7871,6 +8216,11 @@ function bindWorkspace(
             await loadTask(settingsTask.id);
           }
           paintList();
+          if (languageChanged) {
+            overlay.remove();
+            applyLocalizedChrome();
+            renderLists();
+          }
         } catch (error) {
           errorLine.textContent =
             error instanceof Error ? error.message : String(error);
@@ -7909,8 +8259,10 @@ function bindWorkspace(
   interface SlashCommand {
     label: string;
     description: string;
-    kind: "command" | "skill";
+    kind: "command" | "skill" | "template";
+    group: "templates" | "skills" | "commands";
     slug?: string;
+    templateId?: string;
     searchText?: string;
     run?: () => void | Promise<void>;
   }
@@ -8121,10 +8473,10 @@ function bindWorkspace(
         minHeight: "50px",
         padding: "5px 8px",
         borderRadius: "8px",
-        background: active ? "#f0ece3" : "transparent",
         cursor: "pointer",
         boxSizing: "border-box",
       });
+      row.className = "confucius-composer-menu-row";
       row.setAttribute("role", "option");
       row.setAttribute("data-mention-index", String(index));
       row.setAttribute("aria-selected", active ? "true" : "false");
@@ -8242,7 +8594,6 @@ function bindWorkspace(
       const row = node as HTMLElement;
       const active =
         Number(row.getAttribute("data-mention-index")) === mentionState.index;
-      row.style.background = active ? "#f0ece3" : "transparent";
       row.setAttribute("aria-selected", active ? "true" : "false");
     });
   }
@@ -8260,47 +8611,64 @@ function bindWorkspace(
   }
 
   function slashCommands(): SlashCommand[] {
-    const commands: SlashCommand[] = [
+    const commands: SlashCommand[] = FEATURED_TASK_TEMPLATES.map(
+      (template) => ({
+        label: `/${template.id}`,
+        description: getString(`workspace-template-${template.id}-help`),
+        kind: "template" as const,
+        group: "templates" as const,
+        templateId: template.id,
+        searchText: localizedTemplateTitle(template),
+      }),
+    );
+    const utilityCommands: SlashCommand[] = [
       {
         label: "/agent",
         description: getString("workspace-cmd-agent"),
         kind: "command",
+        group: "commands",
         run: () => applyMode("agent"),
       },
       {
         label: "/plan",
         description: getString("workspace-cmd-plan"),
         kind: "command",
+        group: "commands",
         run: () => applyMode("plan"),
       },
       {
         label: "/ask",
         description: getString("workspace-cmd-ask"),
         kind: "command",
+        group: "commands",
         run: () => applyPermission("ask"),
       },
       {
         label: "/auto",
         description: getString("workspace-cmd-auto"),
         kind: "command",
+        group: "commands",
         run: () => applyPermission("auto_allow"),
       },
       {
         label: "/deny-writes",
         description: getString("workspace-cmd-deny"),
         kind: "command",
+        group: "commands",
         run: () => applyPermission("deny"),
       },
       {
         label: "/model",
         description: getString("workspace-cmd-model"),
         kind: "command",
+        group: "commands",
         run: () => void refreshConfig().then(() => openSettings()),
       },
       {
         label: "/compact",
         description: getString("workspace-cmd-compact"),
         kind: "command",
+        group: "commands",
         run: () => void compactNow(),
       },
     ];
@@ -8309,10 +8677,12 @@ function bindWorkspace(
         label: `/${skill.slug}`,
         description: skill.description || skill.name,
         kind: "skill",
+        group: "skills",
         slug: skill.slug,
         searchText: [skill.name, ...skill.triggers].join(" "),
       });
     }
+    commands.push(...utilityCommands);
     return commands;
   }
 
@@ -8495,7 +8865,21 @@ function bindWorkspace(
       boxSizing: "border-box",
     });
     list.id = "confucius-slash-results";
+    let previousGroup: SlashCommand["group"] | null = null;
     slashState.items.forEach((command, index) => {
+      if (command.group !== previousGroup) {
+        const group = el(doc, "div", {
+          padding: previousGroup ? "9px 8px 4px" : "4px 8px",
+          color: "#8a857c",
+          fontSize: "10px",
+          fontWeight: "700",
+          letterSpacing: ".08em",
+          textTransform: "uppercase",
+        });
+        group.textContent = getString(`workspace-slash-group-${command.group}`);
+        list.appendChild(group);
+        previousGroup = command.group;
+      }
       const active = index === slashState.index;
       const row = el(doc, "div", {
         display: "flex",
@@ -8504,10 +8888,10 @@ function bindWorkspace(
         minHeight: "50px",
         padding: "5px 8px",
         borderRadius: "8px",
-        background: active ? "#f0ece3" : "transparent",
         cursor: "pointer",
         boxSizing: "border-box",
       });
+      row.className = "confucius-composer-menu-row";
       row.setAttribute("role", "option");
       row.setAttribute("data-slash-index", String(index));
       row.setAttribute("aria-selected", active ? "true" : "false");
@@ -8524,7 +8908,7 @@ function bindWorkspace(
         color: "#8c6a3f",
         fontSize: "13px",
       });
-      glyph.textContent = "/";
+      glyph.textContent = command.kind === "template" ? "◇" : "/";
       const copy = el(doc, "span", {
         flex: "1 1 auto",
         minWidth: "0",
@@ -8582,7 +8966,6 @@ function bindWorkspace(
       const row = node as HTMLElement;
       const index = Number(row.getAttribute("data-slash-index"));
       const active = index === slashState.index;
-      row.style.background = active ? "#f0ece3" : "transparent";
       row.setAttribute("aria-selected", active ? "true" : "false");
     });
   }
@@ -8602,6 +8985,17 @@ function bindWorkspace(
       prompt.focus();
       const caret = prompt.value.length;
       prompt.setSelectionRange(caret, caret);
+      return;
+    }
+    if (command.kind === "template") {
+      const template = taskTemplate(command.templateId);
+      const remainder = prompt.value.replace(/^\/[^\s]*/, "").trim();
+      closeSlashMenu();
+      if (template) {
+        const basePrompt = localizedTemplatePrompt(template);
+        const draft = remainder ? `${basePrompt}\n\n${remainder}` : basePrompt;
+        void stageTemplate(template, undefined, draft);
+      }
       return;
     }
     closeSlashMenu();

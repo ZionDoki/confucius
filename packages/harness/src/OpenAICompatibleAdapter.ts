@@ -839,6 +839,20 @@ function toOpenAIMessage(message: ModelMessage) {
       })),
     };
   }
+  if (message.images?.length) {
+    return {
+      role: message.role,
+      content: [
+        { type: "text", text: message.content },
+        ...message.images.map((image) => ({
+          type: "image_url",
+          image_url: {
+            url: `data:${image.mimeType};base64,${image.data}`,
+          },
+        })),
+      ],
+    };
+  }
   return {
     role: message.role,
     content: message.content,
@@ -877,6 +891,13 @@ function toOllamaMessages(
         content: message.content,
         tool_call_id: message.toolCallId,
         tool_name: callNames.get(message.toolCallId ?? "") ?? "tool",
+      };
+    }
+    if (message.images?.length) {
+      return {
+        role: message.role,
+        content: message.content,
+        images: message.images.map((image) => image.data),
       };
     }
     return { role: message.role, content: message.content };

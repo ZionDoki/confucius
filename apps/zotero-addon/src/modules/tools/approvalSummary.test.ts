@@ -21,6 +21,36 @@ describe("describeCallForApproval", () => {
     );
   });
 
+  it("summarizes canonical text and image annotations", () => {
+    assert.equal(
+      describeCallForApproval(
+        "propose_annotations",
+        {
+          libraryID: 1,
+          key: "KNOWN",
+          annotations: [
+            { type: "underline", quote: "read this closely", page: 2 },
+          ],
+        },
+        resolve,
+      ),
+      "Item 1:KNOWN · 1 × “read this closely”",
+    );
+    assert.equal(
+      describeCallForApproval("propose_annotations", {
+        annotations: [
+          {
+            type: "image",
+            page: 3,
+            rect: [10, 20, 30, 40],
+            comment: "Figure establishes the baseline",
+          },
+        ],
+      }),
+      "1 × “Figure establishes the baseline”",
+    );
+  });
+
   it("shows a query as the acted-on object", () => {
     assert.equal(
       describeCallForApproval("search_items", { query: "alpha" }, resolve),

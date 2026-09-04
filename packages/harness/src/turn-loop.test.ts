@@ -456,6 +456,144 @@ describe("TurnLoop", () => {
       true,
     );
   });
+
+  it("shows a transient PDF page to the next model call but never persists it", async () => {
+    const sentinel = "TRANSIENT-PDF-PAGE-BASE64";
+    let call = 0;
+    let sawImage = false;
+    const { loop, events, checkpoints, tools } = createHarness({
+      model: {
+        async complete(request) {
+          call += 1;
+          if (call === 1) {
+            return {
+              toolCalls: [
+                {
+                  id: "inspect-1",
+                  name: "inspect_pdf_page",
+                  args: { libraryID: 1, key: "PAPER", page: 2 },
+                },
+              ],
+            };
+          }
+          sawImage = request.messages.some(
+            (message) => message.images?.[0]?.data === sentinel,
+          );
+          return { text: "Grounded in the page image." };
+        },
+      },
+    });
+    tools.register(
+      {
+        name: "inspect_pdf_page",
+        description: "Inspect a PDF page",
+        inputSchema: {
+          type: "object",
+          properties: {
+            libraryID: { type: "number" },
+            key: { type: "string" },
+            page: { type: "number" },
+          },
+          required: ["libraryID", "key", "page"],
+        },
+      },
+      {
+        name: "inspect_pdf_page",
+        catalog: "paper.read",
+        concurrency: "serial",
+        mutatesState: false,
+      },
+      () => ({
+        ok: true,
+        toolName: "inspect_pdf_page",
+        data: { page: 2, lineAnchors: [{ text: "Methods" }] },
+        transientMedia: [
+          { type: "image", mimeType: "image/png", data: sentinel },
+        ],
+      }),
+    );
+
+    const result = await loop.run({
+      session: session(),
+      turnId: "turn_transient_page",
+      userText: "Inspect figure 2",
+    });
+
+    assert.equal(result.phase, "done");
+    assert.equal(sawImage, true);
+    assert.doesNotMatch(JSON.stringify(result.messages), new RegExp(sentinel));
+    assert.doesNotMatch(JSON.stringify(events.events), new RegExp(sentinel));
+    assert.doesNotMatch(
+      JSON.stringify(checkpoints.latest("turn_transient_page")),
+      new RegExp(sentinel),
+    );
+  });
+
+  it("retries a text-only endpoint once without transient page media", async () => {
+    const imagePresence: boolean[] = [];
+    let call = 0;
+    const { loop, tools } = createHarness({
+      model: {
+        async complete(request) {
+          call += 1;
+          imagePresence.push(
+            request.messages.some((message) => Boolean(message.images?.length)),
+          );
+          if (call === 1) {
+            return {
+              toolCalls: [
+                {
+                  id: "inspect-unsupported",
+                  name: "inspect_pdf_page",
+                  args: { libraryID: 1, key: "PAPER", page: 1 },
+                },
+              ],
+            };
+          }
+          if (call === 2) throw new Error("images are not supported");
+          return { text: "Used the durable line anchors." };
+        },
+      },
+    });
+    tools.register(
+      {
+        name: "inspect_pdf_page",
+        description: "Inspect a PDF page",
+        inputSchema: {
+          type: "object",
+          properties: {
+            libraryID: { type: "number" },
+            key: { type: "string" },
+            page: { type: "number" },
+          },
+          required: ["libraryID", "key", "page"],
+        },
+      },
+      {
+        name: "inspect_pdf_page",
+        catalog: "paper.read",
+        concurrency: "serial",
+        mutatesState: false,
+      },
+      () => ({
+        ok: true,
+        toolName: "inspect_pdf_page",
+        data: { page: 1, lineAnchors: [{ text: "Results" }] },
+        transientMedia: [
+          { type: "image", mimeType: "image/png", data: "PAGE" },
+        ],
+      }),
+    );
+
+    const result = await loop.run({
+      session: session(),
+      turnId: "turn_text_fallback",
+      userText: "Inspect the page",
+    });
+
+    assert.equal(result.phase, "done");
+    assert.deepEqual(imagePresence, [false, true, false]);
+  });
 });
 
 describe("tool invariants", () => {

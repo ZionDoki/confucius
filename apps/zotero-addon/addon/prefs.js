@@ -20,6 +20,8 @@ pref("reasoningEffort", "auto");
 pref("contextWindowTokens", 32768);
 pref("uiFont", "sans");
 pref("uiFontSize", 13);
+pref("uiLanguage", "");
+pref("uiLineHeight", "standard");
 // External Agent runtimes are hosted directly by the privileged add-on.
 // Empty executable preferences mean "detect automatically".
 pref("pluginRuntimeHost", true);

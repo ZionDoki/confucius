@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { MEMORY_READ_TOOLS, MEMORY_WRITE_TOOLS } from "@confucius/protocol";
-import { TOOL_DEFINITIONS, TOOL_META } from "./catalog.js";
+import {
+  MEMORY_READ_TOOLS,
+  MEMORY_WRITE_TOOLS,
+  PAPER_READ_TOOLS,
+  PAPER_WRITE_TOOLS,
+} from "@confucius/protocol";
+import {
+  READ_ONLY_TOOL_NAMES,
+  TOOL_DEFINITIONS,
+  TOOL_META,
+  WRITE_TOOL_NAMES,
+} from "./catalog.js";
 
 test("attach_file advertises local paths and HTTP(S) URLs", () => {
   const definition = TOOL_DEFINITIONS.find(
@@ -61,4 +71,29 @@ test("catalog has no Chrome browser tools", () => {
     Object.keys(TOOL_META).some((name) => name.startsWith("browser.")),
     false,
   );
+});
+
+test("annotation tools expose the canonical v0.3.5 contract", () => {
+  assert.ok(PAPER_READ_TOOLS.includes("inspect_pdf_page"));
+  assert.ok(PAPER_WRITE_TOOLS.includes("propose_annotations"));
+  assert.equal(READ_ONLY_TOOL_NAMES.has("inspect_pdf_page"), true);
+  assert.equal(WRITE_TOOL_NAMES.has("propose_annotations"), true);
+  assert.equal(TOOL_META.inspect_pdf_page.concurrency, "serial");
+  assert.equal(TOOL_META.inspect_pdf_page.mutatesState, false);
+  assert.equal(TOOL_META.propose_annotations.mutatesState, true);
+
+  const proposal = TOOL_DEFINITIONS.find(
+    (candidate) => candidate.name === "propose_annotations",
+  );
+  assert.ok(proposal);
+  assert.deepEqual(proposal.inputSchema.required, [
+    "libraryID",
+    "key",
+    "annotations",
+  ]);
+  const annotationArray = proposal.inputSchema.properties.annotations as {
+    items: { properties: Record<string, unknown> };
+  };
+  assert.ok(annotationArray.items.properties.rect);
+  assert.ok(annotationArray.items.properties.color);
 });

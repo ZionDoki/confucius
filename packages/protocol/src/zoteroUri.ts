@@ -5,6 +5,8 @@ export type ZoteroSelectUri = {
   libraryID?: number;
   groupID?: number;
   key: string;
+  /** True only for the historical non-standard zotero://item/<key> form. */
+  legacyItem?: boolean;
 };
 
 export type ZoteroOpenPdfUri = {
@@ -34,7 +36,16 @@ function safeDecode(value: string): string {
 }
 
 export function parseZoteroUri(href: string): ZoteroUri | null {
-  const match = String(href || "").trim().match(SCHEME);
+  const target = String(href || "").trim();
+  const legacyItem = /^zotero:\/\/item\/([^/?#]+)(?:[?#].*)?$/i.exec(target);
+  if (legacyItem) {
+    return {
+      kind: "select",
+      key: safeDecode(legacyItem[1]),
+      legacyItem: true,
+    };
+  }
+  const match = target.match(SCHEME);
   if (!match) {
     return null;
   }
@@ -115,7 +126,8 @@ export function buildOpenPdfUri(
   const params = new URLSearchParams();
   if (options.annotationKey) {
     params.set("annotation", options.annotationKey);
-  } else if (options.page) {
+  }
+  if (options.page) {
     params.set("page", String(options.page));
   }
   const query = params.toString();

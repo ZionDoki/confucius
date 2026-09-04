@@ -380,6 +380,30 @@ test("settings security profile uses a styled custom listbox", () => {
   assert.equal(security.includes('"ArrowDown", "ArrowUp"'), true);
   assert.equal(security.includes("placeMenu("), true);
   assert.equal(security.includes("overlay,"), true);
+  assert.equal(view.includes("#fff1ed"), true);
+  assert.equal(view.includes("inset 2px 0 #b44732"), true);
+});
+
+test("preset templates stage an editable draft and preserve task context", () => {
+  const view = readFileSync(
+    join(root, "src/modules/ui/WorkspaceView.ts"),
+    "utf8",
+  );
+  const stage = view.slice(
+    view.indexOf("async function stageTemplate"),
+    view.indexOf("async function consumeLaunchIntent"),
+  );
+  assert.equal(
+    view.includes("for (const template of FEATURED_TASK_TEMPLATES)"),
+    true,
+  );
+  assert.equal(view.includes("FEATURED_TASK_TEMPLATES.map("), true);
+  assert.equal(stage.includes("context ?? existing?.lockedContext"), true);
+  assert.equal(stage.includes("localizedTemplatePrompt(template)"), true);
+  assert.equal(stage.includes('rpc("task/stageTemplate"'), true);
+  assert.equal(stage.includes("prompt.value = draft"), true);
+  assert.equal(stage.includes("prompt.focus()"), true);
+  assert.equal(stage.includes('rpc("task/prompt"'), false);
 });
 
 test("settings are tabbed with font appearance controls", () => {
@@ -396,12 +420,21 @@ test("settings are tabbed with font appearance controls", () => {
   assert.equal(view.includes('"confucius-cfg-tab-appearance"'), true);
   assert.equal(view.includes('"confucius-cfg-font"'), true);
   assert.equal(view.includes('"confucius-cfg-font-size"'), true);
+  assert.equal(view.includes('"confucius-cfg-language"'), true);
+  assert.equal(view.includes('"confucius-cfg-line-height"'), true);
   assert.equal(view.includes("uiFont: fontChoice"), true);
   assert.equal(view.includes("uiFontSize: sizeChoice"), true);
+  assert.equal(view.includes("uiLanguage: languageChoice"), true);
+  assert.equal(view.includes("uiLineHeight: lineHeightChoice"), true);
   assert.equal(host.includes('setPref("uiFont"'), true);
   assert.equal(host.includes('setPref("uiFontSize"'), true);
+  assert.equal(host.includes('setPref("uiLanguage"'), true);
+  assert.equal(host.includes('setPref("uiLineHeight"'), true);
   assert.equal(prefs.includes('pref("uiFont", "sans")'), true);
   assert.equal(prefs.includes('pref("uiFontSize", 13)'), true);
+  assert.equal(prefs.includes('pref("uiLanguage", "")'), true);
+  assert.equal(prefs.includes('pref("uiLineHeight", "standard")'), true);
+  assert.equal(view.includes('"--confucius-reading-line-height"'), true);
   assert.equal(view.includes("renderReasoning"), true);
   assert.equal(view.includes("mask-image"), true);
 });
@@ -951,7 +984,21 @@ test("zotero uri links render as underlined anchors and navigate on click", () =
     tools.includes("zoteroUri: buildSelectUri(\n              note.key"),
     true,
   );
-  assert.equal(host.includes("when mentioning a paper, a note,"), true);
+  assert.equal(
+    host.includes("Only copy a zoteroUri verbatim from a tool result"),
+    true,
+  );
+  assert.equal(host.includes("Never construct, guess,"), true);
+  const externalPrompt = host.slice(
+    host.indexOf("private externalPrompt"),
+    host.indexOf("private async sessionPrompt"),
+  );
+  const nativePrompt = host.slice(
+    host.indexOf("private async buildSystemPrompt"),
+  );
+  assert.equal(externalPrompt.includes("...TOOL_GROUNDING_PROMPT"), true);
+  assert.equal(nativePrompt.includes("...TOOL_GROUNDING_PROMPT"), true);
+  assert.equal(host.includes("never guess image-region coordinates"), true);
   assert.equal(catalog.includes("Each note carries a zoteroUri"), true);
 
   // Knowledge-base markdown preview shares the same anchor styling.

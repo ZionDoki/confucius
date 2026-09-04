@@ -53,6 +53,7 @@ export type {
   ToolResult,
   ToolRuntimeMeta,
   ToolSuccess,
+  ToolTransientMedia,
 } from "./tools";
 
 export type {
@@ -64,9 +65,21 @@ export type {
   TurnRecord,
 } from "./session";
 export { isTaskStatus, migrateSessionRecord } from "./session";
+export {
+  MAX_TASK_TITLE_LENGTH,
+  fallbackTaskTitle,
+  isPlaceholderTaskTitle,
+  isTaskTitleState,
+  sanitizeGeneratedTaskTitle,
+  temporaryTaskTitle,
+} from "./taskTitle";
+export type { TaskTitleState } from "./taskTitle";
 
 export {
   AGENT_BACKENDS,
+  ANNOTATION_TYPES,
+  DEFAULT_ANNOTATION_COLORS,
+  annotationsFromBody,
   artifactBodyMatchesKind,
   emptyLockedContext,
   isAgentBackendKind,
@@ -83,8 +96,18 @@ export {
   summarizeArtifact,
   withLockedContextFingerprint,
 } from "./research";
-export { TASK_TEMPLATES, taskTemplate, templatesForContext } from "./templates";
-export type { TaskTemplate, TaskTemplateId } from "./templates";
+export {
+  FEATURED_TASK_TEMPLATES,
+  TASK_TEMPLATES,
+  taskTemplate,
+  templatesForContext,
+  validateTemplateContext,
+} from "./templates";
+export type {
+  TaskTemplate,
+  TaskTemplateId,
+  TemplateContextValidation,
+} from "./templates";
 export {
   MCP_TASK_GATEWAY_INSTRUCTIONS,
   artifactUpsertGuidance,
@@ -95,7 +118,10 @@ export type {
 } from "./artifactPrompt";
 export type {
   AgentBackendKind,
+  AnnotationDraft,
+  AnnotationLegendEntry,
   AnnotationSetArtifactBody,
+  AnnotationType,
   ArtifactBody,
   ArtifactKind,
   ArtifactRecord,
@@ -110,6 +136,8 @@ export type {
   CollectionDiffArtifactBody,
   EvidenceAuditArtifactBody,
   LiteratureMapArtifactBody,
+  ImageAnnotationDraft,
+  LegacyHighlightDraft,
   LockedCollectionContext,
   LockedContextSnapshot,
   LockedItemContext,
@@ -124,6 +152,7 @@ export type {
   TaskStatus,
   TaskAttachment,
   TaskAttachmentKind,
+  TextAnnotationDraft,
   TriageTableArtifactBody,
 } from "./research";
 
@@ -156,16 +185,22 @@ export {
   DEFAULT_MAX_TOOL_CALLS,
   DEFAULT_UI_FONT,
   DEFAULT_UI_FONT_SIZE,
+  DEFAULT_UI_LINE_HEIGHT,
   MAX_MAX_ITERATIONS,
   MAX_MAX_TOOL_CALLS,
   MAX_UI_FONT_SIZE,
   MIN_UI_FONT_SIZE,
   UI_FONTS,
+  UI_LANGUAGES,
+  UI_LINE_HEIGHTS,
+  UI_LINE_HEIGHT_VALUES,
   clampMaxIterations,
   clampMaxToolCalls,
   clampUiFontSize,
   isReasoningEffort,
   isUiFont,
+  isUiLanguage,
+  isUiLineHeight,
   REASONING_EFFORTS,
 } from "./rpc";
 export {
@@ -237,6 +272,8 @@ export type {
   SessionEventsParams,
   SkillActivateParams,
   UiFont,
+  UiLanguage,
+  UiLineHeight,
   ArtifactGetParams,
   AttachmentPrepareParams,
   AttachmentPrepareResult,
@@ -258,4 +295,5 @@ export type {
   TaskPreviewCapabilitiesResult,
   TaskSetBackendParams,
   TaskSetContextParams,
+  TaskStageTemplateParams,
 } from "./rpc";

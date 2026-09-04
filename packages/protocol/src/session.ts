@@ -15,6 +15,11 @@ import {
   legacyContextSnapshot,
   withLockedContextFingerprint,
 } from "./research";
+import {
+  isPlaceholderTaskTitle,
+  isTaskTitleState,
+  type TaskTitleState,
+} from "./taskTitle";
 
 export type SessionMode = "plan" | "agent";
 
@@ -57,6 +62,7 @@ export interface ResearchTaskRecord extends SessionRecord {
   capabilityProfile: CapabilityProfile;
   workingDirectory?: string;
   templateId?: string;
+  titleState: TaskTitleState;
 }
 
 export interface TurnRecord {
@@ -127,11 +133,9 @@ export function migrateSessionRecord(
         typeof candidate.activeKnowledgeBaseId === "string"
           ? candidate.activeKnowledgeBaseId
           : undefined,
-      recoverableTurn: [
-        "running",
-        "awaiting_approval",
-        "interrupted",
-      ].includes(status)
+      recoverableTurn: ["running", "awaiting_approval", "interrupted"].includes(
+        status,
+      )
         ? recoverableTurn
         : undefined,
       workingDirectory:
@@ -140,6 +144,11 @@ export function migrateSessionRecord(
         typeof candidate.templateId === "string"
           ? candidate.templateId
           : undefined,
+      titleState: isTaskTitleState(candidate.titleState)
+        ? candidate.titleState
+        : isPlaceholderTaskTitle(candidate.title)
+          ? "pending"
+          : "fixed",
     };
   }
   const legacy = input as SessionRecord;
@@ -153,6 +162,7 @@ export function migrateSessionRecord(
       : emptyLockedContext(legacy.createdAt || now),
     artifactIds: [],
     capabilityProfile: "zotero_only",
+    titleState: isPlaceholderTaskTitle(legacy.title) ? "pending" : "fixed",
   };
 }
 

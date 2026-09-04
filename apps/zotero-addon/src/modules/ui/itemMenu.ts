@@ -165,11 +165,17 @@ function onItemMenuShowing(win: Window, doc: Document): void {
   const singleVisible = items.length === 1 && hasPdf(items[0]);
   for (const entry of SINGLE_ENTRIES) {
     const node = doc.getElementById(entry.id) as HTMLElement | null;
-    if (node) node.hidden = !singleVisible;
+    if (node) {
+      node.setAttribute("label", getString(entry.labelKey));
+      node.hidden = !singleVisible;
+    }
   }
   for (const entry of MULTI_ENTRIES) {
     const node = doc.getElementById(entry.id) as HTMLElement | null;
-    if (node) node.hidden = items.length < 2;
+    if (node) {
+      node.setAttribute("label", getString(entry.labelKey));
+      node.hidden = items.length < 2;
+    }
   }
 }
 

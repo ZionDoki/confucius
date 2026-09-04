@@ -36,6 +36,27 @@ const markdownBodySchema = {
   additionalProperties: false,
 };
 
+const annotationBodySchema = {
+  type: "object",
+  properties: {
+    type: { type: "string", enum: ["highlight", "underline", "image"] },
+    page: { type: "integer", minimum: 1 },
+    quote: { type: "string" },
+    rect: {
+      type: "array",
+      items: { type: "number", minimum: 0, maximum: 1000 },
+      minItems: 4,
+      maxItems: 4,
+      description:
+        "Image region [x,y,width,height], top-left origin, normalized 0-1000",
+    },
+    comment: { type: "string" },
+    color: { type: "string", pattern: "^#[0-9A-Fa-f]{6}$" },
+  },
+  required: ["type", "page"],
+  additionalProperties: false,
+};
+
 const artifactBodySchemas = [
   markdownBodySchema,
   {
@@ -134,8 +155,15 @@ const artifactBodySchemas = [
     properties: {
       type: { type: "string", enum: ["annotation_set"] },
       item: itemRefSchema,
+      annotations: {
+        type: "array",
+        description:
+          "Canonical annotation list. Use this for every new artifact.",
+        items: annotationBodySchema,
+      },
       highlights: {
         type: "array",
+        description: "Deprecated compatibility shape; do not use for new work.",
         items: {
           type: "object",
           properties: {
@@ -148,8 +176,24 @@ const artifactBodySchemas = [
           additionalProperties: false,
         },
       },
+      legend: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              enum: ["highlight", "underline", "image"],
+            },
+            color: { type: "string", pattern: "^#[0-9A-Fa-f]{6}$" },
+            meaning: { type: "string" },
+          },
+          required: ["type", "meaning"],
+          additionalProperties: false,
+        },
+      },
     },
-    required: ["type", "item", "highlights"],
+    required: ["type", "item"],
     additionalProperties: false,
   },
   {

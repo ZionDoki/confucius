@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  annotationsFromBody,
   artifactBodyMatchesKind,
   isArtifactRecord,
   isCitation,
@@ -105,6 +106,89 @@ describe("locked research context", () => {
 });
 
 describe("artifact bodies", () => {
+  it("accepts all current annotation types and normalizes legacy highlights", () => {
+    assert.equal(
+      artifactBodyMatchesKind("annotation_set", {
+        type: "annotation_set",
+        item: { libraryID: 1, key: "PAPER" },
+        annotations: [
+          {
+            type: "highlight",
+            page: 1,
+            quote: "critical result",
+          },
+          {
+            type: "underline",
+            page: 2,
+            quote: "read carefully",
+            color: "#123aBC",
+          },
+          {
+            type: "image",
+            page: 3,
+            rect: [100, 200, 300, 250],
+            comment: "Figure evidence",
+          },
+        ],
+        legend: [
+          {
+            type: "highlight",
+            color: "#ffd400",
+            meaning: "Very important",
+          },
+        ],
+      }),
+      true,
+    );
+    assert.deepEqual(
+      annotationsFromBody({
+        type: "annotation_set",
+        item: { libraryID: 1, key: "PAPER" },
+        highlights: [{ page: 4, quote: "legacy" }],
+      }),
+      [{ type: "highlight", page: 4, quote: "legacy" }],
+    );
+  });
+
+  it("rejects malformed annotation colors and normalized regions", () => {
+    const base = {
+      type: "annotation_set",
+      item: { libraryID: 1, key: "PAPER" },
+    } as const;
+    assert.equal(
+      artifactBodyMatchesKind("annotation_set", {
+        ...base,
+        annotations: [
+          { type: "underline", page: 1, quote: "x", color: "blue" },
+        ],
+      }),
+      false,
+    );
+    assert.equal(
+      artifactBodyMatchesKind("annotation_set", {
+        ...base,
+        annotations: [
+          {
+            type: "image",
+            page: 1,
+            rect: [900, 10, 200, 100],
+            comment: "outside page",
+          },
+        ],
+      }),
+      false,
+    );
+    assert.equal(
+      artifactBodyMatchesKind("annotation_set", {
+        ...base,
+        annotations: [
+          { type: "image", page: 1, rect: [0, 0, 1, 1], comment: "" },
+        ],
+      }),
+      false,
+    );
+  });
+
   it("rejects a body that does not match the declared kind", () => {
     assert.equal(
       artifactBodyMatchesKind("evidence_audit", {

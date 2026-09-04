@@ -8,6 +8,7 @@ function task(): ResearchTaskRecord {
   return {
     id: "task-1",
     title: "Contract test",
+    titleState: "fixed",
     createdAt: 1,
     updatedAt: 1,
     mode: "agent",

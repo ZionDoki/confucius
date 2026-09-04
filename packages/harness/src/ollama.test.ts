@@ -28,6 +28,43 @@ describe("detectApiStyle", () => {
 describe("OpenAICompatibleAdapter ollama native style", () => {
   const nativeUrl = "http://172.30.111.252:54321/api/chat";
 
+  it("sends transient page images through Ollama's images field", async () => {
+    let sent: Record<string, unknown> | null = null;
+    const adapter = new OpenAICompatibleAdapter({
+      apiKey: "ollama",
+      baseUrl: nativeUrl,
+      model: "vision-demo",
+      stream: false,
+      fetchImpl: (async (_url: string, init?: RequestInit) => {
+        sent = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response(
+          JSON.stringify({
+            message: { role: "assistant", content: "seen" },
+            done: true,
+          }),
+        );
+      }) as unknown as typeof fetch,
+    });
+
+    await adapter.complete({
+      messages: [
+        {
+          role: "user",
+          content: "PDF page 3",
+          images: [{ mimeType: "image/png", data: "OLLAMA-PAGE" }],
+          transient: true,
+        },
+      ],
+    });
+
+    const messages = sent!.messages as Array<Record<string, unknown>>;
+    assert.deepEqual(messages[0], {
+      role: "user",
+      content: "PDF page 3",
+      images: ["OLLAMA-PAGE"],
+    });
+  });
+
   it("parses non-streaming replies with thinking and object tool args", async () => {
     const adapter = new OpenAICompatibleAdapter({
       apiKey: "ollama",

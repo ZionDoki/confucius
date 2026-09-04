@@ -1,5 +1,15 @@
-import type { ToolErrorCode, ToolResult } from "@confucius/protocol";
-import { buildOpenPdfUri, buildSelectUri } from "@confucius/protocol";
+import type {
+  AnnotationDraft,
+  AnnotationType,
+  ToolErrorCode,
+  ToolResult,
+  ToolTransientMedia,
+} from "@confucius/protocol";
+import {
+  DEFAULT_ANNOTATION_COLORS,
+  buildOpenPdfUri,
+  buildSelectUri,
+} from "@confucius/protocol";
 import type {
   LiveContextReader,
   LiveContextSelection,
@@ -12,12 +22,23 @@ import {
   requireItemRef,
   splitPages,
 } from "@confucius/zotero-tools";
-import { normalizePdfMatchPositions, type PdfPosition } from "./pdfPosition";
+import {
+  normalizePdfMatchPositions,
+  normalizeRegionRect,
+  normalizedRegionToPdfPosition,
+  pdfRectToNormalizedRegion,
+  type PdfPosition,
+  type PdfViewportLike,
+} from "./pdfPosition";
 
 const MAX_NOTE = 20_000;
 
-function ok(toolName: string, data: unknown): ToolResult {
-  return { ok: true, toolName, data };
+function ok(
+  toolName: string,
+  data: unknown,
+  transientMedia?: ToolTransientMedia[],
+): ToolResult {
+  return { ok: true, toolName, data, transientMedia };
 }
 
 function fail(
@@ -223,6 +244,33 @@ interface PdfFindController {
   };
 }
 
+interface PdfPageProxy {
+  view?: number[];
+  getViewport(input: { scale: number }): PdfViewportLike;
+  render(input: {
+    canvasContext: CanvasRenderingContext2D;
+    viewport: PdfViewportLike;
+    canvas?: HTMLCanvasElement;
+  }): { promise: Promise<void> };
+}
+
+interface PdfDocumentProxy {
+  numPages?: number;
+  getPage(pageNumber: number): Promise<PdfPageProxy>;
+  getPageData?(input: { pageIndex: number }): Promise<{
+    chars?: PdfPageChar[];
+  }>;
+}
+
+interface PdfViewerProxy {
+  getPageView?(pageIndex: number): { pdfPage?: PdfPageProxy } | undefined;
+}
+
+interface PdfViewerApplicationProxy {
+  pdfDocument?: PdfDocumentProxy;
+  pdfViewer?: PdfViewerProxy;
+}
+
 interface PdfSelectionAnnotation {
   text?: string;
   pageLabel?: string;
@@ -245,9 +293,7 @@ interface PdfPrimaryView {
   initializedPromise?: Promise<void>;
   _findController?: PdfFindController;
   _iframeWindow?: Window & {
-    PDFViewerApplication?: {
-      pdfDocument?: { numPages?: number };
-    };
+    PDFViewerApplication?: PdfViewerApplicationProxy;
   };
   _selectionRanges?: unknown[];
   _pdfPages?: Array<{ chars?: PdfPageChar[] } | undefined>;
@@ -256,6 +302,12 @@ interface PdfPrimaryView {
     type: "highlight",
   ) => PdfSelectionAnnotation | null;
   _ensureBasicPageData?: (pageIndex: number) => Promise<void>;
+  _pdfRenderer?: {
+    renderRegionCrops?: (
+      pageIndex: number,
+      rects: number[][],
+    ) => Promise<string[]>;
+  };
   setFindState?: (state: {
     active: boolean;
     query: string;
@@ -278,7 +330,70 @@ interface PdfReaderInstance {
   _waitForReader?: () => Promise<void>;
   _internalReader?: { _primaryView?: PdfPrimaryView };
   setAnnotations: (items: Zotero.Item[]) => Promise<void>;
+  unsetAnnotations?: (keys: string[]) => Promise<void>;
   navigate?: (location: Record<string, unknown>) => void | Promise<void>;
+}
+
+function waiveReaderXrays<T>(value: T): T {
+  if (!value) return value;
+  try {
+    return Components.utils.waiveXrays(value);
+  } catch {
+    return value;
+  }
+}
+
+function readerPdfApplication(
+  view: PdfPrimaryView,
+): PdfViewerApplicationProxy | undefined {
+  return waiveReaderXrays(view._iframeWindow?.PDFViewerApplication) as
+    PdfViewerApplicationProxy | undefined;
+}
+
+function readerPdfDocument(view: PdfPrimaryView): PdfDocumentProxy | undefined {
+  return waiveReaderXrays(readerPdfApplication(view)?.pdfDocument);
+}
+
+function isPdfPageProxy(value: unknown): value is PdfPageProxy {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    typeof (value as { getViewport?: unknown }).getViewport === "function",
+  );
+}
+
+async function readerPdfPage(
+  view: PdfPrimaryView,
+  pageNumber: number,
+): Promise<PdfPageProxy> {
+  const application = readerPdfApplication(view);
+  const viewer = waiveReaderXrays(application?.pdfViewer);
+  const cachedView = waiveReaderXrays(viewer?.getPageView?.(pageNumber - 1));
+  const cachedPage = waiveReaderXrays(cachedView?.pdfPage);
+  if (isPdfPageProxy(cachedPage)) return cachedPage;
+
+  const document = readerPdfDocument(view);
+  if (!document) throw new Error("PDF document is not available in Reader");
+  const loadedPage = waiveReaderXrays(await document.getPage(pageNumber));
+  if (isPdfPageProxy(loadedPage)) return loadedPage;
+
+  // Zotero can initialize the visible PDFPageView while getPage() crosses a
+  // compartment boundary. Check that canonical page object once more.
+  const refreshedView = waiveReaderXrays(viewer?.getPageView?.(pageNumber - 1));
+  const refreshedPage = waiveReaderXrays(refreshedView?.pdfPage);
+  if (isPdfPageProxy(refreshedPage)) return refreshedPage;
+  throw new Error(`PDF page ${pageNumber} does not expose a PDF.js viewport`);
+}
+
+function readerPageViewport(
+  view: PdfPrimaryView,
+  page: PdfPageProxy,
+  scale: number,
+): PdfViewportLike {
+  const input = view._iframeWindow
+    ? Components.utils.cloneInto({ scale }, view._iframeWindow)
+    : { scale };
+  return waiveReaderXrays(page.getViewport(input));
 }
 
 /**
@@ -384,20 +499,43 @@ export function liveReaderContext(): {
   }
 }
 
-interface LocatedHighlight {
+interface LocatedTextAnnotation {
+  type: "highlight" | "underline";
   text: string;
   comment: string;
+  color: string;
   position: PdfPosition;
   sortIndex: string;
   pageLabel: string;
 }
 
+type PendingTextAnnotation = Omit<
+  Extract<AnnotationDraft, { type: "highlight" | "underline" }>,
+  "page"
+> & { page?: number };
+
+type PendingAnnotation =
+  PendingTextAnnotation | Extract<AnnotationDraft, { type: "image" }>;
+
+interface LocatedImageAnnotation {
+  type: "image";
+  text: "";
+  comment: string;
+  color: string;
+  position: PdfPosition;
+  sortIndex: string;
+  pageLabel: string;
+}
+
+type LocatedAnnotation = LocatedTextAnnotation | LocatedImageAnnotation;
+
 async function waitForPdfReader(pdf: Zotero.Item): Promise<{
   reader: PdfReaderInstance;
   view: PdfPrimaryView;
 }> {
-  let reader = (await Zotero.Reader.open(pdf.id)) as
-    PdfReaderInstance | undefined;
+  let reader = waiveReaderXrays(
+    (await Zotero.Reader.open(pdf.id)) as PdfReaderInstance | undefined,
+  );
   const deadline = Date.now() + 15_000;
   while (!reader && Date.now() < deadline) {
     reader = (Zotero.Reader._readers as unknown as PdfReaderInstance[]).find(
@@ -413,7 +551,7 @@ async function waitForPdfReader(pdf: Zotero.Item): Promise<{
   }
   await reader._initPromise;
   await reader._waitForReader?.();
-  const view = reader._internalReader?._primaryView;
+  const view = waiveReaderXrays(reader._internalReader?._primaryView);
   if (!view) {
     throw new Error("Zotero PDF reader view is unavailable");
   }
@@ -552,14 +690,14 @@ async function directMatchPositions(
   return positions;
 }
 
-async function locateHighlight(
+async function locateTextAnnotation(
   view: PdfPrimaryView,
-  highlight: { text: string; page?: number; comment?: string },
+  annotation: PendingTextAnnotation,
   occurrence: number,
-): Promise<LocatedHighlight> {
-  const text = String(highlight.text ?? "").trim();
+): Promise<LocatedTextAnnotation> {
+  const text = String(annotation.quote ?? "").trim();
   if (!text) {
-    throw new Error("Highlight text cannot be empty");
+    throw new Error("Text annotation quote cannot be empty");
   }
   const controller = view._findController;
   const pageCount =
@@ -588,7 +726,7 @@ async function locateHighlight(
   }
   const findReady = await waitForPdfFind(controller);
 
-  const requestedPage = Number(highlight.page);
+  const requestedPage = Number(annotation.page);
   const pageIndexes =
     Number.isInteger(requestedPage) && requestedPage > 0
       ? [requestedPage - 1]
@@ -619,7 +757,7 @@ async function locateHighlight(
     const pageHint =
       pageIndexes.length === 1 ? ` on page ${requestedPage}` : "";
     throw new Error(
-      `Highlight text was not found${pageHint}: ${text.slice(0, 120)}`,
+      `Annotation quote was not found${pageHint}: ${text.slice(0, 120)}`,
     );
   }
   await view._ensureBasicPageData?.(position.pageIndex);
@@ -644,12 +782,271 @@ async function locateHighlight(
     String(meta?.sortIndex || "") ||
     `${String(position.pageIndex).padStart(5, "0")}|000000|00000`;
   return {
+    type: annotation.type,
     text,
-    comment: String(highlight.comment ?? ""),
+    comment: String(annotation.comment ?? ""),
+    color: annotation.color ?? DEFAULT_ANNOTATION_COLORS[annotation.type],
     position: JSON.parse(JSON.stringify(position)) as PdfPosition,
     pageLabel,
     sortIndex,
   };
+}
+
+function annotationMetaForPosition(
+  view: PdfPrimaryView,
+  position: PdfPosition,
+): { pageLabel: string; sortIndex: string } {
+  let meta: { sortIndex?: string; pageLabel?: string } | undefined;
+  try {
+    const readerPosition = Components.utils.cloneInto(
+      position,
+      view._iframeWindow,
+    );
+    meta = view.getAnnotationMeta?.(readerPosition);
+  } catch (error) {
+    throw new Error(
+      `Unable to derive PDF annotation metadata: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+  return {
+    pageLabel:
+      String(
+        meta?.pageLabel || view._getPageLabel?.(position.pageIndex, true) || "",
+      ) || String(position.pageIndex + 1),
+    sortIndex:
+      String(meta?.sortIndex || "") ||
+      `${String(position.pageIndex).padStart(5, "0")}|000000|00000`,
+  };
+}
+
+async function locateImageAnnotation(
+  view: PdfPrimaryView,
+  annotation: Extract<AnnotationDraft, { type: "image" }>,
+): Promise<LocatedImageAnnotation> {
+  const pageIndex = annotation.page - 1;
+  const document = readerPdfDocument(view);
+  const pageCount = document?.numPages ?? 0;
+  if (!document || pageIndex < 0 || pageIndex >= pageCount) {
+    throw new Error(
+      `Image annotation page is out of range: ${annotation.page}`,
+    );
+  }
+  const page = await readerPdfPage(view, annotation.page);
+  const position = normalizedRegionToPdfPosition(
+    pageIndex,
+    annotation.rect,
+    readerPageViewport(view, page, 1),
+  );
+  const meta = annotationMetaForPosition(view, position);
+  return {
+    type: "image",
+    text: "",
+    comment: annotation.comment.trim(),
+    color: annotation.color ?? DEFAULT_ANNOTATION_COLORS.image,
+    position,
+    ...meta,
+  };
+}
+
+function normalizedColor(
+  value: unknown,
+  type: AnnotationType,
+): string | undefined {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return undefined;
+  }
+  const color = String(value).trim();
+  if (!/^#[0-9a-f]{6}$/i.test(color)) {
+    throw new Error(`Invalid ${type} color: expected #RRGGBB`);
+  }
+  return color.toLowerCase();
+}
+
+function positivePage(value: unknown, required: boolean): number | undefined {
+  if (value === undefined && !required) return undefined;
+  const page = Number(value);
+  if (!Number.isInteger(page) || page < 1) {
+    throw new Error("Annotation page must be a positive integer");
+  }
+  return page;
+}
+
+function normalizeAnnotationList(
+  value: unknown,
+  legacyHighlights = false,
+): PendingAnnotation[] {
+  if (!Array.isArray(value)) {
+    throw new Error("annotations must be an array");
+  }
+  return value.map((candidate, index) => {
+    if (
+      !candidate ||
+      typeof candidate !== "object" ||
+      Array.isArray(candidate)
+    ) {
+      throw new Error(`Annotation ${index + 1} must be an object`);
+    }
+    const record = candidate as Record<string, unknown>;
+    const type = legacyHighlights
+      ? "highlight"
+      : String(record.type ?? "").trim();
+    if (type !== "highlight" && type !== "underline" && type !== "image") {
+      throw new Error(`Annotation ${index + 1} has an unsupported type`);
+    }
+    const color = normalizedColor(record.color, type);
+    if (type === "image") {
+      const comment = String(record.comment ?? "").trim();
+      if (!comment) {
+        throw new Error(`Image annotation ${index + 1} requires a comment`);
+      }
+      return {
+        type,
+        page: positivePage(record.page, true)!,
+        rect: normalizeRegionRect(record.rect),
+        comment,
+        color,
+      };
+    }
+    const quote = String(record.quote ?? record.text ?? "").trim();
+    if (!quote) {
+      throw new Error(`Text annotation ${index + 1} requires a quote`);
+    }
+    return {
+      type,
+      page: positivePage(record.page, !legacyHighlights),
+      quote,
+      comment:
+        record.comment === undefined ? undefined : String(record.comment),
+      color,
+    };
+  });
+}
+
+async function pageChars(
+  view: PdfPrimaryView,
+  pageIndex: number,
+): Promise<PdfPageChar[]> {
+  const primary = waiveReaderXrays(view);
+  await primary._ensureBasicPageData?.(pageIndex);
+  const copyChars = (value: unknown): PdfPageChar[] => {
+    const source = waiveReaderXrays(value) as
+      { length?: number; [index: number]: PdfPageChar } | undefined;
+    const length = Number(source?.length ?? 0);
+    if (!Number.isInteger(length) || length <= 0) return [];
+    const copied: PdfPageChar[] = [];
+    for (let index = 0; index < length; index += 1) {
+      copied.push(waiveReaderXrays(source![index]));
+    }
+    return copied;
+  };
+  const cached = copyChars(
+    waiveReaderXrays(primary._pdfPages?.[pageIndex])?.chars,
+  );
+  if (cached.length) return cached;
+  const documentData = waiveReaderXrays(
+    await readerPdfDocument(primary)?.getPageData?.({ pageIndex }),
+  );
+  const documentChars = copyChars(documentData?.chars);
+  if (documentChars.length) return documentChars;
+  const findData = waiveReaderXrays(
+    await primary._findController?._pdfDocument?.getPageData?.({ pageIndex }),
+  );
+  return copyChars(findData?.chars);
+}
+
+function pageLineAnchors(
+  chars: PdfPageChar[],
+  viewport: PdfViewportLike,
+): Array<{ text: string; rect: [number, number, number, number] }> {
+  const lines: Array<{ text: string; rect: [number, number, number, number] }> =
+    [];
+  let start = 0;
+  let text = "";
+  for (let index = 0; index < chars.length; index += 1) {
+    const char = chars[index];
+    text += String(char.u ?? char.char ?? "");
+    if (char.spaceAfter) text += " ";
+    const closesLine =
+      char.lineBreakAfter ||
+      char.paragraphBreakAfter ||
+      index === chars.length - 1;
+    if (!closesLine) continue;
+    const rects = rangeRects(chars, start, index);
+    const bounds = rects.length
+      ? [
+          Math.min(...rects.map((rect) => rect[0])),
+          Math.min(...rects.map((rect) => rect[1])),
+          Math.max(...rects.map((rect) => rect[2])),
+          Math.max(...rects.map((rect) => rect[3])),
+        ]
+      : [];
+    const normalized = pdfRectToNormalizedRegion(bounds, viewport);
+    const trimmed = text.replace(/\s+/g, " ").trim();
+    if (trimmed && normalized) lines.push({ text: trimmed, rect: normalized });
+    start = index + 1;
+    text = "";
+  }
+  return lines;
+}
+
+async function renderPageImage(
+  view: PdfPrimaryView,
+  page: PdfPageProxy,
+  pageNumber: number,
+): Promise<ToolTransientMedia | undefined> {
+  const mediaFromDataUrl = (
+    dataUrl: unknown,
+  ): ToolTransientMedia | undefined => {
+    const match = /^data:image\/png;base64,(.+)$/s.exec(String(dataUrl ?? ""));
+    if (!match?.[1]) return undefined;
+    return {
+      type: "image",
+      mimeType: "image/png",
+      data: match[1],
+      description: `PDF page ${pageNumber}; use only to ground normalized image-region annotations`,
+    };
+  };
+  try {
+    const renderer = waiveReaderXrays(waiveReaderXrays(view)._pdfRenderer);
+    const pageRect = waiveReaderXrays(page.view);
+    if (
+      renderer?.renderRegionCrops &&
+      pageRect?.length === 4 &&
+      pageRect.every(Number.isFinite)
+    ) {
+      const cropRects = view._iframeWindow
+        ? Components.utils.cloneInto([[...pageRect]], view._iframeWindow)
+        : [[...pageRect]];
+      const images = waiveReaderXrays(
+        await renderer.renderRegionCrops(pageNumber - 1, cropRects),
+      );
+      const media = mediaFromDataUrl(waiveReaderXrays(images?.[0]));
+      if (media) return media;
+    }
+  } catch {
+    // Older Reader builds do not expose their internal crop renderer.
+  }
+  try {
+    const base = readerPageViewport(view, page, 1);
+    const scale = Math.max(
+      0.5,
+      Math.min(2, 1600 / Math.max(base.width, base.height)),
+    );
+    const viewport = readerPageViewport(view, page, scale);
+    const canvas = view._iframeWindow?.document.createElement("canvas");
+    if (!canvas) return undefined;
+    canvas.width = Math.max(1, Math.round(viewport.width));
+    canvas.height = Math.max(1, Math.round(viewport.height));
+    const canvasContext = canvas.getContext(
+      "2d",
+    ) as unknown as CanvasRenderingContext2D | null;
+    if (!canvasContext) return undefined;
+    await page.render({ canvas, canvasContext, viewport }).promise;
+    return mediaFromDataUrl(canvas.toDataURL("image/png"));
+  } catch {
+    return undefined;
+  }
 }
 
 function annotationPosition(item: Zotero.Item): unknown {
@@ -748,10 +1145,7 @@ export function markdownToNoteHtml(markdown: string): string {
 }
 
 export class ZoteroToolHost {
-  private readonly proposals = new Map<
-    string,
-    Array<{ text: string; page?: number; comment?: string }>
-  >();
+  private readonly proposals = new Map<string, PendingAnnotation[]>();
 
   async execute(
     name: string,
@@ -849,10 +1243,14 @@ export class ZoteroToolHost {
         return this.getAnnotations(args);
       case "get_pdf_selection":
         return this.getPdfSelection(args);
+      case "inspect_pdf_page":
+        return this.inspectPdfPage(args);
       case "open_item":
         return this.openItem(args);
       case "propose_highlights":
         return this.proposeHighlights(args);
+      case "propose_annotations":
+        return this.proposeAnnotations(args);
       case "commit_annotations":
         return this.commitAnnotations(args);
       case "update_annotation_comment":
@@ -1830,30 +2228,40 @@ export class ZoteroToolHost {
       )
       .filter((ann): ann is Zotero.Item => Boolean(ann))
       .filter((ann) => ann.isAnnotation?.())
-      .map((ann) => ({
-        libraryID: ann.libraryID,
-        key: ann.key,
-        type: (ann as unknown as { annotationType?: string }).annotationType,
-        text:
-          (ann as unknown as { annotationText?: string }).annotationText || "",
-        comment:
-          (ann as unknown as { annotationComment?: string })
-            .annotationComment || "",
-        color:
-          (ann as unknown as { annotationColor?: string }).annotationColor ||
-          "",
-        pageLabel:
-          (ann as unknown as { annotationPageLabel?: string })
-            .annotationPageLabel || "",
-        sortIndex:
-          (ann as unknown as { annotationSortIndex?: string })
-            .annotationSortIndex || "",
-        position: annotationPosition(ann),
-        zoteroUri: buildOpenPdfUri(pdf.key, {
-          groupID: groupIDForLibrary(pdf.libraryID),
-          annotationKey: ann.key,
-        }),
-      }));
+      .map((ann) => {
+        const position = annotationPosition(ann);
+        const pageIndex =
+          position && typeof position === "object"
+            ? Number((position as { pageIndex?: unknown }).pageIndex)
+            : Number.NaN;
+        const page = Number.isInteger(pageIndex) ? pageIndex + 1 : undefined;
+        return {
+          libraryID: ann.libraryID,
+          key: ann.key,
+          type: (ann as unknown as { annotationType?: string }).annotationType,
+          text:
+            (ann as unknown as { annotationText?: string }).annotationText ||
+            "",
+          comment:
+            (ann as unknown as { annotationComment?: string })
+              .annotationComment || "",
+          color:
+            (ann as unknown as { annotationColor?: string }).annotationColor ||
+            "",
+          pageLabel:
+            (ann as unknown as { annotationPageLabel?: string })
+              .annotationPageLabel || "",
+          sortIndex:
+            (ann as unknown as { annotationSortIndex?: string })
+              .annotationSortIndex || "",
+          position,
+          zoteroUri: buildOpenPdfUri(pdf.key, {
+            groupID: groupIDForLibrary(pdf.libraryID),
+            annotationKey: ann.key,
+            page,
+          }),
+        };
+      });
     const first = annotations[0];
     const firstPosition =
       first && typeof first.position === "object" && first.position !== null
@@ -1908,6 +2316,71 @@ export class ZoteroToolHost {
     }
   }
 
+  private async inspectPdfPage(
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
+    const ref = requireItemRef(args);
+    if (!ref.ok) {
+      return fail("inspect_pdf_page", "invalid_args", ref.message);
+    }
+    const pageNumber = Number(args.page);
+    if (!Number.isInteger(pageNumber) || pageNumber < 1) {
+      return fail(
+        "inspect_pdf_page",
+        "invalid_args",
+        "page must be a positive integer",
+      );
+    }
+    const item = getItem(ref.libraryID, ref.key);
+    if (!item) {
+      return fail("inspect_pdf_page", "not_found", "Item not found");
+    }
+    const pdf = await findPdf(item);
+    if (!pdf) {
+      return fail(
+        "inspect_pdf_page",
+        "unavailable",
+        "Item has no PDF attachment",
+      );
+    }
+    const { view } = await waitForPdfReader(pdf);
+    const document = readerPdfDocument(view);
+    const pageCount = document?.numPages ?? 0;
+    if (!document || pageNumber > pageCount) {
+      return fail(
+        "inspect_pdf_page",
+        "invalid_args",
+        `page must be between 1 and ${pageCount || "the PDF page count"}`,
+      );
+    }
+    const page = await readerPdfPage(view, pageNumber);
+    const viewport = readerPageViewport(view, page, 1);
+    const chars = await pageChars(view, pageNumber - 1);
+    const anchors = pageLineAnchors(chars, viewport);
+    const image = await renderPageImage(view, page, pageNumber);
+    return ok(
+      "inspect_pdf_page",
+      {
+        libraryID: pdf.libraryID,
+        itemKey: item.key,
+        attachmentKey: pdf.key,
+        page: pageNumber,
+        pageCount,
+        coordinateSystem: {
+          origin: "top-left",
+          range: [0, 1000],
+          rect: "[x,y,width,height]",
+        },
+        lineAnchors: anchors,
+        visualAvailable: Boolean(image),
+        regionGuidance: image
+          ? "Ground image regions in the attached transient page image and line anchors."
+          : "Only text anchors are available. Do not guess image-region coordinates; omit image annotations.",
+      },
+      image ? [image] : undefined,
+    );
+  }
+
   private async openItem(args: Record<string, unknown>): Promise<ToolResult> {
     const ref = requireItemRef(args);
     if (!ref.ok) {
@@ -1934,26 +2407,79 @@ export class ZoteroToolHost {
     if (!ref.ok) {
       return fail("propose_highlights", "invalid_args", ref.message);
     }
-    const highlights =
-      (args.highlights as Array<{
-        text: string;
-        page?: number;
-        comment?: string;
-      }>) || [];
+    let annotations: PendingAnnotation[];
+    try {
+      annotations = normalizeAnnotationList(args.highlights ?? [], true);
+    } catch (error) {
+      return fail(
+        "propose_highlights",
+        "invalid_args",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
     const id = `${ref.libraryID}:${ref.key}`;
-    this.proposals.set(id, highlights);
+    this.proposals.set(id, annotations);
     const item = getItem(ref.libraryID, ref.key);
     const pdf = item ? await findPdf(item) : null;
-    const firstPage = highlights.find((highlight) =>
-      Number.isInteger(Number(highlight.page)),
+    const firstPage = annotations.find((annotation) =>
+      Number.isInteger(Number(annotation.page)),
     )?.page;
     return ok("propose_highlights", {
       libraryID: ref.libraryID,
       key: ref.key,
       attachmentKey: pdf?.key,
       pageIndex: firstPage === undefined ? undefined : Number(firstPage) - 1,
-      count: highlights.length,
-      highlights,
+      count: annotations.length,
+      highlights: annotations.map((annotation) => ({
+        text: annotation.type === "image" ? "" : annotation.quote,
+        page: annotation.page,
+        comment: annotation.comment,
+        color: annotation.color,
+      })),
+      persisted: false,
+    });
+  }
+
+  private async proposeAnnotations(
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
+    const ref = requireItemRef(args);
+    if (!ref.ok) {
+      return fail("propose_annotations", "invalid_args", ref.message);
+    }
+    let annotations: PendingAnnotation[];
+    try {
+      annotations = normalizeAnnotationList(args.annotations ?? []);
+    } catch (error) {
+      return fail(
+        "propose_annotations",
+        "invalid_args",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    const item = getItem(ref.libraryID, ref.key);
+    if (!item) {
+      return fail("propose_annotations", "not_found", "Item not found");
+    }
+    const pdf = await findPdf(item);
+    if (!pdf) {
+      return fail(
+        "propose_annotations",
+        "unavailable",
+        "Item has no PDF attachment",
+      );
+    }
+    this.proposals.set(`${ref.libraryID}:${ref.key}`, annotations);
+    return ok("propose_annotations", {
+      libraryID: ref.libraryID,
+      itemKey: item.key,
+      attachmentKey: pdf.key,
+      pageIndex:
+        annotations[0]?.page === undefined
+          ? undefined
+          : annotations[0].page - 1,
+      count: annotations.length,
+      annotations,
       persisted: false,
     });
   }
@@ -1970,19 +2496,26 @@ export class ZoteroToolHost {
       return fail("commit_annotations", "not_found", "Item not found");
     }
     const id = `${ref.libraryID}:${ref.key}`;
-    const highlights =
-      (args.highlights as Array<{
-        text: string;
-        page?: number;
-        comment?: string;
-      }>) ||
-      this.proposals.get(id) ||
-      [];
-    if (!highlights.length) {
+    let annotations: PendingAnnotation[];
+    try {
+      annotations =
+        args.annotations !== undefined
+          ? normalizeAnnotationList(args.annotations)
+          : args.highlights !== undefined
+            ? normalizeAnnotationList(args.highlights, true)
+            : (this.proposals.get(id) ?? []);
+    } catch (error) {
       return fail(
         "commit_annotations",
         "invalid_args",
-        "No highlights were proposed or provided",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    if (!annotations.length) {
+      return fail(
+        "commit_annotations",
+        "invalid_args",
+        "No annotations were proposed or provided",
       );
     }
     const pdf = await findPdf(item);
@@ -1995,19 +2528,33 @@ export class ZoteroToolHost {
     }
     const { reader, view } = await waitForPdfReader(pdf);
     const occurrenceCounts = new Map<string, number>();
-    const located: LocatedHighlight[] = [];
-    for (const highlight of highlights) {
-      const occurrenceKey = `${String(highlight.text ?? "").trim()}\u0000${
-        Number.isInteger(Number(highlight.page)) ? Number(highlight.page) : ""
-      }`;
-      const occurrence = occurrenceCounts.get(occurrenceKey) ?? 0;
-      located.push(await locateHighlight(view, highlight, occurrence));
-      occurrenceCounts.set(occurrenceKey, occurrence + 1);
+    const located: LocatedAnnotation[] = [];
+    try {
+      for (const annotation of annotations) {
+        if (annotation.type === "image") {
+          located.push(await locateImageAnnotation(view, annotation));
+          continue;
+        }
+        const occurrenceKey = `${annotation.quote.trim()}\u0000${
+          Number.isInteger(Number(annotation.page))
+            ? Number(annotation.page)
+            : ""
+        }`;
+        const occurrence = occurrenceCounts.get(occurrenceKey) ?? 0;
+        located.push(await locateTextAnnotation(view, annotation, occurrence));
+        occurrenceCounts.set(occurrenceKey, occurrence + 1);
+      }
+    } catch (error) {
+      return fail(
+        "commit_annotations",
+        "invalid_args",
+        error instanceof Error ? error.message : String(error),
+      );
     }
 
     const created: Zotero.Item[] = [];
     try {
-      for (const highlight of located) {
+      for (const pending of located) {
         let annotation: Zotero.Item;
         try {
           annotation = await Zotero.Annotations.saveFromJSON(
@@ -2018,13 +2565,13 @@ export class ZoteroToolHost {
                   DataObjectUtilities: { generateKey: () => string };
                 }
               ).DataObjectUtilities.generateKey(),
-              type: "highlight",
-              text: highlight.text,
-              comment: highlight.comment,
-              color: Zotero.Annotations.DEFAULT_COLOR,
-              pageLabel: highlight.pageLabel,
-              sortIndex: highlight.sortIndex,
-              position: highlight.position,
+              type: pending.type,
+              text: pending.text,
+              comment: pending.comment,
+              color: pending.color,
+              pageLabel: pending.pageLabel,
+              sortIndex: pending.sortIndex,
+              position: pending.position,
               readOnly: false,
             } as unknown as _ZoteroTypes.Annotations.AnnotationJson,
             {
@@ -2035,7 +2582,7 @@ export class ZoteroToolHost {
           );
         } catch (error) {
           throw new Error(
-            `Unable to save PDF highlight: ${error instanceof Error ? error.message : String(error)}`,
+            `Unable to save PDF annotation: ${error instanceof Error ? error.message : String(error)}`,
             { cause: error },
           );
         }
@@ -2048,17 +2595,23 @@ export class ZoteroToolHost {
         await reader.setAnnotations(created);
       } catch (error) {
         throw new Error(
-          `Unable to refresh PDF highlights in the reader: ${error instanceof Error ? error.message : String(error)}`,
+          `Unable to refresh PDF annotations in the reader: ${error instanceof Error ? error.message : String(error)}`,
           { cause: error },
         );
       }
     } catch (error) {
+      const rollbackKeys = created.map((annotation) => annotation.key);
       for (const annotation of created.reverse()) {
         try {
           await annotation.eraseTx();
         } catch {
           // Preserve the original write error; notifier cleanup is best effort.
         }
+      }
+      try {
+        await reader.unsetAnnotations?.(rollbackKeys);
+      } catch {
+        // The database rollback remains authoritative if the reader is gone.
       }
       throw error;
     }
@@ -2068,18 +2621,37 @@ export class ZoteroToolHost {
     if (firstAnnotationKey) {
       try {
         // Commit landed while the reader is open: jump to the first new
-        // highlight so the write-back is visible right away (one-shot).
+        // annotation so the write-back is visible right away (one-shot).
         await reader.navigate?.({ annotationID: firstAnnotationKey });
       } catch {
         // Navigation is cosmetic; the committed annotations are the result.
       }
     }
+    const groupID = groupIDForLibrary(pdf.libraryID);
+    const committed = created.map((annotation, index) => {
+      const page = located[index].position.pageIndex + 1;
+      return {
+        type: located[index].type,
+        annotationKey: annotation.key,
+        page,
+        zoteroUri: buildOpenPdfUri(pdf.key, {
+          groupID,
+          annotationKey: annotation.key,
+          page,
+        }),
+      };
+    });
     return ok("commit_annotations", {
       libraryID: pdf.libraryID,
+      itemKey: item.key,
       key: created[0]?.key || "",
       keys: created.map((annotation) => annotation.key),
       attachmentKey: pdf.key,
+      annotationKey: created[0]?.key || "",
+      annotationKeys: created.map((annotation) => annotation.key),
       pageIndex: first?.position?.pageIndex,
+      annotations: committed,
+      zoteroUri: committed[0]?.zoteroUri,
       mode: "annotations",
       count: created.length,
     });

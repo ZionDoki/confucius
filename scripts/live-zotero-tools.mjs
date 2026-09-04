@@ -50,9 +50,9 @@ const READ_ONLY_TOOLS = [
   ...MEMORY_READ_TOOLS,
 ];
 
-if (ALL_TOOLS.length !== 58 || new Set(ALL_TOOLS).size !== 58) {
+if (ALL_TOOLS.length !== 60 || new Set(ALL_TOOLS).size !== 60) {
   throw new Error(
-    `Expected 58 unique built-in tools, found ${ALL_TOOLS.length}`,
+    `Expected 60 unique built-in tools, found ${ALL_TOOLS.length}`,
   );
 }
 
@@ -853,6 +853,30 @@ async function main() {
         "transport returned current selection state; non-empty selection requires Computer Use",
     });
 
+    outcome = await exercise(
+      "inspect_pdf_page",
+      { ...paperArgs, page: 2 },
+      {
+        validate: (data) =>
+          (data.page === 2 &&
+            data.coordinateSystem?.origin === "top-left" &&
+            Array.isArray(data.lineAnchors) &&
+            data.lineAnchors.length > 0 &&
+            data.visualAvailable === true) ||
+          "real Reader page inspection did not return anchors and a transient image",
+        okDetail:
+          "real Reader page returned normalized anchors and rendered transient media",
+      },
+    );
+    const betaAnchor = outcome?.ok
+      ? outcome.data.lineAnchors?.find((anchor) =>
+          includesText(anchor.text, "BETA-RECT-4242"),
+        )
+      : null;
+    const regionRect =
+      Array.isArray(betaAnchor?.rect) && betaAnchor.rect.length === 4
+        ? betaAnchor.rect.map(Number)
+        : null;
     await exercise(
       "propose_highlights",
       {
@@ -861,41 +885,109 @@ async function main() {
           {
             text: "BETA-RECT-4242",
             page: 2,
-            comment: `${runId} proposed highlight`,
+            comment: `${runId} legacy compatibility proposal`,
           },
         ],
       },
       {
         validate: (data) =>
           (data.count === 1 && data.persisted === false) ||
-          "proposal state mismatch",
+          "legacy highlight proposal state mismatch",
+      },
+    );
+    const annotationDrafts = regionRect
+      ? [
+          {
+            type: "highlight",
+            page: 1,
+            quote: "The token ALPHA-VERIFY-2026 appears only on page one.",
+            comment: `${runId} very important`,
+          },
+          {
+            type: "underline",
+            page: 2,
+            quote:
+              "The exact phrase BETA-RECT-4242 is reserved for page-two text",
+            comment: `${runId} read carefully`,
+          },
+          {
+            type: "image",
+            page: 2,
+            rect: regionRect,
+            comment: `${runId} grounded methodology region`,
+          },
+          {
+            type: "highlight",
+            page: 3,
+            quote:
+              "The token GAMMA-FINAL-9000 appears on the final page for range and regex tests.",
+            comment: `${runId} custom color and disposable edit target`,
+            color: "#57a773",
+          },
+        ]
+      : [];
+    await exercise(
+      "propose_annotations",
+      { ...paperArgs, annotations: annotationDrafts },
+      {
+        validate: (data) =>
+          (regionRect && data.count === 4 && data.persisted === false) ||
+          "canonical annotation proposal was not staged from inspected coordinates",
       },
     );
     outcome = await exercise("commit_annotations", paperArgs, {
       validate: (data) =>
         (data.mode === "annotations" &&
-          data.count === 1 &&
-          Array.isArray(data.keys) &&
-          data.keys.length === 1) ||
-        "real Zotero annotation was not committed",
+          data.count === 4 &&
+          data.itemKey === itemAKey &&
+          data.attachmentKey === attachmentKey &&
+          Array.isArray(data.annotationKeys) &&
+          data.annotationKeys.length === 4 &&
+          data.annotations?.every(
+            (annotation) =>
+              annotation.zoteroUri?.includes("annotation=") &&
+              annotation.zoteroUri?.includes("page="),
+          )) ||
+        "real Zotero annotation batch or canonical location URIs were incomplete",
     });
     annotationKey = outcome?.ok
-      ? String(outcome.data.keys?.[0] || outcome.data.key || "")
+      ? String(outcome.data.annotationKeys?.[3] || "")
       : "";
+    const committedAnnotationKeys = outcome?.ok
+      ? outcome.data.annotationKeys || []
+      : [];
     await exercise("get_annotations", paperArgs, {
-      validate: (data) =>
-        (Array.isArray(data.annotations) &&
-          data.annotations.some(
-            (annotation) =>
-              annotation.key === annotationKey &&
-              annotation.type === "highlight" &&
-              includesText(annotation.text, "BETA-RECT-4242") &&
-              Array.isArray(annotation.position?.rects) &&
-              annotation.position.rects.length > 0,
-          )) ||
-        "committed PDF highlight was not returned with a real position",
+      validate: (data) => {
+        const created = (data.annotations || []).filter((annotation) =>
+          committedAnnotationKeys.includes(annotation.key),
+        );
+        const alpha = created.find((annotation) =>
+          includesText(annotation.text, "ALPHA-VERIFY-2026"),
+        );
+        const beta = created.find((annotation) =>
+          includesText(annotation.text, "BETA-RECT-4242"),
+        );
+        const region = created.find(
+          (annotation) => annotation.type === "image",
+        );
+        const gamma = created.find((annotation) =>
+          includesText(annotation.text, "GAMMA-FINAL-9000"),
+        );
+        return (
+          (created.length === 4 &&
+            alpha?.type === "highlight" &&
+            alpha.color?.toLowerCase() === "#ffd400" &&
+            beta?.type === "underline" &&
+            beta.color?.toLowerCase() === "#2ea8e5" &&
+            region?.color?.toLowerCase() === "#a28ae5" &&
+            Array.isArray(region.position?.rects) &&
+            region.position.rects.length > 0 &&
+            gamma?.color?.toLowerCase() === "#57a773") ||
+          "Reader did not return all annotation types, defaults, custom color, and positions"
+        );
+      },
       okDetail:
-        "read path returned the real Zotero PDF highlight and coordinates",
+        "Reader returned highlight, underline, image note, defaults, custom color, and coordinates",
       defectCodes: ["internal"],
     });
     const updatedComment = `${runId} updated annotation comment`;

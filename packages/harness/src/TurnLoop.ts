@@ -2,6 +2,7 @@ import type {
   ConfuciusEvent,
   SessionRecord,
   ToolResult,
+  ToolTransientMedia,
 } from "@confucius/protocol";
 import { BudgetAccountant } from "./BudgetAccountant";
 import type {
@@ -92,7 +93,7 @@ export class TurnLoop {
     const resultOf = (phase: TurnLoopResult["phase"]): TurnLoopResult => ({
       phase,
       text: delivered,
-      messages: messages.slice(1),
+      messages: durableMessages(messages.slice(1)),
     });
 
     try {
@@ -103,10 +104,23 @@ export class TurnLoop {
         }
 
         this.deps.budget.recordIteration();
-        const modelTurn = await this.deps.model.complete(
-          { messages, tools: this.deps.tools.listTools() },
-          input.signal,
-        );
+        let modelTurn;
+        try {
+          modelTurn = await this.deps.model.complete(
+            { messages, tools: this.deps.tools.listTools() },
+            input.signal,
+          );
+        } catch (error) {
+          if (!messages.some((message) => message.images?.length)) throw error;
+          // Some OpenAI-compatible and Ollama endpoints are text-only. Retry
+          // once using the durable line anchors returned by the tool.
+          removeTransientMessages(messages);
+          modelTurn = await this.deps.model.complete(
+            { messages, tools: this.deps.tools.listTools() },
+            input.signal,
+          );
+        }
+        removeTransientMessages(messages);
         // Some adapters return a partial turn when a streaming request is
         // aborted after data has arrived. Do not deliver that stale response
         // or execute its tool calls after the caller has superseded it.
@@ -293,14 +307,15 @@ export class TurnLoop {
       const results = await Promise.all(
         batch.map(async (call) => {
           let result: ToolResult;
+          let transientMedia: ToolTransientMedia[] = [];
           try {
-            result = truncateToolResult(
-              await this.deps.tools.call(
-                call.toolName,
-                call.args,
-                input.signal,
-              ),
+            const raw = await this.deps.tools.call(
+              call.toolName,
+              call.args,
+              input.signal,
             );
+            transientMedia = raw.ok ? (raw.transientMedia ?? []) : [];
+            result = truncateToolResult(durableToolResult(raw));
           } catch (error) {
             result = {
               ok: false,
@@ -309,7 +324,7 @@ export class TurnLoop {
               message: errorMessage(error),
             };
           }
-          return { call, result };
+          return { call, result, transientMedia };
         }),
       );
       for (const { call, result } of results) {
@@ -329,6 +344,18 @@ export class TurnLoop {
           content: JSON.stringify(result),
           toolCallId: call.modelCallId ?? call.callId,
         });
+      }
+      for (const { transientMedia } of results) {
+        for (const media of transientMedia) {
+          messages.push({
+            role: "user",
+            content:
+              media.description ??
+              "Transient tool image. Ground visual claims in this image.",
+            images: [media],
+            transient: true,
+          });
+        }
       }
       await this.checkpoint(
         input.turnId,
@@ -351,7 +378,7 @@ export class TurnLoop {
       turnId,
       iteration,
       savedAt: this.deps.now(),
-      messages: cloneValue(messages),
+      messages: cloneValue(durableMessages(messages)),
       toolExecutions: cloneValue(toolExecutions),
     });
   }
@@ -370,5 +397,28 @@ export class TurnLoop {
       payload,
     } as ConfuciusEvent;
     this.deps.events.append(event);
+  }
+}
+
+function durableToolResult(result: ToolResult): ToolResult {
+  if (!result.ok || !result.transientMedia) return result;
+  const { transientMedia: _transientMedia, ...durable } = result;
+  return durable;
+}
+
+function durableMessages(messages: ModelMessage[]): ModelMessage[] {
+  return messages
+    .filter((message) => !message.transient)
+    .map((message) => {
+      if (!message.images) return message;
+      const { images: _images, transient: _transient, ...durable } = message;
+      return durable;
+    });
+}
+
+function removeTransientMessages(messages: ModelMessage[]): void {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].transient) messages.splice(index, 1);
+    else if (messages[index].images) delete messages[index].images;
   }
 }

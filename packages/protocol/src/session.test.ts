@@ -18,6 +18,7 @@ describe("schema v1 to v2 migration", () => {
     assert.equal(task.backend, "native");
     assert.equal(task.capabilityProfile, "zotero_only");
     assert.equal(task.status, "ready");
+    assert.equal(task.titleState, "fixed");
     assert.deepEqual(
       task.lockedContext.items.map((item) => item.key),
       ["ABC"],
@@ -60,6 +61,7 @@ describe("schema v1 to v2 migration", () => {
     assert.equal(task.workingDirectory, undefined);
     assert.equal(task.externalSessionId, undefined);
     assert.equal(task.recoverableTurn, undefined);
+    assert.equal(task.titleState, "fixed");
     assert.notEqual(task.lockedContext.fingerprint, "stale");
   });
 
@@ -93,5 +95,18 @@ describe("schema v1 to v2 migration", () => {
     });
     assert.deepEqual(task.artifactIds, ["art_1"]);
     assert.deepEqual(task.recoverableTurn?.unknownToolCallIds, ["call_1"]);
+  });
+
+  it("keeps historical unnamed tasks pending for post-restore repair", () => {
+    const task = migrateSessionRecord({
+      id: "ses_untitled",
+      title: "未命名研究任务",
+      createdAt: 1,
+      updatedAt: 2,
+      mode: "agent",
+      context: {},
+      permissionMode: "ask",
+    });
+    assert.equal(task.titleState, "pending");
   });
 });

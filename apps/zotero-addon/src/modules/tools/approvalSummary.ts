@@ -39,11 +39,15 @@ function firstHighlightText(value: unknown): string {
   if (!Array.isArray(value) || value.length === 0) {
     return "";
   }
-  const entry = value[0] as { text?: unknown; comment?: unknown } | null;
+  const entry = value[0] as {
+    quote?: unknown;
+    text?: unknown;
+    comment?: unknown;
+  } | null;
   if (!entry) {
     return "";
   }
-  for (const field of [entry.text, entry.comment]) {
+  for (const field of [entry.quote, entry.text, entry.comment]) {
     if (typeof field === "string" && field.trim()) {
       return field.trim();
     }

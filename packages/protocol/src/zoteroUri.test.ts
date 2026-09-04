@@ -11,10 +11,11 @@ describe("parseZoteroUri", () => {
   });
 
   it("parses select for a group library", () => {
-    assert.deepEqual(
-      parseZoteroUri("zotero://select/groups/42/items/ABC123"),
-      { kind: "select", groupID: 42, key: "ABC123" },
-    );
+    assert.deepEqual(parseZoteroUri("zotero://select/groups/42/items/ABC123"), {
+      kind: "select",
+      groupID: 42,
+      key: "ABC123",
+    });
   });
 
   it("parses open-pdf with annotation", () => {
@@ -24,6 +25,14 @@ describe("parseZoteroUri", () => {
       ),
       { kind: "open-pdf", attachmentKey: "PDF9KEY", annotationKey: "ANN1KEY" },
     );
+  });
+
+  it("accepts the historical zotero item shorthand", () => {
+    assert.deepEqual(parseZoteroUri("zotero://item/XV9FJZNW"), {
+      kind: "select",
+      key: "XV9FJZNW",
+      legacyItem: true,
+    });
   });
 
   it("parses open-pdf with page", () => {
@@ -61,15 +70,19 @@ describe("build/parse roundtrip", () => {
   });
 
   it("roundtrips open-pdf", () => {
-    const uri = buildOpenPdfUri("PDF9KEY", { annotationKey: "ANN1KEY" });
+    const uri = buildOpenPdfUri("PDF9KEY", {
+      annotationKey: "ANN1KEY",
+      page: 7,
+    });
     assert.equal(
       uri,
-      "zotero://open-pdf/library/items/PDF9KEY?annotation=ANN1KEY",
+      "zotero://open-pdf/library/items/PDF9KEY?annotation=ANN1KEY&page=7",
     );
     assert.deepEqual(parseZoteroUri(uri), {
       kind: "open-pdf",
       attachmentKey: "PDF9KEY",
       annotationKey: "ANN1KEY",
+      page: 7,
     });
   });
 });

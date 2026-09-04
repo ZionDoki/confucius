@@ -36,6 +36,44 @@ describe("normalizeOpenAICompatibleBaseUrl", () => {
 });
 
 describe("OpenAICompatibleAdapter", () => {
+  it("sends transient page images as OpenAI image_url content", async () => {
+    let sent: Record<string, unknown> | null = null;
+    const adapter = new OpenAICompatibleAdapter({
+      apiKey: "sk-test",
+      baseUrl: "https://api.example.test/v1",
+      model: "vision-demo",
+      stream: false,
+      fetchImpl: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        sent = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: "seen" } }] }),
+        );
+      }) as unknown as typeof fetch,
+    });
+
+    await adapter.complete({
+      messages: [
+        {
+          role: "user",
+          content: "PDF page 1",
+          images: [
+            { mimeType: "image/png", data: "OPENAI-PAGE", description: "p1" },
+          ],
+          transient: true,
+        },
+      ],
+    });
+
+    const messages = sent!.messages as Array<{ content: unknown }>;
+    assert.deepEqual(messages[0]?.content, [
+      { type: "text", text: "PDF page 1" },
+      {
+        type: "image_url",
+        image_url: { url: "data:image/png;base64,OPENAI-PAGE" },
+      },
+    ]);
+  });
+
   it("posts host-only Base URLs to /v1/chat/completions", async () => {
     let requested = "";
     const adapter = new OpenAICompatibleAdapter({

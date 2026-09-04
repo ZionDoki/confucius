@@ -44,12 +44,14 @@ export const PAPER_READ_TOOLS = [
   "search_with_regex",
   "get_annotations",
   "get_pdf_selection",
+  "inspect_pdf_page",
   "get_paper_metadata",
   "open_item",
 ] as const;
 
 export const PAPER_WRITE_TOOLS = [
   "propose_highlights",
+  "propose_annotations",
   "commit_annotations",
   "update_annotation_comment",
   "delete_annotation",
@@ -134,6 +136,16 @@ export interface ToolSuccess<T = unknown> {
   ok: true;
   toolName: string;
   data: T;
+  /** Ephemeral model-only media. Hosts must strip this before persistence. */
+  transientMedia?: ToolTransientMedia[];
+}
+
+export interface ToolTransientMedia {
+  type: "image";
+  mimeType: "image/png" | "image/jpeg" | "image/webp";
+  /** Base64 payload without a data-URL prefix. */
+  data: string;
+  description?: string;
 }
 
 export interface ToolFailure {

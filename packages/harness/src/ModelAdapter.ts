@@ -26,6 +26,14 @@ export interface ModelMessage {
   content: string;
   toolCallId?: string;
   toolCalls?: ModelToolCall[];
+  /** Model-only images. They must be removed before checkpoint/persistence. */
+  images?: Array<{
+    mimeType: "image/png" | "image/jpeg" | "image/webp";
+    data: string;
+    description?: string;
+  }>;
+  /** Entire message is valid for only the immediately following model call. */
+  transient?: boolean;
 }
 
 export interface ModelRequest {

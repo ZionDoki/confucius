@@ -20,6 +20,35 @@ const itemRef = {
   key: { type: "string", description: "Item key inside that library" },
 };
 
+const annotationSchema = {
+  type: "object",
+  properties: {
+    type: { type: "string", enum: ["highlight", "underline", "image"] },
+    page: { type: "integer", minimum: 1 },
+    quote: { type: "string" },
+    text: {
+      type: "string",
+      description: "Compatibility alias for quote on text annotations",
+    },
+    rect: {
+      type: "array",
+      description:
+        "Image region [x,y,width,height], top-left origin, normalized 0-1000",
+      items: { type: "number", minimum: 0, maximum: 1000 },
+      minItems: 4,
+      maxItems: 4,
+    },
+    comment: { type: "string" },
+    color: {
+      type: "string",
+      pattern: "^#[0-9A-Fa-f]{6}$",
+      description: "Optional #RRGGBB override",
+    },
+  },
+  required: ["type", "page"],
+  additionalProperties: false,
+};
+
 const memoryTypes = [
   "preference",
   "fact",
@@ -372,6 +401,15 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     ["libraryID", "key"],
   ),
   def("get_pdf_selection", "Current PDF reader selection, if any.", itemRef),
+  def(
+    "inspect_pdf_page",
+    "Inspect one PDF page. Returns durable normalized text-line anchors and, when vision is supported, a transient page PNG that is never persisted. Never guess an image-region rect when no page image is available.",
+    {
+      ...itemRef,
+      page: { type: "integer", minimum: 1 },
+    },
+    ["libraryID", "key", "page"],
+  ),
   def("get_paper_metadata", "Title, authors, year, DOI for a paper.", itemRef, [
     "libraryID",
     "key",
@@ -382,7 +420,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   ]),
   def(
     "propose_highlights",
-    "Propose highlights without writing the PDF.",
+    "Compatibility tool: propose highlights without writing the PDF.",
     {
       ...itemRef,
       highlights: {
@@ -393,6 +431,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
             text: { type: "string" },
             page: { type: "integer" },
             comment: { type: "string" },
+            color: { type: "string", pattern: "^#[0-9A-Fa-f]{6}$" },
           },
         },
       },
@@ -400,11 +439,21 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     ["libraryID", "key", "highlights"],
   ),
   def(
+    "propose_annotations",
+    "Propose highlights, underlines, and image-region notes without writing the PDF. Regions must come from inspect_pdf_page; never guess coordinates.",
+    {
+      ...itemRef,
+      annotations: { type: "array", items: annotationSchema },
+    },
+    ["libraryID", "key", "annotations"],
+  ),
+  def(
     "commit_annotations",
-    "Write previously proposed or provided highlights.",
+    "Atomically write previously proposed or provided annotations. Copy the returned zoteroUri exactly; never construct a Zotero URI yourself.",
     {
       ...itemRef,
       highlights: { type: "array" },
+      annotations: { type: "array", items: annotationSchema },
     },
     ["libraryID", "key"],
   ),
@@ -604,7 +653,9 @@ for (const name of PAPER_READ_TOOLS) {
   TOOL_META[name] = meta(
     name,
     "paper.read",
-    name === "open_item" ? "serial" : "parallel_safe",
+    name === "open_item" || name === "inspect_pdf_page"
+      ? "serial"
+      : "parallel_safe",
     false,
   );
 }

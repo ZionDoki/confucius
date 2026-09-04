@@ -30,8 +30,12 @@ export function artifactUpsertGuidance(
 
   const template = taskTemplate(input.templateId);
   if (template && template.id !== "freeform") {
+    const products = [
+      template.artifactKind,
+      ...(template.additionalArtifactKinds ?? []),
+    ];
     lines.push(
-      `This task's template is "${template.title}". If the current request is that research product, call artifact_upsert with kind ${template.artifactKind} when the result is complete. Follow-ups and clarifications do not need an artifact.`,
+      `This task's template is "${template.title}". If the current request is that research product, call artifact_upsert for ${products.map((kind) => `kind ${kind}`).join(" and ")} when the result is complete. Follow-ups and clarifications do not need an artifact.`,
     );
   }
 

@@ -169,15 +169,62 @@ export interface TriageTableArtifactBody {
   }>;
 }
 
+export const ANNOTATION_TYPES = ["highlight", "underline", "image"] as const;
+
+export type AnnotationType = (typeof ANNOTATION_TYPES)[number];
+
+export const DEFAULT_ANNOTATION_COLORS: Readonly<
+  Record<AnnotationType, string>
+> = {
+  highlight: "#ffd400",
+  underline: "#2ea8e5",
+  image: "#a28ae5",
+};
+
+export interface TextAnnotationDraft {
+  type: "highlight" | "underline";
+  page: number;
+  quote: string;
+  comment?: string;
+  color?: string;
+}
+
+/**
+ * A page region expressed as [x, y, width, height] in a top-left-origin,
+ * 0-1000 coordinate space. The host converts it to PDF coordinates only
+ * after the complete annotation batch has passed validation.
+ */
+export interface ImageAnnotationDraft {
+  type: "image";
+  page: number;
+  rect: [number, number, number, number];
+  comment: string;
+  color?: string;
+}
+
+export type AnnotationDraft = TextAnnotationDraft | ImageAnnotationDraft;
+
+export interface AnnotationLegendEntry {
+  type: AnnotationType;
+  color?: string;
+  meaning: string;
+}
+
+export interface LegacyHighlightDraft {
+  page: number;
+  quote: string;
+  comment?: string;
+  color?: string;
+}
+
 export interface AnnotationSetArtifactBody {
   type: "annotation_set";
   item: ItemRef;
-  highlights: Array<{
-    page: number;
-    quote: string;
-    comment?: string;
-    color?: string;
-  }>;
+  /** Canonical v0.3.5 shape. */
+  annotations?: AnnotationDraft[];
+  /** @deprecated Read-only compatibility with artifacts created before 0.3.5. */
+  highlights?: LegacyHighlightDraft[];
+  legend?: AnnotationLegendEntry[];
 }
 
 export interface CollectionDiffArtifactBody {
@@ -501,21 +548,22 @@ export function artifactBodyMatchesKind(
     );
   }
   if (kind === "annotation_set") {
+    const annotations = Array.isArray(value.annotations)
+      ? value.annotations
+      : null;
+    const legacyHighlights = Array.isArray(value.highlights)
+      ? value.highlights
+      : null;
     return (
       value.type === "annotation_set" &&
       isItemRef(value.item) &&
-      Array.isArray(value.highlights) &&
-      value.highlights.every((entry) => {
-        const highlight = recordOf(entry);
-        return Boolean(
-          highlight &&
-          Number.isInteger(highlight.page) &&
-          Number(highlight.page) >= 1 &&
-          nonEmptyString(highlight.quote) &&
-          optionalString(highlight.comment) &&
-          optionalString(highlight.color),
-        );
-      })
+      (annotations !== null || legacyHighlights !== null) &&
+      (annotations === null || annotations.every(isAnnotationDraft)) &&
+      (legacyHighlights === null ||
+        legacyHighlights.every(isLegacyHighlightDraft)) &&
+      (value.legend === undefined ||
+        (Array.isArray(value.legend) &&
+          value.legend.every(isAnnotationLegendEntry)))
     );
   }
   if (kind === "collection_diff") {
@@ -540,6 +588,19 @@ export function artifactBodyMatchesKind(
       );
     })
   );
+}
+
+/** Normalize legacy highlight-only artifacts for all current consumers. */
+export function annotationsFromBody(
+  body: AnnotationSetArtifactBody,
+): AnnotationDraft[] {
+  if (Array.isArray(body.annotations)) {
+    return body.annotations.map((annotation) => ({ ...annotation }));
+  }
+  return (body.highlights ?? []).map((highlight) => ({
+    type: "highlight",
+    ...highlight,
+  }));
 }
 
 export function emptyLockedContext(
@@ -698,6 +759,84 @@ function nonEmptyString(value: unknown): value is string {
 
 function optionalString(value: unknown): boolean {
   return value === undefined || typeof value === "string";
+}
+
+function optionalHexColor(value: unknown): boolean {
+  return value === undefined || /^#[0-9a-f]{6}$/i.test(String(value));
+}
+
+function isAnnotationType(value: unknown): value is AnnotationType {
+  return (
+    typeof value === "string" &&
+    (ANNOTATION_TYPES as readonly string[]).includes(value)
+  );
+}
+
+function isAnnotationPage(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 1;
+}
+
+function isNormalizedRegionRect(
+  value: unknown,
+): value is [number, number, number, number] {
+  if (
+    !Array.isArray(value) ||
+    value.length !== 4 ||
+    value.some((part) => typeof part !== "number" || !Number.isFinite(part))
+  ) {
+    return false;
+  }
+  const [x, y, width, height] = value;
+  return (
+    x >= 0 &&
+    y >= 0 &&
+    width > 0 &&
+    height > 0 &&
+    x + width <= 1000 &&
+    y + height <= 1000
+  );
+}
+
+function isAnnotationDraft(value: unknown): value is AnnotationDraft {
+  const annotation = recordOf(value);
+  if (
+    !annotation ||
+    !isAnnotationType(annotation.type) ||
+    !isAnnotationPage(annotation.page) ||
+    !optionalHexColor(annotation.color)
+  ) {
+    return false;
+  }
+  if (annotation.type === "image") {
+    return (
+      isNormalizedRegionRect(annotation.rect) &&
+      nonEmptyString(annotation.comment)
+    );
+  }
+  return nonEmptyString(annotation.quote) && optionalString(annotation.comment);
+}
+
+function isLegacyHighlightDraft(value: unknown): value is LegacyHighlightDraft {
+  const highlight = recordOf(value);
+  return Boolean(
+    highlight &&
+    isAnnotationPage(highlight.page) &&
+    nonEmptyString(highlight.quote) &&
+    optionalString(highlight.comment) &&
+    optionalHexColor(highlight.color),
+  );
+}
+
+function isAnnotationLegendEntry(
+  value: unknown,
+): value is AnnotationLegendEntry {
+  const entry = recordOf(value);
+  return Boolean(
+    entry &&
+    isAnnotationType(entry.type) &&
+    optionalHexColor(entry.color) &&
+    nonEmptyString(entry.meaning),
+  );
 }
 
 function stringArray(value: unknown): value is string[] {

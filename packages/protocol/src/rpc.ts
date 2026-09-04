@@ -102,6 +102,7 @@ export const RPC_METHODS = {
   taskCompact: "task/compact",
   taskSetContext: "task/setContext",
   taskSetBackend: "task/setBackend",
+  taskStageTemplate: "task/stageTemplate",
   taskPreviewCapabilities: "task/previewCapabilities",
   taskToolList: "task/toolList",
   taskToolCall: "task/toolCall",
@@ -144,6 +145,11 @@ export interface TaskPromptParams {
   taskId: string;
   text: string;
   attachmentIds?: string[];
+}
+
+export interface TaskStageTemplateParams {
+  taskId: string;
+  templateId: TaskTemplateId;
 }
 
 export interface AttachmentPrepareParams {
@@ -487,6 +493,38 @@ export function clampMaxToolCalls(value: unknown): number {
 
 export type UiFont = "sans" | "serif" | "mono";
 
+export type UiLanguage = "en-US" | "zh-CN";
+
+export const UI_LANGUAGES: readonly UiLanguage[] = ["zh-CN", "en-US"];
+
+export function isUiLanguage(value: unknown): value is UiLanguage {
+  return (
+    typeof value === "string" &&
+    (UI_LANGUAGES as readonly string[]).includes(value)
+  );
+}
+
+export type UiLineHeight = "compact" | "standard" | "relaxed";
+
+export const UI_LINE_HEIGHTS: readonly UiLineHeight[] = [
+  "compact",
+  "standard",
+  "relaxed",
+];
+
+export const UI_LINE_HEIGHT_VALUES: Readonly<Record<UiLineHeight, number>> = {
+  compact: 1.45,
+  standard: 1.6,
+  relaxed: 1.75,
+};
+
+export function isUiLineHeight(value: unknown): value is UiLineHeight {
+  return (
+    typeof value === "string" &&
+    (UI_LINE_HEIGHTS as readonly string[]).includes(value)
+  );
+}
+
 export const UI_FONTS: readonly UiFont[] = ["sans", "serif", "mono"];
 
 export function isUiFont(value: unknown): value is UiFont {
@@ -497,6 +535,7 @@ export function isUiFont(value: unknown): value is UiFont {
 
 export const DEFAULT_UI_FONT: UiFont = "sans";
 export const DEFAULT_UI_FONT_SIZE = 13;
+export const DEFAULT_UI_LINE_HEIGHT: UiLineHeight = "standard";
 export const MIN_UI_FONT_SIZE = 12;
 export const MAX_UI_FONT_SIZE = 18;
 
@@ -539,6 +578,10 @@ export interface ModelConfigView {
   uiFont?: UiFont;
   /** Workspace UI base font size in px (12-18). */
   uiFontSize?: number;
+  /** Explicit workspace interface language. */
+  uiLanguage?: UiLanguage;
+  /** Reading-text line-height preset. */
+  uiLineHeight?: UiLineHeight;
 }
 
 export interface ConfigSetParams {
@@ -565,6 +608,10 @@ export interface ConfigSetParams {
   uiFont?: UiFont;
   /** Workspace UI base font size in px (12-18). */
   uiFontSize?: number;
+  /** Explicit workspace interface language. */
+  uiLanguage?: UiLanguage;
+  /** Reading-text line-height preset. */
+  uiLineHeight?: UiLineHeight;
 }
 
 export interface ConfigListModelsParams {
