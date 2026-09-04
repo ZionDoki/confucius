@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+## 0.3.5 — 2026-09-04
+
+### Deep reading and PDF annotations
+
+- Deep-reading tasks now deliver both a cited report and a detailed annotation
+  set with an explicit reading legend.
+- Annotation sets support highlights, underlines, and image-region notes, with
+  safe per-annotation `#RRGGBB` colors and defaults for each annotation type.
+- PDF writes preflight the complete batch, roll back on save or Reader refresh
+  failure, refresh the active Reader once, and return canonical links to every
+  created annotation.
+- Page inspection can pass a transient rendered page to vision-capable models;
+  page images are removed before events, checkpoints, logs, or host state are
+  persisted. Text-only models are told not to guess regions.
+
+### Tasks and workspace
+
+- The empty workspace and `/` picker now focus on three representative modes:
+  Deep read, Evidence audit, and Synthesis. All 13 template IDs remain
+  compatible with existing tasks and legacy entry points.
+- Research-mode names, descriptions, and editable prompt drafts follow the
+  selected Chinese or English interface language.
+- Appearance settings now include an explicit Chinese/English switch and
+  compact, standard, or relaxed reading line height.
+- Choosing a research mode stages an editable draft and never starts work
+  before Send; validation failures preserve the draft.
+- The `/` and `@` pickers now share placement, dimensions, keyboard behavior,
+  and a restrained vermilion focus treatment. The security profile uses the
+  same styled custom-menu language.
+- Task titles start with a cleaned local summary, then lock to a same-language
+  title generated from the first successful user/Agent exchange, with an
+  atomic local fallback for failures and timeouts.
+
+### Links and compatibility
+
+- Historical `zotero://item/<key>` links open again. New item and PDF links are
+  built only through canonical URI helpers, including annotation and page
+  fallback targets for resilient navigation.
+- Existing highlight-only artifacts and `propose_highlights` calls remain
+  readable while new work uses the discriminated annotation format.
+- PDF page inspection now unwraps Zotero Reader objects, clones viewport
+  arguments into the Reader compartment, and uses its crop renderer so text
+  anchors and transient page images work in a real Zotero 7 Reader.
+
 ## 0.3.4 — 2026-09-04
 
 ### Reliability
