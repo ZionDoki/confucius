@@ -310,6 +310,41 @@ test("failed native turns keep the last committed conversation recoverable", () 
   assert.equal(host.includes('result.phase !== "failed" &&'), true);
 });
 
+test("task switches restore per-task drafts and timeline viewports", () => {
+  const view = readFileSync(
+    join(root, "src/modules/ui/WorkspaceView.ts"),
+    "utf8",
+  );
+  assert.equal(view.includes("const composerDrafts = new Map"), true);
+  assert.equal(view.includes("const timelineViewports = new Map"), true);
+  assert.equal(view.includes("rememberComposerDraft(previousTaskId)"), true);
+  assert.equal(view.includes("rememberTimelineViewport()"), true);
+  assert.equal(
+    view.includes('prompt.value = composerDrafts.get(taskId) ?? ""'),
+    true,
+  );
+  assert.equal(view.includes("savedViewport?.scrollTop"), true);
+});
+
+test("conversation Markdown follows the configured UI font size", () => {
+  const view = readFileSync(
+    join(root, "src/modules/ui/WorkspaceView.ts"),
+    "utf8",
+  );
+  assert.equal(
+    view.includes("font-size: var(--confucius-markdown-font-size, 13px)"),
+    true,
+  );
+  assert.equal(
+    view.includes(
+      'root.style.setProperty("--confucius-markdown-font-size", `${size}px`)',
+    ),
+    true,
+  );
+  assert.equal(view.includes("font-size: 1em;"), true);
+  assert.equal(view.includes("font-size: 0.92em;"), true);
+});
+
 test("settings effort control is a button group, not a native select", () => {
   const view = readFileSync(
     join(root, "src/modules/ui/WorkspaceView.ts"),

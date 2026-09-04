@@ -325,6 +325,7 @@ const TUI_CSS = `
   min-width: 0;
   max-width: 100%;
   overflow-wrap: anywhere;
+  font-size: var(--confucius-markdown-font-size, 13px);
 }
 .tui-answer table {
   display: block;
@@ -334,7 +335,7 @@ const TUI_CSS = `
 .tui-answer th, .tui-answer td {
   border: 1px solid #ddd8cc;
   padding: 4px 8px;
-  font-size: 13px;
+  font-size: 1em;
 }
 .tui-answer th { background: #f0ece3; }
 .tui-answer pre {
@@ -344,7 +345,7 @@ const TUI_CSS = `
   max-width: 100%;
   box-sizing: border-box;
   overflow-wrap: anywhere;
-  font-size: 12px;
+  font-size: 0.92em;
 }
 .tui-answer code {
   font-family: ui-monospace, Consolas, monospace;
@@ -2048,6 +2049,13 @@ function bindWorkspace(
     runtimeHostEnabled: true,
     runtimeHostConnected: false,
   };
+  const composerDrafts = new Map<string, string>();
+  const timelineViewports = new Map<
+    string,
+    { scrollTop: number; followsBottom: boolean }
+  >();
+  let renderedTimelineTaskId: string | null = null;
+  let taskLoadGeneration = 0;
   let pendingPermissionUpdate: Promise<void> = Promise.resolve();
   let pendingContextUpdate: Promise<void> = Promise.resolve();
   const pendingMentionItems = new Map<string, ContextSearchItem>();
@@ -4258,6 +4266,7 @@ function bindWorkspace(
     );
     root.style.fontFamily = UI_FONT_STACKS[font];
     root.style.fontSize = `${size}px`;
+    root.style.setProperty("--confucius-markdown-font-size", `${size}px`);
   }
 
   function renderApprovalCard(
@@ -4455,10 +4464,41 @@ function bindWorkspace(
     }
   }
 
+  function rememberComposerDraft(taskId = state.sessionId): void {
+    if (taskId) composerDrafts.set(taskId, prompt.value);
+  }
+
+  function rememberTimelineViewport(taskId = renderedTimelineTaskId): void {
+    if (!taskId) return;
+    timelineViewports.set(taskId, {
+      scrollTop: timelinePane.scrollTop,
+      followsBottom:
+        timelinePane.scrollHeight -
+          timelinePane.scrollTop -
+          timelinePane.clientHeight <
+        96,
+    });
+  }
+
   async function loadTask(taskId: string): Promise<void> {
-    if (state.sessionId !== taskId) {
+    const generation = ++taskLoadGeneration;
+    const previousTaskId = state.sessionId;
+    const switching = previousTaskId !== taskId;
+    if (switching) {
+      rememberComposerDraft(previousTaskId);
+      rememberTimelineViewport();
       closeArtifactViewer();
       clearPendingAttachments();
+    }
+    const [loaded, bundle] = (await Promise.all([
+      rpc("task/load", { taskId }),
+      rpc("task/events", { taskId }),
+    ])) as [ResearchTaskRecord, { events?: ConfuciusEvent[] }];
+    if (generation !== taskLoadGeneration) return;
+    if (switching && state.sessionId === previousTaskId) {
+      // The user may have kept typing or scrolling while the task loaded.
+      rememberComposerDraft(previousTaskId);
+      rememberTimelineViewport();
     }
     state.sessionId = taskId;
     state.lastEventId = null;
@@ -4467,8 +4507,11 @@ function bindWorkspace(
     state.sendError = "";
     state.selectedArtifactId = null;
     state.selectedArtifactRevision = null;
-    const loaded = (await rpc("task/load", { taskId })) as ResearchTaskRecord;
-    if (state.sessionId !== taskId) return;
+    if (switching) {
+      prompt.value = composerDrafts.get(taskId) ?? "";
+      closeSlashMenu();
+      closeMentionMenu();
+    }
     const index = state.sessions.findIndex((item) => item.id === taskId);
     if (index >= 0) state.sessions[index] = loaded;
     else state.sessions.unshift(loaded);
@@ -4479,16 +4522,13 @@ function bindWorkspace(
         : loaded.permissionMode === "deny"
           ? "deny"
           : "ask";
-    const bundle = (await rpc("task/events", { taskId })) as {
-      events?: ConfuciusEvent[];
-    };
-    if (state.sessionId !== taskId) return;
     state.events = mergeEvents([], bundle.events ?? [], true);
     state.lastEventId = state.events.at(-1)?.id ?? null;
     state.running =
       loaded.status === "running" || loaded.status === "awaiting_approval";
     collectApprovals();
     await refreshArtifacts(taskId);
+    if (generation !== taskLoadGeneration || state.sessionId !== taskId) return;
     syncModeButton();
     updateRunningUI();
   }
@@ -5906,7 +5946,10 @@ function bindWorkspace(
           event.stopPropagation();
           void (async () => {
             await rpc("task/delete", { taskId: item.id });
+            composerDrafts.delete(item.id);
+            timelineViewports.delete(item.id);
             if (state.sessionId === item.id) {
+              taskLoadGeneration += 1;
               state.sessionId = null;
               state.events = [];
               state.lastEventId = null;
@@ -5915,6 +5958,8 @@ function bindWorkspace(
               state.artifacts = [];
               state.selectedArtifactId = null;
               state.selectedArtifactRevision = null;
+              prompt.value = "";
+              renderedTimelineTaskId = null;
               closeArtifactViewer();
             }
             await refreshSessions();
@@ -5939,13 +5984,22 @@ function bindWorkspace(
       }
     }
 
-    const followTimeline =
-      Boolean(state.sending || state.running || state.pendingUserText) ||
-      timelinePane.scrollHeight -
-        timelinePane.scrollTop -
-        timelinePane.clientHeight <
-        96;
-    const savedTimelineScroll = timelinePane.scrollTop;
+    const timelineTaskId = state.sessionId;
+    const taskChanged = renderedTimelineTaskId !== timelineTaskId;
+    rememberTimelineViewport();
+    const savedViewport = timelineTaskId
+      ? timelineViewports.get(timelineTaskId)
+      : undefined;
+    const followTimeline = taskChanged
+      ? (savedViewport?.followsBottom ?? true)
+      : Boolean(state.sending || state.running || state.pendingUserText) ||
+        timelinePane.scrollHeight -
+          timelinePane.scrollTop -
+          timelinePane.clientHeight <
+          96;
+    const savedTimelineScroll = taskChanged
+      ? (savedViewport?.scrollTop ?? 0)
+      : timelinePane.scrollTop;
     timelinePane.textContent = "";
     const session = state.sessions.find((item) => item.id === state.sessionId);
     const activityStream = el(doc, "div");
@@ -6037,10 +6091,12 @@ function bindWorkspace(
       activityStream.appendChild(renderWaiting(doc));
     }
     timelinePane.appendChild(activityStream);
+    renderedTimelineTaskId = timelineTaskId;
     timelinePane.scrollTop =
       followTimeline || newApprovalsArrived
         ? timelinePane.scrollHeight
         : savedTimelineScroll;
+    rememberTimelineViewport();
     newApprovalsArrived = false;
     renderArtifactViewer();
   }
@@ -6151,6 +6207,7 @@ function bindWorkspace(
     state.sessions = listed.tasks || [];
     if (!state.sessionId && state.sessions[0]) {
       state.sessionId = state.sessions[0].id;
+      prompt.value = composerDrafts.get(state.sessionId) ?? "";
     }
   }
 
@@ -6247,6 +6304,7 @@ function bindWorkspace(
       // submitted value when the composer was not edited concurrently.
       if (prompt.value.trim() === enteredText) {
         prompt.value = "";
+        if (promptSessionId) composerDrafts.set(promptSessionId, "");
       }
       state.pendingUserText = "";
       state.running = !started.superseded;
@@ -9296,7 +9354,10 @@ function bindWorkspace(
     closeEndpointMenu();
   });
   contextRing.node.addEventListener("click", () => void compactNow());
-  prompt.addEventListener("input", updateComposerMenus);
+  prompt.addEventListener("input", () => {
+    rememberComposerDraft();
+    updateComposerMenus();
+  });
   prompt.addEventListener("click", updateComposerMenus);
   prompt.addEventListener("keydown", (event) => {
     const key = (event as KeyboardEvent).key;

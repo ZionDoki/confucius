@@ -155,9 +155,10 @@ import {
   buildTaskAttachmentUserText,
   type ExtractedPdfText,
 } from "./TaskAttachments";
+import { compactTaskEvents, isTerminalTaskEventType } from "./TaskEventHistory";
 
 const MAX_SESSIONS = 60;
-const MAX_EVENTS_PER_SESSION = 400;
+const MAX_EVENTS_PER_SESSION = 2_000;
 const MEMORY_INJECT_LIMIT = 6;
 const PINNED_INJECT_LIMIT = 3;
 const CONTEXT_ITEM_SEARCH_CACHE_MS = 15_000;
@@ -351,9 +352,10 @@ export class AgentHost {
       }
       const entries = parsed.tasks ?? parsed.sessions ?? [];
       for (const entry of entries) {
-        const events = (entry.events ?? [])
-          .slice(-MAX_EVENTS_PER_SESSION)
-          .map(compactArtifactEvent);
+        const events = compactTaskEvents(
+          (entry.events ?? []).map(compactArtifactEvent),
+          MAX_EVENTS_PER_SESSION,
+        );
         const loadedSkills = new Set(
           entry.loadedSkills ?? (entry.skillSlug ? [entry.skillSlug] : []),
         );
@@ -530,15 +532,17 @@ export class AgentHost {
 
   private async writeState(): Promise<void> {
     for (const state of this.sessions.values()) {
-      if (state.events.length > MAX_EVENTS_PER_SESSION) {
-        state.events = state.events.slice(-MAX_EVENTS_PER_SESSION);
+      if (!state.activeTurnId) {
+        state.events = compactTaskEvents(state.events, MAX_EVENTS_PER_SESSION);
       }
     }
     const payload = {
       schemaVersion: 2,
       tasks: [...this.sessions.values()].map((state) => ({
         record: state.record,
-        events: state.events.map(compactArtifactEvent),
+        events: compactTaskEvents(state.events, MAX_EVENTS_PER_SESSION).map(
+          compactArtifactEvent,
+        ),
         messages: state.messages,
         loadedSkills: [...state.loadedSkills],
         skillSlug: [...state.loadedSkills][0] ?? null,
@@ -1513,8 +1517,8 @@ export class AgentHost {
       payload,
     } as ConfuciusEvent);
     state.events.push(event);
-    if (state.events.length > MAX_EVENTS_PER_SESSION) {
-      state.events = state.events.slice(-MAX_EVENTS_PER_SESSION);
+    if (isTerminalTaskEventType(type) || !state.activeTurnId) {
+      state.events = compactTaskEvents(state.events, MAX_EVENTS_PER_SESSION);
     }
     state.record.updatedAt = Date.now();
     this.persistSoon();
@@ -2678,8 +2682,8 @@ export class AgentHost {
       sessionId: state.record.id,
     });
     state.events.push(forwarded);
-    if (state.events.length > MAX_EVENTS_PER_SESSION) {
-      state.events = state.events.slice(-MAX_EVENTS_PER_SESSION);
+    if (terminal) {
+      state.events = compactTaskEvents(state.events, MAX_EVENTS_PER_SESSION);
     }
     if (event.type === "approval_required") {
       state.record.status = "awaiting_approval";
@@ -3122,8 +3126,11 @@ export class AgentHost {
           payload,
         } as ConfuciusEvent;
         state.events.push(event);
-        if (state.events.length > MAX_EVENTS_PER_SESSION) {
-          state.events = state.events.slice(-MAX_EVENTS_PER_SESSION);
+        if (isTerminalTaskEventType(type)) {
+          state.events = compactTaskEvents(
+            state.events,
+            MAX_EVENTS_PER_SESSION,
+          );
         }
         state.record.updatedAt = Date.now();
         if (type === "approval_required") {

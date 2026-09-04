@@ -11,6 +11,18 @@
 - Failed Native Runtime turns roll back their in-flight history and
   checkpoints, so the same task can accept a new prompt without carrying a
   broken turn forward. Failed turns also skip follow-up history compaction.
+- Completed streams now collapse token deltas into durable timeline events
+  before applying a higher history cap, preserving substantially more earlier
+  turns when a task is reopened.
+
+### Workspace
+
+- Timeline scroll position and follow-bottom state are restored independently
+  for each task.
+- Unsent composer drafts are isolated by task instead of following the user
+  into another conversation.
+- Conversation Markdown, including tables and code blocks, now follows the
+  configured interface font size.
 
 ### Docs
 
