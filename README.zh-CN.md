@@ -1,142 +1,81 @@
 # Confucius
 
-[播放 44 秒产品短片](https://github.com/user-attachments/assets/3a39a858-3aa5-4198-a4b5-4f13002d19e4)
-
 <p align="center">
   <a href="README.md">English</a> · <strong>简体中文</strong>
 </p>
 
-<p align="center">
-  <strong>从文献出发，把研究向前推进。</strong><br />
-  面向 Zotero 7+ 的开源研究 Agent 工作台
-</p>
-
-<p align="center">
-  <a href="https://github.com/ZionDoki/confucius/releases/latest"><img src="https://img.shields.io/github/v/release/ZionDoki/confucius?style=flat-square&label=release" alt="Latest release" /></a>
-  <img src="https://img.shields.io/badge/Zotero-7%2B-CC2936?style=flat-square" alt="Zotero 7+" />
-  <img src="https://img.shields.io/badge/License-AGPL--3.0-171714?style=flat-square" alt="AGPL-3.0" />
-</p>
-
-Zotero 擅长收藏和管理文献。Confucius 负责把它们变成下一步。
-
-选中一篇论文、一个集合或一段原文，就可以启动精读、证据审计、
-跨文献比较和综述整理。Agent 的结果会保存为带引用、版本和写回状态的
-研究产物，不会随着聊天滚动消失。
+Confucius 是面向 Zotero 7 及以上版本的开源研究工作区。你可以在 Zotero
+里让模型读取论文、集合、PDF 选区和本地文本文件。
 
 [下载最新版本](https://github.com/ZionDoki/confucius/releases/latest) ·
-[查看更新记录](CHANGELOG.md) · [从源码构建](#从源码构建)
+[更新记录](CHANGELOG.md) · [从源码构建](#从源码构建)
 
-## 一条完整的研究链路
+## 功能
 
-```text
-锁定来源 → Agent 分析 → 结构化产物 → 审查差异 → 写回 Zotero
-```
+- 阅读单篇论文，或比较多篇论文。
+- 对照原文、图表和标注核验论断。
+- 生成笔记、报告、文献地图、筛选表和 PDF 标注。
+- 写入 Zotero 笔记、标注、集合或标签前查看差异。
+- 恢复未完成的任务，搜索已保存的研究记忆。
+- 使用 OpenAI 兼容端点、Ollama、Codex 或 Kimi。
 
-1. **锁定研究材料**：在 Zotero 中选择论文、集合、保存搜索或阅读器选区。
-   也可以用 `@` 搜索文献库，或把 PDF、Markdown、TXT 文件拖进工作区。
-2. **交给合适的 Agent**：使用内置 Native Runtime，或直接调用已经登录的
-   Codex、Kimi。任务开始后，Zotero 当前选择的变化不会污染原上下文。
-3. **得到可继续工作的产物**：精读报告、证据审计、文献地图、筛选表、
-   笔记草稿、标注集和引用列表都以文件块出现在活动流中，并保留修订历史。
-4. **确认后再写回**：笔记、高亮、集合和标签在写入 Zotero 前都会显示
-   before/after 差异。你决定接受、修改还是拒绝。
+你可以从 Zotero 条目菜单、PDF 阅读器选区菜单或 Confucius 工作区发起任务。
+输入 `@` 添加文献，输入 `/` 选择任务，也可以把 PDF、Markdown 或 TXT 文件
+拖入工作区。
 
-## 用文献做真正的研究工作
+任务生成的文件显示在活动视图中，并保留引用和修订记录。普通回复留在活动
+视图中。
 
-| 你手上的材料      | 可以直接开始                       | 典型结果                             |
-| ----------------- | ---------------------------------- | ------------------------------------ |
-| 单篇论文          | 精读、证据审计、相关工作、生成笔记 | 论点、方法、证据、局限与原文定位     |
-| 多篇论文或集合    | 比较、筛选、综合、文献地图         | 共识、分歧、研究空白与结构化表格     |
-| 阅读器选区        | 解释、核验论断、保存洞见           | 带页码引用的笔记或标注草稿           |
-| PDF、MD、TXT 文件 | 阅读、整理、交叉分析               | 与当前 Zotero 来源一起进入任务上下文 |
+## Runtime
 
-三个拳头预设——精读、证据审计、综合——不是三段写死的 prompt。发送前你可以
-直接改任务要求；同一份要求会分别注入隔离的研究上下文与全新的交付上下文，
-两者只通过限长的结构化交接相连。每个阶段只开放必要工具，因此研究阶段不会
-提前生成产物，交付阶段也不会重新展开调查。
+| Runtime | 接入方式                    |
+| ------- | --------------------------- |
+| Native  | OpenAI 兼容 API 或 Ollama   |
+| Codex   | 本机 Codex CLI 及其登录状态 |
+| Kimi    | 本机 Kimi CLI 及其登录状态  |
 
-### 精读，直达证据
+Codex 和 Kimi 通过 Zotero 插件运行。可执行文件路径留空时使用自动检测，也可以
+在设置中手动选择。
 
-Confucius 不只生成摘要。它按研究问题、方法、证据和局限组织结果，引用可以
-回到 Zotero 条目、PDF 页码或具体选区。需要核验时，不必重新翻完整篇论文。
-精读还会准备高亮、下划线和有页面依据的区域便签，并直接发起写入 PDF 的
-审批；拒绝写入时仍会交付报告，但不会改动文档。
-
-### 多篇论文，一眼看清
-
-把多篇文献放进同一个任务，Agent 会对齐它们的研究问题、方法和证据，整理
-共识与分歧。结果可以继续修订，也可以转成文献地图、筛选表或报告。
-
-### 从证据里长出新 Idea
-
-研究空白、方法限制和开放问题会保留各自的来源。后续提出的假设和研究设计
-可以沿证据链回到出处，方便复核，也方便下一次继续推进。
-
-### 划重点、记笔记，再写回 Zotero
-
-Agent 可以起草笔记、标注、集合和标签操作。所有 Zotero 写入都先进入审查，
-提交成功后记录来源与产物版本。
-
-## 活动流是工作现场，产物是长期结果
-
-工作区以活动流为主。消息、计划、推理、工具调用、审批、错误和任务状态按时间
-排列，研究过程随时可追溯。产物则以文件块嵌在活动流里，点击后进入完整阅读
-视图，查看正文、引用、修订和写回状态。
-
-任务可以中断和恢复。Native Runtime 从安全检查点继续；Codex 和 Kimi 使用
-各自的会话 ID 恢复。未知结果的工具调用不会在重启后被偷偷重放。
-
-## 选择你信任的 Agent
-
-| Runtime | 适合什么场景                            | 接入方式                  |
-| ------- | --------------------------------------- | ------------------------- |
-| Native  | 自建模型、OpenAI-compatible API、Ollama | Confucius 内置 Agent 循环 |
-| Codex   | 长任务、计划、工具与流式推理            | 官方 Codex App Server     |
-| Kimi    | 中文研究任务与 ACP 工作流               | 官方 Kimi ACP v1          |
-
-Codex 与 Kimi 由 Zotero 插件直接启动，不需要 sidecar、额外端口或单独运行
-Node 脚本。Confucius 会自动搜索官方安装目录、PATH、WinGet 和常见用户目录；
-如果自动识别失败，也可以在设置中选择可执行文件。登录仍由官方 CLI/SDK
-管理，插件不会读取或复制桌面端令牌。
-
-Native Runtime 支持流式文本与推理事件，也能识别 OpenAI-compatible 和
-Ollama 响应中的 `<think>...</think>`。每次 Agent Run 默认最多执行 128 个
-模型步骤，可在设置中调整。
-
-## 让长期研究接得上
-
-Confucius 把任务、产物、会话记录和研究记忆分别保存。下次回来时，Agent 能
-找到之前的结论、尝试过的方法和你的研究偏好，而不是从空白对话重新开始。
-
-- 记忆以 Markdown 文件保存在
-  `<Zotero 数据目录>/confucius/memory/`，可以直接查看、编辑和备份。
-- 新安装与升级默认使用“审查”模式。候选记忆可编辑、接受或拒绝，不会静默
-  写入。
-- 完整会话以追加式日志保存在
-  `<Zotero 数据目录>/confucius/logs/`，上下文压缩不会删除原记录。
-- 研究知识库可以组织文献、笔记、洞见、方法与讨论结果，并维护 Markdown
-  思维导图。
+Native Runtime 支持流式文本和单独的推理输出。模型步骤上限可以调整，默认值为
+128。
 
 ## 安装
 
-### 安装发布版
+1. 从[最新发布版](https://github.com/ZionDoki/confucius/releases/latest)
+   下载 `confucius.xpi`。
+2. 在 Zotero 中打开 **工具 → 插件**。
+3. 点击齿轮菜单，选择 **Install Add-on From File**。
+4. 选择 `confucius.xpi`，安装后点击 Confucius 工具栏按钮。
 
-1. 从 [Releases](https://github.com/ZionDoki/confucius/releases/latest)
-   下载最新的 `.xpi`。
-2. 打开 Zotero，进入 **工具 → 插件**。
-3. 点击右上角齿轮，选择 **Install Add-on From File**，安装下载的文件。
-4. 点击 Zotero 工具栏中的 Confucius 按钮打开工作区。
+后续版本可在 **Confucius 设置 → 更新** 中安装。
 
-安装后可打开 **Confucius 设置 → 更新** 立即检查新版本，也可以让 Zotero
-原生更新器在后台自动安装后续版本。
+使用 Native Runtime 时，在 **Zotero → Settings → Confucius** 中填写 Base URL、
+模型名和 API Key。本地 Ollama 一般不需要 API Key。使用 Codex 或 Kimi 前，
+先在对应 CLI 中登录。
 
-使用 Native Runtime 时，在 **Zotero → Settings → Confucius** 中添加 Base URL、
-模型名和 API Key。本地 Ollama 通常不需要 API Key。使用 Codex 或 Kimi 时，
-先完成官方登录，再在输入框的 Runtime 菜单中选择它。
+## 文件与数据
 
-### 从源码构建
+- 任务、生成文件和会话记录保存在 Zotero 数据目录中。
+- 研究记忆位于 `<Zotero 数据目录>/confucius/memory/`，格式为 Markdown。
+- 会话日志位于 `<Zotero 数据目录>/confucius/logs/`。
+- 模型请求遵循所选端点或 Runtime 的数据政策。
 
-需要 Node.js 22.8 或更高版本。
+新安装默认使用记忆“审查”模式。记忆保存前可以编辑、接受或拒绝，也可以在
+设置中改为“自动”或“关闭”。
+
+## 权限
+
+- 外部 Runtime 默认只能使用 Zotero 读取工具和 `artifact_upsert`。
+- Shell 命令和普通文件写入需要先选择工作目录。
+- Zotero 写入会显示拟议变更并等待审批。
+- 本地 MCP 监听 `127.0.0.1:23119`，除 `/health` 外都需要设置中显示的配对
+  令牌。
+- PDF 文本、网页内容和元数据按数据处理，不作为指令执行。
+
+## 从源码构建
+
+开发需要 Node.js 22.8 及以上版本，以及 Zotero 7 及以上版本。
 
 ```bash
 git clone https://github.com/ZionDoki/confucius.git
@@ -145,52 +84,40 @@ npm install
 npm run build --workspace @confucius/zotero-addon
 ```
 
-生成的插件位于：
+生成的 XPI 位于：
 
 ```text
 apps/zotero-addon/.scaffold/build/confucius.xpi
 ```
 
-本地开发可以运行：
+启动开发版本：
 
 ```bash
 npm start
 ```
 
-需要本机已安装 Zotero 7+。
-
-## 安全与数据边界
-
-- 默认的 Zotero-only 模式只向外部 Runtime 提供当前任务的 Zotero 读取能力和
-  `artifact_upsert`，Shell 与文件写入保持关闭。
-- 工作区能力必须由用户选择并确认规范化目录。命令和文件修改仍需单次或会话
-  级审批。
-- 任何 Zotero 写入都先展示差异，不会因为模型声称完成而直接提交。
-- 本地 MCP 仅监听 `127.0.0.1:23119`，除 `/health` 外均要求 Bearer token。
-  公开 MCP 只提供只读 Zotero 工具。
-- PDF、网页和文献元数据都按不可信内容处理，不会被当作系统指令。
-- 任务与记忆保存在本地；模型请求是否离开本机，取决于你选择的模型服务或
-  Runtime。
-
-## 面向开发者
+## 仓库结构
 
 ```text
-apps/zotero-addon     Zotero 7+ 生产插件与 Runtime Host
-packages/protocol     RPC、任务、产物与事件协议
+apps/zotero-addon     Zotero 插件与 Runtime Host
+packages/protocol     RPC、任务、产物与事件类型
 packages/harness      Native Agent 循环、模型适配器与权限
-packages/memory       纯文本持久记忆与会话日志
-packages/zotero-tools Zotero 工具目录与论文文本处理
+packages/memory       Markdown 记忆与会话日志
+packages/zotero-tools Zotero 工具与论文文本处理
 packages/mcp-client   MCP-over-HTTP 客户端
 packages/skill-format SKILL.md 解析器
-skills/               内置研究技能的源文件
-evals/                可重复执行的黄金轨迹
-apps/agent-sidecar    旧协议契约测试夹具，不进入 XPI 运行路径
+skills/               内置技能源文件
+evals/                测试轨迹
+apps/agent-sidecar    旧协议夹具，不打包进 XPI
 ```
 
+常用命令：
+
 ```bash
-npm test        # 单元测试与评估轨迹
-npm run verify  # 同步、版本、类型与完整测试
-npm run build   # 构建所有 workspace
+npm test
+npm run typecheck
+npm run verify
+npm run build
 ```
 
 本地只读 MCP 地址：
@@ -199,8 +126,6 @@ npm run build   # 构建所有 workspace
 http://127.0.0.1:23119/confucius/v1/mcp
 ```
 
-请求需要 Settings 中显示的 pairing token。
-
-## License
+## 许可证
 
 AGPL-3.0-or-later

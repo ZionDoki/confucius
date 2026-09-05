@@ -246,8 +246,7 @@ export class TurnLoop {
 
       // Vision support varies across OpenAI-compatible and Ollama endpoints,
       // and a gateway can accept an image request without ever answering it.
-      // The durable line anchors remain in the tool messages, so retry once
-      // without model-only media rather than leaving the task running forever.
+      // Text anchors remain in the tool messages, so retry without the image.
       removeTransientMessages(messages);
       const fallbackReason =
         error instanceof TransientMediaTimeoutError
@@ -257,8 +256,8 @@ export class TurnLoop {
         text:
           this.deps.transientMediaFallbackMessage?.(fallbackReason) ??
           (fallbackReason === "timeout"
-            ? "Page-image analysis timed out. Retrying once with the durable text anchors."
-            : "Page-image analysis was unavailable. Retrying once with the durable text anchors."),
+            ? "Page-image analysis timed out. Retrying with the page text."
+            : "Page-image analysis was unavailable. Retrying with the page text."),
       });
       return this.deps.model.complete({ messages, tools }, input.signal);
     }
@@ -603,7 +602,7 @@ function markPageVisualOmitted(result: ToolResult): ToolResult {
       visualAvailable: false,
       visualOmitted: true,
       regionGuidance:
-        "This page's transient image was omitted because only one visual PDF page is sent per model round. Use the durable text anchors only and do not guess image-region coordinates. Inspect this page alone in a later round if visual grounding is required.",
+        "Only one PDF page image is sent per model round, so this page includes text anchors only. Do not guess image-region coordinates. Inspect this page in a later round if its image is needed.",
     },
   };
 }

@@ -22,14 +22,15 @@ describe("preset research workflows", () => {
       assert.ok(workflow);
       assert.match(
         workflow.researchInstruction,
-        /artifact_upsert does not exist/i,
+        /artifact_upsert is unavailable/i,
       );
-      assert.match(workflow.researchInstruction, /never call it/i);
-      assert.match(workflow.researchInstruction, /constraint as binding/i);
-      assert.match(workflow.researchInstruction, /locked context/i);
-      assert.match(workflow.deliveryInstruction, /fresh context/i);
-      assert.match(workflow.deliveryInstruction, /satisfy it exactly/i);
-      assert.match(workflow.deliveryInstruction, /structured handoff/i);
+      assert.match(workflow.researchInstruction, /user's instruction applies/i);
+      assert.match(workflow.researchInstruction, /task context/i);
+      assert.match(workflow.deliveryInstruction, /attached handoff/i);
+      assert.doesNotMatch(
+        `${workflow.researchInstruction}\n${workflow.deliveryInstruction}`,
+        /locked context|sensible defaults|fresh context|autonomously|efficiently|immediately/i,
+      );
     }
     assert.equal(presetWorkflow("deep-read")?.source, "single");
     assert.equal(presetWorkflow("evidence-audit")?.source, "single");

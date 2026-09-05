@@ -1,23 +1,19 @@
-# Confucius 阅读器闭环与上下文脊柱 · 设计
+# Confucius 任务来源与阅读工作流
 
 日期：2026-09-02
 状态：已评审（用户逐节批准）
 范围：Zotero 插件（`apps/zotero-addon`），不含 Chrome 扩展形态
 
-## 背景与目标
+## 现状
 
-当前产品形态是「放在 Zotero 旁边的聊天面板」：入口只有工具栏按钮/Tools 菜单；
-系统提示仅注入主列表首选条目；阅读器打开的 PDF、当前页、选区要靠模型主动调
-`get_pdf_selection`、靠用户用文字描述；写回（高亮/批注）commit 后用户要自己去找。
+工作区原先只能从工具栏按钮或 Tools 菜单打开。系统提示只包含主列表首选条目；
+阅读器中的 PDF、当前页和选区需要模型调用 `get_pdf_selection` 或由用户说明。
+高亮和批注写入后也没有定位入口。
 
-目标：把产品形态变成「住在阅读循环里的 agent」，服务三个场景——
-单篇深读闭环、书库级整理、知识产出。手段是方案 A：先建上下文脊柱，再按
-深读 → 整理 → 产出 顺序垂直切片交付，每切片独立可用。
+本设计覆盖三类操作：阅读单篇论文、整理文库和保存研究结果。三类操作共用任务
+来源快照、入口和写回定位。
 
-核心判断：三个场景共享同一组缺口（上下文不可见、入口太深、写回开环），
-脊柱先修好，后续切片边际成本最小。
-
-## §1 上下文脊柱（活上下文 chip）
+## §1 任务来源快照
 
 ### 数据模型
 
@@ -55,7 +51,7 @@ host 侧新增 live context 快照，三类 chip：
 
 上下文管理面板、手动附加任意文件、chip 持久化。
 
-## §2 切片一：深读闭环
+## §2 论文阅读
 
 ### 阅读器入口
 
@@ -81,19 +77,19 @@ host 侧新增 live context 快照，三类 chip：
 
 阅读器内嵌评论面板、prompt 自动预填。
 
-## §3 切片二/三：整理入口 + 知识产出
+## §3 文库整理与知识产出
 
-### 切片二 · 书库整理
+### 文库整理
 
 - 新模块 `src/modules/ui/itemMenu.ts`：主窗口加载后往 `#zotero-itemmenu` 追加两项：
-  - 「Confucius · 深读此文」：单选且 `findPdf` 有结果时显示 → 打开工作区 + 预选技能 `paper-deep-reading`
+  - 「Confucius · 阅读此文」：单选且 `findPdf` 有结果时显示 → 打开工作区 + 预选技能 `paper-deep-reading`
   - 「Confucius · 整理所选」：多选（≥2）显示 → 打开工作区 + 预选 `library-triage`；
-    所选条目由脊柱 items chip 自动注入
+    所选条目由 items chip 加入任务来源
 - 技能预选传递：AgentHost 存 `pendingLaunch { skillSlug }`，新 RPC
   `workspace/launch-consume` 返回并清空；view poll 时应用 `applySkill`。
 - 集合场景不加菜单，靠 collection chip 自动注入。
 
-### 切片三 · 知识产出
+### 知识产出
 
 - 新写工具 `propose_note`：参数 `{ title, markdown, parentRef? }`，
   复用现有 propose→approval→commit 管线；commit 创建 Zotero note 条目
@@ -115,26 +111,14 @@ host 侧新增 live context 快照，三类 chip：
 - host 侧：selection 截断 2000、suppressSelection 生效、`open_item` 位置参数、
   `propose_note` commit 创建 note、`launch-consume` 一次性语义。
 
-### 交付顺序
-
-1. §1 脊柱 → 2. §2 深读闭环 → 3. §3 整理/产出。每切片独立
-   `npm run typecheck` + 全仓 `npm test` 全绿后进入下一切片。
-
-### Computer Use 验收（AGENTS.md 硬要求）
-
-每切片完成后用 Computer Use 打开真实窗口走用户路径：
-窄侧栏 + 宽悬浮窗两形态、右上角全局按钮、阅读器选区右键模板、
-选区 chip 出现与注入、定位跳转、itemmenu 两项、写入笔记审批。桌面操控若被中断，
-如实声明「未能用 Computer Use 打开界面」，不得假装看过。
-
 ## 关键文件
 
-- `apps/zotero-addon/src/modules/host/AgentHost.ts` — context/live、注入段、pendingLaunch、note/propose-from-session
-- `apps/zotero-addon/src/modules/tools/ZoteroToolHost.ts` — open_item 位置参数、propose_note
-- `apps/zotero-addon/src/modules/ui/WorkspaceView.ts` — chip 栏、定位链接、写入笔记按钮、launch 消费
-- `apps/zotero-addon/src/modules/ui/readerContextMenu.ts`（新）— 阅读器选区右键模板与点击时上下文捕获
-- `apps/zotero-addon/src/modules/ui/itemMenu.ts`（新）— 条目树右键菜单
-- `packages/protocol/src/rpc.ts` — 新 RPC 与类型
+- `apps/zotero-addon/src/modules/host/AgentHost.ts`：context/live、来源注入、pendingLaunch、note/propose-from-session
+- `apps/zotero-addon/src/modules/tools/ZoteroToolHost.ts`：open_item 位置参数、propose_note
+- `apps/zotero-addon/src/modules/ui/WorkspaceView.ts`：chip 栏、定位链接、写入笔记按钮、launch 消费
+- `apps/zotero-addon/src/modules/ui/readerContextMenu.ts`：阅读器选区菜单与来源捕获
+- `apps/zotero-addon/src/modules/ui/itemMenu.ts`：条目树右键菜单
+- `packages/protocol/src/rpc.ts`：RPC 与类型
 
 ## 假设与风险
 

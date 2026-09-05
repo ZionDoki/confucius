@@ -14,4 +14,4 @@ triggers:
   - 相关工作
 ---
 
-Group library papers as predecessors, competitors, or complements. Keep disagreements visible.
+Classify library papers as predecessors, competing work, or complements. Record disagreements between them.

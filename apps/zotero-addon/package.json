@@ -1,7 +1,7 @@
 {
   "name": "@confucius/zotero-addon",
   "version": "0.3.6",
-  "description": "Confucius for Zotero — native research agent host",
+  "description": "Read, compare, annotate, and organize papers in Zotero.",
   "config": {
     "addonName": "Confucius",
     "addonID": "confucius@zotero.plugin",

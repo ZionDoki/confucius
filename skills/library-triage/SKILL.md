@@ -15,4 +15,4 @@ triggers:
   - 整理文献
 ---
 
-Search first. Create or reuse a collection. Import identifiers only with approval. Tag conservatively.
+Search before adding items. Reuse a matching collection or create one. Import identifiers only with approval, and add tags supported by the paper metadata.

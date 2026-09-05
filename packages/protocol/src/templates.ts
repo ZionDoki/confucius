@@ -29,25 +29,24 @@ export interface TaskTemplate {
 export const TASK_TEMPLATES: readonly TaskTemplate[] = [
   {
     id: "deep-read",
-    title: "Deep read",
-    description:
-      "Customize annotation colors and meanings, method summaries, note voice, or focus in the prompt; otherwise sensible defaults are used.",
+    title: "Paper review",
+    description: "Set annotation colors, note style, or a focus in the prompt.",
     artifactKind: "deep_read",
     additionalArtifactKinds: ["annotation_set"],
     skillSlug: "paper-deep-reading",
     source: "single",
     prompt:
-      "Deep-read the locked paper. Use the default annotation meanings, method-summary style, note voice, and focus unless I specify changes here.",
+      "Review the paper attached to this task. Cover its question, method, evidence, assumptions, and limitations. Use the default annotation settings unless I specify changes here.",
   },
   {
     id: "evidence-audit",
     title: "Evidence audit",
     description:
-      "Customize scope, evidence thresholds, counterexample priority, or output structure in the prompt; otherwise audit the full paper.",
+      "Set a scope, evidence threshold, counterexample priority, or output format in the prompt.",
     artifactKind: "evidence_audit",
     source: "single",
     prompt:
-      "Audit the locked paper's major claims against its evidence. Use sensible defaults unless I specify scope, thresholds, counterexample priorities, or structure here.",
+      "Check the main claims in the task paper against its evidence. Use the full paper unless I specify a scope or output format here.",
   },
   {
     id: "related-work",
@@ -56,15 +55,15 @@ export const TASK_TEMPLATES: readonly TaskTemplate[] = [
     artifactKind: "report",
     source: "single",
     prompt:
-      "Map the locked paper to closely related work in this Zotero library.",
+      "Find closely related work in this Zotero library for the task paper.",
   },
   {
     id: "paper-note",
     title: "Paper note",
-    description: "Draft a durable Zotero reading note.",
+    description: "Draft a cited Zotero reading note.",
     artifactKind: "note_draft",
     source: "single",
-    prompt: "Create a concise, cited reading-note draft for the locked paper.",
+    prompt: "Draft a cited reading note for the task paper.",
   },
   {
     id: "compare",
@@ -73,7 +72,7 @@ export const TASK_TEMPLATES: readonly TaskTemplate[] = [
     artifactKind: "report",
     source: "multi",
     prompt:
-      "Compare the locked sources across question, method, evidence, and conclusions.",
+      "Compare the task sources by question, method, evidence, and conclusion.",
   },
   {
     id: "triage",
@@ -82,17 +81,18 @@ export const TASK_TEMPLATES: readonly TaskTemplate[] = [
     artifactKind: "triage_table",
     skillSlug: "library-triage",
     source: "multi",
-    prompt: "Triage every locked source and produce a decision table.",
+    prompt:
+      "Classify each task source as keep, review, or exclude, and give a reason.",
   },
   {
     id: "synthesis",
     title: "Synthesis",
     description:
-      "Customize the question, source scope, treatment of disagreements, or delivery format in the prompt; otherwise use sensible defaults.",
+      "Set the question, source scope, treatment of disagreements, or output format in the prompt.",
     artifactKind: "report",
     source: "multi",
     prompt:
-      "Synthesize the locked sources into a cited research report. Use sensible defaults unless I specify the question, source scope, disagreement emphasis, or format here.",
+      "Write a cited report that synthesizes the task sources. Use the full source set unless I specify a question, scope, treatment of disagreements, or format here.",
   },
   {
     id: "literature-map",
@@ -100,7 +100,7 @@ export const TASK_TEMPLATES: readonly TaskTemplate[] = [
     description: "Map conceptual and evidential relationships.",
     artifactKind: "literature_map",
     source: "multi",
-    prompt: "Build a literature map from the locked sources.",
+    prompt: "Build a literature map from the task sources.",
   },
   {
     id: "explain-selection",
@@ -109,7 +109,7 @@ export const TASK_TEMPLATES: readonly TaskTemplate[] = [
     artifactKind: "report",
     source: "selection",
     prompt:
-      "Explain the locked passage in context, including any necessary definitions.",
+      "Explain the selected passage in its paper context. Define terms when needed.",
   },
   {
     id: "verify-claim",
@@ -119,7 +119,7 @@ export const TASK_TEMPLATES: readonly TaskTemplate[] = [
     artifactKind: "evidence_audit",
     source: "selection",
     prompt:
-      "Verify the claim in the locked passage against the paper and library evidence.",
+      "Check the selected claim against evidence in the paper and Zotero library.",
   },
   {
     id: "save-insight",
@@ -127,7 +127,7 @@ export const TASK_TEMPLATES: readonly TaskTemplate[] = [
     description: "Turn the passage into a reusable research insight.",
     artifactKind: "report",
     source: "selection",
-    prompt: "Turn the locked passage into a concise, cited research insight.",
+    prompt: "Turn the selected passage into a cited research insight.",
   },
   {
     id: "selection-note",
@@ -135,16 +135,16 @@ export const TASK_TEMPLATES: readonly TaskTemplate[] = [
     description: "Draft a note anchored to the selected passage.",
     artifactKind: "note_draft",
     source: "selection",
-    prompt: "Draft a Zotero note grounded in the locked passage.",
+    prompt: "Draft a Zotero note based on the selected passage.",
   },
   {
     id: "freeform",
     title: "Research task",
-    description: "Start from the locked context with your own instruction.",
+    description: "Use the task sources with your own instruction.",
     artifactKind: "report",
     source: "any",
     prompt:
-      "Research the user's request using only the locked Zotero context as the starting scope.",
+      "Research my request using the Zotero sources attached to this task.",
   },
 ] as const;
 

@@ -1,6 +1,6 @@
 ---
 name: Annotation Pass
-description: Design a grounded PDF annotation set and request write approval through the tool gate.
+description: Prepare PDF annotations and request approval before writing them.
 allowed-tools:
   - get_outline
   - get_paper_section
@@ -17,14 +17,14 @@ triggers:
   - 标注
 ---
 
-Design annotations around the user's reading goal and current-task preferences. Use reasonable defaults when optional preferences are absent; do not pause to ask preference or delivery questions.
+Prepare annotations for the user's reading goal. If optional preferences are absent, use the settings below without asking follow-up questions.
 
 Use this default legend unless the user overrides it for this task:
 
-- yellow highlight (`#ffd400`) = very important;
-- blue underline (`#2ea8e5`) = worth reading carefully;
-- purple image-region note (`#a28ae5`) = a figure, formula, table, or other regional piece of evidence plus its explanation.
+- yellow highlight (`#ffd400`) = key point
+- blue underline (`#2ea8e5`) = supporting detail
+- purple image-region note (`#a28ae5`) = visual evidence with an explanation
 
-Text annotations need an exact quote and page. Image-region notes need a useful comment and coordinates grounded in `inspect_pdf_page`. Inspect at most one visual page per model round. If that tool returns no transient page image, do not guess a region; omit it and explain the limitation. Honor per-annotation `#RRGGBB` colors, a redefined legend, requested method-section summaries, note voice, and focus.
+Text annotations need an exact quote and page. Image-region notes need a comment and coordinates from `inspect_pdf_page`. Inspect at most one visual page per model round. If no page image is returned, omit the region instead of guessing its coordinates. Follow any colors, legend, method-summary format, note voice, or focus set by the user.
 
-Create an `annotation_set` artifact with its legend and call `propose_annotations`, then call `commit_annotations` in the same run. Do not ask for confirmation in chat: the tool approval dialog is the consent step. If the user denies the tool or the write fails, do not retry it; keep the proposed annotation set and explain that the PDF was not annotated. When reporting a written annotation, copy only the exact `zoteroUri` returned by the tool; never construct a Zotero URI.
+Create an `annotation_set` artifact with its legend. Call `propose_annotations`, then `commit_annotations` in the same run. The tool approval dialog handles consent, so do not request it in chat. If approval is denied or the write fails, keep the proposed set and do not retry the write. Use only `zoteroUri` values returned by tools.

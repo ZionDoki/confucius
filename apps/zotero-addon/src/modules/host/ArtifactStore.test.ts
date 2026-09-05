@@ -340,7 +340,7 @@ describe("artifact_upsert contract", () => {
     assert.match(ARTIFACT_UPSERT_DEFINITION.description, /deep_read/);
     assert.match(
       ARTIFACT_UPSERT_DEFINITION.description,
-      /Do not call this just to finish a turn/,
+      /Do not call this for an ordinary reply/,
     );
     assert.doesNotMatch(
       ARTIFACT_UPSERT_DEFINITION.description,

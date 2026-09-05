@@ -1,6 +1,6 @@
 ---
 name: Research Knowledge Base
-description: Build and maintain a durable, queryable knowledge base for an active research topic.
+description: Maintain a searchable knowledge base for a research topic.
 allowed-tools:
   - knowledge_base_list
   - knowledge_base_get
@@ -36,21 +36,21 @@ triggers:
   - 课题追踪
 ---
 
-Act as the curator of the user's active research topic, not merely a summarizer.
+Maintain the user's active research topic.
 
-Start by calling `knowledge_base_list`. Reuse an existing topic when its scope matches; do not create near-duplicate knowledge bases. Before adding an entry, call `knowledge_base_search` with its central terms and update an existing entry when the new material refines it.
+Start with `knowledge_base_list`. Reuse a topic when its scope matches. Before adding an entry, call `knowledge_base_search` with its main terms and update a matching entry when the new material changes it.
 
-Organize durable material into the narrowest useful kind:
+Choose the closest entry type:
 
-- `paper`: a literature record, including the Zotero `libraryID` and `key` when known. Record why it matters, not just its citation.
-- `note`: source-grounded observations or reading notes that are useful later.
+- `paper`: a literature record with the Zotero `libraryID` and `key` when known. Record why it matters.
+- `note`: observations or reading notes linked to their source.
 - `insight`: a synthesis, hypothesis, contradiction, or research gap that crosses sources.
 - `method`: an approach that was attempted or is planned. State inputs, outcome, failure mode, and the next decision.
 - `discussion`: conclusions, unresolved questions, and decisions from a conversation.
-- `mindmap`: a Markdown outline that represents a paper or the evolving topic structure.
+- `mindmap`: a Markdown outline for a paper or topic.
 
-Keep evidence and interpretation distinguishable. Cite Zotero items as `libraryID:key`; never invent a paper or source reference. Search the library when a source is uncertain.
+Separate evidence from interpretation. Cite Zotero items as `libraryID:key`. Search the library when a source is uncertain.
 
-Persist when the user explicitly asks to remember/store/track something, when a result changes the continuing research state, or when it will be reused across sessions. For exploratory or disposable material, answer first without saving. Every knowledge-base write is approval-gated, so make titles and proposed content clear enough for the user to judge.
+Save material when the user asks to remember, store, or track it; when it changes the research topic; or when it will be used in another session. Do not save temporary exploration. Give each proposed write a specific title and content that can be reviewed in the approval dialog.
 
-At the end, briefly state which topic and entries were created or updated, plus any unresolved research question.
+At the end, list the topic and entries that changed, followed by any open research question.

@@ -104,7 +104,7 @@ describe("task MCP gateway", () => {
     assert.ok(body.result?.capabilities);
     assert.match(
       String(body.result?.instructions),
-      /only for a durable research product/,
+      /only to save a cited research file/,
     );
     assert.doesNotMatch(
       String(body.result?.instructions),

@@ -426,7 +426,7 @@ const schema: JsonSchemaObject = {
 export const ARTIFACT_UPSERT_DEFINITION: ToolDefinition = {
   name: ARTIFACT_UPSERT_TOOL,
   description:
-    'Create or revise a structured research artifact when the user asked for a durable product. Do not call this just to finish a turn. Critical body rule: deep_read, report, and note_draft use {"type":"markdown","markdown":"..."}; other kinds use a body whose type equals kind and whose required fields follow the schema.',
+    'Create or revise a saved research artifact. Do not call this for an ordinary reply. For deep_read, report, and note_draft, use {"type":"markdown","markdown":"..."}; for other kinds, body.type must equal kind and the body must follow its schema.',
   inputSchema: schema,
 };
 

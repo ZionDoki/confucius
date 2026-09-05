@@ -1232,7 +1232,7 @@ export class AgentHost {
     const active = activeEndpoint(store);
     if (!endpointIsConfigured(active)) {
       throw new Error(
-        "Model not configured — click the ⚙ Settings button to add an endpoint (Base URL and model).",
+        "Model not configured. Open Settings and add an endpoint with a Base URL and model.",
       );
     }
     return active as ModelEndpoint;
@@ -2037,7 +2037,7 @@ export class AgentHost {
         toolName: name,
         code: "permission_denied",
         message:
-          "Source is outside the host-resolved locked context. Use only an identifier from the authoritative preset source inventory.",
+          "Source is outside this task. Use an identifier from the task source list.",
       });
     }
     const callId = String(params.callId ?? this.ids());
@@ -3351,7 +3351,7 @@ export class AgentHost {
       "",
       ...TOOL_GROUNDING_PROMPT,
       "",
-      `Locked Zotero context (${context.fingerprint}, captured ${new Date(
+      `Task Zotero sources (${context.fingerprint}, captured ${new Date(
         context.capturedAt,
       ).toISOString()}):`,
       ...context.items.map(
@@ -3361,27 +3361,27 @@ export class AgentHost {
     );
     if (context.collection) {
       lines.push(
-        `Locked collection: ${context.collection.name} [libraryID=${context.collection.libraryID}, key=${context.collection.key}, contextId=${context.collection.id}]`,
+        `Task collection: ${context.collection.name} [libraryID=${context.collection.libraryID}, key=${context.collection.key}, contextId=${context.collection.id}]`,
       );
     }
     if (context.savedSearch) {
       lines.push(
-        `Locked saved search: ${context.savedSearch.name} [libraryID=${context.savedSearch.libraryID}, key=${context.savedSearch.key}, contextId=${context.savedSearch.id}]`,
+        `Task saved search: ${context.savedSearch.name} [libraryID=${context.savedSearch.libraryID}, key=${context.savedSearch.key}, contextId=${context.savedSearch.id}]`,
       );
     }
     if (context.reader) {
       lines.push(
-        `Locked reader: ${context.reader.title} [libraryID=${context.reader.libraryID}, attachmentKey=${context.reader.attachmentKey}, page=${context.reader.pageLabel ?? "?"}, contextId=${context.reader.id}]`,
+        `Task reader: ${context.reader.title} [libraryID=${context.reader.libraryID}, attachmentKey=${context.reader.attachmentKey}, page=${context.reader.pageLabel ?? "?"}, contextId=${context.reader.id}]`,
       );
     }
     if (context.selection?.text) {
       lines.push(
-        `Locked reader selection (page ${context.selection.pageLabel ?? "?"}):`,
+        `Task reader selection (page ${context.selection.pageLabel ?? "?"}):`,
         context.selection.text.slice(0, 4_000),
       );
     }
     lines.push(
-      "The live Zotero selection may have changed; only use the locked context unless the user explicitly updates it.",
+      "Use these task sources unless the user updates them. Do not replace them with the current Zotero selection.",
     );
     if (options.loadedSkills?.length) {
       lines.push("", "Loaded preset procedure (follow it):");
@@ -3809,7 +3809,7 @@ export class AgentHost {
         {
           ...input,
           task: deliveryTask,
-          prompt: `Delivery is incomplete. Create the missing durable artifact${missing.length === 1 ? "" : "s"} with artifact_upsert now: ${missing.join(", ")}. Do not restart research or annotation work and do not ask the user questions.`,
+          prompt: `The required file${missing.length === 1 ? " is" : "s are"} missing. Create ${missing.join(", ")} with artifact_upsert. Do not repeat the research or annotation work, and do not ask the user questions.`,
           includeArtifactGuidance: true,
           workflowInstruction: workflow.deliveryInstruction,
         },
@@ -4373,7 +4373,7 @@ export class AgentHost {
                 return missing.length === 0
                   ? undefined
                   : {
-                      instruction: `Delivery is incomplete. Create the missing durable artifact${missing.length === 1 ? "" : "s"} with artifact_upsert now: ${missing.join(", ")}. Do not restart research or annotation work and do not ask the user questions.`,
+                      instruction: `The required file${missing.length === 1 ? " is" : "s are"} missing. Create ${missing.join(", ")} with artifact_upsert. Do not repeat the research or annotation work, and do not ask the user questions.`,
                       statusText: deliveryStatus,
                     };
               },
@@ -4697,16 +4697,15 @@ export class AgentHost {
         "is compacted. Use conversation_log_search / conversation_log_read to recover",
         "earlier details. Repeatedly retrieved log excerpts are promoted into memory.",
         "Visible research topics live in knowledge bases. Use knowledge_base_list and",
-        "knowledge_base_search before adding material, then organize durable papers,",
+        "knowledge_base_search before adding material, then organize papers,",
         "notes, insights, attempted methods, discussion results, and Markdown mind maps",
         "with knowledge_base_save_entry. Knowledge-base writes require user approval.",
       );
     } else {
       parts.push(
-        "ISOLATED WORKFLOW CONTEXT: long-term memory, knowledge bases, and prior",
-        "conversation logs are unavailable and out of scope. Do not recall, infer,",
-        "or search for identifiers from another task. Use only the host-resolved",
-        "locked-source inventory and results returned inside this phase.",
+        "This workflow cannot access memory, knowledge bases, or earlier conversation",
+        "logs. Do not recall, infer, or search for identifiers from another task.",
+        "Use only the task source list and results returned in this stage.",
       );
     }
     if (options.includeArtifactGuidance !== false) {
@@ -4735,11 +4734,11 @@ export class AgentHost {
     }
     if (locked.selection?.text && !options.suppressSelection) {
       lockedLines.push(
-        `Locked selection (page ${locked.selection.pageLabel ?? "?"}):\n"""${locked.selection.text.slice(0, 2000)}"""`,
+        `Task selection (page ${locked.selection.pageLabel ?? "?"}):\n"""${locked.selection.text.slice(0, 2000)}"""`,
       );
     }
     if (locked.items.length) {
-      lockedLines.push(`Locked Zotero items (${locked.items.length}):`);
+      lockedLines.push(`Task Zotero items (${locked.items.length}):`);
       for (const entry of locked.items) {
         lockedLines.push(
           `- contextId=${entry.id} libraryID=${entry.libraryID} key=${entry.key} title=${entry.title}`,
@@ -4748,17 +4747,17 @@ export class AgentHost {
     }
     if (locked.collection) {
       lockedLines.push(
-        `Locked collection: ${locked.collection.name} (libraryID=${locked.collection.libraryID}, key=${locked.collection.key})`,
+        `Task collection: ${locked.collection.name} (libraryID=${locked.collection.libraryID}, key=${locked.collection.key})`,
       );
     }
     if (locked.savedSearch) {
       lockedLines.push(
-        `Locked saved search: ${locked.savedSearch.name} (libraryID=${locked.savedSearch.libraryID}, key=${locked.savedSearch.key})`,
+        `Task saved search: ${locked.savedSearch.name} (libraryID=${locked.savedSearch.libraryID}, key=${locked.savedSearch.key})`,
       );
     }
     if (lockedLines.length) {
       parts.push(
-        `Locked task context captured at ${new Date(locked.capturedAt).toISOString()}. Do not replace it with the live Zotero selection:`,
+        `Task sources captured at ${new Date(locked.capturedAt).toISOString()}. Do not replace them with the current Zotero selection:`,
         ...lockedLines,
       );
     }
@@ -5578,7 +5577,7 @@ function omitParallelPageVisual(
       visualAvailable: false,
       visualOmitted: true,
       regionGuidance:
-        "This transient image was omitted because another inspect_pdf_page call is already returning a page image. Use the durable text anchors only and do not guess region coordinates; inspect this page again after the current call completes if visual grounding is necessary.",
+        "Another inspect_pdf_page call already returned a page image. Use this page's text anchors and do not guess region coordinates. Inspect this page again in a later call if the image is needed.",
     },
   };
 }

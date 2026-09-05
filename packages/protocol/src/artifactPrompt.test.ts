@@ -8,18 +8,18 @@ import {
 describe("artifact upsert guidance", () => {
   it("does not require an artifact on every turn", () => {
     const text = artifactUpsertGuidance();
-    assert.match(text, /Call artifact_upsert only when producing a durable/);
-    assert.match(text, /Do not wrap an ordinary reply as a new artifact/);
-    assert.match(text, /keep the chat reply brief/);
+    assert.match(text, /Call artifact_upsert only to save a cited/);
+    assert.match(text, /Do not save an ordinary reply as an artifact/);
+    assert.match(text, /state what changed/);
     assert.doesNotMatch(text, /Before completing/);
     assert.doesNotMatch(text, /Required artifact kind/);
     assert.doesNotMatch(text, /This task's template/);
-    assert.doesNotMatch(text, /Existing artifacts/);
+    assert.doesNotMatch(text, /Saved files/);
   });
 
   it("names the template product without forcing a wrap-up artifact", () => {
     const text = artifactUpsertGuidance({ templateId: "deep-read" });
-    assert.match(text, /This task's template is "Deep read"/);
+    assert.match(text, /This task uses the "Paper review" template/);
     assert.match(text, /kind deep_read/);
     assert.match(text, /kind annotation_set/);
     assert.match(text, /Follow-ups and clarifications do not need an artifact/);
@@ -48,13 +48,13 @@ describe("artifact upsert guidance", () => {
     });
     assert.match(text, /- art_audit \(evidence_audit, r2\): Claim audit/);
     assert.match(text, /call artifact_upsert with its id/);
-    assert.match(text, /This task's template is "Evidence audit"/);
+    assert.match(text, /This task uses the "Evidence audit" template/);
   });
 
   it("keeps MCP task instructions from requiring a wrap-up upsert", () => {
     assert.match(
       MCP_TASK_GATEWAY_INSTRUCTIONS,
-      /only for a durable research product/,
+      /only to save a cited research file/,
     );
     assert.doesNotMatch(
       MCP_TASK_GATEWAY_INSTRUCTIONS,

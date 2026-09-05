@@ -644,7 +644,7 @@ test("workspace exposes an editable research knowledge base and mind maps", () =
   assert.equal(view.includes("workspaceKnowledgeIcon"), true);
 });
 
-test("tasks lock context and expose on-demand context controls", () => {
+test("tasks preserve their sources and expose context controls", () => {
   const view = readFileSync(
     join(root, "src/modules/ui/WorkspaceView.ts"),
     "utf8",
@@ -667,9 +667,9 @@ test("tasks lock context and expose on-demand context controls", () => {
   assert.equal(tools.includes("export function liveReaderContext"), true);
   assert.equal(host.includes("case RPC_METHODS.contextLive"), true);
   assert.equal(host.includes("case RPC_METHODS.readerOpen"), true);
-  assert.equal(host.includes("Locked task context captured at"), true);
+  assert.equal(host.includes("Task sources captured at"), true);
   assert.equal(
-    host.includes("Do not replace it with the live Zotero selection"),
+    host.includes("Do not replace them with the current Zotero selection"),
     true,
   );
   assert.equal(host.includes("firstSelectedItem"), false);

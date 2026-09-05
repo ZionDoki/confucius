@@ -1921,7 +1921,10 @@ function buildContextRing(doc: Document): {
       cursor: "pointer",
       margin: "0 2px",
     },
-    { id: "confucius-context-ring", title: "Context usage — click to compact" },
+    {
+      id: "confucius-context-ring",
+      title: getString("workspace-context-compact"),
+    },
   ) as HTMLElement;
   const svg = doc.createElementNS(SVG_NS, "svg");
   svg.setAttribute("width", String(size));
@@ -1966,7 +1969,10 @@ function buildContextRing(doc: Document): {
       clamped >= 90 ? "#b3452f" : clamped >= 70 ? "#8c6a3f" : "#33302a",
     );
     text.textContent = `${Math.round(clamped)}%`;
-    node.setAttribute("title", `${label} — click to compact`);
+    node.setAttribute(
+      "title",
+      `${label} · ${getString("workspace-context-compact")}`,
+    );
   };
   return { node, update };
 }
@@ -1989,7 +1995,7 @@ function showMountError(root: HTMLElement, error: unknown): void {
     background: "#f5f3ee",
   });
   const title = el(doc, "div", { fontWeight: "700", marginBottom: "8px" });
-  title.textContent = "Confucius workspace failed to mount.";
+  title.textContent = getString("workspace-mount-error");
   const detail = el(doc, "pre", {
     whiteSpace: "pre-wrap",
     wordBreak: "break-word",
@@ -2243,7 +2249,7 @@ function bindWorkspace(
   );
   status.textContent = host
     ? getString("workspace-connecting")
-    : "host missing";
+    : getString("workspace-host-missing");
   brandGroup.appendChild(brandMark(doc));
   brandGroup.appendChild(brand);
   brandGroup.appendChild(status);
@@ -2251,7 +2257,11 @@ function bindWorkspace(
   const newSessionBtn = button(doc, "confucius-new-session", newSessionLabel);
   newSessionBtn.setAttribute("aria-label", newSessionLabel);
   newSessionBtn.setAttribute("title", newSessionLabel);
-  const modeBtn = button(doc, "confucius-mode", "Agent");
+  const modeBtn = button(
+    doc,
+    "confucius-mode",
+    getString("workspace-mode-agent"),
+  );
   modeBtn.style.display = "none";
   const settingsLabel = getString("workspace-settings");
   const settingsBtn = el(doc, "button", undefined, {
@@ -2340,7 +2350,10 @@ function bindWorkspace(
     display: showSessions ? "block" : "none",
   });
   sessionPane.className = "confucius-pane confucius-session-pane";
-  sessionPane.setAttribute("aria-label", "Research tasks");
+  sessionPane.setAttribute(
+    "aria-label",
+    getString("workspace-toggle-sessions"),
+  );
   const workbenchPane = el(doc, "div", {
     flex: "1 1 auto",
     minWidth: "0px",
@@ -3299,7 +3312,7 @@ function bindWorkspace(
         },
         { type: "button" },
       );
-      del.textContent = "forget";
+      del.textContent = getString("workspace-memory-delete");
       del.addEventListener("click", () => {
         void (async () => {
           await rpc("memory/delete", { id: memory.id });
@@ -6467,7 +6480,9 @@ function bindWorkspace(
   }
 
   function syncModeButton(): void {
-    modeBtn.textContent = state.mode === "plan" ? "Plan" : "Agent";
+    modeBtn.textContent = getString(
+      state.mode === "plan" ? "workspace-mode-plan" : "workspace-mode-agent",
+    );
   }
 
   function syncEndpointButton(): void {
@@ -7010,19 +7025,23 @@ function bindWorkspace(
       "",
     );
     const baseUrlInput = field(
-      "Base URL (OpenAI-compatible /chat/completions, or Ollama /api/chat)",
+      getString("workspace-base-url"),
       "confucius-cfg-baseUrl",
       "",
     );
     const apiKeyInput = field(
-      "API key (ignored by local Ollama)",
+      getString("workspace-api-key"),
       "confucius-cfg-apiKey",
       "",
       "password",
     );
-    const modelInput = field("Model", "confucius-cfg-model", "");
+    const modelInput = field(
+      getString("workspace-model"),
+      "confucius-cfg-model",
+      "",
+    );
     const maxTokensInput = field(
-      "Max tokens (0 = provider default)",
+      getString("workspace-max-tokens"),
       "confucius-cfg-maxTokens",
       "0",
       "number",
@@ -7045,7 +7064,7 @@ function bindWorkspace(
       return input;
     };
     const contextInput = field(
-      "Context window (tokens, for the usage ring and compaction)",
+      getString("workspace-context-window"),
       "confucius-cfg-contextWindowTokens",
       "32768",
       "number",
@@ -7057,13 +7076,13 @@ function bindWorkspace(
       color: "#6b665c",
       marginBottom: "3px",
     });
-    effortLabel.textContent = "Thinking effort";
+    effortLabel.textContent = getString("workspace-thinking");
     const effort = effortPicker(doc, "confucius-cfg-effort", "auto");
     effortRow.appendChild(effortLabel);
     effortRow.appendChild(effort.node);
     modelTab.appendChild(effortRow);
     const stream = check(
-      "Stream model output live",
+      getString("workspace-stream-responses"),
       "confucius-cfg-stream",
       live.streamResponses !== false,
     );
@@ -9854,11 +9873,11 @@ function bindWorkspace(
     }
 
     section(getString("workspace-mode"));
-    option("Agent", state.mode === "agent", () => {
+    option(getString("workspace-mode-agent"), state.mode === "agent", () => {
       applyMode("agent");
       closePlusMenu();
     });
-    option("Plan (read-only)", state.mode === "plan", () => {
+    option(getString("workspace-mode-plan"), state.mode === "plan", () => {
       applyMode("plan");
       closePlusMenu();
     });

@@ -24,10 +24,10 @@ describe("task templates", () => {
     );
   });
 
-  it("keeps featured preset drafts editable instead of encoding the workflow", () => {
+  it("keeps featured preset drafts concise and editable", () => {
     for (const template of FEATURED_TASK_TEMPLATES) {
-      assert.match(template.description, /customize/i);
       assert.doesNotMatch(template.prompt, /artifact_upsert|approval dialog/i);
+      assert.doesNotMatch(template.prompt, /locked context|sensible defaults/i);
     }
     assert.doesNotMatch(
       taskTemplate("deep-read")!.prompt,

@@ -2,7 +2,7 @@
   "name": "confucius",
   "version": "0.3.6",
   "private": true,
-  "description": "Native research agent for Zotero",
+  "description": "Research workspace for Zotero",
   "license": "AGPL-3.0-or-later",
   "workspaces": [
     "packages/*",

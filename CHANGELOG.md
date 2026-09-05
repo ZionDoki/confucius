@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.3.6 — 2026-09-05
+## 0.3.6 - 2026-09-05
 
 ### Updates
 
@@ -12,40 +12,32 @@
 
 ### Research presets and annotations
 
-- The three featured presets now run end to end with sensible defaults instead
-  of interviewing the user about optional delivery preferences. Their hints
-  show the controls that can be added directly to the prompt.
-- Each preset now runs as an isolated research context followed by a fresh
-  delivery context. The user's edited brief is injected into both stages, the
-  handoff is bounded and treated as untrusted evidence, and stage-specific
-  tool allowlists prevent premature artifacts or restarted research across
-  Native, Codex, and Kimi backends.
-- Deep reading now treats the `commit_annotations` approval dialog as the
-  consent step. It must attempt PDF highlights, underlines, and region notes;
-  a denied or failed write falls back to the completed report without retrying
-  the mutation.
+- The three featured tasks use default settings when optional preferences are
+  absent. Their hints list the settings accepted in the prompt.
+- Each task separates source analysis from file creation. Both stages receive
+  the user's edited prompt, and each stage has its own tool list. This applies
+  to Native, Codex, and Kimi.
+- Paper review uses the `commit_annotations` dialog for approval. A denied or
+  failed PDF write returns the report without retrying the write.
 - Annotation artifacts tolerate MiniMax-style string encoding for page,
   library, and rectangle numbers while retaining strict schema validation.
 
 ### Long-running turns
 
-- Multi-page inspection now sends at most one transient page image per model
-  round while keeping durable text anchors for every requested page.
-- Parallel external Runtime page inspections likewise return at most one
-  transient image at a time; the remaining calls retain text anchors and are
-  explicitly marked as visually omitted.
+- Multi-page inspection sends at most one page image per model round and keeps
+  text anchors for every requested page.
+- Parallel external Runtime inspections also return at most one page image.
+  The remaining calls return text anchors and note the omitted image.
 - Page-image model calls have a cancellable 45-second deadline and retry once
-  with text anchors. User-initiated Stop never triggers that retry.
-- The workspace now shows the live post-tool phase and elapsed time, including
-  PDF image analysis and text-anchor fallback, instead of an opaque working
-  state.
+  with text anchors. User-initiated Stop does not trigger that retry.
+- The workspace shows the current phase and elapsed time, including PDF image
+  analysis and text fallback.
 
-## 0.3.5 — 2026-09-04
+## 0.3.5 - 2026-09-04
 
-### Deep reading and PDF annotations
+### Paper review and PDF annotations
 
-- Deep-reading tasks now deliver both a cited report and a detailed annotation
-  set with an explicit reading legend.
+- Paper-review tasks return a cited report and an annotation set with a legend.
 - Annotation sets support highlights, underlines, and image-region notes, with
   safe per-annotation `#RRGGBB` colors and defaults for each annotation type.
 - PDF writes preflight the complete batch, roll back on save or Reader refresh
@@ -57,34 +49,33 @@
 
 ### Tasks and workspace
 
-- The empty workspace and `/` picker now focus on three representative modes:
-  Deep read, Evidence audit, and Synthesis. All 13 template IDs remain
+- The empty workspace and `/` picker show three modes: Paper review, Evidence
+  audit, and Synthesis. All 13 template IDs remain
   compatible with existing tasks and legacy entry points.
 - Research-mode names, descriptions, and editable prompt drafts follow the
   selected Chinese or English interface language.
 - Appearance settings now include an explicit Chinese/English switch and
   compact, standard, or relaxed reading line height.
-- Choosing a research mode stages an editable draft and never starts work
-  before Send; validation failures preserve the draft.
-- The `/` and `@` pickers now share placement, dimensions, keyboard behavior,
-  and a restrained vermilion focus treatment. The security profile uses the
-  same styled custom-menu language.
-- Task titles start with a cleaned local summary, then lock to a same-language
-  title generated from the first successful user/Agent exchange, with an
-  atomic local fallback for failures and timeouts.
+- Choosing a research mode creates an editable draft. Work starts after Send,
+  and validation failures preserve the draft.
+- The `/` and `@` pickers share placement, dimensions, keyboard behavior, and
+  focus styles. The security profile uses the same menu component.
+- Task titles start with a local summary. The first successful exchange replaces
+  it with a title in the interface language. Failures and timeouts keep the
+  local title.
 
 ### Links and compatibility
 
 - Historical `zotero://item/<key>` links open again. New item and PDF links are
   built only through canonical URI helpers, including annotation and page
-  fallback targets for resilient navigation.
+  fallback targets for navigation.
 - Existing highlight-only artifacts and `propose_highlights` calls remain
   readable while new work uses the discriminated annotation format.
 - PDF page inspection now unwraps Zotero Reader objects, clones viewport
   arguments into the Reader compartment, and uses its crop renderer so text
   anchors and transient page images work in a real Zotero 7 Reader.
 
-## 0.3.4 — 2026-09-04
+## 0.3.4 - 2026-09-04
 
 ### Reliability
 
@@ -93,9 +84,8 @@
 - Failed Native Runtime turns roll back their in-flight history and
   checkpoints, so the same task can accept a new prompt without carrying a
   broken turn forward. Failed turns also skip follow-up history compaction.
-- Completed streams now collapse token deltas into durable timeline events
-  before applying a higher history cap, preserving substantially more earlier
-  turns when a task is reopened.
+- Completed streams collapse token deltas into timeline events before applying
+  the history cap, preserving more earlier turns when a task is reopened.
 
 ### Workspace
 
@@ -107,30 +97,30 @@
   configured interface font size.
 - The `/` command picker now matches the `@` paper picker in panel styling,
   row layout, responsive width, available-height handling, and placement.
-- PDF search coordinates are normalized and cloned into the reader window;
-  committed highlights are then pushed into the active Zotero reader and
-  opened by annotation ID so they are immediately visible on the page.
+- PDF search coordinates are normalized and cloned into the reader window.
+  Committed highlights are sent to the active reader and opened by annotation
+  ID.
 
 ### Docs
 
-- Product READMEs now link to the GitHub-hosted promo film with Markdown. The
+- Product READMEs now link to the GitHub-hosted demo video. The
   bundled video has been removed from the repository.
 
-## 0.3.3 — 2026-09-04
+## 0.3.3 - 2026-09-04
 
 ### Research workflow
 
 - Ordinary agent replies stay in the activity stream. A completed turn no
   longer auto-saves the assistant text as a report artifact.
-  `artifact_upsert` is only for durable research products such as deep
-  reads, audits, maps, and note drafts.
+  `artifact_upsert` is used for saved files such as paper reviews, audits,
+  maps, and note drafts.
 
 ### Docs
 
-- Product READMEs now embed the promo film with a `<video>` player instead of
+- Product READMEs now embed the demo video with a `<video>` player instead of
   a cover image that links out.
 
-## 0.3.2 — 2026-09-04
+## 0.3.2 - 2026-09-04
 
 ### Agent runtimes
 
@@ -152,15 +142,15 @@
 - Assistant responses now expose copy, branch, and save-to-note actions. The
   composer uses one Runtime/model picker and closes menus when focus moves
   elsewhere.
-- Locked context remains stable as Zotero selection changes, with one
-  deduplicated notice and explicit add/replace controls.
+- Each task keeps the Zotero sources selected at creation. Add and Replace
+  controls update them when the Zotero selection changes.
 - Artifact reading now uses a full-bleed overlay with a right action rail,
-  reliable custom menus, compact sidebar files, and corrected narrow-width
+  custom menus, compact sidebar files, and corrected narrow-width
   overflow.
 - English and Simplified Chinese product READMEs now include the product film,
   installation guidance, Runtime options, and security boundaries.
 
-## 0.3.1 — 2026-09-04
+## 0.3.1 - 2026-09-04
 
 - The activity stream is now the permanent main workspace; the separate
   artifact canvas and stream-wide collapse control are gone.
@@ -168,24 +158,23 @@
   block to inspect revisions, citations, and write-back actions in a
   full-workspace viewer.
 
-## 0.3.0 — 2026-09-03
+## 0.3.0 - 2026-09-03
 
 ### Research workbench
 
-- Conversations are now recoverable research tasks with a locked Zotero
-  context, source-aware templates, clear task states, and explicit controls
-  for adding or replacing a changed selection.
+- Conversations are stored as research tasks with a Zotero source snapshot,
+  task templates, status, and controls for changing the source selection.
 - Research outputs are saved as structured, versioned artifacts with Zotero
   citations. Notes, annotations, collections, and tags always show a
   before/after preview before write-back.
-- Memory now defaults to review: proposed memories can be edited, accepted,
-  or rejected instead of being saved silently.
+- Memory defaults to review. Proposed memories can be edited, accepted, or
+  rejected before saving.
 
 ### Agent runtimes
 
 - Added the local Agent sidecar with Native, Codex App Server, and Kimi ACP
   runtimes. Runtime availability and login state are checked from the real
-  runtime session, while a missing sidecar never blocks Native mode.
+  runtime session. Native mode remains available when the sidecar is missing.
 - External agents receive only task-scoped Zotero and artifact tools by
   default. Shell and file writes stay disabled unless a working directory is
   explicitly selected and approved.
@@ -200,7 +189,7 @@
   instead of mixing it into the answer. Duplicate selection-change notices
   and the extra PDF-toolbar button have been removed.
 
-## 0.2.1 — 2026-09-03
+## 0.2.1 - 2026-09-03
 
 ### Workspace
 
@@ -212,7 +201,7 @@
 - Opening the workspace no longer hangs. Privileged chrome cannot parse
   answer HTML with `DOMParser` / `text/html`.
 
-## 0.2.0 — 2026-09-03
+## 0.2.0 - 2026-09-03
 
 ### Skills
 
@@ -233,17 +222,17 @@
   `/pair` / `/workspace-probe` HTTP endpoints. Confucius is Zotero-only.
   The local MCP/HTTP API and pairing token remain for MCP clients.
 
-## 0.1.2 — 2026-09-02
+## 0.1.2 - 2026-09-02
 
 ### Memory, logs, and context
 
 - Conversation transcripts are now kept as searchable markdown files under
-  `<Zotero data>/confucius/logs/`. In-context compaction never deletes them.
+  `<Zotero data>/confucius/logs/`. Context compaction does not delete them.
 - New read tools `conversation_log_search` and `conversation_log_read`, plus
   `logs/list|search|read` RPCs, let the agent recover earlier details after a
   thread has been summarized.
 - A tool-layer access hook records every log and memory retrieval. Excerpts
-  hit several times are promoted into durable memories (`promoted-from-log`);
+  hit several times are promoted into memories (`promoted-from-log`);
   memories that keep being retrieved are pinned (`confucius:pinned`) and stay
   in the system prompt.
 - History compaction is sized from the active endpoint's context window:
@@ -260,7 +249,7 @@
   send button runs an open slash command instead of submitting `/compact` as
   chat text. Log excerpts shown as memories no longer keep `**user:**` markup.
 
-## 0.1.1 — 2026-09-02
+## 0.1.1 - 2026-09-02
 
 First public preview release.
 
@@ -275,8 +264,8 @@ First public preview release.
 - New `mind-map` and `research-knowledge-base` skills teach the agent to query
   before writing, preserve evidence links, and update existing research state
   instead of creating duplicates.
-- Six approval-aware knowledge-base tools and nine RPC methods let the agent
-  efficiently create, update, retrieve, search, and organize durable topics.
+- Six knowledge-base tools and nine RPC methods create, update, retrieve,
+  search, and organize topics. Writes require approval.
 
 ### Workspace and tool reliability
 
@@ -289,7 +278,7 @@ First public preview release.
 - Chrome can inject its tab extractor on demand for ordinary sites outside
   the predeclared literature domains and reports restricted pages cleanly.
 - Clearing a paper source, or changing a paper entry to another type, now
-  removes the hidden Zotero link instead of silently retaining it.
+  removes the hidden Zotero link.
 - Note search merges recent database writes with Zotero's eventual index, and
   DOI imports fall back to CSL metadata when the translator chain returns no
   items.
@@ -299,14 +288,14 @@ First public preview release.
 
 ### Persistent memory (new)
 
-- Plain-text long-term memory inspired by Mem0, stored as one markdown file
+- Plain-text long-term memory based on Mem0, stored as one Markdown file
   per memory under `<Zotero data>/confucius/memory/`, with a regenerated
-  `MEMORY.md` index. Files are the only source of truth — audit or hand-edit
-  them in any editor; the store tolerates corrupt files.
+  `MEMORY.md` index. The files are the source of truth and can be edited in any
+  text editor. Invalid files do not prevent the store from loading.
 - Embedding-free retrieval: BM25 with CJK character bigrams fused with
   recency decay (30-day half-life), access reinforcement, extraction
   confidence, and tag boosts.
-- Mem0-style consolidation after every turn: an extraction pass proposes
+- After each turn, an extraction pass proposes
   add/update/delete ops; updates keep in-file revision history, and a lexical
   Jaccard pre-check folds near-duplicates before spending model calls.
   Disable per turn loop with the `memoryAutoExtract` pref.
@@ -314,7 +303,7 @@ First public preview release.
   `memory_save` / `memory_update` / `memory_delete` (write, approval-gated)
   tools, plus `memory/list|search|save|delete` RPCs and a memory panel with
   per-memory forget in both workspace UIs. Relevant memories are injected
-  into the system prompt automatically.
+  into the system prompt.
 
 ### Conversation continuity (new)
 
@@ -328,28 +317,28 @@ First public preview release.
 ### Safety & control
 
 - Permission scopes: Approve once / for this session / always (persisted).
-- Plan mode is now real: read-only tool filtering with plan-first prompting.
+- Plan mode filters the tool list to read-only operations and uses a planning
+  prompt.
 - Sessions can be deleted from either UI; pending approvals auto-deny on
   abort, delete, or superseding prompts instead of hanging.
 - `search_with_regex` rejects nested-quantifier patterns (ReDoS), caps the
-  subject at 500k chars, and no longer loops forever on empty matches.
-- The workspace-probe endpoint requires the pairing token — previously any
-  web page could open the workspace window. Token comparisons are
+  subject at 500k characters, and handles empty matches.
+- The workspace-probe endpoint requires the pairing token. Previously, any web
+  page could open the workspace window. Token comparisons are
   constant-time-ish; query-string tokens are no longer accepted.
 - Tool argument validation now enforces declared types and enums, not just
   required keys.
 
 ### Integrations
 
-- MCP: all configured servers connect (not just the first); the read-only
+- MCP: configured servers connect to the read-only
   MCP endpoint returns spec-compliant content blocks with `isError`.
 - Model adapter: 429/5xx retry with backoff, usage accounting, tolerant
   tool-call argument parsing for both streaming and buffered responses.
 - Ollama native support: a base URL ending in `/api/chat` (Ollama's own
-  wire format) is auto-detected and spoken directly — NDJSON streaming,
+  wire format) is auto-detected and uses NDJSON streaming,
   `message.thinking` mapped to reasoning deltas, object-valued tool
-  arguments, and `prompt_eval_count`/`eval_count` usage counters. Verified
-  end to end with `qwen3.8-27b` (tools + thinking): `npm run test:live`.
+  arguments, and `prompt_eval_count`/`eval_count` usage counters.
 - Token usage is normalized across OpenAI snake_case and Ollama counters.
 
 ### Housekeeping
@@ -359,8 +348,7 @@ First public preview release.
 - Skills are generated from `skills/` by `scripts/sync-skills.mjs` with a
   drift check in CI; dead code (duplicate workspace-app.js, unused health
   endpoint) removed.
-- The committed Chrome Markdown bundle is regenerated deterministically and
-  checked for drift; the updated build toolchain has a clean npm audit.
+- The committed Chrome Markdown bundle is regenerated and checked for drift.
 - Chrome release archives preserve and verify nested icons and vendored KaTeX
   instead of flattening away required extension assets.
 - Evals are executed as tests; every commit runs typecheck + tests on

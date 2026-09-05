@@ -13,4 +13,4 @@ triggers:
   - 证据
 ---
 
-List major claims. For each, find supporting experiments or mark unsupported. Be fair.
+List the major claims and the experiment, figure, or passage supporting each one. Mark claims with no supporting evidence.
