@@ -1,3 +1,13 @@
+import {
+  runtimeModelSelection,
+  type RuntimeModelSelection,
+} from "./modelReasoning";
+import {
+  initialContextWindow,
+  taskContextReferences,
+  type ContextWindowState,
+  type TaskContextReference,
+} from "./history";
 import type { CollectionRef, ItemRef } from "./item";
 import type { PermissionMode } from "./permissions";
 import type {
@@ -48,10 +58,14 @@ export interface SessionRecord {
   permissionMode: PermissionMode;
 }
 
-/** Schema-v2 product record. A research task owns exactly one conversation. */
+/** Schema-v3 task with a durable history and replaceable context windows. */
 export interface ResearchTaskRecord extends SessionRecord {
-  schemaVersion: 2;
+  schemaVersion: 3;
+  contextWindow?: ContextWindowState;
+  references?: TaskContextReference[];
+  draft?: { text: string; references: TaskContextReference[] };
   backend: AgentBackendKind;
+  runtimeModel?: RuntimeModelSelection;
   externalSessionId?: string;
   externalTurnId?: string;
   status: TaskStatus;
@@ -75,11 +89,15 @@ export interface TurnRecord {
 }
 
 export function migrateSessionRecord(
-  input: SessionRecord | ResearchTaskRecord,
+  input:
+    | SessionRecord
+    | ResearchTaskRecord
+    | (Omit<Partial<ResearchTaskRecord>, "schemaVersion"> &
+        SessionRecord & { schemaVersion: 2 }),
   now = Date.now(),
 ): ResearchTaskRecord {
   const candidate = input as Partial<ResearchTaskRecord>;
-  if (candidate.schemaVersion === 2) {
+  if (Number(candidate.schemaVersion) === 2 || candidate.schemaVersion === 3) {
     const locked = candidate.lockedContext;
     const backend = isAgentBackendKind(candidate.backend)
       ? candidate.backend
@@ -104,8 +122,16 @@ export function migrateSessionRecord(
       : undefined;
     return {
       ...(input as SessionRecord),
-      schemaVersion: 2,
+      schemaVersion: 3,
       backend,
+      contextWindow:
+        candidate.contextWindow &&
+        /^[\w-]+$/.test(candidate.contextWindow.id) &&
+        Number.isInteger(candidate.contextWindow.number) &&
+        candidate.contextWindow.number > 0
+          ? candidate.contextWindow
+          : initialContextWindow(input.id, backend, now),
+      references: taskContextReferences(candidate.references),
       status,
       lockedContext: isLockedContextSnapshot(locked)
         ? withLockedContextFingerprint(locked)
@@ -121,6 +147,10 @@ export function migrateSessionRecord(
           ]
         : [],
       capabilityProfile,
+      runtimeModel:
+        backend === "native"
+          ? undefined
+          : runtimeModelSelection(candidate.runtimeModel),
       externalSessionId:
         backend !== "native" && typeof candidate.externalSessionId === "string"
           ? candidate.externalSessionId
@@ -154,8 +184,10 @@ export function migrateSessionRecord(
   const legacy = input as SessionRecord;
   return {
     ...legacy,
-    schemaVersion: 2,
+    schemaVersion: 3,
     backend: "native",
+    contextWindow: initialContextWindow(input.id, "native", now),
+    references: [],
     status: "ready",
     lockedContext: legacy.context
       ? legacyContextSnapshot(legacy.context, legacy.createdAt || now)

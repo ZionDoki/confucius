@@ -5,6 +5,7 @@ import type {
   CapabilityProfile,
   ConfuciusEvent,
   RuntimeStatus,
+  RuntimeModelSelection,
   SessionMode,
 } from "@confucius/protocol";
 
@@ -21,6 +22,7 @@ export interface PluginRuntimeTurnInput {
   capabilityProfile: CapabilityProfile;
   cwd: string;
   externalSessionId?: string;
+  runtimeModel?: RuntimeModelSelection;
   mcp: PluginRuntimeMcpConfig;
   developerInstructions: string;
 }
@@ -44,7 +46,7 @@ export interface PluginApprovalBrokerLike {
 
 export interface PluginRuntimeAdapter {
   readonly kind: Exclude<AgentBackendKind, "native">;
-  probe(): Promise<RuntimeStatus>;
+  probe(modelId?: string): Promise<RuntimeStatus>;
   configure?(executable?: string): void;
   startTurn(
     input: PluginRuntimeTurnInput,

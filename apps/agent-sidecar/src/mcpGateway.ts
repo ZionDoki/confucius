@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  CONFUCIUS_VERSION,
   MCP_TASK_GATEWAY_INSTRUCTIONS,
   negotiateMcpProtocolVersion,
 } from "@confucius/protocol";
@@ -80,7 +81,10 @@ export async function handleMcp(
           id,
           result: {
             protocolVersion,
-            serverInfo: { name: "confucius-task-gateway", version: "0.3.6" },
+            serverInfo: {
+              name: "confucius-task-gateway",
+              version: CONFUCIUS_VERSION,
+            },
             capabilities: { tools: { listChanged: false } },
             instructions: MCP_TASK_GATEWAY_INSTRUCTIONS,
           },

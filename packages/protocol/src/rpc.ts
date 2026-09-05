@@ -1,3 +1,4 @@
+import type { TaskContextReference, ContextWindowState } from "./history";
 import type {
   ResearchTaskRecord,
   SessionContext,
@@ -100,8 +101,13 @@ export const RPC_METHODS = {
   taskSetPermissions: "task/setPermissions",
   taskContext: "task/context",
   taskCompact: "task/compact",
+  taskDraft: "task/draft",
+  taskNewContext: "task/new-context",
+  taskHistory: "task/history",
+  contextSearchTasks: "context/search-tasks",
   taskSetContext: "task/setContext",
   taskSetBackend: "task/setBackend",
+  taskSetModel: "task/setModel",
   taskStageTemplate: "task/stageTemplate",
   taskPreviewCapabilities: "task/previewCapabilities",
   taskToolList: "task/toolList",
@@ -112,6 +118,7 @@ export const RPC_METHODS = {
   artifactWritebackPreview: "artifact/writebackPreview",
   artifactWritebackCommit: "artifact/writebackCommit",
   runtimeList: "runtime/list",
+  runtimeListModels: "runtime/listModels",
   runtimeRefresh: "runtime/refresh",
   runtimeConfigure: "runtime/configure",
   runtimeSetPluginHost: "runtime/setPluginHost",
@@ -166,6 +173,7 @@ export interface TaskNewParams {
 }
 
 export interface TaskPromptParams {
+  references?: TaskContextReference[];
   taskId: string;
   text: string;
   attachmentIds?: string[];
@@ -288,6 +296,7 @@ export interface SessionPromptParams {
 }
 
 export interface PromptContextOptions {
+  references?: TaskContextReference[];
   suppressSelection?: boolean;
 }
 
@@ -477,14 +486,27 @@ export interface KnowledgeDeleteEntryParams {
   id: string;
 }
 
-export type ReasoningEffort = "auto" | "off" | "low" | "medium" | "high";
+export type ReasoningEffort =
+  | "auto"
+  | "off"
+  | "on"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
 
 export const REASONING_EFFORTS: readonly ReasoningEffort[] = [
   "auto",
   "off",
+  "on",
+  "minimal",
   "low",
   "medium",
   "high",
+  "xhigh",
+  "max",
 ];
 
 export function isReasoningEffort(value: unknown): value is ReasoningEffort {
@@ -650,6 +672,8 @@ export interface ConfigListModelsResult {
 }
 
 export interface SessionContextStats {
+  window?: ContextWindowState;
+  usageSource?: "reported" | "estimated" | "unknown";
   sessionId: string;
   /** Characters of persisted conversation history. */
   chars: number;

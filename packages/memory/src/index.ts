@@ -64,3 +64,6 @@ export type {
   MemoryStats,
   MemoryType,
 } from "./types";
+
+export { HistoryStore } from "./history";
+export type { HistoryAppend, HistoryQuery } from "./history";

@@ -1,6 +1,35 @@
+import { UI_FONT_STACKS } from "./workspaceTypography";
+import { WorkspaceFormDrafts } from "./workspaceDrafts";
+import {
+  createComposerStatusChip,
+  createWorkspaceButton,
+  bindDialogNavigation,
+  bindTabNavigation,
+} from "./workspaceControls";
+import { renderSourcePicker } from "./workspaceSourcePicker";
+import {
+  createMenuSurface,
+  createMenuHeader,
+  createMenuHeading,
+  createMenuGlyph,
+  bindMenuNavigation,
+} from "./workspaceMenus";
+import { renderReadingSurface } from "./workspaceReading";
+import { TUI_CSS } from "./workspaceTheme";
+import {
+  ensureScrollbarStyles,
+  markScrollContainer,
+} from "./workspaceScrollbars";
+import { createTaskList } from "./workspaceTasks";
+import { keyedTimeline, reconcileActivity } from "./workspaceActivity";
+import {
+  composerKeyAction,
+  taskMentionChoice,
+  mergeTaskReferences,
+  type MentionChoice,
+} from "./workspaceComposer";
 import type {
   AgentBackendKind,
-  ArtifactBody,
   ArtifactRecord,
   ConfuciusEvent,
   ContextSearchItem,
@@ -15,19 +44,24 @@ import type {
   TaskAttachment,
   TaskTemplate,
   UpdateStatus,
+  TaskContextReference,
+  HistoryTask,
+  HistoryItemRef,
+  SessionContextStats,
 } from "@confucius/protocol";
 import {
+  modelReasoning,
+  normalizeModelEffort,
+  type ReasoningEffort,
+  type RuntimeModelOption,
   DEFAULT_MAX_ITERATIONS,
   DEFAULT_MAX_TOOL_CALLS,
   DEFAULT_UI_FONT,
   DEFAULT_UI_FONT_SIZE,
   DEFAULT_UI_LINE_HEIGHT,
-  DEFAULT_ANNOTATION_COLORS,
   FEATURED_TASK_TEMPLATES,
   UI_LINE_HEIGHT_VALUES,
-  annotationsFromBody,
   clampUiFontSize,
-  coalesceTimeline,
   emptyLockedContext,
   isUiFont,
   isUiLanguage,
@@ -66,6 +100,14 @@ import { pickRuntimeExecutable } from "./runtimeExecutablePicker";
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 const MAX_COMPOSER_ATTACHMENTS = 5;
 
+let workspaceViewState:
+  | {
+      taskId: string | null;
+      drafts: Map<string, string>;
+      references: Map<string, TaskContextReference[]>;
+      viewports: Map<string, { scrollTop: number; followsBottom: boolean }>;
+    }
+  | undefined;
 const linkHosts = new WeakMap<HTMLElement, WorkspaceHost | null>();
 const linkListeners = new WeakSet<HTMLElement>();
 let lastNavHref = "";
@@ -207,7 +249,7 @@ type ModelEndpoint = {
   apiKey: string;
   model: string;
   maxTokens: number;
-  reasoningEffort: "auto" | "off" | "low" | "medium" | "high";
+  reasoningEffort: ReasoningEffort;
   contextWindowTokens: number;
 };
 
@@ -220,7 +262,7 @@ type ModelConfig = {
   memoryAutoExtract: boolean;
   memoryConsent: MemoryConsent;
   pluginRuntimeHost: boolean;
-  reasoningEffort: "auto" | "off" | "low" | "medium" | "high";
+  reasoningEffort: ReasoningEffort;
   contextWindowTokens: number;
   hasApiKey: boolean;
   configured?: boolean;
@@ -232,13 +274,6 @@ type ModelConfig = {
   uiFontSize?: number;
   uiLanguage?: UiLanguage;
   uiLineHeight?: UiLineHeight;
-};
-
-/** Local font stacks for the three UI font presets (no web fonts, offline-safe). */
-const UI_FONT_STACKS: Record<UiFont, string> = {
-  sans: '"Segoe UI", "SF Pro Text", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif',
-  serif: 'Georgia, "Times New Roman", "Songti SC", SimSun, serif',
-  mono: '"Cascadia Mono", ui-monospace, Consolas, "Courier New", monospace',
 };
 
 function configReady(config: ModelConfig | null): boolean {
@@ -283,6 +318,7 @@ function el(
   if (styles) {
     Object.assign(node.style, styles);
   }
+  markScrollContainer(node);
   if (attrs) {
     for (const [key, value] of Object.entries(attrs)) {
       node.setAttribute(key, value);
@@ -291,1063 +327,11 @@ function el(
   return node;
 }
 
-const TUI_CSS = `
-@keyframes confucius-waiting-turn {
-  0% { transform: rotate(0deg); opacity: 0.85; }
-  50% { opacity: 0.4; }
-  100% { transform: rotate(360deg); opacity: 0.85; }
-}
-.confucius-workspace-root {
-  min-width: 0;
-  max-width: 100%;
-}
-.confucius-workspace-root > .confucius-topbar,
-.confucius-workspace-root > .confucius-columns,
-.confucius-workspace-root > .confucius-composer {
-  width: 100%;
-  min-width: 0;
-  max-width: 100%;
-  box-sizing: border-box;
-}
-.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-activity-shell,
-.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-task-overview,
-.confucius-workspace-root[data-confucius-layout="sidebar"] .tui-answer {
-  min-width: 0;
-  max-width: 100%;
-}
-.tui-waiting {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12.5px;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  color: #8a857c;
-}
-.tui-waiting-mark {
-  width: 11px;
-  height: 11px;
-  flex: none;
-  color: #55504a;
-  transform-origin: 50% 50%;
-  animation: confucius-waiting-turn 5.6s cubic-bezier(0.65, 0, 0.35, 1) infinite;
-}
-.tui-answer table { border-collapse: collapse; margin: 8px 0; width: auto; }
-.tui-answer {
-  min-width: 0;
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  font-size: var(--confucius-markdown-font-size, 13px);
-  line-height: var(--confucius-reading-line-height, 1.6);
-}
-.tui-answer table {
-  display: block;
-  max-width: 100%;
-  overflow-x: auto;
-}
-.tui-answer th, .tui-answer td {
-  border: 1px solid #ddd8cc;
-  padding: 4px 8px;
-  font-size: 1em;
-}
-.tui-answer th { background: #f0ece3; }
-.tui-answer pre {
-  background: #f0ece3;
-  padding: 8px 10px;
-  overflow: auto;
-  max-width: 100%;
-  box-sizing: border-box;
-  overflow-wrap: anywhere;
-  font-size: 0.92em;
-}
-.tui-answer code {
-  font-family: ui-monospace, Consolas, monospace;
-  font-size: 0.92em;
-}
-.tui-answer img { max-width: 100%; height: auto; }
-.tui-answer .katex-display { max-width: 100%; overflow-x: auto; overflow-y: hidden; }
-.tui-answer h1, .tui-answer h2, .tui-answer h3 { margin: 10px 0 6px; }
-.tui-answer p { margin: 0 0 8px; }
-.tui-answer math { font-size: 1.05em; }
-.confucius-answer-shell { position: relative; }
-.confucius-answer-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  min-height: 26px;
-  margin: 1px 0 0 -3px;
-  opacity: .62;
-  transition: opacity 120ms ease;
-}
-.confucius-answer-shell:hover .confucius-answer-actions,
-.confucius-answer-shell:focus-within .confucius-answer-actions { opacity: 1; }
-.confucius-answer-action {
-  appearance: none;
-  width: 26px;
-  height: 26px;
-  min-width: 26px;
-  min-height: 26px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: #777166;
-  cursor: pointer;
-  transition: background 120ms ease, color 120ms ease, transform 120ms ease;
-}
-.confucius-answer-action:hover:not(:disabled) {
-  background: #eee9df;
-  color: #33302a;
-}
-.confucius-answer-action:active:not(:disabled) { transform: translateY(1px); }
-.confucius-answer-action:focus-visible {
-  outline: 2px solid #9a6842;
-  outline-offset: 1px;
-}
-.confucius-answer-action:disabled { cursor: default; opacity: .38; }
-.confucius-answer-action[data-state="success"] {
-  background: #e5eee5;
-  color: #3f6d49;
-}
-.confucius-answer-action svg { width: 15px; height: 15px; display: block; }
-.confucius-menu-row {
-  transition: background 90ms ease, box-shadow 90ms ease, color 90ms ease;
-}
-.confucius-menu-row:hover,
-.confucius-menu-row[data-highlighted="true"] { background: #fff1ed; }
-.confucius-menu-row[data-active="true"] {
-  background: #fff1ed;
-  box-shadow: inset 2px 0 #b44732;
-  color: #8f2f20;
-  font-weight: 600;
-}
-.confucius-composer-menu-row {
-  transition: background 90ms ease, box-shadow 90ms ease;
-}
-.confucius-composer-menu-row[aria-selected="true"] {
-  background: #fff1ed;
-  box-shadow: inset 2px 0 #b44732;
-}
-.confucius-composer-row { width: 100%; min-width: 0; }
-.confucius-attachment-tray {
-  width: 100%;
-  min-width: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.confucius-attachment-chip {
-  max-width: min(310px, 100%);
-  min-width: 0;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 7px;
-  padding: 5px 6px 5px 8px;
-  border: 1px solid #d8d2c6;
-  border-radius: 8px;
-  background: #fffefa;
-  color: #33302a;
-  box-sizing: border-box;
-  box-shadow: 0 2px 8px rgba(70, 59, 43, .045);
-}
-.confucius-attachment-chip[data-status="preparing"] { color: #7a684e; }
-.confucius-attachment-chip[data-status="error"] {
-  border-color: #dfb3a6;
-  background: #fff8f5;
-  color: #9c3f2b;
-}
-.confucius-attachment-kind {
-  min-width: 30px;
-  padding: 3px 5px;
-  border-radius: 5px;
-  background: #eee8dc;
-  color: #795b36;
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: .06em;
-  text-align: center;
-}
-.confucius-attachment-chip[data-status="error"] .confucius-attachment-kind {
-  background: #f4dfd8;
-  color: #9c3f2b;
-}
-.confucius-attachment-copy { min-width: 0; }
-.confucius-attachment-name {
-  display: block;
-  overflow: hidden;
-  font-size: 11px;
-  font-weight: 650;
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.confucius-attachment-meta {
-  display: block;
-  overflow: hidden;
-  margin-top: 1px;
-  color: #8a857c;
-  font-size: 9px;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.confucius-attachment-remove {
-  appearance: none;
-  width: 24px;
-  height: 24px;
-  min-width: 24px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: #8a857c;
-  cursor: pointer;
-  font: 600 16px/1 system-ui, sans-serif;
-}
-.confucius-attachment-remove:hover { background: #eee9df; color: #33302a; }
-.confucius-drop-hint {
-  position: absolute;
-  inset: 6px;
-  z-index: 950;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  border: 1px dashed rgba(138, 90, 43, .72);
-  border-radius: 12px;
-  background: rgba(250, 248, 242, .91);
-  backdrop-filter: blur(4px);
-  color: #795b36;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: .01em;
-  text-align: center;
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition: opacity 120ms ease, visibility 0s linear 120ms;
-}
-.confucius-workspace-root[data-file-drop-active="true"] .confucius-drop-hint {
-  opacity: 1;
-  visibility: visible;
-  transition-delay: 0s;
-}
-.confucius-icon-button {
-  width: 34px !important;
-  height: 34px !important;
-  min-width: 34px !important;
-  min-height: 34px !important;
-  flex: 0 0 34px;
-  padding: 0 !important;
-  display: inline-flex !important;
-  align-items: center;
-  justify-content: center;
-  justify-self: center;
-  border: 0 !important;
-  border-radius: 8px !important;
-  background: transparent !important;
-  color: #33302a !important;
-  box-sizing: border-box;
-  cursor: pointer;
-  line-height: 1;
-  transition: background 120ms ease, color 120ms ease;
-}
-.confucius-icon-button:hover {
-  background: #f0ece3 !important;
-  color: #33302a !important;
-}
-.confucius-icon-button:focus-visible {
-  outline: 2px solid #33302a;
-  outline-offset: 2px;
-}
-.confucius-icon-button svg {
-  width: 20px;
-  height: 20px;
-  display: block;
-}
-.confucius-knowledge-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 1200;
-  display: flex;
-  padding: 12px;
-  box-sizing: border-box;
-  background: rgba(90, 80, 60, 0.35);
-  backdrop-filter: blur(2px);
-}
-.confucius-knowledge-shell {
-  width: min(1180px, 100%);
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  margin: auto;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  overflow: hidden;
-  border: 1px solid #ddd8cc;
-  border-radius: 12px;
-  background: #ffffff;
-  box-shadow: 0 18px 50px rgba(90, 80, 60, 0.16);
-}
-.confucius-knowledge-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  padding: 12px 16px;
-  border-bottom: 1px solid #e5e1d8;
-  background: #f5f3ee;
-}
-.confucius-knowledge-header-copy { min-width: 0; flex: 1; }
-.confucius-knowledge-eyebrow {
-  color: #8a857c;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: .12em;
-  text-transform: uppercase;
-}
-.confucius-knowledge-heading {
-  overflow: hidden;
-  color: #33302a;
-  font: 700 17px/1.25 Inter, "Segoe UI", system-ui, sans-serif;
-  letter-spacing: -0.01em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.confucius-knowledge-body {
-  display: grid;
-  grid-template-columns: minmax(170px, 220px) minmax(220px, .85fr) minmax(280px, 1.15fr);
-  min-width: 0;
-  min-height: 0;
-}
-.confucius-knowledge-pane {
-  min-width: 0;
-  min-height: 0;
-  overflow: auto;
-  box-sizing: border-box;
-}
-.confucius-knowledge-topics {
-  padding: 14px 10px;
-  border-right: 1px solid #e5e1d8;
-  background: #f5f3ee;
-}
-.confucius-knowledge-entries {
-  padding: 14px;
-  border-right: 1px solid #e5e1d8;
-  background: #ffffff;
-}
-.confucius-knowledge-editor { padding: 16px; background: #ffffff; }
-.confucius-kb-row, .confucius-kb-entry-row {
-  width: 100%;
-  padding: 9px 10px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: #33302a;
-  text-align: left;
-  cursor: pointer;
-  box-sizing: border-box;
-}
-.confucius-kb-row:hover, .confucius-kb-entry-row:hover { background: #efece4; }
-.confucius-kb-row.active, .confucius-kb-entry-row.active {
-  background: #33302a;
-  color: #ffffff;
-  box-shadow: inset 3px 0 #b05c2e;
-}
-.confucius-kb-meta { margin-top: 2px; color: #8a857c; font-size: 11px; }
-.confucius-kb-section-label {
-  margin: 0 0 8px;
-  color: #8a857c;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: .1em;
-  text-transform: uppercase;
-}
-.confucius-kb-toolbar { display: flex; gap: 6px; align-items: center; margin-bottom: 10px; }
-.confucius-kb-toolbar input { flex: 1; min-width: 0; }
-.confucius-kb-filters { display: flex; flex-wrap: wrap; gap: 4px; overflow-x: auto; padding-bottom: 8px; }
-.confucius-kb-filter {
-  flex: 0 0 auto;
-  padding: 4px 8px;
-  border: 1px solid #e5e1d8;
-  border-radius: 8px;
-  background: #f0ece3;
-  color: #6b665c;
-  cursor: pointer;
-  font: inherit;
-  font-size: 11px;
-}
-.confucius-kb-filter.active { background: #33302a; border-color: #33302a; color: #ffffff; }
-.confucius-kb-field { display: grid; gap: 5px; margin-bottom: 12px; color: #555046; font-size: 11px; }
-.confucius-kb-field input, .confucius-kb-field textarea, .confucius-kb-field select,
-.confucius-kb-toolbar input {
-  min-width: 0;
-  width: 100%;
-  padding: 8px 9px;
-  border: 1px solid #ddd8cc;
-  border-radius: 8px;
-  background: #ffffff;
-  color: #33302a;
-  box-sizing: border-box;
-  font: inherit;
-}
-.confucius-kb-field input:focus, .confucius-kb-field textarea:focus, .confucius-kb-field select:focus,
-.confucius-kb-toolbar input:focus {
-  outline: none;
-  border-color: #33302a;
-}
-.confucius-kb-field textarea { min-height: 180px; resize: vertical; line-height: 1.5; }
-.confucius-mindmap-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
-.confucius-mindmap-preview {
-  min-height: 220px;
-  overflow: auto;
-  padding: 12px;
-  border: 1px solid #e5e1d8;
-  border-radius: 8px;
-  background: #f5f3ee;
-}
-.confucius-mindmap-preview ul { margin: 4px 0 4px 14px; padding-left: 12px; border-left: 1px solid #ddd8cc; }
-.confucius-mindmap-preview > ul { margin-left: 0; padding-left: 0; border-left: 0; }
-.confucius-mindmap-preview li { margin: 5px 0; color: #33302a; }
-.confucius-kb-actions { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
-.confucius-kb-danger { margin-left: auto; color: #b3452f !important; background: transparent !important; border-color: #e3c0b6 !important; }
-.confucius-kb-empty { display: grid; place-items: center; min-height: 180px; padding: 18px; color: #8a857c; text-align: center; }
-.confucius-kb-error { margin: 8px 0; color: #b3452f; font-size: 12px; white-space: pre-wrap; }
-@media (max-width: 760px) {
-  .confucius-knowledge-overlay { padding: 0; }
-  .confucius-knowledge-shell { border: 0; border-radius: 0; }
-  .confucius-knowledge-body { grid-template-columns: 132px minmax(0, 1fr); }
-  .confucius-knowledge-editor { grid-column: 1 / -1; border-top: 1px solid #e5e1d8; }
-  .confucius-knowledge-entries { border-right: 0; }
-  .confucius-mindmap-workspace { grid-template-columns: minmax(0, 1fr); }
-}
-@media (max-width: 430px) {
-  .confucius-knowledge-header { padding: 9px 10px; }
-  .confucius-knowledge-body { display: block; overflow: auto; }
-  .confucius-knowledge-pane { overflow: visible; }
-  .confucius-knowledge-topics { border-right: 0; border-bottom: 1px solid #e5e1d8; }
-  .confucius-knowledge-entries { border-right: 0; border-bottom: 1px solid #e5e1d8; }
-  .confucius-kb-topic-list { display: flex; gap: 6px; overflow-x: auto; }
-  .confucius-kb-row { flex: 0 0 140px; }
-  .confucius-kb-field textarea { min-height: 150px; }
-}
-.confucius-workspace-root a {
-  color: #8a5a2b;
-  text-decoration: underline;
-  text-decoration-color: #cbb890;
-  text-underline-offset: 2px;
-  cursor: pointer;
-}
-.confucius-task-row {
-  border-left: 2px solid transparent;
-  transition: background 120ms ease, border-color 120ms ease;
-}
-.confucius-task-row:hover { background: #f0ece3 !important; }
-.confucius-task-row[data-active="true"] { border-left-color: #a45a2a; }
-.confucius-activity-shell {
-  width: min(900px, 100%);
-  min-width: 0;
-  max-width: 100%;
-  margin: 0 auto;
-  padding-bottom: 28px;
-  box-sizing: border-box;
-}
-.confucius-activity-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 14px;
-}
-.confucius-task-overview {
-  margin-bottom: 18px;
-  padding: 4px 0 18px;
-  border-bottom: 1px solid #ddd8cc;
-}
-.confucius-task-overview-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-.confucius-task-overview h1 {
-  margin: 5px 0 4px;
-  overflow-wrap: anywhere;
-  font-size: clamp(21px, 3.2vw, 27px);
-  line-height: 1.2;
-  letter-spacing: -.02em;
-}
-.confucius-task-empty {
-  margin: 4px 0 18px;
-  padding: 18px 0 20px;
-  border-bottom: 1px solid #ddd8cc;
-}
-.confucius-artifact-file {
-  appearance: none;
-  width: 100%;
-  min-width: 0;
-  display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  margin: 10px 0;
-  padding: 13px 14px;
-  border: 1px solid #d8d2c6;
-  border-radius: 9px;
-  background: #fffefa;
-  color: #33302a;
-  box-sizing: border-box;
-  box-shadow: 0 4px 16px rgba(70, 59, 43, .055);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
-}
-.confucius-artifact-file:hover {
-  border-color: #b8ad9d;
-  box-shadow: 0 8px 22px rgba(70, 59, 43, .09);
-  transform: translateY(-1px);
-}
-.confucius-artifact-file:focus-visible {
-  outline: 2px solid #8a5a2b;
-  outline-offset: 2px;
-}
-.confucius-artifact-file-icon {
-  width: 34px;
-  height: 40px;
-  display: grid;
-  place-items: center;
-  border: 1px solid #baa98e;
-  border-radius: 4px;
-  background: #f4eee3;
-  color: #8a5a2b;
-  font: 700 17px/1 Georgia, serif;
-  box-shadow: inset 0 -3px rgba(138, 90, 43, .06);
-}
-.confucius-artifact-file[data-update="true"] .confucius-artifact-file-icon {
-  border-color: #9db09f;
-  background: #edf3ed;
-  color: #4f7657;
-}
-.confucius-artifact-file-copy { min-width: 0; }
-.confucius-artifact-file-kind {
-  display: block;
-  margin-bottom: 2px;
-  color: #8a857c;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-}
-.confucius-artifact-file-title {
-  display: block;
-  overflow: hidden;
-  color: #33302a;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.confucius-artifact-file-meta {
-  display: block;
-  margin-top: 3px;
-  overflow: hidden;
-  color: #777166;
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.confucius-artifact-file-open {
-  color: #8a5a2b;
-  font-size: 11px;
-  font-weight: 700;
-  white-space: nowrap;
-}
-.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-file {
-  height: auto;
-  min-height: 50px;
-  grid-template-columns: 30px minmax(0, 1fr);
-  gap: 9px;
-  margin: 8px 0;
-  padding: 8px 9px;
-}
-.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-file-icon {
-  width: 28px;
-  height: 34px;
-}
-.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-file-copy {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 45%);
-  grid-template-areas:
-    "title title"
-    "kind meta";
-  align-items: center;
-  column-gap: 8px;
-}
-.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-file-kind {
-  grid-area: kind;
-  min-width: 0;
-  margin: 1px 0 0;
-  overflow: hidden;
-  font-size: 9px;
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-file-title {
-  grid-area: title;
-  line-height: 1.3;
-}
-.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-file-meta {
-  grid-area: meta;
-  min-width: 0;
-  margin: 1px 0 0;
-  font-size: 10px;
-  line-height: 1.25;
-  text-align: right;
-}
-.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-file-open {
-  display: none;
-}
-.confucius-artifact-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 1000;
-  display: block;
-  padding: 0;
-  box-sizing: border-box;
-  background:
-    radial-gradient(130% 100% at 50% 0%, rgba(252, 250, 245, 0.84) 0%, rgba(245, 242, 235, 0.72) 55%, rgba(238, 234, 225, 0.78) 100%);
-  backdrop-filter: blur(22px) saturate(1.06);
-  animation: confucius-artifact-overlay-in 150ms ease-out;
-}
-.confucius-artifact-overlay[data-refresh="true"] { animation: none; }
-.confucius-artifact-overlay[data-mount="window"] { position: fixed; }
-.confucius-artifact-overlay a {
-  color: #8a5a2b;
-  text-decoration: underline;
-  text-decoration-color: #cbb890;
-  text-underline-offset: 2px;
-  cursor: pointer;
-}
-.confucius-artifact-dialog {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-.confucius-artifact-action-rail {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  right: 12px;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 9px;
-  width: 40px;
-  min-width: 0;
-  min-height: 0;
-  padding: 14px 0;
-  border: 0;
-  background: transparent;
-  box-sizing: border-box;
-  pointer-events: none;
-}
-.confucius-artifact-rail-spacer { flex: 1 1 auto; }
-.confucius-artifact-rail-divider {
-  width: 16px;
-  height: 1px;
-  flex: 0 0 1px;
-  margin: 1px 0 3px;
-  background: rgba(51, 48, 42, 0.18);
-}
-.confucius-artifact-rail-button,
-.confucius-artifact-menu-trigger {
-  appearance: none;
-  position: relative;
-  width: 40px;
-  height: 40px;
-  min-width: 40px;
-  min-height: 40px;
-  flex: 0 0 40px;
-  display: inline-grid;
-  place-items: center;
-  padding: 0;
-  overflow: hidden;
-  border: 1px solid rgba(215, 208, 196, 0.95);
-  border-radius: 50%;
-  background: rgba(255, 254, 250, 0.78);
-  backdrop-filter: blur(10px);
-  color: #5d574d;
-  box-sizing: border-box;
-  box-shadow: 0 2px 10px rgba(70, 59, 43, 0.1);
-  font: inherit;
-  cursor: pointer;
-  pointer-events: auto;
-  transition: background 110ms ease, border-color 110ms ease, color 110ms ease, transform 110ms ease, box-shadow 110ms ease;
-}
-.confucius-artifact-rail-button:hover,
-.confucius-artifact-menu-trigger:hover {
-  border-color: #c5b9a8;
-  background: rgba(255, 254, 250, 0.96);
-  color: #33302a;
-  transform: translateY(-1px);
-  box-shadow: 0 5px 16px rgba(70, 59, 43, 0.16);
-}
-.confucius-artifact-menu-trigger[aria-expanded="true"] {
-  border-color: #c5b9a8;
-  background: #fffefa;
-  color: #8a5a2b;
-}
-.confucius-artifact-rail-button:focus-visible,
-.confucius-artifact-menu-trigger:focus-visible {
-  outline: 2px solid #8a5a2b;
-  outline-offset: 1px;
-}
-.confucius-artifact-rail-button svg,
-.confucius-artifact-menu-trigger svg { width: 18px; height: 18px; display: block; }
-.confucius-artifact-menu-trigger-value {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: -.02em;
-  white-space: nowrap;
-}
-.confucius-artifact-menu-trigger-chevron {
-  position: absolute;
-  right: 4px;
-  bottom: 2px;
-  color: #9a9387;
-  font-size: 11px;
-  line-height: 1;
-  transition: transform 100ms ease;
-}
-.confucius-artifact-revision-badge {
-  width: 40px;
-  height: 40px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 1px solid rgba(215, 208, 196, 0.7);
-  border-radius: 50%;
-  background: rgba(255, 254, 250, 0.55);
-  backdrop-filter: blur(10px);
-  color: #6f695f;
-  box-sizing: border-box;
-  font-size: 11px;
-  font-weight: 700;
-  pointer-events: auto;
-}
-#confucius-artifact-writeback {
-  color: #8a5a2b;
-}
-#confucius-artifact-writeback:hover {
-  border-color: #cabca9;
-  background: #fffefa;
-}
-.confucius-artifact-rail-button:disabled {
-  opacity: .38;
-  cursor: default;
-  transform: none;
-}
-.confucius-artifact-choice-menu {
-  animation: confucius-artifact-menu-in 110ms ease-out;
-}
-.confucius-settings-choice-menu {
-  animation: confucius-settings-menu-in 110ms ease-out;
-}
-.confucius-settings-select {
-  appearance: none;
-  width: 100%;
-  height: 34px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 18px;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-  padding: 0 9px 0 10px;
-  border: 1px solid #ddd8cc;
-  border-radius: 7px;
-  background: #fff;
-  color: #33302a;
-  box-sizing: border-box;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 100ms ease, background 100ms ease,
-    box-shadow 100ms ease;
-}
-.confucius-settings-select:hover:not(:disabled) {
-  border-color: #c4bbad;
-  background: #fffefa;
-}
-.confucius-settings-select:focus-visible,
-.confucius-settings-select[aria-expanded="true"] {
-  outline: none;
-  border-color: #9a6430;
-  box-shadow: 0 0 0 2px rgba(154, 100, 48, 0.14);
-}
-.confucius-settings-select:disabled {
-  opacity: .48;
-  cursor: default;
-}
-.confucius-settings-select-value {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.confucius-settings-select-chevron {
-  color: #8a857c;
-  font-size: 12px;
-  line-height: 1;
-  text-align: center;
-  transition: transform 100ms ease;
-}
-.confucius-settings-select[aria-expanded="true"]
-  .confucius-settings-select-chevron {
-  transform: rotate(180deg);
-}
-.confucius-artifact-choice,
-.confucius-settings-choice {
-  appearance: none;
-  width: 100%;
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 18px;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 9px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: #33302a;
-  box-sizing: border-box;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.confucius-artifact-choice:hover,
-.confucius-artifact-choice:focus-visible,
-.confucius-settings-choice:hover,
-.confucius-settings-choice:focus-visible {
-  outline: none;
-  background: #fff1ed;
-}
-.confucius-artifact-choice[data-selected="true"],
-.confucius-settings-choice[data-selected="true"] {
-  background: #fff1ed;
-  box-shadow: inset 2px 0 #b44732;
-}
-.confucius-settings-choice-label {
-  overflow: hidden;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.confucius-settings-choice-check {
-  color: #a43b29;
-  font-weight: 700;
-  text-align: center;
-}
-.confucius-artifact-choice-copy { min-width: 0; }
-.confucius-artifact-choice-title {
-  display: block;
-  overflow: hidden;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.confucius-artifact-choice-meta {
-  display: block;
-  margin-top: 1px;
-  color: #8a857c;
-  font-size: 10px;
-}
-.confucius-artifact-choice-check {
-  color: #8a5a2b;
-  font-weight: 700;
-  text-align: center;
-}
-.confucius-artifact-dialog-body {
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  overflow: auto;
-  padding: clamp(26px, 5vh, 54px) max(clamp(18px, 5vw, 68px), 68px) 64px clamp(18px, 5vw, 68px);
-  background: transparent;
-  box-sizing: border-box;
-}
-.confucius-artifact-shell {
-  width: min(780px, 100%);
-  min-width: 0;
-  min-height: calc(100% - 50px);
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-}
-.confucius-artifact-paper {
-  min-width: 0;
-  flex: 1 0 auto;
-  margin: 20px 0 30px;
-  padding: clamp(26px, 4vw, 44px) clamp(22px, 4.5vw, 52px) 56px;
-  border: 1px solid rgba(215, 208, 196, 0.9);
-  border-radius: 10px;
-  background: rgba(255, 254, 250, 0.96);
-  box-shadow:
-    0 12px 36px rgba(70, 59, 43, 0.12),
-    0 1px 3px rgba(70, 59, 43, 0.06);
-}
-.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-action-rail {
-  right: 6px;
-  width: 36px;
-  padding: 10px 0;
-}
-.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-rail-button,
-.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-menu-trigger,
-.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-revision-badge {
-  width: 36px;
-  height: 36px;
-  min-width: 36px;
-  min-height: 36px;
-  flex-basis: 36px;
-}
-.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-dialog-body {
-  padding: 18px 48px 40px 10px;
-}
-.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-paper {
-  margin: 10px 0 18px;
-  padding: 18px 16px 34px;
-  border-radius: 8px;
-}
-.confucius-artifact-paper .tui-answer {
-  font-size: 1.02em;
-  line-height: var(--confucius-reading-line-height, 1.6);
-}
-.confucius-artifact-paper table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: .92em;
-}
-.confucius-artifact-paper th,
-.confucius-artifact-paper td {
-  padding: 8px 10px;
-  border-bottom: 1px solid #e5e1d8;
-  text-align: left;
-  vertical-align: top;
-}
-.confucius-artifact-paper th { color: #6b665c; font-size: .82em; letter-spacing: .05em; text-transform: uppercase; }
-.confucius-template-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-auto-rows: minmax(86px, auto);
-  gap: 0 18px;
-  margin-top: 18px;
-  border-top: 1px solid #ddd8cc;
-}
-.confucius-template-button {
-  appearance: none;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: flex-start;
-  min-width: 0;
-  min-height: 86px;
-  padding: 15px 2px;
-  border: 0;
-  border-bottom: 1px solid #e5e1d8;
-  background: transparent;
-  color: #33302a;
-  box-sizing: border-box;
-  white-space: normal;
-  text-align: left;
-  cursor: pointer;
-}
-.confucius-template-button:hover { color: #9a4f25; }
-.confucius-template-title { display: block; margin-bottom: 3px; font-weight: 700; }
-.confucius-template-copy { display: block; color: #777166; font-size: .9em; line-height: 1.4; }
-.confucius-runtime-dot {
-  width: 7px;
-  height: 7px;
-  flex: 0 0 7px;
-  border-radius: 50%;
-  background: #9b968b;
-}
-.confucius-runtime-dot[data-state="ready"] { background: #4f7657; }
-.confucius-runtime-dot[data-state="auth_required"] { background: #bf762f; }
-.confucius-runtime-dot[data-state="error"] { background: #b3452f; }
-.confucius-before-after {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin-top: 8px;
-}
-.confucius-before-after pre {
-  max-height: 180px;
-  margin: 3px 0 0;
-  padding: 8px;
-  overflow: auto;
-  border: 1px solid #e5e1d8;
-  border-radius: 6px;
-  background: #fff;
-  white-space: pre-wrap;
-  font: 11px/1.45 ui-monospace, Consolas, monospace;
-}
-@media (max-width: 620px) {
-  .confucius-template-grid,
-  .confucius-before-after { grid-template-columns: minmax(0, 1fr); }
-  .confucius-template-grid { grid-auto-rows: minmax(70px, auto); }
-  .confucius-template-button { min-height: 70px; }
-  .confucius-artifact-action-rail { right: 6px; width: 36px; padding: 10px 0; }
-  .confucius-artifact-rail-button,
-  .confucius-artifact-menu-trigger,
-  .confucius-artifact-revision-badge {
-    width: 36px;
-    height: 36px;
-    min-width: 36px;
-    min-height: 36px;
-    flex-basis: 36px;
-  }
-  .confucius-artifact-dialog-body { padding: 18px 48px 40px 10px; }
-  .confucius-artifact-file { grid-template-columns: 38px minmax(0, 1fr); gap: 9px; padding: 11px; }
-  .confucius-artifact-file-open { display: none; }
-  .confucius-artifact-paper { margin: 8px 0 14px; padding: 16px 12px 30px; border-radius: 8px; }
-}
-@keyframes confucius-artifact-overlay-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-@keyframes confucius-artifact-menu-in {
-  from { opacity: 0; transform: translateX(4px); }
-  to { opacity: 1; transform: translateX(0); }
-}
-@keyframes confucius-settings-menu-in {
-  from { opacity: 0; transform: scale(.985); }
-  to { opacity: 1; transform: scale(1); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .confucius-artifact-overlay,
-  .confucius-artifact-choice-menu,
-  .confucius-settings-choice-menu { animation: none; }
-  .confucius-artifact-menu-trigger-chevron,
-  .confucius-settings-select-chevron,
-  .confucius-drop-hint { transition: none; }
-}
-`;
-
 function ensureTuiStyles(doc: Document): void {
-  if (doc.getElementById("confucius-tui-css")) {
+  ensureScrollbarStyles(doc);
+  const existing = doc.getElementById("confucius-tui-css");
+  if (existing) {
+    if (existing.textContent !== TUI_CSS) existing.textContent = TUI_CSS;
     return;
   }
   const style = doc.createElementNS(HTML_NS, "style");
@@ -1591,32 +575,10 @@ function muted(doc: Document, text: string): HTMLElement {
   return node;
 }
 
-function button(
-  doc: Document,
-  id: string,
-  label: string,
-  variant: "primary" | "outline" = "outline",
-): HTMLElement {
-  const solid = variant === "primary";
-  const node = el(
-    doc,
-    "button",
-    {
-      background: solid ? "#33302a" : "#ffffff",
-      color: solid ? "#ffffff" : "#33302a",
-      border: "1px solid #ddd8cc",
-      borderRadius: "8px",
-      padding: "6px 12px",
-      cursor: "pointer",
-      minHeight: "32px",
-      font: "inherit",
-      fontWeight: "600",
-    },
-    { id, type: "button" },
-  );
-  node.textContent = label;
-  return node;
-}
+const button = createWorkspaceButton;
+let lastSettingsTab:
+  "model" | "runtime" | "memory" | "security" | "appearance" | "update" =
+  "model";
 
 function brandMark(doc: Document): Element {
   const svg = doc.createElementNS(SVG_NS, "svg");
@@ -1801,97 +763,107 @@ function replyActionIcon(
   return svg;
 }
 
-const EFFORT_OPTIONS = ["auto", "off", "low", "medium", "high"] as const;
-type EffortOption = (typeof EFFORT_OPTIONS)[number];
+function effortLabel(value: string, fallback = value): string {
+  const labels: Record<string, string> = {
+    auto: getString("workspace-effort-auto"),
+    off: getString("workspace-effort-off"),
+    none: getString("workspace-effort-off"),
+    disabled: getString("workspace-effort-off"),
+    instant: getString("workspace-effort-off"),
+    on: getString("workspace-effort-on"),
+    enabled: getString("workspace-effort-on"),
+    thinking: getString("workspace-effort-on"),
+    minimal: getString("workspace-effort-minimal"),
+    low: getString("workspace-effort-low"),
+    medium: getString("workspace-effort-medium"),
+    high: getString("workspace-effort-high"),
+    xhigh: getString("workspace-effort-xhigh"),
+    max: getString("workspace-effort-max"),
+    ultra: getString("workspace-effort-ultra"),
+  };
+  return labels[value] ?? fallback;
+}
 
-/**
- * Native HTML select popups do not paint or receive clicks in Zotero chrome
- * windows. A button group is the same control, but actually usable.
- */
-function effortPicker(
-  doc: Document,
-  id: string,
-  value: string,
-  onChange?: (value: EffortOption) => void,
-): {
-  node: HTMLElement;
-  getValue: () => EffortOption;
-  setValue: (value: string) => void;
-} {
-  let current: EffortOption = EFFORT_OPTIONS.includes(value as EffortOption)
-    ? (value as EffortOption)
-    : "auto";
+/** Settings and the composer use the same model-specific capability resolver. */
+function effortPicker(doc: Document, id: string, value: string) {
+  let current: ReasoningEffort = "auto";
+  let model = "";
+  let baseUrl = "";
   const node = el(
     doc,
     "div",
-    {
-      display: "flex",
-      flexWrap: "wrap",
-      gap: "4px",
-    },
+    { display: "flex", flexWrap: "wrap", gap: "4px" },
     { id, role: "radiogroup" },
   );
-  const buttons = new Map<EffortOption, HTMLElement>();
   const paint = () => {
-    for (const [effort, btn] of buttons) {
-      const active = effort === current;
-      Object.assign(btn.style, {
-        background: active ? "#33302a" : "#ffffff",
-        color: active ? "#f5f3ee" : "#33302a",
-        border: `1px solid ${active ? "#33302a" : "#ddd8cc"}`,
-        fontWeight: active ? "600" : "400",
+    node.textContent = "";
+    const options = modelReasoning(model, baseUrl).efforts;
+    for (const effort of options) {
+      const btn = el(
+        doc,
+        "button",
+        {
+          appearance: "none",
+          border: "0",
+          padding: "5px 10px",
+          borderRadius: "8px",
+          cursor: "pointer",
+          font: "inherit",
+          minHeight: "28px",
+          lineHeight: "1.2",
+          background: current === effort ? "#ebe5d9" : "transparent",
+          color: "#4a4135",
+        },
+        {
+          type: "button",
+          role: "radio",
+          "data-effort": effort,
+          "aria-checked": String(current === effort),
+        },
+      );
+      btn.textContent = effortLabel(effort);
+      btn.addEventListener("click", () => {
+        current = effort;
+        paint();
+        (
+          node.querySelector(`[data-effort="${effort}"]`) as HTMLElement
+        )?.focus();
       });
-      btn.setAttribute("aria-checked", active ? "true" : "false");
+      btn.addEventListener("keydown", (event) => {
+        const key = (event as KeyboardEvent).key;
+        if (!["ArrowLeft", "ArrowRight"].includes(key)) return;
+        event.preventDefault();
+        current =
+          options[
+            (options.indexOf(effort) +
+              (key === "ArrowRight" ? 1 : options.length - 1)) %
+              options.length
+          ];
+        paint();
+        (
+          node.querySelector(`[data-effort="${current}"]`) as HTMLElement
+        )?.focus();
+      });
+      node.appendChild(btn);
     }
   };
-  for (const effort of EFFORT_OPTIONS) {
-    const btn = el(
-      doc,
-      "button",
-      {
-        appearance: "none",
-        padding: "4px 10px",
-        borderRadius: "8px",
-        cursor: "pointer",
-        font: "inherit",
-        minHeight: "28px",
-        lineHeight: "1.2",
-      },
-      {
-        type: "button",
-        role: "radio",
-        "data-effort": effort,
-      },
-    );
-    btn.textContent = effort;
-    btn.addEventListener("mouseenter", () => {
-      if (effort !== current) {
-        btn.style.background = "#f0ece3";
-      }
-    });
-    btn.addEventListener("mouseleave", () => paint());
-    btn.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (current === effort) {
-        return;
-      }
-      current = effort;
-      paint();
-      onChange?.(effort);
-    });
-    buttons.set(effort, btn);
-    node.appendChild(btn);
-  }
-  paint();
+  const setValue = (value: string) => {
+    current = normalizeModelEffort(model, baseUrl, value);
+    paint();
+  };
+  setValue(value);
   return {
     node,
     getValue: () => current,
-    setValue: (value: string) => {
-      current = EFFORT_OPTIONS.includes(value as EffortOption)
-        ? (value as EffortOption)
-        : "auto";
-      paint();
+    setValue,
+    setModel: (
+      nextModel: string,
+      nextBaseUrl: string,
+      effort: string = current,
+    ) => {
+      model = nextModel;
+      baseUrl = nextBaseUrl;
+      setValue(effort);
     },
   };
 }
@@ -1923,7 +895,9 @@ function buildContextRing(doc: Document): {
     },
     {
       id: "confucius-context-ring",
-      title: getString("workspace-context-compact"),
+      title: getString("workspace-context-details"),
+      role: "button",
+      tabindex: "0",
     },
   ) as HTMLElement;
   const svg = doc.createElementNS(SVG_NS, "svg");
@@ -1952,14 +926,15 @@ function buildContextRing(doc: Document): {
   text.setAttribute("dominant-baseline", "middle");
   text.setAttribute("font-size", "9");
   text.setAttribute("fill", "#33302a");
-  text.textContent = "0%";
+  text.textContent = "—";
   svg.appendChild(bg);
   svg.appendChild(fg);
   svg.appendChild(text);
   node.appendChild(svg);
 
   const update = (percent: number, label: string) => {
-    const clamped = Math.max(0, Math.min(100, percent));
+    const unknown = !Number.isFinite(percent);
+    const clamped = unknown ? 0 : Math.max(0, Math.min(100, percent));
     fg.setAttribute(
       "stroke-dasharray",
       `${(clamped / 100) * circumference} ${circumference}`,
@@ -1968,10 +943,11 @@ function buildContextRing(doc: Document): {
       "stroke",
       clamped >= 90 ? "#b3452f" : clamped >= 70 ? "#8c6a3f" : "#33302a",
     );
-    text.textContent = `${Math.round(clamped)}%`;
+    text.textContent = unknown ? "—" : `${Math.round(clamped)}%`;
+    node.setAttribute("aria-label", label);
     node.setAttribute(
       "title",
-      `${label} · ${getString("workspace-context-compact")}`,
+      `${label} · ${getString("workspace-context-details")}`,
     );
   };
   return { node, update };
@@ -2033,8 +1009,9 @@ export function unmountWorkspace(root?: HTMLElement | null): void {
     "confucius-slash-menu",
     "confucius-mention-menu",
     "confucius-plus-menu",
+    "confucius-source-menu",
     "confucius-endpoint-menu",
-    "confucius-endpoint-submenu",
+    "confucius-context-details",
   ]) {
     doc.getElementById(id)?.remove();
   }
@@ -2135,9 +1112,10 @@ function bindWorkspace(
     root.addEventListener("click", onWorkspaceLink, true);
   }
 
+  const cachedView = workspaceViewState;
   const state = {
     sessions: [] as SessionRow[],
-    sessionId: null as string | null,
+    sessionId: cachedView?.taskId ?? (null as string | null),
     events: [] as ConfuciusEvent[],
     lastEventId: null as string | null,
     skills: [] as ConfuciusSkill[],
@@ -2151,11 +1129,7 @@ function bindWorkspace(
     config: null as ModelConfig | null,
     running: false,
     permission: "ask" as "ask" | "auto_allow" | "deny",
-    contextStats: null as {
-      tokensEstimate: number;
-      contextWindowTokens: number;
-      percent: number;
-    } | null,
+    contextStats: null as SessionContextStats | null,
     live: null as LiveContextResult | null,
     artifacts: [] as ArtifactRecord[],
     selectedArtifactId: null as string | null,
@@ -2165,15 +1139,22 @@ function bindWorkspace(
     runtimeHostEnabled: true,
     runtimeHostConnected: false,
   };
-  const composerDrafts = new Map<string, string>();
-  const timelineViewports = new Map<
-    string,
-    { scrollTop: number; followsBottom: boolean }
-  >();
+  const composerDrafts = cachedView?.drafts ?? new Map<string, string>();
+  const referenceDrafts =
+    cachedView?.references ?? new Map<string, TaskContextReference[]>();
+  let composing = false;
+  const draftSaves = new Map<string, { timer: number; save: () => void }>();
+  let pendingDraftSave: Promise<unknown> = Promise.resolve();
+  const timelineViewports =
+    cachedView?.viewports ??
+    new Map<string, { scrollTop: number; followsBottom: boolean }>();
   let renderedTimelineTaskId: string | null = null;
+  let loadedComposerTaskId: string | null = null;
   let taskLoadGeneration = 0;
   let pendingPermissionUpdate: Promise<void> = Promise.resolve();
   let pendingContextUpdate: Promise<void> = Promise.resolve();
+  let presetUpdatePending = false;
+  let modeUpdatePending = false;
   const pendingMentionItems = new Map<string, ContextSearchItem>();
   let mentionSearchTimer: number | null = null;
   type PendingAttachment = {
@@ -2197,6 +1178,13 @@ function bindWorkspace(
   const toolsOpen = new Set<string>();
   const toolOpen = new Set<string>();
   let artifactViewerOpen = false;
+  const artifactScrolls = new Map<string, number>();
+  let renderedArtifactKey = "";
+  function rememberArtifactScroll(): void {
+    const body = doc.getElementById("confucius-artifact-dialog-body");
+    if (body && renderedArtifactKey)
+      artifactScrolls.set(renderedArtifactKey, body.scrollTop);
+  }
   let artifactViewerReturnFocus: HTMLElement | null = null;
   let lastArtifactViewerSignature = "";
   let artifactChoiceMenu: {
@@ -2204,17 +1192,21 @@ function bindWorkspace(
     anchor: HTMLElement;
   } | null = null;
   let endpointMenuOpen = false;
-  let newApprovalsArrived = false;
-  type EndpointSubmenu =
-    { kind: "models"; endpointId: string } | { kind: "effort" };
-  let endpointSubmenu: EndpointSubmenu | null = null;
+  type ComposerModelChoice = {
+    backend: AgentBackendKind;
+    endpointId?: string;
+    model: RuntimeModelOption;
+  };
+  let endpointSelection: ComposerModelChoice | null = null;
+  let modelUpdatePending = false;
+  let modelMenuError = "";
 
   const topbar = el(doc, "div", {
     display: "flex",
     alignItems: "center",
     gap: "10px",
     padding: "10px 14px",
-    borderBottom: "1px solid #ddd8cc",
+    borderBottom: "0",
     background: "#faf9f6",
     minHeight: "48px",
     boxSizing: "border-box",
@@ -2257,12 +1249,6 @@ function bindWorkspace(
   const newSessionBtn = button(doc, "confucius-new-session", newSessionLabel);
   newSessionBtn.setAttribute("aria-label", newSessionLabel);
   newSessionBtn.setAttribute("title", newSessionLabel);
-  const modeBtn = button(
-    doc,
-    "confucius-mode",
-    getString("workspace-mode-agent"),
-  );
-  modeBtn.style.display = "none";
   const settingsLabel = getString("workspace-settings");
   const settingsBtn = el(doc, "button", undefined, {
     id: "confucius-settings",
@@ -2297,9 +1283,9 @@ function bindWorkspace(
     doc,
     "button",
     {
-      background: "#f0ece3",
+      background: "transparent",
       color: "#33302a",
-      border: "1px solid #ddd8cc",
+      border: "0",
       borderRadius: "8px",
       padding: "6px 10px",
       cursor: "pointer",
@@ -2344,8 +1330,8 @@ function bindWorkspace(
     padding: "14px",
     overflowX: "hidden",
     overflowY: "auto",
-    borderRight: "1px solid #e5e1d8",
-    background: "#faf9f6",
+    borderRight: "0",
+    background: "#f5f3ee",
     boxSizing: "border-box",
     display: showSessions ? "block" : "none",
   });
@@ -2388,20 +1374,12 @@ function bindWorkspace(
   columns.appendChild(sessionPane);
   columns.appendChild(workbenchPane);
 
-  const composer = el(doc, "form", {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "stretch",
-    gap: "8px",
-    padding: "12px 14px",
-    borderTop: "1px solid #ddd8cc",
-    background: "#faf9f6",
-    minHeight: "64px",
-    boxSizing: "border-box",
-    flex: "0 0 auto",
-    position: "relative",
-  });
+  const composer = el(doc, "form");
   composer.className = "confucius-composer";
+  const composerCard = el(doc, "div");
+  composerCard.className = "confucius-composer-card";
+  const composerSources = el(doc, "div");
+  composerSources.className = "confucius-composer-sources";
   const attachmentTray = el(
     doc,
     "div",
@@ -2413,12 +1391,10 @@ function bindWorkspace(
     },
   );
   attachmentTray.className = "confucius-attachment-tray";
-  const composerRow = el(doc, "div", {
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-  });
-  composerRow.className = "confucius-composer-row";
+  const composerToolbar = el(doc, "div");
+  composerToolbar.className = "confucius-composer-toolbar";
+  const composerLeading = el(doc, "div");
+  composerLeading.className = "confucius-composer-leading";
   const dropHint = el(doc, "div", undefined, {
     id: "confucius-drop-hint",
     "aria-hidden": "true",
@@ -2427,56 +1403,117 @@ function bindWorkspace(
   dropHint.textContent = getString("workspace-attachment-drop");
   const prompt = el(
     doc,
-    "input",
+    "textarea",
     {
-      flex: "1 1 auto",
       display: "block",
-      height: "40px",
-      minHeight: "40px",
-      minWidth: compact ? "80px" : "240px",
-      border: "1px solid #ddd8cc",
-      borderRadius: "8px",
-      background: "#ffffff",
+      minWidth: "0px",
+      border: "0",
+      background: "transparent",
       color: "#33302a",
-      padding: "0 12px",
-      font: "inherit",
+      fontFamily: "inherit",
+      fontSize: "inherit",
     },
     {
       id: "confucius-prompt",
-      type: "text",
+      rows: "1",
+      "aria-label": getString("workspace-composer-placeholder"),
       placeholder: getString("workspace-composer-placeholder"),
     },
-  ) as HTMLInputElement;
+  ) as HTMLTextAreaElement;
   prompt.style.boxSizing = "border-box";
-  const sendBtn = button(
-    doc,
-    "confucius-send",
-    getString("workspace-send"),
-    "primary",
-  );
-  sendBtn.setAttribute("type", "submit");
-  sendBtn.setAttribute("aria-label", getString("workspace-send"));
-  const stopBtn = button(doc, "confucius-stop", getString("workspace-stop"));
-  stopBtn.setAttribute("aria-label", getString("workspace-stop"));
+  const sourceTray = el(doc, "div");
+  sourceTray.className = "confucius-source-tray";
+  composerSources.appendChild(sourceTray);
+  function currentReferences(): TaskContextReference[] {
+    return (
+      referenceDrafts.get(state.sessionId ?? "new") ??
+      currentTask()?.draft?.references ??
+      currentTask()?.references ??
+      []
+    );
+  }
+  let sourceTagSignature = "";
+  function renderSourceTags(): void {
+    const references = currentReferences();
+    const signature = JSON.stringify(
+      references.map((ref) => [
+        ref,
+        state.sessions.some((task) => task.id === ref.taskId),
+      ]),
+    );
+    if (signature === sourceTagSignature) return;
+    sourceTagSignature = signature;
+    sourceTray.replaceChildren();
+    for (const ref of references) {
+      const available = state.sessions.some((task) => task.id === ref.taskId);
+      const tag = el(doc, "span", undefined, {
+        "data-unavailable": String(!available),
+      });
+      tag.className = "confucius-source-tag";
+      const title = button(
+        doc,
+        "",
+        `${getString("workspace-reference-task")} · ${ref.title}`,
+      );
+      title.className = "confucius-source-title";
+      title.title = `${ref.title} · ${ref.taskId}${available ? "" : ` · ${getString("workspace-source-unavailable")}`}`;
+      title.setAttribute("aria-disabled", String(!available));
+      title.addEventListener("click", () => {
+        if (available) void loadTask(ref.taskId).then(renderLists);
+      });
+      const remove = button(doc, "", "×");
+      remove.setAttribute(
+        "aria-label",
+        `${getString("workspace-reference-remove")} ${ref.title}`,
+      );
+      remove.addEventListener("click", () => {
+        referenceDrafts.set(
+          state.sessionId ?? "new",
+          currentReferences().filter((item) => item.taskId !== ref.taskId),
+        );
+        rememberComposerDraft();
+        renderSourceTags();
+        prompt.focus();
+      });
+      tag.append(title);
+      if (!available) {
+        const unavailable = el(doc, "small");
+        unavailable.className = "confucius-source-unavailable";
+        unavailable.textContent = getString(
+          "workspace-source-unavailable-short",
+        );
+        tag.append(unavailable);
+      }
+      tag.append(remove);
+      sourceTray.append(tag);
+    }
+  }
+  const sendBtn = el(doc, "button", undefined, {
+    id: "confucius-send",
+    type: "submit",
+    "aria-label": getString("workspace-send"),
+    title: getString("workspace-send"),
+  });
+  sendBtn.className = "confucius-composer-action";
+  const stopBtn = el(doc, "button", undefined, {
+    id: "confucius-stop",
+    type: "button",
+    "aria-label": getString("workspace-stop"),
+    title: getString("workspace-stop"),
+  });
+  stopBtn.className = "confucius-composer-action";
   stopBtn.style.display = "none";
-  stopBtn.style.background = "#ffffff";
-  stopBtn.style.border = "1px solid #8c6a3f";
-  stopBtn.style.color = "#8c6a3f";
 
   const plusBtn = el(
     doc,
     "button",
     {
-      flex: "0 0 auto",
-      background: "#33302a",
-      color: "#ffffff",
-      border: "1px solid #ddd8cc",
-      borderRadius: "8px",
-      width: "40px",
-      height: "40px",
+      background: "transparent",
+      color: "#555046",
+      border: "0",
       cursor: "pointer",
       font: "inherit",
-      fontSize: "18px",
+      fontSize: "24px",
     },
     {
       id: "confucius-plus",
@@ -2487,23 +1524,35 @@ function bindWorkspace(
   plusBtn.textContent = "+";
   plusBtn.setAttribute("aria-label", getString("workspace-plus"));
 
+  const planStatus = createComposerStatusChip(
+    doc,
+    "confucius-mode",
+    "plan",
+    async () => {
+      const taskId = state.sessionId;
+      if ((await applyMode("agent")) && state.sessionId === taskId)
+        prompt.focus({ preventScroll: true });
+    },
+  );
+  const presetStatus = createComposerStatusChip(
+    doc,
+    "confucius-preset",
+    "preset",
+    clearPreset,
+  );
+  const presetChip = presetStatus.node;
+  const presetLabel = presetStatus.label;
+
   const endpointBtn = el(
     doc,
     "button",
     {
-      flex: "0 1 auto",
       display: "flex",
       alignItems: "center",
       gap: "6px",
-      maxWidth: "180px",
-      minWidth: "108px",
-      height: "40px",
-      minHeight: "40px",
       margin: "0",
-      padding: "0 10px",
-      border: "1px solid #ddd8cc",
-      borderRadius: "8px",
-      background: "#ffffff",
+      border: "0",
+      background: "transparent",
       color: "#33302a",
       cursor: "pointer",
       font: "inherit",
@@ -2524,6 +1573,7 @@ function bindWorkspace(
     whiteSpace: "nowrap",
     textAlign: "left",
   });
+  endpointName.className = "confucius-endpoint-name";
   const endpointChevron = el(doc, "span", {
     flex: "0 0 auto",
     color: "#6b665c",
@@ -2533,19 +1583,44 @@ function bindWorkspace(
   endpointBtn.appendChild(endpointChevron);
 
   const contextRing = buildContextRing(doc);
+  contextRing.node.style.margin = "0";
 
-  composerRow.appendChild(plusBtn);
-  composerRow.appendChild(prompt);
-  composerRow.appendChild(endpointBtn);
-  composerRow.appendChild(contextRing.node);
-  composerRow.appendChild(sendBtn);
-  composerRow.appendChild(stopBtn);
-  composer.appendChild(attachmentTray);
-  composer.appendChild(composerRow);
+  composerLeading.append(plusBtn, planStatus.node, presetChip);
+  composerToolbar.appendChild(composerLeading);
+  composerToolbar.appendChild(endpointBtn);
+  composerToolbar.appendChild(contextRing.node);
+  composerToolbar.appendChild(sendBtn);
+  composerToolbar.appendChild(stopBtn);
+  composerSources.appendChild(attachmentTray);
+  composerCard.appendChild(composerSources);
+  composerCard.appendChild(prompt);
+  composerCard.appendChild(composerToolbar);
+  composer.appendChild(composerCard);
+  const latest = button(
+    doc,
+    "confucius-latest",
+    getString("workspace-back-to-latest"),
+  );
+  latest.classList.add("confucius-latest");
+  latest.hidden = true;
+  const syncLatest = () => {
+    latest.hidden =
+      timelinePane.scrollHeight -
+        timelinePane.scrollTop -
+        timelinePane.clientHeight <
+        96 || !state.events.length;
+  };
+  latest.addEventListener("click", () => {
+    timelinePane.scrollTop = timelinePane.scrollHeight;
+    rememberTimelineViewport();
+    syncLatest();
+  });
+  timelinePane.addEventListener("scroll", syncLatest, { passive: true });
+  composer.appendChild(latest);
+  workbenchPane.appendChild(composer);
 
   root.appendChild(topbar);
   root.appendChild(columns);
-  root.appendChild(composer);
   root.appendChild(dropHint);
 
   let sessionsLabel = getString("workspace-toggle-sessions");
@@ -2589,18 +1664,20 @@ function bindWorkspace(
     );
     sendBtn.setAttribute("aria-label", sendLabel);
     stopBtn.setAttribute("aria-label", stopLabel);
+    sendBtn.setAttribute("title", sendLabel);
+    stopBtn.setAttribute("title", stopLabel);
     const nextPlusLabel = getString("workspace-plus");
     plusBtn.setAttribute("aria-label", nextPlusLabel);
     plusBtn.setAttribute("title", nextPlusLabel);
     endpointBtn.setAttribute("title", getString("workspace-model"));
+    syncPresetChip();
     applyResponsiveLayout();
   }
 
   function paintToggle(node: HTMLElement, active: boolean): void {
     node.setAttribute("aria-pressed", active ? "true" : "false");
-    node.style.background = active ? "#33302a" : "#f0ece3";
-    node.style.color = active ? "#ffffff" : "#33302a";
-    node.style.borderColor = active ? "#33302a" : "#ddd8cc";
+    node.style.background = active ? "#eeebe3" : "transparent";
+    node.style.color = "#33302a";
   }
 
   function syncAuxiliaryPanes(): void {
@@ -2633,7 +1710,7 @@ function bindWorkspace(
       width: `${drawerWidth}px`,
       minWidth: "0px",
       maxWidth: "100%",
-      boxShadow: "8px 0 24px rgba(28, 25, 23, 0.18)",
+      boxShadow: "8px 0 32px rgba(51, 42, 28, 0.08)",
       display: showSessions ? "block" : "none",
     });
   }
@@ -2653,6 +1730,7 @@ function bindWorkspace(
       showSessions = false;
     }
     root.setAttribute("data-confucius-density", density);
+    root.setAttribute("data-confucius-compact-panels", String(measured < 900));
 
     const stacked = density !== "wide";
     const narrow = density === "narrow";
@@ -2670,9 +1748,7 @@ function bindWorkspace(
     status.style.display = narrow ? "none" : "inline";
     Object.assign(topbarActions.style, {
       display: stacked ? "grid" : "flex",
-      gridTemplateColumns: stacked
-        ? `repeat(${narrow ? 3 : 5}, minmax(0, 1fr))`
-        : "",
+      gridTemplateColumns: stacked ? "repeat(5, minmax(0, 1fr))" : "",
       width: stacked ? "100%" : "auto",
       marginLeft: stacked ? "0px" : "auto",
       gap: stacked ? "4px" : "8px",
@@ -2692,100 +1768,8 @@ function bindWorkspace(
     newSessionBtn.textContent = narrow ? "+" : newSessionLabel;
     sessionsToggle.textContent = narrow ? "☰" : sessionsLabel;
 
-    const stackedComposer = measured < 620;
-    const tinyComposer = measured < 250;
-    if (stackedComposer) {
-      Object.assign(composer.style, {
-        gap: "6px",
-        padding: "8px",
-        minHeight: "0px",
-      });
-      Object.assign(composerRow.style, {
-        display: "grid",
-        gridTemplateAreas: tinyComposer
-          ? '"prompt prompt prompt" "plus endpoint action"'
-          : '"prompt prompt prompt prompt" "plus endpoint context action"',
-        gridTemplateColumns: tinyComposer
-          ? "34px minmax(0, 1fr) 34px"
-          : "40px minmax(0, 1fr) 30px 40px",
-        alignItems: "center",
-        gap: "6px",
-      });
-      Object.assign(prompt.style, {
-        gridArea: "prompt",
-        width: "100%",
-        minWidth: "0px",
-      });
-      Object.assign(plusBtn.style, {
-        gridArea: "plus",
-        width: tinyComposer ? "34px" : "40px",
-        height: tinyComposer ? "34px" : "40px",
-      });
-      Object.assign(endpointBtn.style, {
-        gridArea: "endpoint",
-        width: "100%",
-        minWidth: "0px",
-        maxWidth: "none",
-      });
-      Object.assign(contextRing.node.style, {
-        gridArea: "context",
-        display: tinyComposer ? "none" : "block",
-        margin: "0px",
-      });
-      for (const action of [sendBtn, stopBtn]) {
-        Object.assign(action.style, {
-          gridArea: "action",
-          minWidth: "0px",
-          width: tinyComposer ? "34px" : "40px",
-          height: tinyComposer ? "34px" : "40px",
-          padding: "4px",
-        });
-      }
-    } else {
-      Object.assign(composer.style, {
-        gap: "8px",
-        padding: "12px 14px",
-        minHeight: "64px",
-      });
-      Object.assign(composerRow.style, {
-        display: "flex",
-        gridTemplateAreas: "",
-        gridTemplateColumns: "",
-        alignItems: "center",
-        gap: "8px",
-      });
-      Object.assign(prompt.style, {
-        gridArea: "",
-        width: "auto",
-        minWidth: compact ? "0px" : "240px",
-      });
-      Object.assign(plusBtn.style, {
-        gridArea: "",
-        width: "40px",
-        height: "40px",
-      });
-      Object.assign(endpointBtn.style, {
-        gridArea: "",
-        width: "auto",
-        minWidth: "108px",
-        maxWidth: "180px",
-      });
-      Object.assign(contextRing.node.style, {
-        gridArea: "",
-        display: "block",
-        margin: "0 2px",
-      });
-      for (const action of [sendBtn, stopBtn]) {
-        Object.assign(action.style, {
-          gridArea: "",
-          width: "auto",
-          height: "auto",
-          padding: "6px 12px",
-        });
-      }
-    }
-    sendBtn.textContent = stackedComposer ? "↑" : sendLabel;
-    stopBtn.textContent = stackedComposer ? "■" : stopLabel;
+    sendBtn.textContent = "↑";
+    stopBtn.textContent = "■";
     timelinePane.style.padding = stacked ? "10px" : "18px 24px";
     sessionPane.style.padding = stacked ? "10px" : "14px";
     syncAuxiliaryPanes();
@@ -2805,6 +1789,18 @@ function bindWorkspace(
   resizeObserver?.observe(root);
   win?.addEventListener("resize", onWindowResize);
   layoutCleanups.set(root, () => {
+    rememberComposerDraft();
+    rememberTimelineViewport();
+    workspaceViewState = {
+      taskId: state.sessionId,
+      drafts: composerDrafts,
+      references: referenceDrafts,
+      viewports: timelineViewports,
+    };
+    for (const pending of draftSaves.values()) {
+      win?.clearTimeout(pending.timer);
+      pending.save();
+    }
     resizeObserver?.disconnect();
     win?.removeEventListener("resize", onWindowResize);
     root.removeEventListener("dragenter", onAttachmentDragEnter);
@@ -3068,13 +2064,27 @@ function bindWorkspace(
     filter: "all" as "all" | KnowledgeEntryKind,
     editor: "empty" as "empty" | "base" | "entry",
     creatingBase: false,
+    entryEditing: false,
+    stage: "topics" as "topics" | "entries" | "editor",
+    memoriesOpen: false,
+    topicQuery: "",
+    entryQuery: "",
     error: "",
   };
+  const knowledgeDrafts = new WorkspaceFormDrafts();
+  let knowledgeLoadGeneration = 0;
+  const knowledgeScrolls = new Map<string, number>();
+  let knowledgeReturnFocus: HTMLElement | null = null;
+  const knowledgeEditor = () =>
+    doc.querySelector<HTMLElement>(".confucius-knowledge-editor");
+  const clearKnowledgeDraft = () => knowledgeDrafts.clear(knowledgeEditor());
 
   const knowledgeKindLabel = (kind: KnowledgeEntryKind): string =>
     getString(`workspace-knowledge-kind-${kind}`);
 
   async function openKnowledgeWindow(): Promise<void> {
+    if (!knowledgeUi.open)
+      knowledgeReturnFocus = doc.activeElement as HTMLElement | null;
     knowledgeUi.open = true;
     knowledgeUi.loading = true;
     knowledgeUi.error = "";
@@ -3113,24 +2123,61 @@ function bindWorkspace(
   }
 
   async function loadKnowledgeBase(id: string, repaint = true): Promise<void> {
-    knowledgeUi.baseId = id;
-    knowledgeUi.entryId = "";
-    knowledgeUi.error = "";
+    const generation = ++knowledgeLoadGeneration;
     const result = (await rpc("knowledge/get", { id, limit: 2_000 })) as {
       knowledgeBase?: KnowledgeBaseDetail;
     };
+    if (generation !== knowledgeLoadGeneration || !knowledgeUi.open) return;
+    const preserveSelection =
+      !repaint &&
+      knowledgeUi.baseId === id &&
+      result.knowledgeBase?.entries.some(
+        (entry) => entry.id === knowledgeUi.entryId,
+      );
+    knowledgeUi.baseId = id;
+    knowledgeUi.creatingBase = false;
+    knowledgeUi.error = "";
     knowledgeUi.base = result.knowledgeBase ?? null;
-    knowledgeUi.editor = knowledgeUi.base ? "base" : "empty";
-    if (repaint) renderKnowledgeWindow();
+    if (!preserveSelection) {
+      knowledgeUi.entryId = "";
+      knowledgeUi.editor = "empty";
+      knowledgeUi.entryEditing = false;
+      if (!repaint && knowledgeUi.stage === "editor")
+        knowledgeUi.stage = "entries";
+    }
+    if (repaint) {
+      knowledgeUi.stage = "entries";
+      renderKnowledgeWindow();
+    }
   }
 
   function closeKnowledgeWindow(): void {
+    knowledgeLoadGeneration += 1;
+    knowledgeDrafts.remember(knowledgeEditor());
     knowledgeUi.open = false;
     doc.getElementById("confucius-knowledge-overlay")?.remove();
+    if (knowledgeReturnFocus?.isConnected)
+      knowledgeReturnFocus.focus({ preventScroll: true });
   }
 
   function renderKnowledgeWindow(): void {
-    doc.getElementById("confucius-knowledge-overlay")?.remove();
+    const previous = doc.getElementById("confucius-knowledge-overlay");
+    const previousKey = knowledgeEditor()?.dataset.viewKey;
+    const active = previous?.contains(doc.activeElement)
+      ? (doc.activeElement as HTMLInputElement)
+      : null;
+    const focusId = active?.id;
+    const selection =
+      active && "selectionStart" in active
+        ? [active.selectionStart, active.selectionEnd]
+        : null;
+    knowledgeDrafts.remember(knowledgeEditor());
+    for (const pane of Array.from(
+      previous?.querySelectorAll("[data-view-key]") ?? [],
+    ) as HTMLElement[]) {
+      knowledgeScrolls.set(pane.dataset.viewKey!, pane.scrollTop);
+    }
+    previous?.remove();
     if (!knowledgeUi.open) return;
 
     const overlay = el(doc, "div", undefined, {
@@ -3142,6 +2189,8 @@ function bindWorkspace(
     overlay.className = "confucius-knowledge-overlay";
     const shell = el(doc, "section");
     shell.className = "confucius-knowledge-shell";
+    shell.dataset.stage = knowledgeUi.stage;
+    bindDialogNavigation(overlay, closeKnowledgeWindow);
     overlay.appendChild(shell);
     overlay.addEventListener("click", (event) => {
       if (event.target === overlay) closeKnowledgeWindow();
@@ -3149,6 +2198,17 @@ function bindWorkspace(
 
     const header = el(doc, "header");
     header.className = "confucius-knowledge-header";
+    const back = button(doc, "confucius-kb-back", "←");
+    back.classList.add("confucius-kb-back");
+    back.setAttribute("aria-label", getString("workspace-back"));
+    back.addEventListener("click", () => {
+      knowledgeUi.stage =
+        knowledgeUi.stage === "editor" && knowledgeUi.base
+          ? "entries"
+          : "topics";
+      renderKnowledgeWindow();
+    });
+    header.appendChild(back);
     const icon = el(doc, "div", { color: "#33302a" });
     icon.appendChild(workspaceKnowledgeIcon(doc));
     const copy = el(doc, "div");
@@ -3183,18 +2243,41 @@ function bindWorkspace(
     body.appendChild(renderKnowledgeEditor());
     shell.appendChild(body);
     root.appendChild(overlay);
-    const focusTarget = knowledgeUi.creatingBase
-      ? (doc.getElementById(
-          "confucius-kb-base-title",
-        ) as HTMLInputElement | null)
-      : knowledgeUi.editor === "entry"
-        ? (doc.getElementById(
-            "confucius-kb-entry-title",
-          ) as HTMLInputElement | null)
-        : (doc.getElementById(
-            "confucius-kb-topic-search",
-          ) as HTMLInputElement | null);
-    focusTarget?.focus();
+    const editor = knowledgeEditor();
+    if (editor) {
+      editor.dataset.viewKey = `${knowledgeUi.baseId}:${knowledgeUi.editor}:${knowledgeUi.entryId}:${knowledgeUi.creatingBase}`;
+      if (editor.querySelector("input"))
+        knowledgeDrafts.restore(editor, editor.dataset.viewKey);
+    }
+    for (const pane of Array.from(
+      overlay.querySelectorAll("[data-view-key]"),
+    ) as HTMLElement[]) {
+      pane.scrollTop = knowledgeScrolls.get(pane.dataset.viewKey!) ?? 0;
+    }
+    const restore =
+      previousKey === editor?.dataset.viewKey && focusId
+        ? (doc.getElementById(focusId) as HTMLInputElement | null)
+        : null;
+    const focusTarget = restore?.getClientRects().length
+      ? restore
+      : knowledgeUi.stage === "topics"
+        ? doc.getElementById("confucius-kb-topic-search")
+        : knowledgeUi.stage === "entries"
+          ? doc.getElementById("confucius-kb-entry-search")
+          : (editor?.querySelector<HTMLElement>("input, button") ?? close);
+    (focusTarget as HTMLElement | null)?.focus({ preventScroll: true });
+    if (
+      restore &&
+      restore === focusTarget &&
+      selection &&
+      selection[0] !== null
+    ) {
+      try {
+        restore.setSelectionRange(selection[0], selection[1] ?? selection[0]);
+      } catch {
+        /* Number inputs have no caret. */
+      }
+    }
   }
 
   function sectionLabel(text: string): HTMLElement {
@@ -3207,6 +2290,7 @@ function bindWorkspace(
   function renderKnowledgeTopics(): HTMLElement {
     const pane = el(doc, "aside");
     pane.className = "confucius-knowledge-pane confucius-knowledge-topics";
+    pane.dataset.viewKey = "topics";
     const toolbar = el(doc, "div");
     toolbar.className = "confucius-kb-toolbar";
     const search = el(doc, "input", undefined, {
@@ -3221,8 +2305,10 @@ function bindWorkspace(
     add.style.width = "34px";
     add.style.padding = "4px";
     add.addEventListener("click", () => {
+      knowledgeLoadGeneration += 1;
       knowledgeUi.creatingBase = true;
       knowledgeUi.editor = "base";
+      knowledgeUi.stage = "editor";
       knowledgeUi.entryId = "";
       renderKnowledgeWindow();
     });
@@ -3240,6 +2326,7 @@ function bindWorkspace(
     }
     for (const base of knowledgeUi.bases) {
       const row = el(doc, "button", undefined, {
+        id: `confucius-kb-topic-${base.id}`,
         type: "button",
         "data-search":
           `${base.title} ${base.description} ${base.tags.join(" ")}`.toLowerCase(),
@@ -3257,7 +2344,9 @@ function bindWorkspace(
       row.addEventListener("click", () => void loadKnowledgeBase(base.id));
       list.appendChild(row);
     }
-    search.addEventListener("input", () => {
+    search.value = knowledgeUi.topicQuery;
+    const filterTopics = () => {
+      knowledgeUi.topicQuery = search.value;
       const query = search.value.trim().toLowerCase();
       for (const row of Array.from(
         list.querySelectorAll("[data-search]"),
@@ -3265,26 +2354,31 @@ function bindWorkspace(
         row.style.display =
           !query || (row.dataset.search ?? "").includes(query) ? "" : "none";
       }
-    });
+    };
+    search.addEventListener("input", filterTopics);
+    filterTopics();
     pane.appendChild(list);
 
-    pane.appendChild(sectionLabel(getString("workspace-memory")));
+    const memories = el(doc, "details");
+    memories.className = "confucius-kb-memories";
+    if (knowledgeUi.memoriesOpen) memories.setAttribute("open", "");
+    const memoryHeading = el(doc, "summary");
+    memoryHeading.textContent = `${getString("workspace-memory")} · ${state.memories.length}`;
+    memories.appendChild(memoryHeading);
+    memories.addEventListener("toggle", () => {
+      knowledgeUi.memoriesOpen = memories.hasAttribute("open");
+    });
     if (state.logCount > 0) {
-      pane.appendChild(
+      memories.appendChild(
         muted(doc, `${state.logCount} ${getString("workspace-session-logs")}`),
       );
     }
     if (!state.memories.length) {
-      pane.appendChild(muted(doc, getString("workspace-no-memory")));
+      memories.appendChild(muted(doc, getString("workspace-no-memory")));
     }
     for (const memory of state.memories) {
-      const card = el(doc, "div", {
-        border: "1px solid #e5e1d8",
-        borderRadius: "8px",
-        padding: "6px 8px",
-        marginBottom: "6px",
-        background: "#ffffff",
-      });
+      const card = el(doc, "div");
+      card.className = "confucius-kb-memory";
       const memoryTitle = el(doc, "div", {
         fontSize: "11px",
         color: "#33302a",
@@ -3324,14 +2418,16 @@ function bindWorkspace(
       card.appendChild(memoryTitle);
       card.appendChild(memoryBody);
       card.appendChild(del);
-      pane.appendChild(card);
+      memories.appendChild(card);
     }
+    pane.appendChild(memories);
     return pane;
   }
 
   function renderKnowledgeEntries(): HTMLElement {
     const pane = el(doc, "main");
     pane.className = "confucius-knowledge-pane confucius-knowledge-entries";
+    pane.dataset.viewKey = `entries:${knowledgeUi.baseId}`;
     if (!knowledgeUi.base) {
       const empty = el(doc, "div");
       empty.className = "confucius-kb-empty";
@@ -3371,8 +2467,10 @@ function bindWorkspace(
     editBase.style.background = "#ffffff";
     editBase.style.padding = "4px 8px";
     editBase.addEventListener("click", () => {
+      knowledgeLoadGeneration += 1;
       knowledgeUi.creatingBase = false;
       knowledgeUi.editor = "base";
+      knowledgeUi.stage = "editor";
       knowledgeUi.entryId = "";
       renderKnowledgeWindow();
     });
@@ -3395,6 +2493,8 @@ function bindWorkspace(
         choice === "all"
           ? knowledgeUi.base.entryCount
           : (knowledgeUi.base.counts[choice] ?? 0);
+      if (choice !== "all" && count === 0 && knowledgeUi.filter !== choice)
+        continue;
       filter.textContent = `${
         choice === "all"
           ? getString("workspace-knowledge-kind-all")
@@ -3411,6 +2511,7 @@ function bindWorkspace(
     const toolbar = el(doc, "div");
     toolbar.className = "confucius-kb-toolbar";
     const search = el(doc, "input", undefined, {
+      id: "confucius-kb-entry-search",
       type: "search",
       placeholder: getString("workspace-knowledge-search-entries"),
       "aria-label": getString("workspace-knowledge-search-entries"),
@@ -3421,8 +2522,11 @@ function bindWorkspace(
       getString("workspace-knowledge-add-entry"),
     );
     add.addEventListener("click", () => {
+      knowledgeLoadGeneration += 1;
       knowledgeUi.entryId = "";
       knowledgeUi.editor = "entry";
+      knowledgeUi.stage = "editor";
+      knowledgeUi.entryEditing = true;
       renderKnowledgeWindow();
     });
     toolbar.appendChild(search);
@@ -3439,6 +2543,7 @@ function bindWorkspace(
     }
     for (const entry of entries) {
       const row = el(doc, "button", undefined, {
+        id: `confucius-kb-entry-${entry.id}`,
         type: "button",
         "data-search":
           `${entry.title} ${entry.content} ${entry.tags.join(" ")}`.toLowerCase(),
@@ -3461,18 +2566,26 @@ function bindWorkspace(
       entryTitle.textContent = entry.title;
       const excerpt = el(doc, "div");
       excerpt.className = "confucius-kb-meta";
-      excerpt.textContent = entry.content.replace(/\s+/g, " ").slice(0, 90);
+      excerpt.textContent = entry.content
+        .replace(/[#*_`>|]/g, "")
+        .replace(/\s+/g, " ")
+        .slice(0, 90);
       row.appendChild(kind);
       row.appendChild(entryTitle);
       row.appendChild(excerpt);
       row.addEventListener("click", () => {
+        knowledgeLoadGeneration += 1;
         knowledgeUi.entryId = entry.id;
         knowledgeUi.editor = "entry";
+        knowledgeUi.stage = "editor";
+        knowledgeUi.entryEditing = false;
         renderKnowledgeWindow();
       });
       list.appendChild(row);
     }
-    search.addEventListener("input", () => {
+    search.value = knowledgeUi.entryQuery;
+    const filterEntries = () => {
+      knowledgeUi.entryQuery = search.value;
       const query = search.value.trim().toLowerCase();
       for (const row of Array.from(
         list.querySelectorAll("[data-search]"),
@@ -3480,7 +2593,9 @@ function bindWorkspace(
         row.style.display =
           !query || (row.dataset.search ?? "").includes(query) ? "" : "none";
       }
-    });
+    };
+    search.addEventListener("input", filterEntries);
+    filterEntries();
     pane.appendChild(list);
     return pane;
   }
@@ -3509,6 +2624,48 @@ function bindWorkspace(
       return pane;
     }
     if (knowledgeUi.editor === "entry" && knowledgeUi.base) {
+      const entry = knowledgeUi.base.entries.find(
+        (item) => item.id === knowledgeUi.entryId,
+      );
+      if (entry && !knowledgeUi.entryEditing) {
+        const actions = el(doc, "div");
+        actions.className = "confucius-kb-editor-actions";
+        actions.appendChild(sectionLabel(knowledgeKindLabel(entry.kind)));
+        const edit = button(
+          doc,
+          "confucius-kb-edit-entry",
+          getString("workspace-knowledge-edit-entry"),
+        );
+        edit.addEventListener("click", () => {
+          knowledgeUi.entryEditing = true;
+          renderKnowledgeWindow();
+        });
+        actions.appendChild(edit);
+        const title = el(doc, "h2", {
+          margin: "0 0 20px",
+          fontSize: "1.5em",
+          lineHeight: "1.3",
+          overflowWrap: "anywhere",
+        });
+        title.textContent = entry.title;
+        pane.append(
+          actions,
+          title,
+          renderReadingSurface(
+            doc,
+            { type: "markdown", markdown: entry.content },
+            { fillAnswerHtml, locateLink },
+          ),
+        );
+        if (entry.source)
+          pane.appendChild(
+            locateLink(doc, {
+              libraryID: entry.source.libraryID,
+              key: entry.source.key,
+            }),
+          );
+        return pane;
+      }
       pane.appendChild(renderKnowledgeEntryForm());
       return pane;
     }
@@ -3560,6 +2717,7 @@ function bindWorkspace(
       doc,
       "confucius-kb-save-base",
       getString("workspace-knowledge-save"),
+      "primary",
     );
     save.addEventListener("click", async () => {
       if (!title.value.trim()) {
@@ -3579,6 +2737,7 @@ function bindWorkspace(
             ? payload
             : { ...payload, id: knowledgeUi.baseId },
         )) as { knowledgeBase?: KnowledgeBaseRow };
+        clearKnowledgeDraft();
         knowledgeUi.creatingBase = false;
         await refreshKnowledgeBases(
           result.knowledgeBase?.id ?? knowledgeUi.baseId,
@@ -3648,6 +2807,7 @@ function bindWorkspace(
       const option = el(doc, "button", undefined, {
         type: "button",
         role: "radio",
+        "data-value": choice,
       });
       option.textContent = knowledgeKindLabel(choice);
       option.addEventListener("click", () => {
@@ -3681,12 +2841,14 @@ function bindWorkspace(
       type: "number",
       min: "1",
       value: current?.source ? String(current.source.libraryID) : "",
+      id: "confucius-kb-source-library",
       placeholder: "libraryID",
       "aria-label": "Zotero libraryID",
     }) as HTMLInputElement;
     const key = el(doc, "input", undefined, {
       type: "text",
       value: current?.source?.key ?? "",
+      id: "confucius-kb-source-key",
       placeholder: "Zotero key",
       "aria-label": "Zotero key",
     }) as HTMLInputElement;
@@ -3760,8 +2922,12 @@ function bindWorkspace(
       paintMarkdownPreview();
     };
     wrap.appendChild(mindWorkspace);
-    wrap.appendChild(previewCaption);
-    wrap.appendChild(mdPreview);
+    const previewDisclosure = el(doc, "details");
+    previewDisclosure.className = "confucius-settings-advanced";
+    const previewSummary = el(doc, "summary");
+    previewSummary.textContent = getString("workspace-knowledge-preview");
+    previewDisclosure.append(previewSummary, mdPreview);
+    wrap.appendChild(previewDisclosure);
     syncKind();
 
     const actions = el(doc, "div");
@@ -3770,6 +2936,7 @@ function bindWorkspace(
       doc,
       "confucius-kb-save-entry",
       getString("workspace-knowledge-save"),
+      "primary",
     );
     save.addEventListener("click", async () => {
       if (!title.value.trim() || !content.value.trim()) {
@@ -3792,9 +2959,11 @@ function bindWorkspace(
             !Number(libraryID.value) ||
             !key.value.trim(),
         })) as { entry?: KnowledgeEntryRow };
+        clearKnowledgeDraft();
         await loadKnowledgeBase(knowledgeUi.baseId, false);
         knowledgeUi.entryId = result.entry?.id ?? "";
         knowledgeUi.editor = "entry";
+        knowledgeUi.entryEditing = false;
         const list = (await rpc("knowledge/list", { limit: 200 })) as {
           knowledgeBases?: KnowledgeBaseRow[];
         };
@@ -3878,17 +3047,8 @@ function bindWorkspace(
   }
 
   function renderUserLine(targetDoc: Document, text: string): HTMLElement {
-    const row = tuiBlock(targetDoc, {
-      color: "#3c3831",
-      fontSize: "1em",
-      fontWeight: "500",
-      margin: "14px 0 10px",
-      background: "#ffffff",
-      border: "1px solid #e7e3da",
-      borderRadius: "8px",
-      padding: "8px 12px",
-      boxShadow: "0 1px 2px rgba(90, 80, 60, 0.05)",
-    });
+    const row = el(targetDoc, "div");
+    row.className = "confucius-user-message";
     row.textContent = text;
     return row;
   }
@@ -4079,7 +3239,7 @@ function bindWorkspace(
       fontSize: "0.85em",
       letterSpacing: "0.04em",
       textTransform: "uppercase",
-      color: "#8a857c",
+      color: "#70695f",
       marginBottom: "2px",
     });
     head.textContent = `${fold === "open" ? "▾" : "▸"} ${getString("workspace-tui-thinking")}`;
@@ -4349,12 +3509,8 @@ function bindWorkspace(
       return renderArtifactFileBlock(targetDoc, block.artifact);
     }
     if (block.kind === "plan") {
-      const plan = tuiBlock(targetDoc, {
-        margin: "0 0 8px",
-        padding: "7px 10px",
-        borderLeft: "2px solid #ba8b56",
-        background: "#f2eee6",
-      });
+      const plan = el(targetDoc, "div");
+      plan.className = "confucius-plan";
       const heading = el(targetDoc, "div", {
         marginBottom: "4px",
         color: "#6b665c",
@@ -4383,15 +3539,8 @@ function bindWorkspace(
       return plan;
     }
     if (block.kind === "command" || block.kind === "file") {
-      const action = tuiBlock(targetDoc, {
-        margin: "0 0 8px",
-        padding: "7px 10px",
-        border: "1px solid #ddd8cc",
-        borderRadius: "7px",
-        background: "#f2eee6",
-        fontFamily: UI_FONT_STACKS.mono,
-        fontSize: ".88em",
-      });
+      const action = el(targetDoc, "div");
+      action.className = "confucius-command";
       const heading = el(targetDoc, "div", {
         color:
           block.status === "failed" || block.status === "rejected"
@@ -4408,7 +3557,8 @@ function bindWorkspace(
         const pre = el(targetDoc, "pre", {
           maxHeight: "180px",
           margin: "5px 0 0",
-          overflow: "auto",
+          overflowX: "scroll",
+          overflowY: "auto",
           whiteSpace: "pre-wrap",
         });
         pre.textContent = detail;
@@ -4448,13 +3598,10 @@ function bindWorkspace(
     targetDoc: Document,
     item: ApprovalRow,
   ): HTMLElement {
-    const card = el(targetDoc, "div", {
-      border: "1px solid #b05c2e",
-      borderRadius: "8px",
-      padding: "8px 10px",
-      marginBottom: "8px",
-      background: "#f5f3ee",
+    const card = el(targetDoc, "section", undefined, {
+      "aria-label": getString("workspace-awaiting-approval"),
     });
+    card.className = "confucius-approval";
     const name = el(targetDoc, "div", {
       fontFamily: "ui-monospace, Consolas, monospace",
       fontSize: "11px",
@@ -4549,7 +3696,7 @@ function bindWorkspace(
     );
     paramsToggle.style.background = "transparent";
     paramsToggle.style.border = "none";
-    paramsToggle.style.color = "#8a857c";
+    paramsToggle.style.color = "#70695f";
     paramsToggle.style.fontSize = "11px";
     paramsToggle.style.padding = "2px 0";
     paramsToggle.style.marginTop = "4px";
@@ -4640,7 +3787,29 @@ function bindWorkspace(
   }
 
   function rememberComposerDraft(taskId = state.sessionId): void {
-    if (taskId) composerDrafts.set(taskId, prompt.value);
+    composerDrafts.set(taskId ?? "new", prompt.value);
+    referenceDrafts.set(taskId ?? "new", currentReferences());
+    const previousSave = taskId ? draftSaves.get(taskId) : undefined;
+    if (previousSave && win) win.clearTimeout(previousSave.timer);
+    const text = prompt.value,
+      references = currentReferences();
+    if (!taskId) return;
+    const save = () => {
+      draftSaves.delete(taskId);
+      pendingDraftSave = pendingDraftSave
+        .catch(() => undefined)
+        .then(() =>
+          state.sessions.some((task) => task.id === taskId)
+            ? rpc("task/draft", { taskId, text, references })
+            : undefined,
+        )
+        .catch((error) => {
+          state.sendError = String(error);
+          renderLists();
+        });
+    };
+    if (win) draftSaves.set(taskId, { timer: win.setTimeout(save, 250), save });
+    else save();
   }
 
   function rememberTimelineViewport(taskId = renderedTimelineTaskId): void {
@@ -4655,11 +3824,17 @@ function bindWorkspace(
     });
   }
 
-  async function loadTask(taskId: string): Promise<void> {
+  async function loadTask(
+    taskId: string,
+    preserveModelMenu = false,
+  ): Promise<void> {
     const generation = ++taskLoadGeneration;
     const previousTaskId = state.sessionId;
     const switching = previousTaskId !== taskId;
     if (switching) {
+      if (!preserveModelMenu) closeEndpointMenu();
+      closePlusMenu();
+      doc.getElementById("confucius-source-menu")?.remove();
       rememberComposerDraft(previousTaskId);
       rememberTimelineViewport();
       closeArtifactViewer();
@@ -4675,6 +3850,13 @@ function bindWorkspace(
       rememberComposerDraft(previousTaskId);
       rememberTimelineViewport();
     }
+    if (!composerDrafts.has(taskId))
+      composerDrafts.set(taskId, loaded.draft?.text ?? "");
+    if (!referenceDrafts.has(taskId))
+      referenceDrafts.set(
+        taskId,
+        loaded.draft?.references ?? loaded.references ?? [],
+      );
     state.sessionId = taskId;
     state.lastEventId = null;
     state.running = false;
@@ -4682,7 +3864,8 @@ function bindWorkspace(
     state.sendError = "";
     state.selectedArtifactId = null;
     state.selectedArtifactRevision = null;
-    if (switching) {
+    if (switching || loadedComposerTaskId !== taskId) {
+      loadedComposerTaskId = taskId;
       prompt.value = composerDrafts.get(taskId) ?? "";
       closeSlashMenu();
       closeMentionMenu();
@@ -4716,6 +3899,7 @@ function bindWorkspace(
       templateId?: string;
       prompt?: string;
       skillSlug?: string;
+      preserveModelMenu?: boolean;
     } = {},
   ): Promise<ResearchTaskRecord> {
     const current = currentTask();
@@ -4744,7 +3928,7 @@ function bindWorkspace(
       ...state.sessions.filter((row) => row.id !== created.id),
     ];
     pendingMentionItems.clear();
-    await loadTask(created.id);
+    await loadTask(created.id, options.preserveModelMenu);
     if (options.skillSlug) {
       await rpc("skill/activate", {
         sessionId: created.id,
@@ -4772,11 +3956,75 @@ function bindWorkspace(
     return getString(`workspace-template-${template.id}-prompt`);
   }
 
+  function syncPresetChip(): void {
+    syncModeButton();
+    const template = taskTemplate(currentTask()?.templateId);
+    presetChip.hidden = !template;
+    composerToolbar.dataset.statusActive = String(
+      Boolean(template) || state.mode === "plan",
+    );
+    presetChip.toggleAttribute(
+      "disabled",
+      presetUpdatePending ||
+        modeUpdatePending ||
+        modelUpdatePending ||
+        state.running ||
+        state.sending,
+    );
+    if (presetChip.hidden || presetChip.disabled) presetStatus.resetPreview();
+    if (!template) return;
+    const label = localizedTemplateTitle(template);
+    if (presetLabel.textContent !== label) presetLabel.textContent = label;
+    presetChip.dataset.templateId = template.id;
+    const hint = getString("workspace-preset-dismiss");
+    presetChip.title = `${label} · ${hint}`;
+    presetChip.setAttribute("aria-label", `${label} · ${hint}`);
+  }
+
+  async function clearPreset(): Promise<void> {
+    const task = currentTask();
+    if (
+      !task?.templateId ||
+      presetUpdatePending ||
+      modeUpdatePending ||
+      modelUpdatePending ||
+      state.running ||
+      state.sending
+    )
+      return;
+    presetUpdatePending = true;
+    updateRunningUI();
+    try {
+      const updated = (await rpc("task/stageTemplate", {
+        taskId: task.id,
+        templateId: null,
+      })) as ResearchTaskRecord;
+      const index = state.sessions.findIndex((row) => row.id === updated.id);
+      if (index >= 0) state.sessions[index] = updated;
+      if (state.sessionId === task.id) {
+        state.sendError = "";
+        rememberComposerDraft();
+        prompt.focus({ preventScroll: true });
+      }
+    } catch (error) {
+      if (state.sessionId === task.id)
+        state.sendError =
+          error instanceof Error ? error.message : String(error);
+    } finally {
+      presetUpdatePending = false;
+      updateRunningUI();
+      renderLists();
+    }
+  }
+
   async function stageTemplate(
     template: TaskTemplate,
     context?: LockedContextSnapshot,
     promptOverride?: string,
   ): Promise<void> {
+    if (presetUpdatePending || modeUpdatePending || state.sending) return;
+    presetUpdatePending = true;
+    updateRunningUI();
     state.sendError = "";
     try {
       const existing = currentTask();
@@ -4817,6 +4065,7 @@ function bindWorkspace(
       ).trim();
       prompt.value = draft;
       composerDrafts.set(task.id, draft);
+      rememberComposerDraft();
       closeSlashMenu();
       closeMentionMenu();
       prompt.focus();
@@ -4826,6 +4075,9 @@ function bindWorkspace(
     } catch (error) {
       state.sendError = error instanceof Error ? error.message : String(error);
       renderLists();
+    } finally {
+      presetUpdatePending = false;
+      updateRunningUI();
     }
   }
 
@@ -4846,6 +4098,7 @@ function bindWorkspace(
         promptText || (intent.skillSlug ? `/${intent.skillSlug} ` : "");
       prompt.value = draft;
       composerDrafts.set(created.id, draft);
+      rememberComposerDraft();
       prompt.focus();
     }
     await refreshSessions();
@@ -5002,20 +4255,22 @@ function bindWorkspace(
 
   let contextFlashGeneration = 0;
   function flashContextUpdated(): void {
+    const source = doc.getElementById(
+      "confucius-task-sources",
+    ) as HTMLElement | null;
+    if (!source) return;
     const generation = ++contextFlashGeneration;
     const label = getString("workspace-context-updated");
-    plusBtn.textContent = "✓";
-    plusBtn.setAttribute("data-state", "success");
-    plusBtn.setAttribute("title", label);
-    plusBtn.setAttribute("aria-label", label);
+    const text = source.textContent;
+    const title = source.title;
+    source.textContent = `${text} · ${label}`;
+    source.title = label;
+    source.setAttribute("aria-live", "polite");
     doc.defaultView?.setTimeout(() => {
-      if (generation !== contextFlashGeneration || !plusBtn.isConnected) {
-        return;
-      }
-      plusBtn.textContent = "+";
-      plusBtn.removeAttribute("data-state");
-      plusBtn.setAttribute("title", getString("workspace-plus"));
-      plusBtn.setAttribute("aria-label", getString("workspace-plus"));
+      if (generation !== contextFlashGeneration || !source.isConnected) return;
+      source.textContent = text;
+      source.title = title;
+      source.removeAttribute("aria-live");
     }, 1_200);
   }
 
@@ -5055,7 +4310,7 @@ function bindWorkspace(
     const heading = el(doc, "div", {
       marginTop: "22px",
       fontSize: "11px",
-      color: "#8a857c",
+      color: "#70695f",
       fontWeight: "700",
       letterSpacing: "0.09em",
       textTransform: "uppercase",
@@ -5084,299 +4339,6 @@ function bindWorkspace(
       grid.appendChild(templateButton);
     }
     target.appendChild(grid);
-  }
-
-  function renderArtifactBodyNode(body: ArtifactBody): HTMLElement {
-    const container = el(doc, "div");
-    if (body.type === "markdown") {
-      container.className = "tui-answer";
-      fillAnswerHtml(container, body.markdown);
-      return container;
-    }
-    const table = (
-      headers: string[],
-      rows: Array<Array<string | HTMLElement>>,
-    ): HTMLElement => {
-      const node = el(doc, "table");
-      const head = el(doc, "thead");
-      const headRow = el(doc, "tr");
-      for (const label of headers) {
-        const cell = el(doc, "th");
-        cell.textContent = label;
-        headRow.appendChild(cell);
-      }
-      head.appendChild(headRow);
-      node.appendChild(head);
-      const tbody = el(doc, "tbody");
-      for (const values of rows) {
-        const row = el(doc, "tr");
-        for (const value of values) {
-          const cell = el(doc, "td");
-          if (typeof value === "string") cell.textContent = value;
-          else cell.appendChild(value);
-          row.appendChild(cell);
-        }
-        tbody.appendChild(row);
-      }
-      node.appendChild(tbody);
-      return node;
-    };
-    if (body.type === "evidence_audit") {
-      const fourColumn = body.claims.some(
-        (claim) => claim.evidence !== undefined || claim.risk !== undefined,
-      );
-      container.appendChild(
-        fourColumn
-          ? table(
-              [
-                getString("workspace-artifact-claim"),
-                getString("workspace-artifact-evidence"),
-                getString("workspace-artifact-verdict"),
-                getString("workspace-artifact-risk"),
-              ],
-              body.claims.map((claim) => [
-                claim.claim,
-                claim.evidence ?? claim.rationale ?? "",
-                claim.verdict,
-                claim.risk ?? "",
-              ]),
-            )
-          : table(
-              [
-                getString("workspace-artifact-claim"),
-                getString("workspace-artifact-verdict"),
-                getString("workspace-artifact-rationale"),
-              ],
-              body.claims.map((claim) => [
-                claim.claim,
-                claim.verdict,
-                claim.rationale ?? "",
-              ]),
-            ),
-      );
-    } else if (body.type === "literature_map") {
-      const nodes = el(doc, "div", { marginBottom: "18px" });
-      for (const node of body.nodes) {
-        const row = el(doc, "div", {
-          padding: "8px 0",
-          borderBottom: "1px solid #ece8df",
-        });
-        const name = el(doc, "strong");
-        name.textContent = node.label;
-        row.appendChild(name);
-        if (node.summary) {
-          const summary = el(doc, "div", { color: "#6b665c" });
-          summary.textContent = node.summary;
-          row.appendChild(summary);
-        }
-        if (node.item) {
-          row.appendChild(
-            locateLink(doc, { ...node.item, pageIndex: undefined }),
-          );
-        }
-        nodes.appendChild(row);
-      }
-      container.appendChild(nodes);
-      container.appendChild(
-        table(
-          [
-            getString("workspace-artifact-from"),
-            getString("workspace-artifact-relation"),
-            getString("workspace-artifact-to"),
-          ],
-          body.edges.map((edge) => [edge.source, edge.relation, edge.target]),
-        ),
-      );
-    } else if (body.type === "triage_table") {
-      container.appendChild(
-        table(
-          [
-            getString("workspace-artifact-source"),
-            getString("workspace-artifact-decision"),
-            getString("workspace-artifact-reason"),
-          ],
-          body.rows.map((row) => {
-            const source = el(doc, "div");
-            const title = el(doc, "div", { fontWeight: "600" });
-            title.textContent = row.title;
-            source.appendChild(title);
-            source.appendChild(locateLink(doc, row.item));
-            return [source, row.decision, row.reason];
-          }),
-        ),
-      );
-    } else if (body.type === "annotation_set") {
-      const legend = body.legend?.length
-        ? body.legend
-        : [
-            {
-              type: "highlight" as const,
-              color: DEFAULT_ANNOTATION_COLORS.highlight,
-              meaning: getString(
-                "workspace-artifact-annotation-highlight-default",
-              ),
-            },
-            {
-              type: "underline" as const,
-              color: DEFAULT_ANNOTATION_COLORS.underline,
-              meaning: getString(
-                "workspace-artifact-annotation-underline-default",
-              ),
-            },
-            {
-              type: "image" as const,
-              color: DEFAULT_ANNOTATION_COLORS.image,
-              meaning: getString("workspace-artifact-annotation-image-default"),
-            },
-          ];
-      const legendHeading = el(doc, "div", {
-        marginBottom: "7px",
-        color: "#6b665c",
-        fontSize: "11px",
-        fontWeight: "700",
-        letterSpacing: ".06em",
-        textTransform: "uppercase",
-      });
-      legendHeading.textContent = getString(
-        "workspace-artifact-annotation-legend",
-      );
-      container.appendChild(legendHeading);
-      const legendList = el(doc, "div", {
-        marginBottom: "18px",
-        borderTop: "1px solid #e5e1d8",
-      });
-      for (const entry of legend) {
-        const row = el(doc, "div", {
-          display: "flex",
-          alignItems: "center",
-          gap: "8px",
-          padding: "7px 0",
-          borderBottom: "1px solid #eeeae2",
-          color: "#575249",
-          fontSize: ".9em",
-        });
-        const swatch = el(doc, "span", {
-          width: "10px",
-          height: "10px",
-          flex: "0 0 10px",
-          borderRadius: "3px",
-          background: entry.color ?? DEFAULT_ANNOTATION_COLORS[entry.type],
-          boxShadow: "inset 0 0 0 1px rgba(28,25,23,.12)",
-        });
-        const label = el(doc, "strong", { color: "#33302a" });
-        label.textContent = getString(
-          `workspace-artifact-annotation-${entry.type}`,
-        );
-        row.appendChild(swatch);
-        row.appendChild(label);
-        row.appendChild(doc.createTextNode(entry.meaning));
-        legendList.appendChild(row);
-      }
-      container.appendChild(legendList);
-
-      for (const annotation of annotationsFromBody(body)) {
-        const color =
-          annotation.color ?? DEFAULT_ANNOTATION_COLORS[annotation.type];
-        const annotationNode = el(doc, "section", {
-          marginBottom: "16px",
-          padding: "0 0 16px 14px",
-          borderLeft: `3px solid ${color}`,
-          borderBottom: "1px solid #eeeae2",
-        });
-        const meta = el(doc, "div", {
-          display: "flex",
-          alignItems: "center",
-          gap: "7px",
-          marginBottom: "7px",
-          color: "#777166",
-          fontSize: ".82em",
-        });
-        const type = el(doc, "strong", { color: "#4b4740" });
-        type.textContent = getString(
-          `workspace-artifact-annotation-${annotation.type}`,
-        );
-        meta.appendChild(type);
-        meta.appendChild(doc.createTextNode(`p. ${annotation.page}`));
-        annotationNode.appendChild(meta);
-        if (annotation.type === "image") {
-          const region = el(doc, "div", {
-            position: "relative",
-            width: "112px",
-            height: "148px",
-            margin: "4px 0 9px",
-            overflow: "hidden",
-            border: "1px solid #d8d1c4",
-            borderRadius: "4px",
-            background:
-              "repeating-linear-gradient(0deg,#faf9f6,#faf9f6 11px,#f0ece3 12px)",
-          });
-          const [x, y, width, height] = annotation.rect;
-          const crop = el(doc, "span", {
-            position: "absolute",
-            left: `${x / 10}%`,
-            top: `${y / 10}%`,
-            width: `${width / 10}%`,
-            height: `${height / 10}%`,
-            boxSizing: "border-box",
-            border: `2px solid ${color}`,
-            background: `${color}2b`,
-          });
-          region.appendChild(crop);
-          region.setAttribute(
-            "title",
-            `${getString("workspace-artifact-annotation-region")}: ${annotation.rect.join(", ")}`,
-          );
-          annotationNode.appendChild(region);
-        } else {
-          const quote = el(doc, "div", {
-            marginBottom: annotation.comment ? "7px" : "0",
-            padding: annotation.type === "highlight" ? "2px 4px" : "2px 0",
-            background:
-              annotation.type === "highlight" ? `${color}38` : "transparent",
-            textDecoration:
-              annotation.type === "underline" ? "underline" : "none",
-            textDecorationColor: color,
-            textDecorationThickness: "2px",
-            textUnderlineOffset: "3px",
-          });
-          quote.textContent = `“${annotation.quote}”`;
-          annotationNode.appendChild(quote);
-        }
-        if (annotation.comment) {
-          const comment = el(doc, "div", {
-            color: "#575249",
-            lineHeight: "1.5",
-          });
-          comment.textContent = annotation.comment;
-          annotationNode.appendChild(comment);
-        }
-        container.appendChild(annotationNode);
-      }
-    } else if (body.type === "collection_diff") {
-      container.appendChild(
-        table(
-          [
-            getString("workspace-artifact-operation"),
-            getString("workspace-artifact-target"),
-          ],
-          body.operations.map((operation) => [
-            operation.op,
-            operation.item
-              ? `${operation.item.libraryID}:${operation.item.key}`
-              : (operation.value ?? ""),
-          ]),
-        ),
-      );
-    } else if (body.type === "citation_list") {
-      const list = el(doc, "ol", { paddingLeft: "24px" });
-      for (const entry of body.entries) {
-        const item = el(doc, "li", { marginBottom: "10px" });
-        item.textContent = entry.rendered;
-        list.appendChild(item);
-      }
-      container.appendChild(list);
-    }
-    return container;
   }
 
   function writebackTargets(
@@ -5427,33 +4389,24 @@ function bindWorkspace(
       return;
     }
     doc.getElementById("confucius-writeback-overlay")?.remove();
+    const returnFocus = doc.activeElement as HTMLElement | null;
     const overlay = el(
       doc,
       "div",
+      { zIndex: "1300" },
       {
-        position: "absolute",
-        inset: "0px",
-        zIndex: "1100",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "10px",
-        boxSizing: "border-box",
-        background: "rgba(28,25,23,.45)",
+        id: "confucius-writeback-overlay",
+        "aria-label": getString("workspace-writeback-preview"),
       },
-      { id: "confucius-writeback-overlay" },
     );
-    const panel = el(doc, "div", {
-      width: "min(760px, 100%)",
-      maxHeight: "100%",
-      overflow: "auto",
-      padding: "18px",
-      boxSizing: "border-box",
-      borderRadius: "9px",
-      background: "#faf9f6",
-      color: "#33302a",
-      boxShadow: "0 18px 50px rgba(28,25,23,.2)",
-    });
+    overlay.className = "confucius-dialog";
+    const closeWriteback = () => {
+      overlay.remove();
+      if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+    };
+    bindDialogNavigation(overlay, closeWriteback);
+    const panel = el(doc, "div");
+    panel.className = "confucius-dialog-panel";
     const heading = el(doc, "div", {
       marginBottom: "10px",
       fontSize: "16px",
@@ -5555,7 +4508,7 @@ function bindWorkspace(
         targetSelect.value === "knowledge_base" ? "block" : "none";
       void loadPreview();
     });
-    cancel.addEventListener("click", () => overlay.remove());
+    cancel.addEventListener("click", closeWriteback);
     requestApproval.addEventListener("click", () => {
       requestApproval.setAttribute("disabled", "true");
       void (async () => {
@@ -5566,7 +4519,7 @@ function bindWorkspace(
             target: targetSelect.value,
             knowledgeBaseId: knowledgeInput.value.trim() || undefined,
           });
-          overlay.remove();
+          closeWriteback();
           const keepViewerOpen = artifactViewerOpen;
           await loadTask(artifact.taskId);
           if (
@@ -5596,7 +4549,9 @@ function bindWorkspace(
     panel.appendChild(errorLine);
     panel.appendChild(actions);
     overlay.appendChild(panel);
-    root.appendChild(overlay);
+    const viewer = doc.getElementById("confucius-artifact-overlay");
+    (viewer?.parentElement ?? root).appendChild(overlay);
+    targetSelect.focus({ preventScroll: true });
     void loadPreview();
   }
 
@@ -5652,7 +4607,7 @@ function bindWorkspace(
     header.className = "confucius-task-overview-header";
     const headerCopy = el(doc, "div", { minWidth: "0px", flex: "1 1 280px" });
     const meta = el(doc, "div", {
-      color: "#8a857c",
+      color: "#70695f",
       fontSize: "11px",
       fontWeight: "700",
       letterSpacing: ".08em",
@@ -5661,13 +4616,80 @@ function bindWorkspace(
     meta.textContent = `${runtimeLabel(task.backend)} · ${taskStatusLabel(task)}`;
     const title = el(doc, "h1");
     title.textContent = task.title || getString("workspace-untitled-task");
-    const source = el(doc, "div", { color: "#6b665c", fontSize: ".9em" });
-    source.textContent = contextSummary(task.lockedContext);
+    const source = el(
+      doc,
+      "button",
+      {
+        color: "#6b665c",
+        fontSize: ".9em",
+        fontFamily: "inherit",
+        textAlign: "start",
+        background: "transparent",
+        border: "0",
+        padding: "4px 0",
+        cursor: "pointer",
+        maxWidth: "100%",
+      },
+      { id: "confucius-task-sources", type: "button", "aria-haspopup": "menu" },
+    );
+    source.textContent = `${contextSummary(task.lockedContext)} ⌄`;
+    source.title =
+      contextDetail(task.lockedContext) ||
+      getString("workspace-context-heading");
+    source.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const existing = doc.getElementById("confucius-source-menu");
+      if (existing) {
+        existing.remove();
+        return;
+      }
+      closeEndpointMenu();
+      closePlusMenu();
+      closeMentionMenu();
+      closeSlashMenu();
+      const menu = menuPanel("confucius-source-menu");
+      menu.appendChild(
+        createMenuHeader(
+          doc,
+          getString("workspace-context-heading"),
+          contextSummary(task.lockedContext),
+        ),
+      );
+      for (const mode of ["add", "replace"] as const) {
+        const row = menuRow(
+          getString(
+            mode === "add"
+              ? "workspace-context-add"
+              : "workspace-context-replace",
+          ),
+          {
+            onClick: () => {
+              menu.remove();
+              if (currentTask()?.id === task.id) void updateTaskContext(mode);
+            },
+          },
+        );
+        row.dataset.contextAction = mode;
+        menu.appendChild(row);
+      }
+      placeMenu(source, menu, 300);
+    });
     headerCopy.appendChild(meta);
     headerCopy.appendChild(title);
     headerCopy.appendChild(source);
 
     header.appendChild(headerCopy);
+    if (state.artifacts.length) {
+      const files = button(
+        doc,
+        "confucius-task-files",
+        `${getString("workspace-artifacts")} · ${state.artifacts.length}`,
+      );
+      files.addEventListener("click", () =>
+        openArtifactViewer(state.artifacts[0].id, undefined, files),
+      );
+      header.append(files);
+    }
     if (task.status === "interrupted") {
       const controls = el(doc, "div", {
         display: "flex",
@@ -5700,29 +4722,17 @@ function bindWorkspace(
     }
     overview.appendChild(header);
 
-    if (!state.artifacts.length) {
-      const empty = el(doc, "div", {
-        marginTop: "16px",
-        paddingTop: "14px",
-        borderTop: "1px solid #e5e1d8",
+    if (
+      !state.artifacts.length &&
+      !state.events.some((event) => event.type === "turn_started")
+    ) {
+      const guide = el(doc, "p", {
+        color: "#70695f",
+        margin: "20px 0 8px",
+        lineHeight: "1.6",
       });
-      const emptyTitle = el(doc, "div", {
-        marginBottom: "4px",
-        fontWeight: "700",
-      });
-      emptyTitle.textContent =
-        task.status === "running" || task.status === "awaiting_approval"
-          ? getString("workspace-artifact-building")
-          : getString("workspace-no-artifacts");
-      const emptyCopy = el(doc, "div", {
-        maxWidth: "620px",
-        color: "#6b665c",
-        lineHeight: "1.5",
-      });
-      emptyCopy.textContent = getString("workspace-no-artifacts-help");
-      empty.appendChild(emptyTitle);
-      empty.appendChild(emptyCopy);
-      overview.appendChild(empty);
+      guide.textContent = getString("workspace-start-guide");
+      overview.appendChild(guide);
       if (!state.running) renderTemplatePicker(overview, task.lockedContext);
     }
     return overview;
@@ -5775,34 +4785,18 @@ function bindWorkspace(
       closeArtifactChoiceMenu(false);
       return;
     }
-    const menu = el(
-      doc,
-      "div",
-      {
-        position: "fixed",
-        zIndex: "1300",
-        minWidth: "0px",
-        maxHeight: "340px",
-        padding: "5px",
-        overflow: "auto",
-        border: "1px solid #d7d1c5",
-        borderRadius: "9px",
-        background: "#fffefa",
-        boxSizing: "border-box",
-        boxShadow: "0 12px 34px rgba(45,40,34,.18)",
-      },
-      {
-        id: "confucius-artifact-choice-menu",
-        role: "listbox",
-        "data-placement": "left",
-        "aria-label": getString(
-          kind === "artifact"
-            ? "workspace-artifact-switch"
-            : "workspace-artifact-revision",
-        ),
-      },
-    );
-    menu.className = "confucius-artifact-choice-menu";
+    const menu = createMenuSurface(doc, {
+      id: "confucius-artifact-choice-menu",
+      role: "listbox",
+      "data-placement": "left",
+      "aria-label": getString(
+        kind === "artifact"
+          ? "workspace-artifact-switch"
+          : "workspace-artifact-revision",
+      ),
+    });
+    menu.style.zIndex = "1300";
+    menu.classList.add("confucius-artifact-choice-menu");
     const choices =
       kind === "artifact"
         ? state.artifacts.map((item) => ({
@@ -5941,6 +4935,7 @@ function bindWorkspace(
   }
 
   function closeArtifactViewer(restoreFocus = true): void {
+    rememberArtifactScroll();
     closeArtifactChoiceMenu(false);
     artifactViewerOpen = false;
     lastArtifactViewerSignature = "";
@@ -6022,7 +5017,13 @@ function bindWorkspace(
     const previousBody = doc.getElementById(
       "confucius-artifact-dialog-body",
     ) as HTMLElement | null;
-    const previousScroll = resetScroll ? 0 : (previousBody?.scrollTop ?? 0);
+    rememberArtifactScroll();
+    const artifactKey = `${artifact.id}:${revision.revision}`;
+    const previousScroll =
+      artifactKey !== renderedArtifactKey || resetScroll
+        ? (artifactScrolls.get(artifactKey) ?? 0)
+        : (previousBody?.scrollTop ?? 0);
+    renderedArtifactKey = artifactKey;
     const wasOpen = Boolean(existing);
     closeArtifactChoiceMenu(false);
     existing?.remove();
@@ -6039,17 +5040,22 @@ function bindWorkspace(
       "aria-labelledby": "confucius-artifact-dialog-title",
     });
     overlay.className = "confucius-artifact-overlay";
+    overlay.style.fontFamily = root.style.fontFamily;
+    overlay.style.fontSize = root.style.fontSize;
+    for (const property of [
+      "--confucius-markdown-font-size",
+      "--confucius-reading-line-height",
+    ]) {
+      overlay.style.setProperty(
+        property,
+        root.style.getPropertyValue(property),
+      );
+    }
     if (wasOpen) overlay.setAttribute("data-refresh", "true");
     overlay.addEventListener("click", (event) => {
       if (event.target === overlay) closeArtifactViewer();
     });
-    overlay.addEventListener("keydown", (event) => {
-      if ((event as KeyboardEvent).key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        closeArtifactViewer();
-      }
-    });
+    bindDialogNavigation(overlay, () => closeArtifactViewer());
 
     const dialog = el(doc, "section");
     dialog.className = "confucius-artifact-dialog";
@@ -6130,7 +5136,7 @@ function bindWorkspace(
       alignItems: "center",
       flexWrap: "wrap",
       gap: "7px",
-      color: "#8a857c",
+      color: "#70695f",
       fontSize: "11px",
       fontWeight: "700",
       letterSpacing: ".07em",
@@ -6163,7 +5169,9 @@ function bindWorkspace(
     artifactTitle.textContent = artifact.title;
     paper.appendChild(paperMeta);
     paper.appendChild(artifactTitle);
-    paper.appendChild(renderArtifactBodyNode(revision.body));
+    paper.appendChild(
+      renderReadingSurface(doc, revision.body, { fillAnswerHtml, locateLink }),
+    );
     if (revision.citations.length) {
       const citationHeading = el(doc, "h3", {
         margin: "28px 0 8px",
@@ -6214,6 +5222,47 @@ function bindWorkspace(
     if (!wasOpen) closeButton.focus();
   }
 
+  const updateTaskList = createTaskList(doc, sessionPane, {
+    text: (key) => getString(key),
+    status: taskStatusLabel,
+    open: (taskId) => {
+      void loadTask(taskId).then(() => {
+        if (auxiliaryOverlay) {
+          showSessions = false;
+          syncAuxiliaryPanes();
+        }
+        renderLists();
+      });
+    },
+    remove: (taskId) => {
+      void (async () => {
+        await rpc("task/delete", { taskId: taskId });
+        composerDrafts.delete(taskId);
+        timelineViewports.delete(taskId);
+        if (state.sessionId === taskId) {
+          taskLoadGeneration += 1;
+          state.sessionId = null;
+          state.events = [];
+          state.lastEventId = null;
+          state.running = false;
+          state.pendingUserText = "";
+          state.artifacts = [];
+          state.selectedArtifactId = null;
+          state.selectedArtifactRevision = null;
+          prompt.value = "";
+          renderedTimelineTaskId = null;
+          closeArtifactViewer();
+        }
+        await refreshSessions();
+        renderLists();
+        referenceDrafts.delete(taskId);
+      })().catch((error) => {
+        state.sendError = String(error);
+        renderLists();
+      });
+    },
+  });
+
   let lastListSignature = "";
 
   function listSignature(): string {
@@ -6230,7 +5279,7 @@ function bindWorkspace(
       state.sessions
         .map(
           (item) =>
-            `${item.id}:${item.title ?? ""}:${item.status}:${item.backend}:${item.lockedContext.fingerprint}`,
+            `${item.id}:${item.title ?? ""}:${item.status}:${item.backend}:${item.templateId ?? ""}:${item.lockedContext.fingerprint}`,
         )
         .join("|"),
       state.artifacts
@@ -6244,123 +5293,10 @@ function bindWorkspace(
   function renderLists(): void {
     applyAppearance();
     syncEndpointButton();
+    syncPresetChip();
     lastListSignature = listSignature();
-    sessionPane.textContent = "";
-    sessionPane.appendChild(paneLabel(doc, getString("workspace-tasks")));
-    if (!state.sessions.length) {
-      sessionPane.appendChild(muted(doc, getString("workspace-no-tasks")));
-    } else {
-      for (const item of state.sessions) {
-        const row = el(doc, "div", {
-          display: "flex",
-          alignItems: "flex-start",
-          gap: "7px",
-          padding: "9px 7px",
-          cursor: "pointer",
-          background: item.id === state.sessionId ? "#f0ece3" : "transparent",
-        });
-        row.className = "confucius-task-row";
-        row.setAttribute(
-          "data-active",
-          item.id === state.sessionId ? "true" : "false",
-        );
-        row.setAttribute("data-task-status", item.status);
-        const dot = el(doc, "span", {
-          width: "7px",
-          height: "7px",
-          flex: "0 0 7px",
-          marginTop: "6px",
-          borderRadius: "50%",
-          background:
-            item.status === "completed"
-              ? "#4f7657"
-              : item.status === "failed"
-                ? "#b3452f"
-                : item.status === "running" ||
-                    item.status === "awaiting_approval"
-                  ? "#b97837"
-                  : item.status === "interrupted"
-                    ? "#8561a5"
-                    : "#aaa49a",
-        });
-        const label = el(doc, "div", {
-          flex: "1 1 auto",
-          minWidth: "0px",
-        });
-        const labelTitle = el(doc, "div", {
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          fontWeight: item.id === state.sessionId ? "650" : "500",
-        });
-        labelTitle.textContent = item.title || item.id;
-        const labelMeta = el(doc, "div", {
-          marginTop: "2px",
-          overflow: "hidden",
-          color: "#8a857c",
-          fontSize: "10px",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        });
-        labelMeta.textContent = `${runtimeLabel(item.backend)} · ${taskStatusLabel(item)}`;
-        label.appendChild(labelTitle);
-        label.appendChild(labelMeta);
-        const del = el(
-          doc,
-          "button",
-          {
-            flex: "0 0 auto",
-            border: "none",
-            background: "transparent",
-            color: "#b3452f",
-            cursor: "pointer",
-            font: "inherit",
-            padding: "0 4px",
-          },
-          { type: "button", title: getString("workspace-delete-task") },
-        );
-        del.textContent = "✕";
-        del.addEventListener("click", (event) => {
-          event.stopPropagation();
-          void (async () => {
-            await rpc("task/delete", { taskId: item.id });
-            composerDrafts.delete(item.id);
-            timelineViewports.delete(item.id);
-            if (state.sessionId === item.id) {
-              taskLoadGeneration += 1;
-              state.sessionId = null;
-              state.events = [];
-              state.lastEventId = null;
-              state.running = false;
-              state.pendingUserText = "";
-              state.artifacts = [];
-              state.selectedArtifactId = null;
-              state.selectedArtifactRevision = null;
-              prompt.value = "";
-              renderedTimelineTaskId = null;
-              closeArtifactViewer();
-            }
-            await refreshSessions();
-            renderLists();
-          })();
-        });
-        row.addEventListener("click", () => {
-          void (async () => {
-            const selectedSessionId = item.id;
-            await loadTask(selectedSessionId);
-            if (auxiliaryOverlay) {
-              showSessions = false;
-              syncAuxiliaryPanes();
-            }
-            renderLists();
-          })();
-        });
-        row.appendChild(dot);
-        row.appendChild(label);
-        row.appendChild(del);
-        sessionPane.appendChild(row);
-      }
-    }
+    updateTaskList(state.sessions, state.sessionId);
+    renderSourceTags();
 
     const timelineTaskId = state.sessionId;
     const taskChanged = renderedTimelineTaskId !== timelineTaskId;
@@ -6370,15 +5306,14 @@ function bindWorkspace(
       : undefined;
     const followTimeline = taskChanged
       ? (savedViewport?.followsBottom ?? true)
-      : Boolean(state.sending || state.running || state.pendingUserText) ||
-        timelinePane.scrollHeight -
+      : timelinePane.scrollHeight -
           timelinePane.scrollTop -
           timelinePane.clientHeight <
-          96;
+        96;
     const savedTimelineScroll = taskChanged
       ? (savedViewport?.scrollTop ?? 0)
       : timelinePane.scrollTop;
-    timelinePane.textContent = "";
+    if (taskChanged) timelinePane.replaceChildren();
     const session = state.sessions.find((item) => item.id === state.sessionId);
     const activityStream = el(doc, "div");
     activityStream.className = "confucius-activity-shell";
@@ -6395,20 +5330,16 @@ function bindWorkspace(
       ),
     );
     activityStream.appendChild(timelineHead);
-    activityStream.appendChild(renderActivityOverview());
+    const overview = renderActivityOverview();
+    overview.dataset.entryId = `overview:${state.sessionId ?? "new"}`;
+    activityStream.appendChild(overview);
     if (
       session?.backend === "native" &&
       state.config &&
       !configReady(state.config)
     ) {
-      const banner = el(doc, "div", {
-        border: "1px solid #d9b36a",
-        borderRadius: "8px",
-        padding: "10px 12px",
-        marginBottom: "8px",
-        background: "#f5f3ee",
-        color: "#8c6a3f",
-      });
+      const banner = el(doc, "div");
+      banner.className = "confucius-notice";
       const bannerText = el(doc, "div", { marginBottom: "6px" });
       bannerText.textContent = getString("workspace-config-banner");
       const configure = button(
@@ -6429,20 +5360,20 @@ function bindWorkspace(
       err.textContent = state.sendError;
       activityStream.appendChild(err);
     }
-    const timelineBlocks = coalesceTimeline(state.events);
+    const keyedBlocks = keyedTimeline(state.events);
+    const timelineBlocks = keyedBlocks.map((entry) => entry.block);
     if (
       !state.events.length &&
       !state.artifacts.length &&
       !state.pendingUserText &&
       !state.sendError
     ) {
-      activityStream.appendChild(
-        muted(doc, getString("workspace-empty-timeline")),
-      );
+      // The task overview already provides the starting actions.
     } else {
       timelineBlocks.forEach((block, index) => {
         const node = renderTimelineBlock(doc, block, index);
         if (node) {
+          node.dataset.entryId = keyedBlocks[index].key;
           activityStream.appendChild(node);
         }
       });
@@ -6463,33 +5394,140 @@ function bindWorkspace(
       }
     }
     for (const item of state.approvals) {
-      activityStream.appendChild(renderApprovalCard(doc, item));
+      const card = renderApprovalCard(doc, item);
+      card.dataset.entryId = `approval:${item.id}`;
+      activityStream.appendChild(card);
     }
     if (state.sending || turnAwaitingReply(state.events)) {
       activityStream.appendChild(renderWaiting(doc, state.events));
     }
-    timelinePane.appendChild(activityStream);
+    const sources = renderHistorySources();
+    if (sources) activityStream.appendChild(sources);
+    const previousStream = timelinePane.firstElementChild as HTMLElement | null;
+    if (previousStream) reconcileActivity(previousStream, activityStream);
+    else {
+      const initialStream = el(doc, "div");
+      initialStream.className = activityStream.className;
+      reconcileActivity(initialStream, activityStream);
+      timelinePane.appendChild(initialStream);
+    }
     renderedTimelineTaskId = timelineTaskId;
     timelinePane.scrollTop =
-      followTimeline || newApprovalsArrived
+      followTimeline && (state.events.length > 0 || state.pendingUserText)
         ? timelinePane.scrollHeight
         : savedTimelineScroll;
     rememberTimelineViewport();
-    newApprovalsArrived = false;
+    syncLatest();
     renderArtifactViewer();
   }
 
-  function syncModeButton(): void {
-    modeBtn.textContent = getString(
-      state.mode === "plan" ? "workspace-mode-plan" : "workspace-mode-agent",
+  function renderHistorySources(): HTMLElement | null {
+    const events = state.events.filter(
+      (event): event is Extract<ConfuciusEvent, { type: "history_recalled" }> =>
+        event.type === "history_recalled",
     );
+    const unique = new Map(
+      events.map((event) => [JSON.stringify(event.payload.ref), event.payload]),
+    );
+    if (!unique.size) return null;
+    const details = el(doc, "details");
+    details.className = "confucius-history-sources";
+    details.dataset.entryId = "history-sources";
+    const summary = el(doc, "summary");
+    summary.textContent = `${getString("workspace-history-sources")} · ${unique.size}`;
+    details.append(summary);
+    for (const payload of unique.values()) {
+      const row = el(doc, "div");
+      const read = button(
+        doc,
+        "",
+        `${payload.title} · ${payload.sourceIds.join(", ") || payload.ref.itemId}`,
+      );
+      const preview = el(doc, "pre");
+      preview.hidden = true;
+      const more = button(doc, "", getString("workspace-history-more"));
+      more.hidden = true;
+      let offset = 0;
+      const load = async (ref: HistoryItemRef) => {
+        try {
+          const result = (await rpc("task/history", {
+            ...ref,
+            offset,
+            limit: 4000,
+          })) as { content: string; nextOffset: number | null };
+          preview.textContent = result.content;
+          preview.hidden = false;
+          more.hidden = result.nextOffset === null;
+          offset = result.nextOffset ?? 0;
+        } catch {
+          preview.textContent = getString("workspace-source-unavailable");
+          preview.hidden = false;
+          more.hidden = true;
+        }
+      };
+      read.addEventListener("click", () => {
+        offset = 0;
+        void load(payload.ref);
+      });
+      more.addEventListener("click", () => void load(payload.ref));
+      const open = button(doc, "", getString("workspace-reference-open"));
+      open.addEventListener(
+        "click",
+        () =>
+          void loadTask(payload.ref.taskId)
+            .then(renderLists)
+            .catch(() => {
+              preview.textContent = getString("workspace-source-unavailable");
+              preview.hidden = false;
+            }),
+      );
+      row.append(read, open, preview, more);
+      details.append(row);
+    }
+    return details;
+  }
+
+  function syncModeButton(): void {
+    if (!modeUpdatePending) state.mode = currentTask()?.mode ?? state.mode;
+    const chip = planStatus.node;
+    chip.hidden = state.mode !== "plan";
+    chip.disabled =
+      modeUpdatePending ||
+      presetUpdatePending ||
+      modelUpdatePending ||
+      state.running ||
+      state.sending;
+    if (chip.hidden || chip.disabled) planStatus.resetPreview();
+    const label = getString("workspace-mode-plan-label");
+    if (planStatus.label.textContent !== label)
+      planStatus.label.textContent = label;
+    chip.title = `${getString("workspace-mode-plan")} · ${getString("workspace-mode-dismiss")}`;
+    chip.setAttribute("aria-label", chip.title);
   }
 
   function syncEndpointButton(): void {
     const task = currentTask();
     if (task && task.backend !== "native") {
       const runtime = runtimeStatus(task.backend);
-      endpointName.textContent = runtimeLabel(task.backend);
+      const model =
+        runtime?.models?.find(
+          (model) => model.id === task.runtimeModel?.modelId,
+        ) ??
+        (!task.runtimeModel
+          ? runtime?.models?.find((model) => model.isDefault)
+          : undefined);
+      const label =
+        model?.label ||
+        task.runtimeModel?.modelId ||
+        runtimeLabel(task.backend);
+      const effort = task.runtimeModel?.reasoningEffort;
+      endpointName.textContent = effort
+        ? `${label} · ${effortLabel(effort)}`
+        : label;
+      endpointBtn.setAttribute(
+        "aria-label",
+        `${runtimeLabel(task.backend)} · ${endpointName.textContent}`,
+      );
       endpointBtn.title =
         runtime?.message || getString("workspace-runtime-external");
       endpointBtn.setAttribute(
@@ -6505,7 +5543,16 @@ function bindWorkspace(
       active?.model ||
       endpointLabel(active) ||
       getString("workspace-no-endpoint");
-    endpointName.textContent = label;
+    const activeEffort = normalizeModelEffort(
+      active?.model ?? "",
+      active?.baseUrl ?? "",
+      active?.reasoningEffort,
+    );
+    endpointName.textContent =
+      activeEffort !== "auto"
+        ? `${label} · ${effortLabel(activeEffort)}`
+        : label;
+    endpointBtn.setAttribute("aria-label", label);
     const detail = [
       active?.name,
       active?.model,
@@ -6521,7 +5568,6 @@ function bindWorkspace(
   }
 
   function collectApprovals(): void {
-    const hadPendingApprovals = state.approvals.length > 0;
     const open = new Map<string, ApprovalRow>();
     for (const event of state.events) {
       if (event.type === "approval_required") {
@@ -6542,9 +5588,6 @@ function bindWorkspace(
       }
     }
     state.approvals = [...open.values()];
-    if (!hadPendingApprovals && state.approvals.length > 0) {
-      newApprovalsArrived = true;
-    }
   }
 
   /**
@@ -6585,15 +5628,42 @@ function bindWorkspace(
       tasks?: SessionRow[];
     };
     state.sessions = listed.tasks || [];
+    if (
+      state.sessionId &&
+      !state.sessions.some((task) => task.id === state.sessionId)
+    )
+      state.sessionId = null;
+    if (!state.sessionId && !state.sessions.length)
+      prompt.value = composerDrafts.get("new") ?? "";
     if (!state.sessionId && state.sessions[0]) {
       state.sessionId = state.sessions[0].id;
-      prompt.value = composerDrafts.get(state.sessionId) ?? "";
+    }
+    // The first poll restores the selected task without calling loadTask.
+    // Hydrate its composer too, including a cached task retained across layouts.
+    const selected = currentTask();
+    if (selected && loadedComposerTaskId !== selected.id) {
+      if (!composerDrafts.has(selected.id))
+        composerDrafts.set(selected.id, selected.draft?.text ?? "");
+      if (!referenceDrafts.has(selected.id))
+        referenceDrafts.set(
+          selected.id,
+          selected.draft?.references ?? selected.references ?? [],
+        );
+      prompt.value = composerDrafts.get(selected.id) ?? "";
+      loadedComposerTaskId = selected.id;
     }
   }
 
   async function sendPrompt(): Promise<void> {
     const enteredText = prompt.value.trim();
-    if (state.sending || state.running) {
+    const submittedReferences = currentReferences().map((ref) => ({ ...ref }));
+    if (
+      state.sending ||
+      state.running ||
+      presetUpdatePending ||
+      modeUpdatePending ||
+      modelUpdatePending
+    ) {
       return;
     }
     if (pendingAttachments.some((item) => item.status === "preparing")) {
@@ -6649,8 +5719,11 @@ function bindWorkspace(
             72,
           ),
           lockedContext,
+          mode: state.mode,
         })) as SessionRow;
         state.sessionId = created.id;
+        referenceDrafts.set(created.id, submittedReferences);
+        referenceDrafts.delete("new");
         state.events = [];
         state.lastEventId = null;
         state.running = false;
@@ -6667,6 +5740,7 @@ function bindWorkspace(
         taskId: promptSessionId,
         text,
         attachmentIds,
+        references: submittedReferences,
       })) as { superseded?: boolean };
       for (let index = pendingAttachments.length - 1; index >= 0; index -= 1) {
         if (submittedUiIds.has(pendingAttachments[index].uiId)) {
@@ -6685,6 +5759,7 @@ function bindWorkspace(
       if (prompt.value.trim() === enteredText) {
         prompt.value = "";
         if (promptSessionId) composerDrafts.set(promptSessionId, "");
+        rememberComposerDraft();
       }
       state.pendingUserText = "";
       state.running = !started.superseded;
@@ -6750,50 +5825,28 @@ function bindWorkspace(
       return;
     }
     const config = state.config;
-    const overlay = el(
-      doc,
-      "div",
-      {
-        position: "absolute",
-        inset: "0px",
-        background: "rgba(28, 25, 23, 0.45)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: "1000",
-      },
-      { id: "confucius-settings-overlay" },
-    );
-    const panel = el(doc, "div", {
-      background: "#ffffff",
-      borderRadius: "8px",
-      padding: responsiveWidth < 360 ? "14px" : "18px 20px",
-      width: "480px",
-      maxWidth: "calc(100% - 16px)",
-      maxHeight: "calc(100% - 16px)",
-      overflow: "auto",
-      boxSizing: "border-box",
-      font: `13px/1.5 ${UI_FONT_STACKS[isUiFont(config?.uiFont) ? config.uiFont : DEFAULT_UI_FONT]}`,
-      color: "#33302a",
+    const returnFocus = doc.activeElement as HTMLElement | null;
+    const overlay = el(doc, "div", undefined, {
+      id: "confucius-settings-overlay",
+      "aria-labelledby": "confucius-settings-title",
     });
-    overlay.addEventListener("click", (event) => {
-      if (event.target === overlay) overlay.remove();
-    });
-    const header = el(doc, "div", {
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      gap: "8px",
-      marginBottom: "12px",
-      position: "sticky",
-      top: "0px",
-      background: "#ffffff",
-      zIndex: "1",
-    });
-    const title = el(doc, "div", {
-      fontWeight: "700",
-      fontSize: "15px",
-    });
+    overlay.className = "confucius-dialog";
+    const closeSettings = () => {
+      doc.getElementById("confucius-security-profile-menu")?.remove();
+      overlay.remove();
+      if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+    };
+    bindDialogNavigation(overlay, closeSettings);
+    const panel = el(doc, "div");
+    panel.className = "confucius-dialog-panel confucius-settings-shell";
+    panel.style.fontFamily =
+      UI_FONT_STACKS[
+        isUiFont(config?.uiFont) ? config.uiFont : DEFAULT_UI_FONT
+      ];
+    const header = el(doc, "header");
+    header.className = "confucius-settings-header";
+    const title = el(doc, "h2", undefined, { id: "confucius-settings-title" });
+    title.className = "confucius-settings-title";
     title.textContent = getString("workspace-settings");
     const closeBtn = el(doc, "button", undefined, {
       id: "confucius-cfg-close",
@@ -6804,23 +5857,21 @@ function bindWorkspace(
     closeBtn.className = "confucius-icon-button";
     closeBtn.textContent = "×";
     closeBtn.style.fontSize = "24px";
-    closeBtn.addEventListener("click", () => overlay.remove());
+    closeBtn.addEventListener("click", closeSettings);
     header.appendChild(title);
     header.appendChild(closeBtn);
     panel.appendChild(header);
 
-    const tabBar = el(
-      doc,
-      "div",
-      {
-        display: "flex",
-        flexWrap: "wrap",
-        gap: "4px",
-        borderBottom: "1px solid #e5e1d8",
-        marginBottom: "14px",
-      },
-      { role: "tablist" },
-    );
+    const tabBar = el(doc, "nav", undefined, {
+      role: "tablist",
+      "aria-label": getString("workspace-settings"),
+    });
+    tabBar.className = "confucius-settings-tabs";
+    bindTabNavigation(tabBar);
+    const settingsContent = el(doc, "div");
+    settingsContent.className = "confucius-settings-content";
+    const tabScrolls = new Map<string, number>();
+    let selectedTab = "";
     const modelTab = el(doc, "div", {}, { id: "confucius-cfg-model-tab" });
     const runtimeTab = el(
       doc,
@@ -6853,32 +5904,12 @@ function bindWorkspace(
       { id: "confucius-cfg-update-tab" },
     );
     const makeTabButton = (id: string, label: string): HTMLElement => {
-      const node = el(
-        doc,
-        "button",
-        {
-          appearance: "none",
-          border: "none",
-          borderBottom: "2px solid transparent",
-          background: "transparent",
-          color: "#6b665c",
-          padding: "6px 12px",
-          marginBottom: "-1px",
-          cursor: "pointer",
-          font: "inherit",
-          fontWeight: "600",
-        },
-        { id, type: "button", role: "tab" },
-      );
+      const node = el(doc, "button", undefined, {
+        id,
+        type: "button",
+        role: "tab",
+      });
       node.textContent = label;
-      node.addEventListener("mouseenter", () => {
-        if (node.getAttribute("aria-selected") !== "true") {
-          node.style.background = "#f0ece3";
-        }
-      });
-      node.addEventListener("mouseleave", () => {
-        node.style.background = "transparent";
-      });
       tabBar.appendChild(node);
       return node;
     };
@@ -6910,6 +5941,9 @@ function bindWorkspace(
       tab:
         "model" | "runtime" | "memory" | "security" | "appearance" | "update",
     ): void => {
+      if (selectedTab) tabScrolls.set(selectedTab, settingsContent.scrollTop);
+      selectedTab = tab;
+      lastSettingsTab = tab;
       modelTab.style.display = tab === "model" ? "block" : "none";
       runtimeTab.style.display = tab === "runtime" ? "block" : "none";
       memoryTab.style.display = tab === "memory" ? "block" : "none";
@@ -6925,10 +5959,17 @@ function bindWorkspace(
         [updateTabBtn, tab === "update"],
       ];
       for (const [btn, active] of pairs) {
-        btn.style.color = active ? "#33302a" : "#6b665c";
-        btn.style.borderBottomColor = active ? "#b3452f" : "transparent";
-        btn.setAttribute("aria-selected", active ? "true" : "false");
+        btn.setAttribute("aria-selected", String(active));
+        btn.tabIndex = active ? 0 : -1;
+        const targetId = btn.id.replace("-tab-", "-") + "-tab";
+        btn.setAttribute("aria-controls", targetId);
+        const target = settingsContent.querySelector<HTMLElement>(
+          `#${targetId}`,
+        );
+        target?.setAttribute("role", "tabpanel");
+        target?.setAttribute("aria-labelledby", btn.id);
       }
+      settingsContent.scrollTop = tabScrolls.get(tab) ?? 0;
     };
     modelTabBtn.addEventListener("click", () => setSettingsTab("model"));
     runtimeTabBtn.addEventListener("click", () => setSettingsTab("runtime"));
@@ -6939,13 +5980,14 @@ function bindWorkspace(
     );
     updateTabBtn.addEventListener("click", () => setSettingsTab("update"));
     panel.appendChild(tabBar);
-    panel.appendChild(modelTab);
-    panel.appendChild(runtimeTab);
-    panel.appendChild(memoryTab);
-    panel.appendChild(securityTab);
-    panel.appendChild(appearanceTab);
-    panel.appendChild(updateTab);
-    setSettingsTab("model");
+    settingsContent.appendChild(modelTab);
+    settingsContent.appendChild(runtimeTab);
+    settingsContent.appendChild(memoryTab);
+    settingsContent.appendChild(securityTab);
+    settingsContent.appendChild(appearanceTab);
+    settingsContent.appendChild(updateTab);
+    panel.appendChild(settingsContent);
+    setSettingsTab(lastSettingsTab);
 
     let live: ModelConfig = config ?? {
       baseUrl: "",
@@ -6972,45 +6014,27 @@ function bindWorkspace(
     });
     listLabel.textContent = getString("workspace-endpoints");
     modelTab.appendChild(listLabel);
-    const listBox = el(doc, "div", {
-      border: "1px solid #ddd8cc",
-      borderRadius: "8px",
-      marginBottom: "8px",
-      overflow: "hidden",
-    });
+    const listBox = el(doc, "div");
+    listBox.className = "confucius-endpoint-list";
     modelTab.appendChild(listBox);
     const addBtn = button(
       doc,
       "confucius-cfg-add",
       getString("workspace-endpoint-add"),
     );
-    addBtn.style.background = "#ffffff";
-    addBtn.style.border = "1px solid #ddd8cc";
+
     addBtn.style.marginBottom = "12px";
     modelTab.appendChild(addBtn);
 
     const field = (label: string, id: string, value: string, type = "text") => {
-      const row = el(doc, "div", { marginBottom: "10px" });
-      const name = el(doc, "label", {
-        display: "block",
-        fontSize: "11px",
-        color: "#6b665c",
-        marginBottom: "3px",
-      });
+      const row = el(doc, "div");
+      row.className = "confucius-settings-field";
+      const name = el(doc, "label", undefined, { for: id });
       name.textContent = label;
       const input = el(
         doc,
         "input",
-        {
-          display: "block",
-          width: "100%",
-          boxSizing: "border-box",
-          height: "32px",
-          border: "1px solid #ddd8cc",
-          borderRadius: "8px",
-          padding: "0 8px",
-          font: "inherit",
-        },
+        { display: "block", width: "100%" },
         { id, type, value },
       ) as HTMLInputElement;
       row.appendChild(name);
@@ -7058,6 +6082,7 @@ function bindWorkspace(
       input.checked = checked;
       const text = doc.createElementNS(HTML_NS, "label") as HTMLElement;
       text.textContent = label;
+      text.setAttribute("for", id);
       row.appendChild(input);
       row.appendChild(text);
       modelTab.appendChild(row);
@@ -7081,6 +6106,17 @@ function bindWorkspace(
     effortRow.appendChild(effortLabel);
     effortRow.appendChild(effort.node);
     modelTab.appendChild(effortRow);
+    const advanced = el(doc, "details");
+    advanced.className = "confucius-settings-advanced";
+    const advancedTitle = el(doc, "summary");
+    advancedTitle.textContent = getString("workspace-settings-advanced");
+    advanced.append(
+      advancedTitle,
+      maxTokensInput.parentElement!,
+      contextInput.parentElement!,
+    );
+    modelTab.appendChild(advanced);
+
     const stream = check(
       getString("workspace-stream-responses"),
       "confucius-cfg-stream",
@@ -7134,7 +6170,7 @@ function bindWorkspace(
     });
     const runtimeList = el(doc, "div", {
       marginBottom: "12px",
-      borderTop: "1px solid #e5e1d8",
+      borderTop: "0",
     });
     const runtimeActions = el(doc, "div", {
       display: "flex",
@@ -7175,7 +6211,7 @@ function bindWorkspace(
       const wrap = el(doc, "div", {
         marginBottom: "12px",
         padding: "10px",
-        border: "1px solid #e5e1d8",
+        border: "0",
         borderRadius: "8px",
       });
       const label = el(doc, "label", {
@@ -7193,7 +6229,7 @@ function bindWorkspace(
           height: "32px",
           padding: "0 8px",
           boxSizing: "border-box",
-          border: "1px solid #ddd8cc",
+          border: "0",
           borderRadius: "7px",
         },
         {
@@ -7287,7 +6323,7 @@ function bindWorkspace(
           gap: "7px",
           alignItems: "start",
           padding: "9px 2px",
-          borderBottom: "1px solid #e5e1d8",
+          borderBottom: "0",
         });
         const dot = el(doc, "span", { marginTop: "5px" });
         dot.className = "confucius-runtime-dot";
@@ -7381,7 +6417,7 @@ function bindWorkspace(
         gap: "7px",
         alignItems: "start",
         padding: "8px",
-        border: "1px solid #e5e1d8",
+        border: "0",
         borderRadius: "7px",
         cursor: "pointer",
       });
@@ -7430,7 +6466,7 @@ function bindWorkspace(
       for (const proposal of pending) {
         const row = el(doc, "div", {
           padding: "10px 0",
-          borderTop: "1px solid #e5e1d8",
+          borderTop: "0",
         });
         const op = el(doc, "div", {
           marginBottom: "5px",
@@ -7449,7 +6485,7 @@ function bindWorkspace(
             marginBottom: "5px",
             padding: "0 7px",
             boxSizing: "border-box",
-            border: "1px solid #ddd8cc",
+            border: "0",
             borderRadius: "6px",
           },
           { type: "text", value: proposal.title ?? "" },
@@ -7459,7 +6495,7 @@ function bindWorkspace(
           minHeight: "74px",
           padding: "7px",
           boxSizing: "border-box",
-          border: "1px solid #ddd8cc",
+          border: "0",
           borderRadius: "6px",
           resize: "vertical",
         }) as HTMLTextAreaElement;
@@ -7565,7 +6601,7 @@ function bindWorkspace(
         marginBottom: "8px",
         padding: "0 8px",
         boxSizing: "border-box",
-        border: "1px solid #ddd8cc",
+        border: "0",
         borderRadius: "7px",
       },
       {
@@ -7681,12 +6717,8 @@ function bindWorkspace(
       closeSecurityProfileMenu(false);
       const menu = menuPanel("confucius-security-profile-menu", {
         zIndex: "1100",
-        padding: "5px",
-        borderRadius: "9px",
-        background: "#fffefa",
-        boxShadow: "0 12px 34px rgba(45,40,34,.18)",
       });
-      menu.className = "confucius-settings-choice-menu";
+      menu.classList.add("confucius-settings-choice-menu");
       menu.setAttribute("role", "listbox");
       menu.setAttribute("aria-labelledby", profileTrigger.id);
       for (const option of securityProfileOptions) {
@@ -7985,7 +7017,7 @@ function bindWorkspace(
     }
 
     const fontPreview = el(doc, "div", {
-      border: "1px solid #e5e1d8",
+      border: "0",
       borderRadius: "8px",
       background: "#faf9f6",
       padding: "12px",
@@ -8022,8 +7054,8 @@ function bindWorkspace(
     updateHelp.textContent = getString("workspace-update-help");
     const updateVersion = el(doc, "div", {
       padding: "10px 0",
-      borderTop: "1px solid #eee9df",
-      borderBottom: "1px solid #eee9df",
+      borderTop: "0",
+      borderBottom: "0",
       fontWeight: "600",
     });
     const autoUpdateRow = el(doc, "label", {
@@ -8149,34 +7181,31 @@ function bindWorkspace(
     });
     paintUpdate();
 
-    const errorLine = el(doc, "div", {
-      color: "#b3452f",
-      minHeight: "18px",
-      marginBottom: "8px",
+    const actions = el(doc, "footer");
+    actions.className = "confucius-settings-footer";
+    const errorLine = el(doc, "div", undefined, {
+      role: "status",
+      "aria-live": "polite",
     });
-    panel.appendChild(errorLine);
-
-    const actions = el(doc, "div", {
-      display: "flex",
-      flexWrap: "wrap",
-      gap: "8px",
-    });
+    errorLine.className = "confucius-settings-feedback";
     const save = button(
       doc,
       "confucius-cfg-save",
       getString("workspace-settings-save"),
+      "primary",
     );
     const cancel = button(
       doc,
       "confucius-cfg-cancel",
       getString("workspace-settings-cancel"),
     );
-    cancel.style.background = "#ffffff";
-    cancel.style.border = "1px solid #ddd8cc";
-    actions.appendChild(save);
-    actions.appendChild(cancel);
+    actions.append(errorLine, cancel, save);
     panel.appendChild(actions);
 
+    for (const field of [modelInput, baseUrlInput])
+      field.addEventListener("input", () =>
+        effort.setModel(modelInput.value, baseUrlInput.value),
+      );
     const fillForm = (ep?: ModelEndpoint) => {
       nameInput.value = ep?.name ?? "";
       baseUrlInput.value = ep?.baseUrl ?? "";
@@ -8184,7 +7213,11 @@ function bindWorkspace(
       modelInput.value = ep?.model ?? "";
       maxTokensInput.value = String(ep?.maxTokens ?? 0);
       contextInput.value = String(ep?.contextWindowTokens ?? 32768);
-      effort.setValue(ep?.reasoningEffort ?? "auto");
+      effort.setModel(
+        ep?.model ?? "",
+        ep?.baseUrl ?? "",
+        ep?.reasoningEffort ?? "auto",
+      );
     };
 
     const paintList = () => {
@@ -8192,21 +7225,25 @@ function bindWorkspace(
       for (const ep of live.endpoints ?? []) {
         const row = el(doc, "div", {
           display: "flex",
+          minWidth: "0",
           alignItems: "center",
           gap: "8px",
           padding: "6px 8px",
           cursor: "pointer",
-          background: ep.id === editingId ? "#f0ece3" : "#ffffff",
-          borderBottom: "1px solid #f0ece3",
+          background: ep.id === editingId ? "#f0ece3" : "transparent",
+          borderRadius: "8px",
+          borderBottom: "0",
         });
         const mark = el(doc, "span", {
           color: "#33302a",
           fontWeight: "700",
-          width: "14px",
+          fontSize: "10px",
+          flex: "0 0 14px",
         });
         mark.textContent = ep.id === live.activeEndpointId ? "●" : "○";
         const info = el(doc, "div", {
           flex: "1 1 auto",
+          minWidth: "0",
           overflow: "hidden",
         });
         const headline = el(doc, "div", {
@@ -8246,10 +7283,13 @@ function bindWorkspace(
           },
         );
         del.textContent = "✕";
-        row.appendChild(mark);
-        row.appendChild(info);
-        row.appendChild(del);
-        row.addEventListener("click", () => {
+        const choose = button(doc, "", "");
+        choose.className = "confucius-endpoint-choice";
+        choose.setAttribute("aria-label", ep.name || ep.model);
+        choose.setAttribute("aria-pressed", String(ep.id === editingId));
+        choose.append(mark, info);
+        row.append(choose, del);
+        choose.addEventListener("click", () => {
           void selectEndpoint(ep.id);
         });
         del.addEventListener("click", (event) => {
@@ -8340,12 +7380,15 @@ function bindWorkspace(
     overlay.appendChild(panel);
     overlay.addEventListener("click", (event) => {
       if (event.target === overlay) {
-        overlay.remove();
+        closeSettings();
       }
     });
     cancel.addEventListener("click", () => overlay.remove());
     save.addEventListener("click", () => {
+      if (save.disabled) return;
+      save.disabled = true;
       void (async () => {
+        errorLine.dataset.state = "";
         errorLine.textContent = "";
         try {
           if (
@@ -8414,18 +7457,25 @@ function bindWorkspace(
             await loadTask(settingsTask.id);
           }
           paintList();
+          errorLine.dataset.state = "saved";
+          errorLine.textContent = getString("workspace-settings-saved");
           if (languageChanged) {
-            overlay.remove();
+            closeSettings();
             applyLocalizedChrome();
             renderLists();
           }
         } catch (error) {
           errorLine.textContent =
             error instanceof Error ? error.message : String(error);
+        } finally {
+          save.disabled = false;
         }
       })();
     });
     root.appendChild(overlay);
+    tabBar
+      .querySelector<HTMLElement>('[aria-selected="true"]')
+      ?.focus({ preventScroll: true });
     void Promise.all([
       refreshRuntimes(true),
       refreshMemoryProposals(),
@@ -8477,7 +7527,8 @@ function bindWorkspace(
     open: false,
     token: null as LibraryMentionToken | null,
     query: "",
-    items: [] as ContextSearchItem[],
+    items: [] as MentionChoice[],
+    scope: "literature" as "literature" | "tasks",
     index: 0,
     nextOffset: 0 as number | null,
     total: 0,
@@ -8566,17 +7617,40 @@ function bindWorkspace(
     mentionState.error = "";
     renderMentionMenu(!reset);
     try {
-      const result = (await rpc("context/search-items", {
-        query: mentionState.query,
-        offset,
-        limit: MENTION_PAGE_SIZE,
-        libraryID: reset ? undefined : mentionState.libraryID || undefined,
-      })) as ContextSearchItemsResult;
+      let result: ContextSearchItemsResult & { items: MentionChoice[] };
+      if (mentionState.scope === "tasks") {
+        const found = (await rpc("context/search-tasks", {
+          query: mentionState.query,
+          offset,
+          limit: MENTION_PAGE_SIZE,
+        })) as {
+          tasks: HistoryTask[];
+          total: number;
+          nextOffset: number | null;
+        };
+        result = {
+          query: mentionState.query,
+          libraryID: 0,
+          libraryName: getString("workspace-reference-task"),
+          items: found.tasks
+            .filter((task) => task.id !== state.sessionId)
+            .map(taskMentionChoice),
+          total: found.total,
+          nextOffset: found.nextOffset,
+        };
+      } else {
+        result = (await rpc("context/search-items", {
+          query: mentionState.query,
+          offset,
+          limit: MENTION_PAGE_SIZE,
+          libraryID: reset ? undefined : mentionState.libraryID || undefined,
+        })) as ContextSearchItemsResult;
+      }
       if (!mentionState.open || requestId !== mentionState.requestId) return;
       const combined = reset
         ? result.items
         : [...mentionState.items, ...result.items];
-      const unique = new Map<string, ContextSearchItem>();
+      const unique = new Map<string, MentionChoice>();
       for (const item of combined) unique.set(mentionItemKey(item), item);
       mentionState.items = [...unique.values()];
       mentionState.nextOffset = result.nextOffset;
@@ -8600,193 +7674,39 @@ function bindWorkspace(
   }
 
   function renderMentionMenu(preserveScroll = true): void {
-    const previousList = doc.getElementById(
-      "confucius-mention-results",
-    ) as HTMLElement | null;
-    const previousScrollTop = preserveScroll ? previousList?.scrollTop || 0 : 0;
-    doc.getElementById("confucius-mention-menu")?.remove();
-    if (!mentionState.open) return;
-    const menu = el(
-      doc,
-      "div",
-      {
-        position: "fixed",
-        background: "#ffffff",
-        border: "1px solid #d8d1c4",
-        borderRadius: "12px",
-        boxShadow: "0 12px 32px rgba(28,25,23,0.2)",
-        padding: "8px",
-        overflow: "hidden",
-        zIndex: "930",
-        boxSizing: "border-box",
+    renderSourcePicker(doc, {
+      state: mentionState,
+      preserveScroll,
+      included: (item) =>
+        item.taskReference
+          ? currentReferences().some(
+              (ref) => ref.taskId === item.taskReference!.taskId,
+            )
+          : taskHasMentionItem(item),
+      selectScope: (scope) => {
+        if (mentionSearchTimer && win) win.clearTimeout(mentionSearchTimer);
+        mentionState.scope = scope;
+        mentionState.items = [];
+        mentionState.nextOffset = 0;
+        mentionState.index = 0;
+        mentionState.loading = false;
+        mentionState.requestId += 1;
+        void loadMentionItems(true);
+        prompt.focus();
       },
-      {
-        id: "confucius-mention-menu",
-        role: "listbox",
-        "aria-label": getString("workspace-mention-heading"),
-      },
-    );
-    const header = el(doc, "div", {
-      display: "flex",
-      alignItems: "baseline",
-      justifyContent: "space-between",
-      gap: "10px",
-      padding: "5px 7px 8px",
-      borderBottom: "1px solid #eee9df",
-    });
-    const heading = el(doc, "strong", {
-      color: "#33302a",
-      fontSize: "12px",
-      letterSpacing: ".01em",
-    });
-    heading.textContent = getString("workspace-mention-heading");
-    const scope = el(doc, "span", {
-      minWidth: "0",
-      color: "#8a857c",
-      fontSize: "11px",
-      overflow: "hidden",
-      textOverflow: "ellipsis",
-      whiteSpace: "nowrap",
-    });
-    scope.textContent = mentionState.libraryName
-      ? `${mentionState.libraryName} · ${mentionState.items.length}/${mentionState.total}`
-      : getString("workspace-mention-hint");
-    header.appendChild(heading);
-    header.appendChild(scope);
-    menu.appendChild(header);
-
-    const list = el(doc, "div", {
-      maxHeight: "258px",
-      overflowY: "auto",
-      overscrollBehavior: "contain",
-      padding: "4px 0",
-      boxSizing: "border-box",
-    });
-    list.id = "confucius-mention-results";
-    for (const [index, item] of mentionState.items.entries()) {
-      const active = index === mentionState.index;
-      const included = taskHasMentionItem(item);
-      const row = el(doc, "div", {
-        display: "flex",
-        alignItems: "center",
-        gap: "9px",
-        minHeight: "50px",
-        padding: "5px 8px",
-        borderRadius: "8px",
-        cursor: "pointer",
-        boxSizing: "border-box",
-      });
-      row.className = "confucius-composer-menu-row";
-      row.setAttribute("role", "option");
-      row.setAttribute("data-mention-index", String(index));
-      row.setAttribute("aria-selected", active ? "true" : "false");
-      const glyph = el(doc, "span", {
-        flex: "0 0 auto",
-        width: "25px",
-        height: "31px",
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        border: "1px solid #d8d1c4",
-        borderRadius: "5px",
-        background: "#faf8f3",
-        color: "#8c6a3f",
-        fontSize: "13px",
-      });
-      glyph.textContent = "▤";
-      const copy = el(doc, "span", {
-        flex: "1 1 auto",
-        minWidth: "0",
-      });
-      const title = el(doc, "span", {
-        display: "block",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-        color: "#33302a",
-        fontWeight: "600",
-        fontSize: "12px",
-      });
-      title.textContent = item.title || getString("workspace-mention-untitled");
-      const meta = el(doc, "span", {
-        display: "block",
-        marginTop: "2px",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-        color: "#8a857c",
-        fontSize: "11px",
-      });
-      meta.textContent = [
-        item.creators.slice(0, 2).join(", "),
-        item.year,
-        item.itemType,
-      ]
-        .filter(Boolean)
-        .join(" · ");
-      copy.appendChild(title);
-      copy.appendChild(meta);
-      row.appendChild(glyph);
-      row.appendChild(copy);
-      if (included) {
-        const mark = el(doc, "span", {
-          flex: "0 0 auto",
-          color: "#6b665c",
-          fontSize: "11px",
-        });
-        mark.textContent = `✓ ${getString("workspace-mention-added")}`;
-        row.appendChild(mark);
-      }
-      row.addEventListener("mousedown", (event) => event.preventDefault());
-      row.addEventListener("mouseenter", () => {
+      hover: (index, menu) => {
         mentionState.index = index;
         highlightMentionRows(menu);
-      });
-      row.addEventListener("click", () => {
+      },
+      select: (index) => {
         mentionState.index = index;
         runMentionSelection();
-      });
-      list.appendChild(row);
-    }
-    if (mentionState.error) {
-      const error = el(doc, "div", {
-        padding: "12px 9px",
-        color: "#b3452f",
-        fontSize: "12px",
-      });
-      error.textContent = mentionState.error;
-      list.appendChild(error);
-    } else if (!mentionState.loading && mentionState.items.length === 0) {
-      const empty = el(doc, "div", {
-        padding: "14px 9px",
-        color: "#8a857c",
-        fontSize: "12px",
-      });
-      empty.textContent = getString("workspace-mention-empty");
-      list.appendChild(empty);
-    }
-    if (mentionState.loading) {
-      const loading = el(doc, "div", {
-        padding: "9px",
-        color: "#8a857c",
-        fontSize: "11px",
-        textAlign: "center",
-      });
-      loading.textContent = getString("workspace-mention-loading");
-      list.appendChild(loading);
-    }
-    list.addEventListener("scroll", () => {
-      if (
-        list.scrollHeight - list.scrollTop - list.clientHeight < 28 &&
-        mentionState.nextOffset !== null &&
-        !mentionState.loading
-      ) {
+      },
+      loadMore: () => {
         void loadMentionItems(false);
-      }
+      },
+      place: placeComposerMenu,
     });
-    menu.appendChild(list);
-    placeComposerMenu(menu, header, list);
-    list.scrollTop = previousScrollTop;
   }
 
   function highlightMentionRows(menu: Element): void {
@@ -8802,23 +7722,36 @@ function bindWorkspace(
     const item = mentionState.items[mentionState.index];
     const token = mentionState.token;
     if (!item || !token) return;
-    const replacement = replaceLibraryMention(prompt.value, token, item.title);
+    const replacement = item.taskReference
+      ? {
+          value:
+            prompt.value.slice(0, token.start) + prompt.value.slice(token.end),
+          caret: token.start,
+        }
+      : replaceLibraryMention(prompt.value, token, item.title);
     prompt.value = replacement.value;
     closeMentionMenu();
     prompt.focus();
     prompt.setSelectionRange(replacement.caret, replacement.caret);
-    void addMentionContext(item);
+    if (item.taskReference) {
+      referenceDrafts.set(
+        state.sessionId ?? "new",
+        mergeTaskReferences(currentReferences(), item.taskReference),
+      );
+      renderSourceTags();
+    } else void addMentionContext(item);
+    rememberComposerDraft();
   }
 
   function slashCommands(): SlashCommand[] {
     const commands: SlashCommand[] = FEATURED_TASK_TEMPLATES.map(
       (template) => ({
-        label: `/${template.id}`,
+        label: localizedTemplateTitle(template),
         description: getString(`workspace-template-${template.id}-help`),
         kind: "template" as const,
         group: "templates" as const,
         templateId: template.id,
-        searchText: localizedTemplateTitle(template),
+        searchText: `/${template.id}`,
       }),
     );
     const utilityCommands: SlashCommand[] = [
@@ -8865,7 +7798,7 @@ function bindWorkspace(
         run: () => void refreshConfig().then(() => openSettings()),
       },
       {
-        label: "/compact",
+        label: "/new-context",
         description: getString("workspace-cmd-compact"),
         kind: "command",
         group: "commands",
@@ -8886,11 +7819,44 @@ function bindWorkspace(
     return commands;
   }
 
-  function applyMode(mode: "agent" | "plan"): void {
-    state.mode = mode;
-    syncModeButton();
-    if (state.sessionId) {
-      void rpc("task/setMode", { taskId: state.sessionId, mode });
+  async function applyMode(mode: "agent" | "plan"): Promise<boolean> {
+    if (
+      modeUpdatePending ||
+      presetUpdatePending ||
+      modelUpdatePending ||
+      state.running ||
+      state.sending
+    )
+      return false;
+    const taskId = state.sessionId;
+    if (!taskId) {
+      state.mode = mode;
+      syncPresetChip();
+      return true;
+    }
+    modeUpdatePending = true;
+    updateRunningUI();
+    try {
+      const updated = (await rpc("task/setMode", {
+        taskId,
+        mode,
+      })) as ResearchTaskRecord;
+      const index = state.sessions.findIndex((row) => row.id === taskId);
+      if (index >= 0) state.sessions[index] = updated;
+      if (state.sessionId === taskId) {
+        state.mode = updated.mode;
+        state.sendError = "";
+      }
+      return true;
+    } catch (error) {
+      if (state.sessionId === taskId)
+        state.sendError =
+          error instanceof Error ? error.message : String(error);
+      return false;
+    } finally {
+      modeUpdatePending = false;
+      updateRunningUI();
+      renderLists();
     }
   }
 
@@ -8926,15 +7892,16 @@ function bindWorkspace(
     try {
       status.style.color = "#8c6a3f";
       status.textContent = getString("workspace-compacting");
-      const stats = (await rpc("task/compact", {
+      const stats = (await rpc("task/new-context", {
         taskId: state.sessionId,
-      })) as {
-        percent: number;
-        tokensEstimate: number;
-        contextWindowTokens: number;
-      };
+      })) as SessionContextStats;
       state.contextStats = stats;
-      contextRing.update(stats.percent, ringLabel(stats));
+      contextRing.update(
+        stats.usageSource === "unknown" || stats.window?.control === "runtime"
+          ? Number.NaN
+          : stats.percent,
+        ringLabel(stats),
+      );
     } catch (error) {
       status.style.color = "#b3452f";
       status.textContent =
@@ -8942,11 +7909,61 @@ function bindWorkspace(
     }
   }
 
-  function ringLabel(stats: {
-    tokensEstimate: number;
-    contextWindowTokens: number;
-  }): string {
-    return `${fmtTokens(stats.tokensEstimate)} / ${fmtTokens(stats.contextWindowTokens)} tokens`;
+  function ringLabel(stats: SessionContextStats): string {
+    const label = getString(
+      `workspace-usage-${stats.usageSource ?? "estimated"}`,
+    );
+    const window = stats.window
+      ? ` · ${getString("workspace-window-label")} ${stats.window.number}`
+      : "";
+    if (stats.usageSource === "unknown") return `${label}${window}`;
+    if (stats.window?.control === "runtime")
+      return `${getString("workspace-context-runtime")}${window} · ${label}${stats.usageSource === "reported" ? ` · ${fmtTokens(stats.tokensEstimate)} tokens` : ""}`;
+    return `${label} · ${fmtTokens(stats.tokensEstimate)} / ${fmtTokens(stats.contextWindowTokens)} tokens${window}`;
+  }
+  function toggleContextDetails(): void {
+    const existing = doc.getElementById("confucius-context-details");
+    if (existing) {
+      existing.remove();
+      return;
+    }
+    closePlusMenu();
+    closeEndpointMenu();
+    closeMentionMenu();
+    closeSlashMenu();
+    const panel = createMenuSurface(doc, {
+      id: "confucius-context-details",
+      role: "dialog",
+      "aria-label": getString("workspace-context-details"),
+    });
+    panel.classList.add("confucius-context-details");
+    const info = el(doc, "p");
+    info.textContent = state.contextStats
+      ? ringLabel(state.contextStats)
+      : getString("workspace-usage-unknown");
+    const hint = el(doc, "p");
+    hint.textContent = getString("workspace-context-hint");
+    panel.append(info, hint);
+    const footer = el(doc, "div");
+    footer.className = "confucius-menu-footer";
+    if (currentTask()?.backend === "native") {
+      const reset = el(doc, "button", undefined, { type: "button" });
+      reset.className = "confucius-menu-row";
+      reset.textContent = getString("workspace-context-new-window");
+      reset.toggleAttribute("disabled", state.running || state.sending);
+      reset.addEventListener("click", () => {
+        panel.remove();
+        void compactNow();
+      });
+      footer.append(reset);
+    }
+    const close = el(doc, "button", undefined, { type: "button" });
+    close.className = "confucius-menu-row";
+    close.textContent = getString("workspace-context-close");
+    close.addEventListener("click", () => panel.remove());
+    footer.append(close);
+    panel.append(footer);
+    placeMenu(contextRing.node, panel, 320);
   }
 
   function fmtTokens(value: number): string {
@@ -9010,55 +8027,25 @@ function bindWorkspace(
     if (!slashState.open) {
       return;
     }
-    const menu = el(
+    const menu = createMenuSurface(
       doc,
-      "div",
-      {
-        position: "fixed",
-        background: "#ffffff",
-        border: "1px solid #d8d1c4",
-        borderRadius: "12px",
-        boxShadow: "0 12px 32px rgba(28,25,23,0.2)",
-        padding: "8px",
-        overflow: "hidden",
-        zIndex: "930",
-        boxSizing: "border-box",
-      },
       {
         id: "confucius-slash-menu",
         role: "listbox",
         "aria-label": getString("workspace-slash-heading"),
       },
+      true,
     );
-    const header = el(doc, "div", {
-      display: "flex",
-      alignItems: "baseline",
-      justifyContent: "space-between",
-      gap: "10px",
-      padding: "5px 7px 8px",
-      borderBottom: "1px solid #eee9df",
-    });
-    const heading = el(doc, "strong", {
-      color: "#33302a",
-      fontSize: "12px",
-      letterSpacing: ".01em",
-    });
-    heading.textContent = getString("workspace-slash-heading");
-    const scope = el(doc, "span", {
-      minWidth: "0",
-      color: "#8a857c",
-      fontSize: "11px",
-      overflow: "hidden",
-      textOverflow: "ellipsis",
-      whiteSpace: "nowrap",
-    });
-    scope.textContent = getString("workspace-slash-hint");
-    header.appendChild(heading);
-    header.appendChild(scope);
+    const header = createMenuHeader(
+      doc,
+      getString("workspace-slash-heading"),
+      getString("workspace-slash-hint"),
+    );
     menu.appendChild(header);
 
     const list = el(doc, "div", {
       maxHeight: "258px",
+      overflowX: "hidden",
       overflowY: "auto",
       overscrollBehavior: "contain",
       padding: "4px 0",
@@ -9068,47 +8055,25 @@ function bindWorkspace(
     let previousGroup: SlashCommand["group"] | null = null;
     slashState.items.forEach((command, index) => {
       if (command.group !== previousGroup) {
-        const group = el(doc, "div", {
-          padding: previousGroup ? "9px 8px 4px" : "4px 8px",
-          color: "#8a857c",
-          fontSize: "10px",
-          fontWeight: "700",
-          letterSpacing: ".08em",
-          textTransform: "uppercase",
-        });
-        group.textContent = getString(`workspace-slash-group-${command.group}`);
-        list.appendChild(group);
+        list.appendChild(
+          createMenuHeading(
+            doc,
+            getString(`workspace-slash-group-${command.group}`),
+          ),
+        );
         previousGroup = command.group;
       }
       const active = index === slashState.index;
-      const row = el(doc, "div", {
-        display: "flex",
-        alignItems: "center",
-        gap: "9px",
-        minHeight: "50px",
-        padding: "5px 8px",
-        borderRadius: "8px",
-        cursor: "pointer",
-        boxSizing: "border-box",
-      });
+      const row = el(doc, "div");
       row.className = "confucius-composer-menu-row";
       row.setAttribute("role", "option");
       row.setAttribute("data-slash-index", String(index));
+      if (command.templateId) row.dataset.templateId = command.templateId;
       row.setAttribute("aria-selected", active ? "true" : "false");
-      const glyph = el(doc, "span", {
-        flex: "0 0 auto",
-        width: "25px",
-        height: "31px",
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        border: "1px solid #d8d1c4",
-        borderRadius: "5px",
-        background: "#faf8f3",
-        color: "#8c6a3f",
-        fontSize: "13px",
-      });
-      glyph.textContent = command.kind === "template" ? "◇" : "/";
+      const glyph = createMenuGlyph(
+        doc,
+        command.kind === "template" ? "◇" : "/",
+      );
       const copy = el(doc, "span", {
         flex: "1 1 auto",
         minWidth: "0",
@@ -9119,8 +8084,8 @@ function bindWorkspace(
         textOverflow: "ellipsis",
         whiteSpace: "nowrap",
         color: "#33302a",
-        fontWeight: "600",
-        fontSize: "12px",
+        fontWeight: "500",
+        fontSize: "1em",
       });
       label.textContent = command.label;
       const hint = el(doc, "span", {
@@ -9129,8 +8094,8 @@ function bindWorkspace(
         overflow: "hidden",
         textOverflow: "ellipsis",
         whiteSpace: "nowrap",
-        color: "#8a857c",
-        fontSize: "11px",
+        color: "#70695f",
+        fontSize: ".86em",
       });
       hint.textContent = command.description;
       copy.appendChild(label);
@@ -9209,43 +8174,15 @@ function bindWorkspace(
 
   function closeEndpointMenu(): void {
     endpointMenuOpen = false;
-    endpointSubmenu = null;
+    endpointSelection = null;
     doc.getElementById("confucius-endpoint-menu")?.remove();
-    doc.getElementById("confucius-endpoint-submenu")?.remove();
     endpointBtn.setAttribute("aria-expanded", "false");
   }
 
-  function clearEndpointSubmenuHighlight(): void {
-    if (!endpointSubmenu) return;
-    endpointSubmenu = null;
-    doc.getElementById("confucius-endpoint-submenu")?.remove();
-    doc
-      .querySelectorAll(
-        "#confucius-endpoint-menu .confucius-menu-row[data-highlighted='true']",
-      )
-      .forEach((row: Element) => row.setAttribute("data-highlighted", "false"));
-  }
-
   function menuPanel(id: string, extra?: Styles): HTMLElement {
-    return el(
-      doc,
-      "div",
-      {
-        position: "fixed",
-        background: "#ffffff",
-        border: "1px solid #ddd8cc",
-        borderRadius: "8px",
-        boxShadow: "0 6px 18px rgba(28,25,23,0.18)",
-        padding: "6px",
-        zIndex: "920",
-        minWidth: "0px",
-        maxHeight: "360px",
-        overflow: "auto",
-        boxSizing: "border-box",
-        ...extra,
-      },
-      { id, role: "menu" },
-    );
+    const menu = createMenuSurface(doc, { id, role: "menu" });
+    if (extra) Object.assign(menu.style, extra);
+    return menu;
   }
 
   function menuRow(
@@ -9258,16 +8195,12 @@ function bindWorkspace(
       onEnter?: () => void;
     } = {},
   ): HTMLElement {
-    const row = el(doc, "div", {
-      padding: "6px 8px",
-      borderRadius: "8px",
-      cursor: "pointer",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      gap: "8px",
+    const row = el(doc, "button", undefined, {
+      type: "button",
+      role: "menuitem",
     });
     row.className = "confucius-menu-row";
+    row.toggleAttribute("disabled", !opts.onClick && !opts.onEnter);
     row.setAttribute("data-active", opts.active ? "true" : "false");
     row.setAttribute("data-highlighted", opts.highlighted ? "true" : "false");
     const text = el(doc, "span", {
@@ -9280,9 +8213,13 @@ function bindWorkspace(
     row.appendChild(text);
     if (opts.hint) {
       const hint = el(doc, "span", {
-        flex: "0 0 auto",
+        flex: "0 1 auto",
+        maxWidth: "42%",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
         color: "#6b665c",
-        fontSize: "12px",
+        fontSize: ".86em",
       });
       hint.textContent = opts.hint;
       row.appendChild(hint);
@@ -9313,6 +8250,23 @@ function bindWorkspace(
     portal?: HTMLElement,
   ): void {
     const view = doc.defaultView;
+    if (menu.id !== "confucius-source-menu")
+      doc.getElementById("confucius-source-menu")?.remove();
+    bindMenuNavigation(menu, () => {
+      if (menu.id === "confucius-endpoint-menu") closeEndpointMenu();
+      else if (menu.id === "confucius-mention-menu") closeMentionMenu();
+      else if (menu.id === "confucius-slash-menu") closeSlashMenu();
+      else menu.remove();
+      anchor.focus({ preventScroll: true });
+    });
+    const typography = view?.getComputedStyle(root);
+    if (typography) {
+      menu.style.fontFamily = typography.fontFamily;
+      menu.style.fontSize = typography.fontSize;
+      menu.style.lineHeight = typography.lineHeight;
+    }
+    if (menu.id !== "confucius-context-details")
+      doc.getElementById("confucius-context-details")?.remove();
     const rect = anchor.getBoundingClientRect();
     const height = view?.innerHeight ?? 800;
     const width = view?.innerWidth ?? 1100;
@@ -9385,65 +8339,26 @@ function bindWorkspace(
 
   function placeComposerMenu(
     menu: HTMLElement,
-    header: HTMLElement,
+    _header: HTMLElement,
     list: HTMLElement,
   ): void {
     placeMenu(prompt, menu, Math.min(520, Math.max(280, responsiveWidth - 16)));
+    const chromeHeight = Array.from(menu.children)
+      .filter((child) => child !== list)
+      .reduce(
+        (height, child) => height + child.getBoundingClientRect().height,
+        0,
+      );
     const availableListHeight = Math.max(
-      86,
-      menu.clientHeight - header.offsetHeight - 16,
+      0,
+      menu.clientHeight - chromeHeight - 16,
     );
     list.style.maxHeight = `${Math.min(258, availableListHeight)}px`;
   }
 
-  function placeSubmenu(
-    anchor: HTMLElement,
-    submenu: HTMLElement,
-    menu: HTMLElement,
-  ): void {
-    const view = doc.defaultView;
-    const rowRect = anchor.getBoundingClientRect();
-    const menuRect = menu.getBoundingClientRect();
-    const width = view?.innerWidth ?? 1100;
-    const height = view?.innerHeight ?? 800;
-    const rootRect = root.getBoundingClientRect();
-    const narrowRoot =
-      rootRect.width > 0 && rootRect.width < 500 && width < 500;
-    const subWidth = narrowRoot
-      ? Math.max(120, menuRect.width)
-      : Math.min(240, width - 16);
-    if (narrowRoot) {
-      submenu.style.position = "fixed";
-      submenu.style.width = `${subWidth}px`;
-      submenu.style.maxWidth = `${Math.max(120, rootRect.width - 16)}px`;
-      submenu.style.top = `${menuRect.top}px`;
-      submenu.style.bottom = "auto";
-      submenu.style.left = `${menuRect.left}px`;
-      submenu.style.zIndex = "930";
-      (doc.body ?? doc.documentElement)?.appendChild(submenu);
-      return;
-    }
-    const openLeft = width - menuRect.right < subWidth + 12;
-    submenu.style.position = "fixed";
-    submenu.style.width = `${subWidth}px`;
-    submenu.style.top = `${rowRect.top}px`;
-    submenu.style.bottom = "auto";
-    submenu.style.left = openLeft
-      ? `${Math.max(8, menuRect.left - subWidth - 4)}px`
-      : `${menuRect.right + 4}px`;
-    const host = doc.body ?? doc.documentElement;
-    host?.appendChild(submenu);
-    const box = submenu.getBoundingClientRect();
-    if (box.bottom > height - 8) {
-      submenu.style.top = `${Math.max(8, height - box.height - 8)}px`;
-    }
-  }
-
   async function ensureModels(endpointId: string): Promise<void> {
     const cached = modelLists.get(endpointId);
-    if (cached && (cached.status === "loading" || cached.status === "ok")) {
-      return;
-    }
+    if (cached && cached.status !== "idle") return;
     const endpoint = state.config?.endpoints?.find(
       (item) => item.id === endpointId,
     );
@@ -9452,9 +8367,6 @@ function bindWorkspace(
       models: endpoint?.model ? [endpoint.model] : [],
       error: "",
     });
-    if (endpointMenuOpen) {
-      renderEndpointMenu();
-    }
     try {
       const result = (await rpc("config/listModels", { endpointId })) as {
         models?: string[];
@@ -9462,296 +8374,309 @@ function bindWorkspace(
       };
       modelLists.set(endpointId, {
         status: result.error ? "error" : "ok",
-        models:
-          result.models && result.models.length
-            ? result.models
-            : endpoint?.model
-              ? [endpoint.model]
-              : [],
-        error: result.error || "",
+        models: [
+          ...new Set([
+            ...(endpoint?.model ? [endpoint.model] : []),
+            ...(result.models ?? []),
+          ]),
+        ],
+        error: result.error ?? "",
       });
     } catch (error) {
       modelLists.set(endpointId, {
         status: "error",
         models: endpoint?.model ? [endpoint.model] : [],
-        error: error instanceof Error ? error.message : String(error),
+        error: String(error),
       });
     }
-    if (
-      endpointMenuOpen &&
-      endpointSubmenu?.kind === "models" &&
-      endpointSubmenu.endpointId === endpointId
-    ) {
-      renderEndpointMenu();
-    }
-  }
-
-  async function applyEndpointSwitch(endpointId: string): Promise<void> {
-    endpointSubmenu = { kind: "models", endpointId };
-    if (endpointId !== state.config?.activeEndpointId) {
-      try {
-        state.config = (await rpc("config/set", {
-          activeEndpointId: endpointId,
-        })) as ModelConfig;
-      } catch {
-        /* keep old value */
-      }
-      syncEndpointButton();
-    }
-    renderEndpointMenu();
-    void ensureModels(endpointId);
+    if (endpointMenuOpen && !endpointSelection) renderEndpointMenu();
   }
 
   async function applyTaskBackend(backend: AgentBackendKind): Promise<void> {
     const task = currentTask();
+    if (!task) {
+      const text = prompt.value;
+      const references = currentReferences();
+      await createTask({
+        title: getString("workspace-untitled-task"),
+        context: state.live?.lockedSnapshot,
+        backend,
+        preserveModelMenu: true,
+      });
+      prompt.value = text;
+      referenceDrafts.set(state.sessionId!, references);
+      rememberComposerDraft();
+    } else if (task.backend !== backend) {
+      await rpc("task/setBackend", {
+        taskId: task.id,
+        backend,
+        capabilityProfile: task.capabilityProfile,
+        workingDirectory: task.workingDirectory,
+      });
+      await loadTask(task.id);
+    }
+  }
+
+  async function selectComposerModel(
+    choice: ComposerModelChoice,
+  ): Promise<void> {
+    if (modelUpdatePending || state.running || state.sending) return;
+    const taskId = state.sessionId;
+    modelUpdatePending = true;
+    modelMenuError = "";
+    updateRunningUI();
+    renderEndpointMenu();
     try {
-      if (!task) {
-        await createTask({
-          title: getString("workspace-untitled-task"),
-          context: state.live?.lockedSnapshot,
-          backend,
-        });
-      } else {
-        await rpc("task/setBackend", {
-          taskId: task.id,
-          backend,
-          capabilityProfile: task.capabilityProfile,
-          workingDirectory: task.workingDirectory,
-        });
-        await refreshSessions();
-        await loadTask(task.id);
+      let selected = choice;
+      if (choice.backend !== "native" && choice.model.id) {
+        const catalog = (await rpc("runtime/listModels", {
+          backend: choice.backend,
+          modelId: choice.model.id,
+        })) as { models: RuntimeModelOption[] };
+        const model = catalog.models.find(
+          (model) => model.id === choice.model.id,
+        );
+        if (!model) throw new Error(getString("workspace-model-error"));
+        selected = { ...choice, model };
+      }
+      if (state.sessionId !== taskId) return;
+      await applyTaskBackend(choice.backend);
+      if (taskId && state.sessionId !== taskId) return;
+      if (selected.backend === "native") {
+        const endpoint = state.config?.endpoints?.find(
+          (ep) => ep.id === selected.endpointId,
+        );
+        state.config = (await rpc("config/set", {
+          activeEndpointId: selected.endpointId,
+          model: selected.model.id,
+          reasoningEffort: normalizeModelEffort(
+            selected.model.id,
+            endpoint?.baseUrl ?? "",
+            endpoint?.reasoningEffort,
+          ),
+        })) as ModelConfig;
+      } else if (selected.model.id) {
+        const previous = currentTask()?.runtimeModel;
+        const effort =
+          previous?.modelId === selected.model.id &&
+          selected.model.reasoningOptions?.some(
+            (option) => option.value === previous.reasoningEffort,
+          )
+            ? previous.reasoningEffort
+            : selected.model.defaultReasoningEffort;
+        const updated = (await rpc("task/setModel", {
+          taskId: state.sessionId,
+          modelId: selected.model.id,
+          reasoningEffort: effort,
+        })) as ResearchTaskRecord;
+        state.sessions = state.sessions.map((task) =>
+          task.id === updated.id ? updated : task,
+        );
       }
       state.sendError = "";
+      if (endpointMenuOpen) {
+        endpointSelection = selected;
+        if (!selected.model.reasoningOptions?.length) closeEndpointMenu();
+      }
     } catch (error) {
-      state.sendError = error instanceof Error ? error.message : String(error);
-    }
-    closeEndpointMenu();
-    renderLists();
-  }
-
-  async function applyModelSelection(
-    endpointId: string,
-    model: string,
-  ): Promise<void> {
-    const patch: Record<string, unknown> = {};
-    if (endpointId !== state.config?.activeEndpointId) {
-      patch.activeEndpointId = endpointId;
-    }
-    const target = state.config?.endpoints?.find(
-      (item) => item.id === endpointId,
-    );
-    if (model && model !== target?.model) {
-      patch.model = model;
-    }
-    if (Object.keys(patch).length > 0) {
-      try {
-        state.config = (await rpc("config/set", patch)) as ModelConfig;
-      } catch (error) {
-        status.style.color = "#b3452f";
-        status.textContent =
-          error instanceof Error ? error.message : String(error);
+      modelMenuError = error instanceof Error ? error.message : String(error);
+    } finally {
+      modelUpdatePending = false;
+      updateRunningUI();
+      syncEndpointButton();
+      renderLists();
+      renderEndpointMenu();
+      if (endpointMenuOpen && endpointSelection) {
+        (
+          doc.querySelector(
+            "#confucius-endpoint-menu [data-effort][aria-checked='true']",
+          ) as HTMLElement | null
+        )?.focus({ preventScroll: true });
       }
     }
-    closeEndpointMenu();
-    syncEndpointButton();
   }
 
-  async function applyEffort(value: EffortOption): Promise<void> {
-    try {
-      state.config = (await rpc("config/set", {
-        reasoningEffort: value,
-      })) as ModelConfig;
-    } catch {
-      /* keep old value */
-    }
-    renderEndpointMenu();
-  }
-
-  function openModelsSubmenu(endpointId: string): void {
-    if (
-      endpointSubmenu?.kind === "models" &&
-      endpointSubmenu.endpointId === endpointId
-    ) {
+  async function applyEffort(value: string): Promise<void> {
+    const selected = endpointSelection;
+    if (!selected || modelUpdatePending || state.running || state.sending)
       return;
-    }
-    endpointSubmenu = { kind: "models", endpointId };
+    if (
+      !selected.model.reasoningOptions?.some((option) => option.value === value)
+    )
+      return;
+    modelUpdatePending = true;
+    modelMenuError = "";
+    updateRunningUI();
     renderEndpointMenu();
-    void ensureModels(endpointId);
+    try {
+      if (selected.backend === "native") {
+        state.config = (await rpc("config/set", {
+          activeEndpointId: selected.endpointId,
+          reasoningEffort: value,
+        })) as ModelConfig;
+      } else {
+        const updated = (await rpc("task/setModel", {
+          taskId: state.sessionId,
+          modelId: selected.model.id,
+          reasoningEffort: value,
+        })) as ResearchTaskRecord;
+        state.sessions = state.sessions.map((task) =>
+          task.id === updated.id ? updated : task,
+        );
+      }
+      closeEndpointMenu();
+      endpointBtn.focus({ preventScroll: true });
+    } catch (error) {
+      modelMenuError = error instanceof Error ? error.message : String(error);
+    } finally {
+      modelUpdatePending = false;
+      updateRunningUI();
+      syncEndpointButton();
+      renderEndpointMenu();
+    }
   }
 
   function renderEndpointMenu(): void {
-    doc.getElementById("confucius-endpoint-menu")?.remove();
-    doc.getElementById("confucius-endpoint-submenu")?.remove();
-    if (!endpointMenuOpen) {
-      return;
-    }
-    const endpoints = state.config?.endpoints ?? [];
+    const old = doc.getElementById("confucius-endpoint-menu");
+    const focusedKey = (doc.activeElement as HTMLElement | null)?.dataset
+      .modelKey;
+    const scrollTop = old?.scrollTop ?? 0;
+    old?.remove();
+    if (!endpointMenuOpen) return;
     const menu = menuPanel("confucius-endpoint-menu");
-    const section = (title: string) => {
-      const label = el(doc, "div", {
-        fontSize: "11px",
-        color: "#6b665c",
-        margin: "6px 8px 4px",
-        textTransform: "uppercase" as const,
-        letterSpacing: "0.08em",
+    menu.dataset.step = endpointSelection ? "effort" : "model";
+    if (endpointSelection) {
+      const selected = endpointSelection;
+      const back = menuRow(`‹ ${getString("workspace-model")}`, {
+        onClick: modelUpdatePending
+          ? undefined
+          : () => {
+              endpointSelection = null;
+              renderEndpointMenu();
+              (
+                doc.querySelector(
+                  "#confucius-endpoint-menu [aria-checked='true']",
+                ) as HTMLElement | null
+              )?.focus({ preventScroll: true });
+            },
       });
-      label.textContent = title;
-      menu.appendChild(label);
-    };
-
-    section(getString("workspace-runtime"));
-    const selectedBackend = currentTask()?.backend ?? "native";
-    for (const backend of ["native", "codex", "kimi"] as const) {
-      const runtime = runtimeStatus(backend);
-      const row = menuRow(runtimeLabel(backend), {
-        active: selectedBackend === backend,
-        hint:
-          runtime?.state === "ready"
-            ? getString("workspace-runtime-ready")
-            : runtime?.state === "auth_required"
-              ? getString("workspace-runtime-auth-required")
-              : backend === "native"
-                ? ""
-                : getString("workspace-runtime-unavailable"),
-        onClick: () => void applyTaskBackend(backend),
-        onEnter: clearEndpointSubmenuHighlight,
-      });
-      row.setAttribute("data-runtime", backend);
-      row.setAttribute("role", "menuitem");
-      menu.appendChild(row);
-    }
-
-    section(getString("workspace-endpoints"));
-    const endpointRows = new Map<string, HTMLElement>();
-    for (const ep of endpoints) {
-      const active = ep.id === state.config?.activeEndpointId;
-      const open =
-        endpointSubmenu?.kind === "models" &&
-        endpointSubmenu.endpointId === ep.id;
-      const row = menuRow(
-        ep.name || ep.model || endpointHost(ep.baseUrl) || ep.id,
-        {
-          active,
-          highlighted: open,
-          hint: "›",
-          onClick: () => {
-            void applyEndpointSwitch(ep.id);
-          },
-          onEnter: () => openModelsSubmenu(ep.id),
-        },
-      );
-      row.setAttribute("data-endpoint-id", ep.id);
-      row.setAttribute("role", "menuitem");
-      endpointRows.set(ep.id, row);
-      menu.appendChild(row);
-    }
-    if (!endpoints.length) {
+      back.classList.add("confucius-menu-back");
+      menu.appendChild(back);
       menu.appendChild(
-        menuRow(getString("workspace-no-endpoint"), { active: false }),
+        createMenuHeader(
+          doc,
+          selected.model.label,
+          getString("workspace-thinking"),
+        ),
       );
-    }
-
-    const thinkingOpen = endpointSubmenu?.kind === "effort";
-    const thinkingRow = menuRow(getString("workspace-thinking"), {
-      highlighted: thinkingOpen,
-      hint: `${state.config?.reasoningEffort ?? "auto"} ›`,
-      onClick: () => {
-        endpointSubmenu = { kind: "effort" };
-        renderEndpointMenu();
-      },
-      onEnter: () => {
-        if (endpointSubmenu?.kind !== "effort") {
-          endpointSubmenu = { kind: "effort" };
-          renderEndpointMenu();
+      const effort =
+        selected.backend === "native"
+          ? (state.config?.reasoningEffort ?? "auto")
+          : (currentTask()?.runtimeModel?.reasoningEffort ??
+            selected.model.defaultReasoningEffort);
+      for (const option of selected.model.reasoningOptions ?? []) {
+        const row = menuRow(effortLabel(option.value, option.label), {
+          active: effort === option.value,
+          onClick: modelUpdatePending
+            ? undefined
+            : () => void applyEffort(option.value),
+        });
+        row.dataset.effort = option.value;
+        row.setAttribute("role", "menuitemradio");
+        row.setAttribute("aria-checked", String(effort === option.value));
+        menu.appendChild(row);
+      }
+    } else {
+      const selectedBackend = currentTask()?.backend ?? "native";
+      const choices: ComposerModelChoice[] = [];
+      for (const endpoint of state.config?.endpoints ?? []) {
+        const models =
+          modelLists.get(endpoint.id)?.models ??
+          (endpoint.model ? [endpoint.model] : []);
+        for (const id of models) {
+          const capability = modelReasoning(id, endpoint.baseUrl);
+          choices.push({
+            backend: "native",
+            endpointId: endpoint.id,
+            model: {
+              id,
+              label: id,
+              reasoningOptions:
+                capability.source === "unknown"
+                  ? []
+                  : capability.efforts.map((value) => ({
+                      value,
+                      label: effortLabel(value),
+                    })),
+            },
+          });
         }
-      },
-    });
-    thinkingRow.setAttribute("data-submenu", "effort");
-    thinkingRow.setAttribute("role", "menuitem");
-    menu.appendChild(thinkingRow);
-
-    const manage = menuRow(getString("workspace-endpoint-manage"), {
-      onClick: () => {
-        closeEndpointMenu();
-        void refreshConfig().then(() => openSettings());
-      },
-      onEnter: clearEndpointSubmenuHighlight,
-    });
-    manage.setAttribute("data-submenu", "manage");
-    manage.setAttribute("role", "menuitem");
-    menu.appendChild(manage);
-
-    placeMenu(endpointBtn, menu);
-
-    const submenu = menuPanel("confucius-endpoint-submenu");
-    let submenuAnchor: HTMLElement | null;
-    if (endpointSubmenu?.kind === "effort") {
-      submenuAnchor = thinkingRow;
-      for (const effort of EFFORT_OPTIONS) {
-        const row = menuRow(effort, {
-          active: (state.config?.reasoningEffort ?? "auto") === effort,
-          onClick: () => {
-            void applyEffort(effort);
-          },
-        });
-        row.setAttribute("data-effort", effort);
-        row.setAttribute("role", "menuitem");
-        submenu.appendChild(row);
       }
-    } else {
-      const endpointId =
-        endpointSubmenu?.kind === "models"
-          ? endpointSubmenu.endpointId
-          : state.config?.activeEndpointId || endpoints[0]?.id || "";
-      submenuAnchor = endpointId ? endpointRows.get(endpointId) || null : null;
-      const endpoint = endpoints.find((item) => item.id === endpointId);
-      const cached = endpointId ? modelLists.get(endpointId) : undefined;
-      const models = cached?.models?.length
-        ? cached.models
-        : endpoint?.model
-          ? [endpoint.model]
-          : [];
-      if (cached?.status === "loading" && !models.length) {
-        submenu.appendChild(menuRow(getString("workspace-model-loading")));
+      for (const backend of ["codex", "kimi"] as const) {
+        const runtime = runtimeStatus(backend);
+        if (runtime?.models?.length) {
+          for (const model of runtime.models) choices.push({ backend, model });
+        } else if (runtime?.state === "ready") {
+          choices.push({
+            backend,
+            model: {
+              id: "",
+              label: `${runtimeLabel(backend)} · ${getString("workspace-model-default")}`,
+            },
+          });
+        }
       }
-      if (!models.length && cached?.status !== "loading") {
-        submenu.appendChild(
-          menuRow(
-            cached?.error
-              ? getString("workspace-model-error")
-              : getString("workspace-model-empty"),
-          ),
+      for (const choice of choices) {
+        const endpoint = state.config?.endpoints?.find(
+          (ep) => ep.id === choice.endpointId,
         );
-      }
-      for (const model of models) {
-        const row = menuRow(model, {
-          active: endpoint?.model === model,
-          onClick: () => {
-            void applyModelSelection(endpointId, model);
-          },
+        const active =
+          selectedBackend === choice.backend &&
+          (choice.backend === "native"
+            ? state.config?.activeEndpointId === choice.endpointId &&
+              endpoint?.model === choice.model.id
+            : currentTask()?.runtimeModel
+              ? currentTask()?.runtimeModel?.modelId === choice.model.id
+              : choice.model.isDefault || !choice.model.id);
+        const row = menuRow(choice.model.label, {
+          active,
+          hint:
+            choice.backend === "native"
+              ? endpoint?.name || endpointHost(endpoint?.baseUrl ?? "")
+              : runtimeLabel(choice.backend),
+          onClick:
+            modelUpdatePending || state.running
+              ? undefined
+              : () => void selectComposerModel(choice),
         });
-        row.setAttribute("data-model", model);
-        row.setAttribute("role", "menuitem");
-        submenu.appendChild(row);
+        row.dataset.model = choice.model.id;
+        row.dataset.runtime = choice.backend;
+        row.dataset.modelKey = `${choice.backend}:${choice.endpointId ?? ""}:${choice.model.id}`;
+        row.setAttribute("role", "menuitemradio");
+        row.setAttribute("aria-checked", String(Boolean(active)));
+        menu.appendChild(row);
       }
-      if (cached?.status === "loading" && models.length) {
-        submenu.appendChild(menuRow(getString("workspace-model-loading")));
-      }
-      if (cached?.error && models.length) {
-        const err = el(doc, "div", {
-          padding: "6px 8px",
-          color: "#b3452f",
-          fontSize: "11px",
-        });
-        err.textContent = cached.error;
-        submenu.appendChild(err);
-      }
+      if (!choices.length)
+        menu.appendChild(menuRow(getString("workspace-model-empty")));
     }
-    if (submenuAnchor) {
-      placeSubmenu(submenuAnchor, submenu, menu);
-    } else {
-      submenu.remove();
+    if (modelUpdatePending)
+      menu.appendChild(
+        createMenuHeading(doc, getString("workspace-model-loading")),
+      );
+    if (modelMenuError) {
+      const error = createMenuHeading(doc, modelMenuError);
+      error.style.color = "#a63d28";
+      error.setAttribute("role", "alert");
+      menu.appendChild(error);
     }
+    placeMenu(endpointBtn, menu, 320);
+    if (focusedKey) {
+      const row = [
+        ...menu.querySelectorAll<HTMLElement>("[data-model-key]"),
+      ].find((row) => row.dataset.modelKey === focusedKey);
+      row?.focus({ preventScroll: true });
+    }
+    menu.scrollTop = scrollTop;
   }
 
   function toggleEndpointMenu(): void {
@@ -9763,18 +8688,18 @@ function bindWorkspace(
     closeSlashMenu();
     closeMentionMenu();
     endpointMenuOpen = true;
-    const activeId = state.config?.activeEndpointId || "";
-    endpointSubmenu = activeId
-      ? { kind: "models", endpointId: activeId }
-      : { kind: "effort" };
+    endpointSelection = null;
+    modelMenuError = "";
     renderEndpointMenu();
     syncEndpointButton();
-    void refreshRuntimes(true).then(() => {
-      if (endpointMenuOpen) renderEndpointMenu();
-    });
-    if (activeId) {
-      void ensureModels(activeId);
+    for (const endpoint of state.config?.endpoints ?? []) {
+      if (modelLists.get(endpoint.id)?.status === "error")
+        modelLists.delete(endpoint.id);
+      void ensureModels(endpoint.id);
     }
+    void refreshRuntimes(false).then(() => {
+      if (endpointMenuOpen && !endpointSelection) renderEndpointMenu();
+    });
   }
 
   function togglePlusMenu(): void {
@@ -9786,101 +8711,33 @@ function bindWorkspace(
     closeEndpointMenu();
     closeSlashMenu();
     closeMentionMenu();
-    const menu = el(
-      doc,
-      "div",
-      {
-        position: "fixed",
-        background: "#ffffff",
-        border: "1px solid #ddd8cc",
-        borderRadius: "8px",
-        boxShadow: "0 6px 18px rgba(28,25,23,0.18)",
-        padding: "10px 12px",
-        zIndex: "900",
-        maxHeight: "min(420px, calc(100vh - 16px))",
-        overflow: "auto",
-        boxSizing: "border-box",
-      },
-      { id: "confucius-plus-menu" },
-    );
-
-    const section = (title: string) => {
-      const label = el(doc, "div", {
-        fontSize: "11px",
-        color: "#6b665c",
-        margin: "8px 0 4px",
-        textTransform: "uppercase" as const,
-        letterSpacing: "0.08em",
-      });
-      label.textContent = title;
-      menu.appendChild(label);
-    };
+    const menu = menuPanel("confucius-plus-menu");
+    const section = (title: string) =>
+      menu.appendChild(createMenuHeading(doc, title));
     const option = (label: string, active: boolean, onClick: () => void) => {
-      const row = el(doc, "div", {
-        padding: "5px 8px",
-        borderRadius: "8px",
-        cursor: "pointer",
-        display: "flex",
-        justifyContent: "space-between",
-        background: active ? "#f0ece3" : "transparent",
-      });
-      const text = el(doc, "span");
-      text.textContent = label;
-      row.appendChild(text);
-      if (active) {
-        const mark = el(doc, "span", { color: "#33302a", fontWeight: "700" });
-        mark.textContent = "✓";
-        row.appendChild(mark);
-      }
-      row.addEventListener("click", onClick);
-      menu.appendChild(row);
+      menu.appendChild(menuRow(label, { active, onClick }));
     };
-
-    const task = currentTask();
-    if (task) {
-      section(getString("workspace-context-heading"));
-      const summary = el(doc, "div", {
-        margin: "2px 8px 6px",
-        color: "#6b665c",
-        fontSize: "12px",
-        lineHeight: "1.4",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-      });
-      summary.textContent = contextSummary(task.lockedContext);
-      const detail = contextDetail(task.lockedContext);
-      if (detail) summary.title = detail;
-      menu.appendChild(summary);
-      if (
-        state.live?.lockedSnapshot &&
-        state.live.lockedSnapshot.fingerprint !== task.lockedContext.fingerprint
-      ) {
-        const changed = el(doc, "div", {
-          margin: "0 8px 5px",
-          color: "#8a4b26",
-          fontSize: "11px",
-        });
-        changed.textContent = getString("workspace-context-changed");
-        menu.appendChild(changed);
-      }
-      option(getString("workspace-context-add"), false, () => {
-        void updateTaskContext("add");
-      });
-      option(getString("workspace-context-replace"), false, () => {
-        void updateTaskContext("replace");
-      });
-    }
 
     section(getString("workspace-mode"));
-    option(getString("workspace-mode-agent"), state.mode === "agent", () => {
-      applyMode("agent");
-      closePlusMenu();
-    });
-    option(getString("workspace-mode-plan"), state.mode === "plan", () => {
-      applyMode("plan");
-      closePlusMenu();
-    });
+    const modeDisabled =
+      modeUpdatePending ||
+      presetUpdatePending ||
+      modelUpdatePending ||
+      state.running ||
+      state.sending;
+    for (const mode of ["agent", "plan"] as const) {
+      menu.appendChild(
+        menuRow(getString(`workspace-mode-${mode}`), {
+          active: state.mode === mode,
+          onClick: modeDisabled
+            ? undefined
+            : () => {
+                void applyMode(mode);
+                closePlusMenu();
+              },
+        }),
+      );
+    }
 
     section(getString("workspace-permissions"));
     option(getString("workspace-perm-ask"), state.permission === "ask", () => {
@@ -10069,11 +8926,19 @@ function bindWorkspace(
   }
 
   function updateRunningUI(): void {
+    endpointBtn.toggleAttribute(
+      "disabled",
+      modelUpdatePending || modeUpdatePending || state.running || state.sending,
+    );
+    syncPresetChip();
     const working = state.running || state.sending;
     sendBtn.style.display = working ? "none" : "";
     stopBtn.style.display = working ? "" : "none";
     if (
       state.sending ||
+      presetUpdatePending ||
+      modeUpdatePending ||
+      modelUpdatePending ||
       pendingAttachments.some((item) => item.status === "preparing")
     ) {
       sendBtn.setAttribute("disabled", "true");
@@ -10163,13 +9028,15 @@ function bindWorkspace(
         try {
           const stats = (await rpc("task/context", {
             taskId: state.sessionId,
-          })) as {
-            tokensEstimate: number;
-            contextWindowTokens: number;
-            percent: number;
-          };
+          })) as SessionContextStats;
           state.contextStats = stats;
-          contextRing.update(stats.percent, ringLabel(stats));
+          contextRing.update(
+            stats.usageSource === "unknown" ||
+              stats.window?.control === "runtime"
+              ? Number.NaN
+              : stats.percent,
+            ringLabel(stats),
+          );
         } catch {
           /* stats are cosmetic */
         }
@@ -10305,6 +9172,14 @@ function bindWorkspace(
   });
   plusBtn.addEventListener("click", () => togglePlusMenu());
   layoutBtn.addEventListener("click", () => {
+    rememberComposerDraft();
+    rememberTimelineViewport();
+    workspaceViewState = {
+      taskId: state.sessionId,
+      drafts: composerDrafts,
+      references: referenceDrafts,
+      viewports: timelineViewports,
+    };
     options.onLayoutChange?.(compact ? "window" : "sidebar");
   });
   sessionsToggle.addEventListener("click", () => {
@@ -10318,6 +9193,14 @@ function bindWorkspace(
   });
   doc.addEventListener("mousedown", (event) => {
     const target = event.target as Node | null;
+    const contextDetails = doc.getElementById("confucius-context-details");
+    if (
+      contextDetails &&
+      (!target ||
+        (!contextRing.node.contains(target) &&
+          !contextDetails.contains(target)))
+    )
+      contextDetails.remove();
     if (artifactChoiceMenu) {
       const artifactMenu = doc.getElementById("confucius-artifact-choice-menu");
       if (
@@ -10349,27 +9232,67 @@ function bindWorkspace(
     ) {
       closeMentionMenu();
     }
-    if (!endpointMenuOpen) {
-      return;
-    }
+    const sourceMenu = doc.getElementById("confucius-source-menu");
+    if (
+      sourceMenu &&
+      target &&
+      !sourceMenu.contains(target) &&
+      !doc.getElementById("confucius-task-sources")?.contains(target)
+    )
+      sourceMenu.remove();
+    if (!endpointMenuOpen) return;
     const menu = doc.getElementById("confucius-endpoint-menu");
-    const submenu = doc.getElementById("confucius-endpoint-submenu");
     if (
       (target && endpointBtn.contains(target)) ||
-      (target && menu?.contains(target)) ||
-      (target && submenu?.contains(target))
+      (target && menu?.contains(target))
     ) {
       return;
     }
     closeEndpointMenu();
   });
-  contextRing.node.addEventListener("click", () => void compactNow());
+  contextRing.node.addEventListener("click", toggleContextDetails);
+  contextRing.node.addEventListener("keydown", (event) => {
+    if (["Enter", " "].includes((event as KeyboardEvent).key)) {
+      event.preventDefault();
+      toggleContextDetails();
+    }
+  });
+  for (const [trigger, menuId, dismiss] of [
+    [plusBtn, "confucius-plus-menu", closePlusMenu],
+    [endpointBtn, "confucius-endpoint-menu", closeEndpointMenu],
+    [
+      contextRing.node,
+      "confucius-context-details",
+      () => doc.getElementById("confucius-context-details")?.remove(),
+    ],
+  ] as const) {
+    trigger.addEventListener("keydown", (event) => {
+      if (
+        (event as KeyboardEvent).key !== "Escape" ||
+        !doc.getElementById(menuId)
+      )
+        return;
+      event.preventDefault();
+      event.stopPropagation();
+      dismiss();
+    });
+  }
+  prompt.addEventListener("compositionstart", () => {
+    composing = true;
+  });
+  prompt.addEventListener("compositionend", () => {
+    composing = false;
+    updateComposerMenus();
+  });
   prompt.addEventListener("input", () => {
     rememberComposerDraft();
+    if (composing) return;
     updateComposerMenus();
   });
   prompt.addEventListener("click", updateComposerMenus);
   prompt.addEventListener("keydown", (event) => {
+    const action = composerKeyAction(event as KeyboardEvent, composing);
+    if (action === "ignore" || action === "newline") return;
     const key = (event as KeyboardEvent).key;
     if (
       mentionState.open &&

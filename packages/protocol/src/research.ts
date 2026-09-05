@@ -1,3 +1,4 @@
+import type { RuntimeModelOption } from "./modelReasoning";
 import type { CollectionRef, ItemRef } from "./item";
 import type { SessionContext } from "./session";
 
@@ -104,6 +105,8 @@ export interface RuntimeStatus {
   executable?: string;
   /** User override; empty means automatic detection. */
   configuredExecutable?: string;
+  models?: RuntimeModelOption[];
+  modelsError?: string;
   checkedAt: number;
 }
 

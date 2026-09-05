@@ -36,6 +36,7 @@ export function createHarness(options: {
   modeFor?: (toolName: string) => PermissionMode;
   resolve?: ConstructorParameters<typeof PermissionGate>[0]["resolve"];
   describeCall?: ConstructorParameters<typeof TurnLoop>[0]["describeCall"];
+  context?: ConstructorParameters<typeof TurnLoop>[0]["context"];
   checkpointStore?: ConstructorParameters<typeof TurnLoop>[0]["checkpoints"];
   transientMediaTimeoutMs?: number;
   completionGuard?: ConstructorParameters<
@@ -116,6 +117,7 @@ export function createHarness(options: {
 
   const loop = new TurnLoop({
     model,
+    context: options.context,
     tools,
     describeCall: options.describeCall,
     permissions,

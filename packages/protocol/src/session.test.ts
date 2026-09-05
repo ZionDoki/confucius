@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { migrateSessionRecord, type SessionRecord } from "./session";
 
-describe("schema v1 to v2 migration", () => {
+describe("schema v1/v2 to v3 migration", () => {
   it("migrates legacy sessions to safe native tasks", () => {
     const legacy: SessionRecord = {
       id: "ses_old",
@@ -14,7 +14,7 @@ describe("schema v1 to v2 migration", () => {
       permissionMode: "auto_allow",
     };
     const task = migrateSessionRecord(legacy, 30);
-    assert.equal(task.schemaVersion, 2);
+    assert.equal(task.schemaVersion, 3);
     assert.equal(task.backend, "native");
     assert.equal(task.capabilityProfile, "zotero_only");
     assert.equal(task.status, "ready");

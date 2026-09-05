@@ -63,7 +63,9 @@ body {
 
 .pane {
   padding: 14px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
   border-right: 1px solid #e5e1d8;
   background: #faf9f6;
 }
@@ -160,7 +162,9 @@ pre {
   padding: 10px 12px;
   margin-top: 6px;
   max-height: 220px;
-  overflow: auto;
+  overflow-x: scroll;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
   font-size: 0.95em;
   line-height: 1.5;
 }

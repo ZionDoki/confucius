@@ -1,9 +1,15 @@
-import type {
-  ApprovalRequest,
-  ApprovalResolution,
-  CapabilityProfile,
-  PlanStep,
-  RuntimeStatus,
+import {
+  codexModels,
+  codexModelParams,
+  validateRuntimeModel,
+} from "./RuntimeModels";
+import {
+  CONFUCIUS_VERSION,
+  type ApprovalRequest,
+  type ApprovalResolution,
+  type CapabilityProfile,
+  type PlanStep,
+  type RuntimeStatus,
 } from "@confucius/protocol";
 import {
   RuntimeJsonLineProcess,
@@ -125,15 +131,20 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
 
   async probe(): Promise<RuntimeStatus> {
     const checkedAt = Date.now();
+    let version: string | undefined;
+    let resolvedExecutable: string | undefined;
     try {
       const command = await runRuntimeCommand(
         this.executable,
         "codex",
         ["--version"],
-        8_000,
+        15_000,
       );
-      const version = command.stdout.trim().replace(/^codex-cli\s+/, "");
-      const rpc = await this.openRpc();
+      resolvedExecutable = command.executable;
+      version = `${command.stdout}\n${command.stderr}`
+        .trim()
+        .match(/\d+\.\d+\.\d+(?:[-+][\w.-]+)?/)?.[0];
+      const rpc = await this.openRpc("zotero_only", resolvedExecutable);
       try {
         const account = await withTimeout(
           rpc.request<Record<string, unknown>>("account/read", {}),
@@ -141,9 +152,24 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
           "Codex account probe timed out",
         );
         const ready = codexAccountReady(account);
+        let models;
+        let modelsError;
+        if (ready) {
+          try {
+            models = await withTimeout(
+              codexModels(rpc),
+              8_000,
+              "Codex model catalog timed out",
+            );
+          } catch (error) {
+            modelsError = errorMessage(error);
+          }
+        }
         return {
           backend: "codex",
           state: ready ? "ready" : "auth_required",
+          models,
+          modelsError,
           version,
           executable: command.executable,
           message: ready
@@ -157,9 +183,10 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
     } catch (error) {
       return {
         backend: "codex",
-        state: "unavailable",
+        state: resolvedExecutable ? "error" : "unavailable",
+        version,
         message: errorMessage(error),
-        executable: this.executable,
+        executable: resolvedExecutable ?? this.executable,
         checkedAt,
       };
     }
@@ -241,10 +268,19 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
       session.hostTurnId = input.turnId;
     }
 
+    if (input.runtimeModel) {
+      const models = await withTimeout(
+        codexModels(session.rpc),
+        8_000,
+        "Codex model catalog timed out",
+      );
+      validateRuntimeModel(models, input.runtimeModel);
+    }
     const response = await session.rpc.request<Record<string, unknown>>(
       "turn/start",
       {
         threadId: session.threadId,
+        ...codexModelParams(input.runtimeModel),
         input: [{ type: "text", text: input.prompt, text_elements: [] }],
         cwd: input.cwd,
         approvalPolicy: "on-request",
@@ -330,30 +366,36 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
 
   private async openRpc(
     profile: CapabilityProfile = "zotero_only",
+    executable = this.executable,
   ): Promise<RuntimeJsonLineProcess> {
     const rpc = await RuntimeJsonLineProcess.open(
-      this.executable,
+      executable,
       "codex",
       pluginCodexAppServerArgs(profile),
     );
-    await withTimeout(
-      rpc.request("initialize", {
-        clientInfo: {
-          name: "confucius_zotero",
-          title: "Confucius for Zotero",
-          version: "0.3.6",
-        },
-        capabilities: {
-          experimentalApi: true,
-          requestAttestation: false,
-          optOutNotificationMethods: ["rawResponseItem/completed"],
-        },
-      }),
-      10_000,
-      "Codex initialization timed out",
-    );
-    rpc.notify("initialized", {});
-    return rpc;
+    try {
+      await withTimeout(
+        rpc.request("initialize", {
+          clientInfo: {
+            name: "confucius_zotero",
+            title: "Confucius for Zotero",
+            version: CONFUCIUS_VERSION,
+          },
+          capabilities: {
+            experimentalApi: true,
+            requestAttestation: false,
+            optOutNotificationMethods: ["rawResponseItem/completed"],
+          },
+        }),
+        10_000,
+        "Codex initialization timed out",
+      );
+      rpc.notify("initialized", {});
+      return rpc;
+    } catch (error) {
+      rpc.close();
+      throw error;
+    }
   }
 
   private async threadParams(
@@ -363,6 +405,7 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
     const configuredMcpServers = await this.configuredMcpServers(rpc);
     return {
       cwd: input.cwd,
+      ...(input.runtimeModel ? { model: input.runtimeModel.modelId } : {}),
       approvalPolicy: "on-request",
       sandbox:
         input.capabilityProfile === "workspace"
@@ -402,6 +445,28 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
     const turnId = session.hostTurnId;
     if (params.threadId && params.threadId !== session.threadId) return;
     switch (message.method) {
+      case "thread/tokenUsage/updated": {
+        const usage = asRecord(params.tokenUsage);
+        const inputTokens = asRecord(usage.last).inputTokens;
+        if (
+          typeof inputTokens === "number" &&
+          Number.isFinite(inputTokens) &&
+          inputTokens >= 0
+        ) {
+          session.sink.emit(
+            "context_usage_updated",
+            {
+              inputTokens,
+              capacityTokens:
+                typeof usage.modelContextWindow === "number"
+                  ? usage.modelContextWindow
+                  : undefined,
+            },
+            turnId,
+          );
+        }
+        return;
+      }
       case "item/agentMessage/delta":
         session.sink.emit(
           "text_delta",
@@ -519,6 +584,23 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
   ): void {
     const type = String(item.type ?? "");
     const id = String(item.id ?? "runtime_item");
+    if (type === "contextCompaction" && completed) {
+      session.sink.emit(
+        "context_window_changed",
+        {
+          window: {
+            id: `runtime_${id}`.replace(/[^\w-]/g, "_"),
+            number: 1,
+            createdAt: Date.now(),
+            control: "runtime",
+            usageSource: "unknown",
+            historyCoverage: "runtime-partial",
+          },
+        },
+        turnId,
+      );
+      return;
+    }
     if (
       session.profile === "zotero_only" &&
       (type === "commandExecution" || type === "fileChange")

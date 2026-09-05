@@ -66,3 +66,6 @@ export { validateArgs } from "./SchemaValidate";
 export { TurnLoop } from "./TurnLoop";
 export type { TurnLoopDeps, TurnLoopInput, TurnLoopResult } from "./TurnLoop";
 export { abortError, errorMessage, isAbortError } from "./abort";
+
+export { WindowContext, estimateRequestTokens } from "./WindowContext";
+export type { WindowContextOptions } from "./WindowContext";

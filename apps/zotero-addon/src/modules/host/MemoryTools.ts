@@ -8,13 +8,14 @@ import type { ToolProvider } from "@confucius/harness";
 import {
   ConversationLogEngine,
   MemoryEngine,
+  HistoryStore,
   callMemoryCatalogTool,
   type MemoryFileSystem,
 } from "@confucius/memory";
 import { TOOL_DEFINITIONS, TOOL_META } from "@confucius/zotero-tools";
 
 /** IOUtils-backed filesystem so memories live as plain markdown files. */
-class ZoteroMemoryFs implements MemoryFileSystem {
+export class ZoteroMemoryFs implements MemoryFileSystem {
   async readFile(path: string): Promise<string> {
     return IOUtils.readUTF8(nativePath(path));
   }
@@ -24,7 +25,10 @@ class ZoteroMemoryFs implements MemoryFileSystem {
     await IOUtils.makeDirectory(PathUtils.parent(target)!, {
       ignoreExisting: true,
     });
-    await IOUtils.writeUTF8(target, content);
+    await IOUtils.writeUTF8(target, content, {
+      tmpPath: `${target}.tmp`,
+      flush: true,
+    });
   }
 
   async deleteFile(path: string): Promise<void> {
@@ -80,8 +84,6 @@ const MEMORY_TOOL_NAMES = new Set([
   "knowledge_base_create",
   "knowledge_base_update",
   "knowledge_base_save_entry",
-  "conversation_log_search",
-  "conversation_log_read",
 ]);
 
 /** ToolProvider over the persistent memory engine and conversation logs. */
@@ -113,4 +115,11 @@ export class ConfuciusMemoryToolProvider implements ToolProvider {
   ): Promise<ToolResult> {
     return callMemoryCatalogTool(this.engine, this.logs, name, args);
   }
+}
+
+export function createHistoryStore(): HistoryStore {
+  return new HistoryStore(
+    new ZoteroMemoryFs(),
+    PathUtils.join(Zotero.DataDirectory.dir, "confucius", "history"),
+  );
 }

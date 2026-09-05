@@ -1,8 +1,10 @@
-import type {
-  ApprovalRequest,
-  ApprovalResolution,
-  PlanStep,
-  RuntimeStatus,
+import { kimiModels, selectKimiModel } from "./RuntimeModels";
+import {
+  CONFUCIUS_VERSION,
+  type ApprovalRequest,
+  type ApprovalResolution,
+  type PlanStep,
+  type RuntimeStatus,
 } from "@confucius/protocol";
 import {
   RuntimeJsonLineProcess,
@@ -22,6 +24,7 @@ interface KimiSession {
   profile: PluginRuntimeTurnInput["capabilityProfile"];
   rpc: RuntimeJsonLineProcess;
   sessionId: string;
+  modelState?: unknown;
   sink: PluginRuntimeEventSink;
   approvals: PluginApprovalBrokerLike;
   turnId?: string;
@@ -44,7 +47,7 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
     this.executable = executable?.trim() ?? "";
   }
 
-  async probe(): Promise<RuntimeStatus> {
+  async probe(modelId?: string): Promise<RuntimeStatus> {
     const checkedAt = Date.now();
     let version: string | undefined;
     let resolvedExecutable: string;
@@ -55,7 +58,7 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
         this.executable,
         "kimi",
         ["--version"],
-        8_000,
+        15_000,
       );
       resolvedExecutable = command.executable;
       version = `${command.stdout}\n${command.stderr}`.match(
@@ -73,11 +76,14 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
 
     try {
       probeCwd = await makeTemporaryDirectory("kimi-probe");
+      const environment = await isolatedKimiProbeEnvironment(probeCwd);
       opened = await this.openConnection({
         taskId: "probe",
+        executable: resolvedExecutable,
         profile: "zotero_only",
         sink: noopSink,
         approvals: denyApprovals,
+        environment,
       });
       const created = await withTimeout(
         opened.rpc.request<Record<string, unknown>>(
@@ -90,6 +96,14 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
       opened.sessionId = String(created.sessionId ?? "");
       if (!opened.sessionId)
         throw new Error("Kimi did not return a session id");
+      const modelState = modelId
+        ? await withTimeout(
+            selectKimiModel(opened.rpc, opened.sessionId, created, { modelId }),
+            8_000,
+            "Kimi model selection timed out",
+          )
+        : created;
+      const models = kimiModels(modelState);
       await withTimeout(
         opened.rpc.request("session/close", { sessionId: opened.sessionId }),
         1_500,
@@ -99,6 +113,7 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
       return {
         backend: "kimi",
         state: "ready",
+        models,
         version,
         executable: resolvedExecutable,
         checkedAt,
@@ -169,13 +184,13 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
       let sessionId = externalSessionId;
       if (sessionId) {
         try {
-          await withTimeout(
+          opened.modelState = await withTimeout(
             opened.rpc.request("session/resume", { sessionId, ...request }),
             15_000,
             "Kimi session resume timed out",
           );
         } catch {
-          await withTimeout(
+          opened.modelState = await withTimeout(
             opened.rpc.request("session/load", { sessionId, ...request }),
             15_000,
             "Kimi session load timed out",
@@ -187,6 +202,7 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
           15_000,
           "Kimi session creation timed out",
         );
+        opened.modelState = created;
         sessionId = String(created.sessionId ?? "");
       }
       if (!sessionId) {
@@ -212,6 +228,18 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
       session.approvals = approvals;
     }
 
+    if (input.runtimeModel) {
+      session.modelState = await withTimeout(
+        selectKimiModel(
+          session.rpc,
+          session.sessionId,
+          session.modelState,
+          input.runtimeModel,
+        ),
+        8_000,
+        "Kimi model selection timed out",
+      );
+    }
     session.turnId = input.turnId;
     const active = session;
     void active.rpc
@@ -357,10 +385,16 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
     profile: PluginRuntimeTurnInput["capabilityProfile"];
     sink: PluginRuntimeEventSink;
     approvals: PluginApprovalBrokerLike;
+    executable?: string;
+    environment?: Record<string, string>;
   }): Promise<KimiSession> {
-    const rpc = await RuntimeJsonLineProcess.open(this.executable, "kimi", [
-      "acp",
-    ]);
+    const rpc = await RuntimeJsonLineProcess.open(
+      input.executable ?? this.executable,
+      "kimi",
+      ["acp"],
+      undefined,
+      input.environment,
+    );
     const holder: KimiSession = {
       ...input,
       rpc,
@@ -392,7 +426,7 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
             fs: { readTextFile: false, writeTextFile: false },
             plan: {},
           },
-          clientInfo: { name: "confucius-zotero", version: "0.3.6" },
+          clientInfo: { name: "confucius-zotero", version: CONFUCIUS_VERSION },
         }),
         10_000,
         "Kimi ACP initialization timed out",
@@ -684,6 +718,46 @@ function sessionSetup(
   mcpServers: Array<Record<string, unknown>> = [],
 ): Record<string, unknown> {
   return { cwd, additionalDirectories, mcpServers };
+}
+
+/** Catalog probing may switch a temporary ACP session. Some CLI versions also
+ * persist that choice globally, so probe against a private disposable config. */
+async function isolatedKimiProbeEnvironment(
+  root: string,
+): Promise<Record<string, string>> {
+  const home = Services.dirsvc.get("Home", Ci.nsIFile).path;
+  const environment: Record<string, string> = {};
+  for (const [key, directory] of [
+    ["KIMI_CODE_HOME", ".kimi-code"],
+    ["KIMI_SHARE_DIR", ".kimi"],
+  ]) {
+    const source = Services.env.get(key) || PathUtils.join(home, directory);
+    const destination = PathUtils.join(root, directory);
+    await IOUtils.makeDirectory(destination, { permissions: 0o700 });
+    environment[key] = destination;
+    const config = PathUtils.join(source, "config.toml");
+    if (await IOUtils.exists(config)) {
+      const target = PathUtils.join(destination, "config.toml");
+      await IOUtils.write(target, await IOUtils.read(config));
+      await IOUtils.setPermissions(target, 0o600);
+    }
+    const credentials = PathUtils.join(source, "credentials");
+    if (await IOUtils.exists(credentials)) {
+      const target = PathUtils.join(destination, "credentials");
+      await IOUtils.makeDirectory(target, { permissions: 0o700 });
+      for (const file of await IOUtils.getChildren(credentials)) {
+        if (
+          !file.endsWith(".json") ||
+          (await IOUtils.stat(file)).type !== "regular"
+        )
+          continue;
+        const copied = PathUtils.join(target, PathUtils.filename(file));
+        await IOUtils.write(copied, await IOUtils.read(file));
+        await IOUtils.setPermissions(copied, 0o600);
+      }
+    }
+  }
+  return environment;
 }
 
 async function makeTemporaryDirectory(label: string): Promise<string> {

@@ -45,7 +45,12 @@ history and citations. Ordinary replies remain in the activity view.
 | Kimi    | Installed Kimi CLI and its login  |
 
 Codex and Kimi run through the Zotero add-on. Leave their executable paths
-empty to use automatic detection, or choose the executable in Settings.
+empty to use automatic detection, or choose the executable in Settings. Detection covers common macOS,
+Windows, and Linux installations, including Homebrew, npm, nvm/fnm, uv/pipx,
+and the Codex desktop app. Refresh after installing or signing in. Codex npm
+entry points resolve to their packaged native binary without requiring Node
+inside Zotero. See [runtime discovery](docs/runtime-discovery.md) for supported
+layouts and troubleshooting.
 
 The Native runtime supports streamed text and separate reasoning output. The
 model-step limit is configurable and defaults to 128.
@@ -107,6 +112,17 @@ Start the development build with:
 ```bash
 npm start
 ```
+
+This works from the repository root or `apps/zotero-addon`. Startup locates
+Zotero in macOS system/user Applications, common Windows install directories
+and App Paths registrations, or Linux PATH, system/user installs and extracted
+archives. The terminal prints the selected executable.
+
+An `.env` file is optional. For a custom installation, copy
+`apps/zotero-addon/.env.example` to `.env` in the same directory and set
+`ZOTERO_PLUGIN_ZOTERO_BIN_PATH`; leave it empty for automatic detection. Shell
+environment values take precedence over `.env`. An invalid explicit path
+produces an actionable error. Building and releasing do not require Zotero.
 
 ## Repository layout
 

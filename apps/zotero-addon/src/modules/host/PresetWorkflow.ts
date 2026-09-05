@@ -1,3 +1,4 @@
+import { HISTORY_TOOL_NAMES } from "./HistoryTools";
 import type {
   ArtifactKind,
   ConfuciusEvent,
@@ -68,6 +69,7 @@ export function presetResearchToolNames(
 ): ReadonlySet<string> {
   return new Set([
     ...PRESET_RESEARCH_READ_TOOLS,
+    ...HISTORY_TOOL_NAMES,
     ...(workflow.annotationFirst
       ? ["propose_annotations", "propose_highlights", "commit_annotations"]
       : []),

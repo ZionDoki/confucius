@@ -1,12 +1,13 @@
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import { promisify } from "node:util";
-import type {
-  ApprovalRequest,
-  ApprovalResolution,
-  CapabilityProfile,
-  PlanStep,
-  RuntimeStatus,
+import {
+  CONFUCIUS_VERSION,
+  type ApprovalRequest,
+  type ApprovalResolution,
+  type CapabilityProfile,
+  type PlanStep,
+  type RuntimeStatus,
 } from "@confucius/protocol";
 import { JsonLineProcess, type JsonRpcMessage } from "./jsonLineProcess.js";
 import type { InitializeParams } from "./generated/codex/InitializeParams.js";
@@ -346,7 +347,7 @@ export class CodexAdapter implements RuntimeAdapter {
       clientInfo: {
         name: "confucius_zotero",
         title: "Confucius for Zotero",
-        version: "0.3.6",
+        version: CONFUCIUS_VERSION,
       },
       capabilities: {
         experimentalApi: true,

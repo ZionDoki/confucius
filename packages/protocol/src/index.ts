@@ -1,3 +1,5 @@
+export { CONFUCIUS_VERSION } from "./version";
+
 export {
   CONFUCIUS_EVENTS_PATH,
   CONFUCIUS_HEALTH_PATH,
@@ -300,3 +302,7 @@ export type {
   TaskSetContextParams,
   TaskStageTemplateParams,
 } from "./rpc";
+
+export * from "./history";
+
+export * from "./modelReasoning";

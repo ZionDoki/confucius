@@ -17,11 +17,12 @@ import {
   type RequestPermissionResponse,
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
-import type {
-  ApprovalRequest,
-  ApprovalResolution,
-  PlanStep,
-  RuntimeStatus,
+import {
+  CONFUCIUS_VERSION,
+  type ApprovalRequest,
+  type ApprovalResolution,
+  type PlanStep,
+  type RuntimeStatus,
 } from "@confucius/protocol";
 import type {
   ApprovalBrokerLike,
@@ -383,7 +384,7 @@ export class KimiAdapter implements RuntimeAdapter {
             fs: { readTextFile: false, writeTextFile: false },
             plan: {},
           },
-          clientInfo: { name: "confucius-zotero", version: "0.3.6" },
+          clientInfo: { name: "confucius-zotero", version: CONFUCIUS_VERSION },
         }),
         10_000,
         () =>

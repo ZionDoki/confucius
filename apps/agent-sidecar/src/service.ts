@@ -2,6 +2,7 @@ import { mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
+  CONFUCIUS_VERSION,
   artifactUpsertGuidance,
   type AgentBackendKind,
   type ApprovalResolution,
@@ -64,7 +65,11 @@ export class SidecarService {
   async rpc(method: string, params: Record<string, unknown>): Promise<unknown> {
     switch (method) {
       case "health":
-        return { ok: true, name: "confucius-agent-sidecar", version: "0.3.6" };
+        return {
+          ok: true,
+          name: "confucius-agent-sidecar",
+          version: CONFUCIUS_VERSION,
+        };
       case "host/register":
         this.host.register(
           String(params.baseUrl ?? ""),

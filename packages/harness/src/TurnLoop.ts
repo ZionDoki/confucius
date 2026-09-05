@@ -1,3 +1,4 @@
+import type { WindowContext } from "./WindowContext";
 import type {
   ConfuciusEvent,
   SessionRecord,
@@ -41,6 +42,8 @@ export interface TurnLoopInput {
    * Replayed before the new user text so turns build on each other.
    */
   history?: ModelMessage[];
+  /** Resume a verified checkpoint without resetting budgets or write records. */
+  resume?: TurnCheckpoint;
   signal?: AbortSignal;
 }
 
@@ -54,6 +57,8 @@ export interface TurnLoopResult {
 }
 
 export interface TurnLoopDeps {
+  context?: WindowContext;
+  workflowPhase?: "research" | "delivery";
   model: ModelAdapter;
   tools: ToolProvider;
   permissions: PermissionGate;
@@ -96,20 +101,40 @@ export class TurnLoop {
   constructor(private readonly deps: TurnLoopDeps) {}
 
   async run(input: TurnLoopInput): Promise<TurnLoopResult> {
+    if (input.resume?.toolExecutions.some((call) => call.status === "started"))
+      throw new Error("Cannot resume while a tool outcome is unknown");
+    if (input.resume) {
+      this.deps.budget.iterationsUsed = input.resume.iteration;
+      this.deps.budget.toolCallsUsed =
+        input.resume.toolCallsUsed ??
+        input.resume.toolExecutions.filter(
+          (call) => !this.deps.completionToolNames?.has(call.toolName),
+        ).length;
+    }
     const messages: ModelMessage[] = [
       {
         role: "system",
         content:
           this.deps.systemPrompt ?? "You are Confucius, a research agent.",
       },
-      ...(input.history ?? []),
+      ...(input.resume
+        ? (cloneValue(input.resume.messages.slice(1)) as ModelMessage[])
+        : (input.history ?? [])),
       { role: "user", content: input.modelUserText ?? input.userText },
     ];
 
-    const toolExecutions: ToolExecutionCheckpoint[] = [];
+    this.deps.context?.start(input, messages);
+    const toolExecutions: ToolExecutionCheckpoint[] = cloneValue(
+      input.resume?.toolExecutions ?? [],
+    );
 
     this.emit(input, "turn_started", { userText: input.userText });
-    await this.checkpoint(input.turnId, 0, messages, toolExecutions);
+    await this.checkpoint(
+      input.turnId,
+      this.deps.budget.iterationsUsed,
+      messages,
+      toolExecutions,
+    );
 
     let delivered = "";
     let completionGuardReminders = 0;
@@ -132,7 +157,25 @@ export class TurnLoop {
         }
 
         this.deps.budget.recordIteration();
+        await this.deps.context?.prepare(
+          messages,
+          this.deps.tools.listTools(),
+          input.signal,
+        );
+        if (input.signal?.aborted) {
+          this.emit(input, "turn_aborted", { reason: "signal" });
+          return resultOf("aborted");
+        }
+        // Persist the charged iteration before sending a request so stopping
+        // or restarting during that request does not replenish its budget.
+        await this.checkpoint(
+          input.turnId,
+          this.deps.budget.iterationsUsed,
+          messages,
+          toolExecutions,
+        );
         const modelTurn = await this.completeModelTurn(input, messages);
+        this.deps.context?.usage(modelTurn.usage);
         removeTransientMessages(messages);
         // Some adapters return a partial turn when a streaming request is
         // aborted after data has arrived. Do not deliver that stale response
@@ -214,7 +257,7 @@ export class TurnLoop {
       this.emit(input, "turn_completed", { phase: "done" });
       return resultOf("done");
     } catch (error) {
-      if (isAbortError(error)) {
+      if (input.signal?.aborted || isAbortError(error)) {
         this.emit(input, "turn_aborted", { reason: "signal" });
         return resultOf("aborted");
       }
@@ -353,6 +396,28 @@ export class TurnLoop {
         continue;
       }
 
+      // A continuation can recover a completed write's recorded response.
+      // It must not execute that same write again merely to reconstruct context.
+      const priorWrite = this.deps.tools.getMeta(call.name)?.mutatesState
+        ? input.resume?.toolExecutions.find(
+            (entry) =>
+              entry.toolName === call.name &&
+              entry.status === "completed" &&
+              entry.result &&
+              canonicalArguments(entry.args) === canonicalArguments(call.args),
+          )
+        : undefined;
+      if (priorWrite) {
+        const result = priorWrite.result as ToolResult;
+        this.emit(input, "tool_result", { callId: eventId, result });
+        messages.push({
+          role: "tool",
+          content: JSON.stringify(result),
+          toolCallId: call.id,
+        });
+        continue;
+      }
+
       const completionTool =
         this.deps.completionToolNames?.has(call.name) === true;
       if (!completionTool && !this.deps.budget.canRunTools(1)) {
@@ -459,15 +524,47 @@ export class TurnLoop {
         batch.map(async (call) => {
           let result: ToolResult;
           let transientMedia: ToolTransientMedia[] = [];
+          let observedWriteFailure = false;
           try {
             const raw = await this.deps.tools.call(
               call.toolName,
               call.args,
               input.signal,
             );
+            if (
+              !raw.ok &&
+              raw.code === "internal" &&
+              this.deps.tools.getMeta(call.toolName)?.mutatesState
+            ) {
+              observedWriteFailure = true;
+              await this.deps.context?.toolResult(
+                call.callId,
+                call.toolName,
+                JSON.stringify(raw),
+                call.args,
+                call.modelCallId,
+              );
+              throw new Error(
+                `The outcome of ${call.toolName} is unknown: ${raw.message}. Verify the write before retrying.`,
+              );
+            }
             transientMedia = raw.ok ? (raw.transientMedia ?? []) : [];
             result = durableToolResult(raw);
           } catch (error) {
+            if (this.deps.tools.getMeta(call.toolName)?.mutatesState) {
+              if (!observedWriteFailure)
+                await this.deps.context?.toolResult(
+                  call.callId,
+                  call.toolName,
+                  JSON.stringify({
+                    outcome: "unknown",
+                    error: errorMessage(error),
+                  }),
+                  call.args,
+                  call.modelCallId,
+                );
+              throw error;
+            }
             result = {
               ok: false,
               toolName: call.toolName,
@@ -478,6 +575,17 @@ export class TurnLoop {
           return { call, result, transientMedia };
         }),
       );
+      // Persist complete results before truncating model input. A failed journal write
+      // leaves the last checkpoint's started call unresolved, preventing blind replay.
+      for (const { call, result } of rawResults) {
+        await this.deps.context?.toolResult(
+          call.callId,
+          call.toolName,
+          JSON.stringify(result),
+          call.args,
+          call.modelCallId,
+        );
+      }
       const results = rawResults.map(({ call, result, transientMedia }) => {
         const acceptedMedia: ToolTransientMedia[] = [];
         let omittedMedia = false;
@@ -558,9 +666,21 @@ export class TurnLoop {
     messages: ModelMessage[],
     toolExecutions: ToolExecutionCheckpoint[],
   ): Promise<void> {
-    await this.deps.checkpoints.save({
+    await this.deps.context?.record({
       turnId,
       iteration,
+      toolCallsUsed: this.deps.budget.toolCallsUsed,
+      workflowPhase: this.deps.workflowPhase,
+      savedAt: this.deps.now(),
+      messages,
+      toolExecutions,
+    });
+    await this.deps.checkpoints.save({
+      window: this.deps.context?.window,
+      turnId,
+      iteration,
+      toolCallsUsed: this.deps.budget.toolCallsUsed,
+      workflowPhase: this.deps.workflowPhase,
       savedAt: this.deps.now(),
       messages: cloneValue(durableMessages(messages)),
       toolExecutions: cloneValue(toolExecutions),
@@ -589,6 +709,19 @@ class TransientMediaTimeoutError extends Error {
     super("Transient page image request timed out");
     this.name = "TransientMediaTimeoutError";
   }
+}
+
+function canonicalArguments(value: unknown): string {
+  if (Array.isArray(value))
+    return `[${value.map(canonicalArguments).join(",")}]`;
+  if (value && typeof value === "object")
+    return `{${Object.entries(value)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(
+        ([key, item]) => `${JSON.stringify(key)}:${canonicalArguments(item)}`,
+      )
+      .join(",")}}`;
+  return JSON.stringify(value) ?? "undefined";
 }
 
 function markPageVisualOmitted(result: ToolResult): ToolResult {

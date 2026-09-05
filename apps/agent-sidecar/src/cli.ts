@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { CONFUCIUS_VERSION } from "@confucius/protocol";
 import { readFileSync, unlinkSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -15,7 +16,7 @@ const descriptor: SidecarDescriptor = {
   pid: process.pid,
   baseUrl: running.baseUrl,
   token: running.token,
-  version: "0.3.6",
+  version: CONFUCIUS_VERSION,
   startedAt: Date.now(),
 };
 

@@ -79,13 +79,16 @@ describe("applyEndpointPatch", () => {
   });
 
   it("updates the active endpoint through legacy fields", () => {
-    const result = applyEndpointPatch(seed, { reasoningEffort: "high" });
+    const result = applyEndpointPatch(seed, {
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+    });
     assert.equal(result.ok, true);
     if (!result.ok) {
       return;
     }
     assert.equal(result.store.endpoints[0]?.reasoningEffort, "high");
-    assert.equal(result.store.endpoints[0]?.model, "gpt-4o-mini");
+    assert.equal(result.store.endpoints[0]?.model, "gpt-5.5");
   });
 
   it("switches the active endpoint", () => {

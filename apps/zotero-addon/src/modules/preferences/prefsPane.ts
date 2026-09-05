@@ -1,7 +1,13 @@
+import { UI_FONT_STACKS } from "../ui/workspaceTypography";
+import { SURFACE_CSS } from "../ui/workspaceSurface";
 import { getPref, setPref } from "../../utils/prefs";
 import { getString } from "../../utils/locale";
 import { config } from "../../../package.json";
 import {
+  clampUiFontSize,
+  isUiFont,
+  isUiLineHeight,
+  UI_LINE_HEIGHT_VALUES,
   clampMaxIterations,
   clampMaxToolCalls,
   isMemoryConsent,
@@ -9,6 +15,7 @@ import {
   type RuntimeListResult,
 } from "@confucius/protocol";
 import { pickRuntimeExecutable } from "../ui/runtimeExecutablePicker";
+import { bindPreferenceScrollbars } from "../ui/workspaceScrollbars";
 
 export async function registerPreferencePane(): Promise<void> {
   const paneId = "confucius-prefpane";
@@ -31,6 +38,27 @@ export async function registerPreferencePane(): Promise<void> {
 
 export function bindPrefsWindow(win: Window): void {
   const doc = win.document;
+  bindPreferenceScrollbars(win);
+  if (!doc.getElementById("confucius-preferences-style")) {
+    const style = doc.createElementNS("http://www.w3.org/1999/xhtml", "style");
+    style.id = "confucius-preferences-style";
+    style.textContent = SURFACE_CSS;
+    (doc.head ?? doc.documentElement)?.appendChild(style);
+  }
+  const pane = doc.getElementById(
+    "confucius-preferences",
+  ) as HTMLElement | null;
+  if (pane) {
+    const font = getPref("uiFont");
+    const lineHeight = getPref("uiLineHeight");
+    pane.style.fontFamily = UI_FONT_STACKS[isUiFont(font) ? font : "sans"];
+    pane.style.fontSize = `${clampUiFontSize(getPref("uiFontSize"))}px`;
+    pane.style.lineHeight = String(
+      UI_LINE_HEIGHT_VALUES[
+        isUiLineHeight(lineHeight) ? lineHeight : "standard"
+      ],
+    );
+  }
   const bind = (
     id: string,
     key: Parameters<typeof getPref>[0],

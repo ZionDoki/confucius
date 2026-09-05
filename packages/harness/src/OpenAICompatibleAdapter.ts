@@ -8,7 +8,7 @@ import type {
   ModelUsage,
 } from "./ModelAdapter";
 
-import type { ReasoningEffort } from "@confucius/protocol";
+import { modelReasoningBody, type ReasoningEffort } from "@confucius/protocol";
 import {
   splitThinkTaggedContent,
   ThinkTagStreamParser,
@@ -233,10 +233,14 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     if (this.config.maxTokens && this.config.maxTokens > 0) {
       body.max_tokens = this.config.maxTokens;
     }
-    const effort = this.config.reasoningEffort;
-    if (effort && effort !== "auto" && effort !== "off") {
-      body.reasoning_effort = effort;
-    }
+    Object.assign(
+      body,
+      modelReasoningBody(
+        this.config.model,
+        this.baseUrl,
+        this.config.reasoningEffort,
+      ),
+    );
     if (request.tools && request.tools.length > 0) {
       body.tools = request.tools.map((tool) => ({
         type: "function",
@@ -262,10 +266,14 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     if (this.config.maxTokens && this.config.maxTokens > 0) {
       body.options = { num_predict: this.config.maxTokens };
     }
-    const effort = this.config.reasoningEffort;
-    if (effort && effort !== "auto") {
-      body.think = effort === "off" ? false : effort;
-    }
+    Object.assign(
+      body,
+      modelReasoningBody(
+        this.config.model,
+        `${this.baseUrl.replace(/\/api\/chat\/?$/, "")}/api/chat`,
+        this.config.reasoningEffort,
+      ),
+    );
     if (request.tools && request.tools.length > 0) {
       body.tools = request.tools.map((tool) => ({
         type: "function",

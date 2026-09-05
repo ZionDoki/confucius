@@ -14,7 +14,7 @@ function task(): ResearchTaskRecord {
     mode: "agent",
     permissionMode: "ask",
     context: {},
-    schemaVersion: 2,
+    schemaVersion: 3,
     backend: "codex",
     status: "ready",
     capabilityProfile: "zotero_only",
@@ -171,7 +171,10 @@ describe("ExternalBackend", () => {
 
     await backend.startTurn(
       {
-        task: task(),
+        task: {
+          ...task(),
+          runtimeModel: { modelId: "gpt-6-astra", reasoningEffort: "ultra" },
+        },
         turnId: "turn-1",
         prompt: "Audit the evidence",
         mode: "agent",
@@ -191,6 +194,10 @@ describe("ExternalBackend", () => {
     assert.equal(observed.handles(), 1);
     assert.equal(observed.disconnects(), 0);
     assert.equal(eventReads, 2);
+    assert.deepEqual(startParams?.runtimeModel, {
+      modelId: "gpt-6-astra",
+      reasoningEffort: "ultra",
+    });
     assert.equal(startParams?.includeArtifactGuidance, false);
     assert.equal(startParams?.workflowInstruction, "RESEARCH PHASE ONLY");
   });

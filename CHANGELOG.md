@@ -2,6 +2,64 @@
 
 ## Unreleased
 
+## 0.3.7 - 2026-09-05
+
+### Context and history
+
+- Native research tasks continue across replaceable context windows without
+  automatic summary calls. Window changes preserve the task, original request,
+  sources, artifacts, work notes, and remaining run budget.
+- Added durable, paginated task history and working notes shared by Native,
+  Codex, and Kimi. Agents retrieve earlier evidence on demand, and the `@`
+  picker can reference both papers and previous tasks by stable ID.
+- History retrieval respects paper scope and deleted tasks. Earlier instructions
+  and approvals remain source material and do not authorize new actions.
+- Schema-v3 migration backs up existing state and imports messages, events, and
+  logs without inventing missing content. Failed persistence keeps the current
+  window; restart recovery preserves completed tool results and prevents
+  automatic retries of writes whose result is unknown.
+- Context indicators distinguish reported, estimated, and unavailable usage.
+  Codex and Kimi retain their own CLI context management.
+
+### Workspace and reading
+
+- Refreshed the workspace, menus, task list, settings, knowledge base, and
+  artifact reader with warm white surfaces, clearer typography, fewer borders,
+  and consistent keyboard and focus behavior.
+- Thin scrollbars keep layout dimensions stable in sidebars and separate
+  windows. Drafts, source references, reading positions, and keyboard focus
+  survive navigation; streaming updates respect readers viewing older content.
+- The composer has a compact, fixed-height text area with Chinese IME support
+  and no blue typing outline. Its toolbar controls share a vertical alignment.
+- `/` stages localized research presets as editable drafts. Plan and preset
+  chips appear beside `+`, briefly show a close icon on hover, and dismiss with
+  one click while retaining the draft and sources.
+- Model selection opens the model list first, followed by that model's supported
+  thinking settings. Codex and Kimi use their actual CLI capability catalogs;
+  Native APIs use documented model profiles and preserve provider defaults for
+  unknown models.
+- Task source actions now live on the source menu in the task header, removing
+  ambiguous duplicate Zotero actions from `+`. Settings provide save feedback;
+  the knowledge base preserves unsaved edits while navigating.
+
+### Platform compatibility
+
+- Fixed macOS Codex and Kimi discovery aborting on nonexistent candidate paths.
+  Detection now covers common macOS, Linux, and Windows installations, package
+  managers, desktop bundles, and executable paths containing spaces or Chinese.
+- Runtime probes and launches use the same executable and environment, with
+  clearer missing-installation, authentication, and protocol diagnostics.
+- `npm start` automatically locates Zotero on macOS, Linux, and Windows while
+  respecting explicit overrides. Building does not require an installed Zotero.
+
+### Release consistency
+
+- Unified package, lockfile, runtime, and plugin versions. Tagged releases check
+  their version against the changelog and publish its notes with a consistent
+  `Confucius vX.Y.Z` title, plugin package, and Zotero update manifest.
+- Windows and Linux discovery are covered by simulated platform tests. Native
+  desktop acceptance for this release was performed on macOS with Zotero 10.
+
 ## 0.3.6 - 2026-09-05
 
 ### Updates

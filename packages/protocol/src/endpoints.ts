@@ -1,3 +1,4 @@
+import { normalizeModelEffort } from "./modelReasoning";
 import {
   isReasoningEffort,
   validateConfigPatch,
@@ -226,6 +227,11 @@ function mergeEndpoint(
       next.contextWindowTokens = window;
     }
   }
+  next.reasoningEffort = normalizeModelEffort(
+    next.model,
+    next.baseUrl,
+    next.reasoningEffort,
+  );
   if (!next.name) {
     next.name = endpointLabel(next.model, next.baseUrl);
   }

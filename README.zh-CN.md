@@ -43,7 +43,11 @@ Confucius 是面向 Zotero 7 及以上版本的开源研究工作区。你可以
 | Kimi    | 本机 Kimi CLI 及其登录状态  |
 
 Codex 和 Kimi 通过 Zotero 插件运行。可执行文件路径留空时使用自动检测，也可以
-在设置中手动选择。
+在设置中手动选择。 自动检测覆盖 macOS、Windows 和 Linux 的常见安装目录，
+包括 Homebrew、npm、nvm／fnm、uv／pipx，以及 Codex 桌面应用。
+安装或登录后点击“重新检测”；自定义目录可直接填写绝对路径。
+Codex 的 npm 启动入口会解析到所附的原生程序，不依赖 Zotero 自带 Node。
+更多安装方式与故障处理见[运行时识别说明](docs/runtime-discovery.md)。
 
 Native Runtime 支持流式文本和单独的推理输出。模型步骤上限可以调整，默认值为
 128。
@@ -103,6 +107,15 @@ apps/zotero-addon/.scaffold/build/confucius.xpi
 ```bash
 npm start
 ```
+
+根目录和 `apps/zotero-addon` 目录都可以运行此命令。启动时自动查找已安装的
+Zotero：macOS 的系统／用户应用目录，Windows 的常见安装目录和 App Paths
+注册项，以及 Linux 的 PATH、系统／用户安装目录和解压版。终端会显示选中的路径。
+
+通常不需要 `.env`。自定义安装位置可以把
+`apps/zotero-addon/.env.example` 复制为同目录下的 `.env`，填写
+`ZOTERO_PLUGIN_ZOTERO_BIN_PATH`；留空继续自动检测。命令行环境变量优先于 `.env`，
+显式路径无效时会报错并提示修正。构建和发布不要求本机安装 Zotero。
 
 ## 仓库结构
 

@@ -1,6 +1,10 @@
+import type { ContextWindowState } from "@confucius/protocol";
 export interface TurnCheckpoint {
+  window?: ContextWindowState;
   turnId: string;
   iteration: number;
+  toolCallsUsed?: number;
+  workflowPhase?: "research" | "delivery";
   savedAt: number;
   messages: unknown[];
   toolExecutions: ToolExecutionCheckpoint[];

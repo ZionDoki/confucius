@@ -245,3 +245,45 @@ describe("truncateToolResult", () => {
     }
   });
 });
+
+describe("reasoning request parameters", () => {
+  for (const [model, effort, expected] of [
+    ["gpt-5.5", "off", { reasoning_effort: "none" }],
+    ["gpt-6-astra", "max", { reasoning_effort: "max" }],
+    ["gpt-6-astra", "off", {}],
+    ["kimi-k2.6", "off", { thinking: { type: "disabled" } }],
+    ["kimi-k2.6", "on", { thinking: { type: "enabled" } }],
+    [
+      "deepseek-v4-pro",
+      "max",
+      { thinking: { type: "enabled" }, reasoning_effort: "max" },
+    ],
+    ["custom", "high", {}],
+  ] as const) {
+    it(`sends only supported ${model}/${effort} parameters`, async () => {
+      let body: Record<string, unknown> = {};
+      const adapter = new OpenAICompatibleAdapter({
+        apiKey: "test",
+        baseUrl: "https://provider.example.test/v1",
+        model,
+        reasoningEffort: effort,
+        stream: false,
+        fetchImpl: (async (_url: RequestInfo | URL, init?: RequestInit) => {
+          body = JSON.parse(String(init?.body));
+          return new Response(
+            JSON.stringify({ choices: [{ message: { content: "done" } }] }),
+          );
+        }) as typeof fetch,
+      });
+      await adapter.complete({ messages: [{ role: "user", content: "test" }] });
+      assert.deepEqual(
+        Object.fromEntries(
+          Object.entries(body).filter(([key]) =>
+            ["reasoning_effort", "thinking", "think"].includes(key),
+          ),
+        ),
+        expected,
+      );
+    });
+  }
+});

@@ -1,3 +1,4 @@
+import type { ContextWindowState, HistoryItemRef } from "./history";
 import type { SessionContext, SessionMode, TurnPhase } from "./session";
 import type { ApprovalRequest, ApprovalResolution } from "./permissions";
 import type { ToolFailure, ToolSuccess } from "./tools";
@@ -36,7 +37,10 @@ export type ConfuciusEventType =
   | "file_change"
   | "turn_diff_updated"
   | "context_drifted"
-  | "memory_proposed";
+  | "memory_proposed"
+  | "context_usage_updated"
+  | "context_window_changed"
+  | "history_recalled";
 
 export interface ConfuciusEventBase {
   id: string;
@@ -53,6 +57,9 @@ export interface PlanStep {
 }
 
 type EventPayloads = {
+  context_usage_updated: { inputTokens: number; capacityTokens?: number };
+  context_window_changed: { window: ContextWindowState };
+  history_recalled: { ref: HistoryItemRef; title: string; sourceIds: string[] };
   session_created: { title: string; mode: SessionMode };
   session_updated: { title?: string; mode?: SessionMode };
   turn_started: { userText: string };

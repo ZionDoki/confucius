@@ -53,13 +53,13 @@ describe("artifact turn policy", () => {
     assert.match(host, /new PresetResearchToolProvider/);
     assert.match(host, /presetResearchToolNames\(workflow\)/);
     assert.match(host, /presetResearchToolCallInScope/);
-    assert.match(host, /new Set\(\[ARTIFACT_UPSERT_TOOL\]\)/);
+    assert.match(host, /ARTIFACT_UPSERT_TOOL, \.\.\.HISTORY_TOOL_NAMES/);
     assert.match(host, /startExternalPresetWorkflow/);
     assert.match(host, /buildWorkflowHandoffFromEvents/);
     assert.match(host, /externalToolNames/);
   });
 
-  it("removes recall content and recall tools from both preset phases", () => {
+  it("keeps user memory outside preset phases while permitting scoped history", () => {
     const host = source("src/modules/host/AgentHost.ts");
     const workflow = source("src/modules/host/PresetWorkflow.ts");
     assert.match(host, /includeRecallContext: !workflow/);

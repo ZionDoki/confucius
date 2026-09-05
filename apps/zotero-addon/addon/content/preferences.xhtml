@@ -1,7 +1,10 @@
 <linkset>
   <html:link rel="localization" href="__addonRef__-preferences.ftl" />
 </linkset>
-<vbox onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })">
+<vbox
+  id="confucius-preferences"
+  onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })"
+>
   <groupbox>
     <label><html:h2 data-l10n-id="pref-model-title"></html:h2></label>
     <html:p data-l10n-id="pref-model-help"></html:p>

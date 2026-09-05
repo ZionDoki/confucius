@@ -2,6 +2,7 @@ import {
   CONFUCIUS_LOOPBACK_ORIGIN,
   CONFUCIUS_MCP_PATH,
   artifactUpsertGuidance,
+  runtimeModelSelection,
   type AgentBackendKind,
   type ApprovalResolution,
   type RuntimeListResult,
@@ -87,6 +88,41 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
       case "runtime/refresh":
         result = await this.listRuntimes(true);
         break;
+      case "runtime/listModels": {
+        if (!this.enabled)
+          throw new Error("The in-plugin Runtime Host is disabled");
+        const backend = externalKind(params.backend);
+        const statuses = (await this.listRuntimes()).runtimes;
+        let status = statuses.find((status) => status.backend === backend);
+        const modelId =
+          typeof params.modelId === "string" ? params.modelId : undefined;
+        if (
+          !status?.models?.length ||
+          (modelId &&
+            !status.models.find((model) => model.id === modelId)
+              ?.reasoningOptions)
+        ) {
+          const discovered = await this.adapter(backend).probe(modelId);
+          const models = discovered.models?.map((model) => ({
+            ...model,
+            isDefault:
+              status?.models?.find((old) => old.id === model.id)?.isDefault ??
+              model.isDefault,
+          }));
+          status = { ...discovered, models };
+          this.cachedStatuses = statuses.map((old) =>
+            old.backend === backend ? status! : old,
+          );
+        }
+        if (status?.state !== "ready" || !status.models?.length)
+          throw new Error(
+            status?.modelsError ||
+              status?.message ||
+              "Runtime did not report available models",
+          );
+        result = { models: status.models };
+        break;
+      }
       case "runtime/configure":
         result = await this.configureRuntime(params);
         break;
@@ -206,6 +242,7 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
       mode: params.mode === "plan" ? "plan" : "agent",
       capabilityProfile,
       cwd,
+      runtimeModel: runtimeModelSelection(params.runtimeModel),
       externalSessionId:
         typeof params.externalSessionId === "string"
           ? params.externalSessionId

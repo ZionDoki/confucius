@@ -153,6 +153,7 @@ export class ExternalBackend implements AgentBackend {
         capabilityProfile: input.capabilityProfile,
         workingDirectory: input.workingDirectory,
         externalSessionId: input.task.externalSessionId,
+        runtimeModel: input.task.runtimeModel,
         workflowInstruction: input.workflowInstruction,
         includeArtifactGuidance: input.includeArtifactGuidance,
       });

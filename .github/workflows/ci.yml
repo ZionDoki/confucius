@@ -21,6 +21,9 @@ jobs:
       - run: npm ci
       - run: npm run sync-skills:check
       - run: npm run versions:check
+      - name: Validate release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/release-notes.mjs "$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-notes.md"
       - run: npm run typecheck
       - run: npm test
       - run: npm run lint
@@ -44,11 +47,17 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run versions:check
+      - name: Prepare release notes
+        run: node scripts/release-notes.mjs "$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-notes.md"
       - name: Build Zotero xpi
         run: npm run build --workspace @confucius/zotero-addon
       - uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          name: Confucius ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          body_path: ${{ runner.temp }}/release-notes.md
+          fail_on_unmatched_files: true
           files: |
             apps/zotero-addon/.scaffold/build/confucius.xpi
             apps/zotero-addon/.scaffold/build/update.json

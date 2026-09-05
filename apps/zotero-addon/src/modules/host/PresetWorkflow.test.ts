@@ -3,6 +3,11 @@ import { describe, it } from "node:test";
 import type { ModelMessage } from "@confucius/harness";
 import type { ArtifactKind, ConfuciusEvent } from "@confucius/protocol";
 import {
+  emptyLockedContext,
+  type ResearchTaskRecord,
+} from "@confucius/protocol";
+import { setTaskPreset } from "./TaskPreset";
+import {
   buildWorkflowHandoff,
   buildWorkflowHandoffFromEvents,
   eventToolWasRequested,
@@ -14,6 +19,124 @@ import {
   successfulArtifactKindsFromEvents,
   toolWasRequested,
 } from "./PresetWorkflow";
+
+describe("task preset selection", () => {
+  function task(backend: ResearchTaskRecord["backend"] = "native") {
+    const record: ResearchTaskRecord = {
+      id: "preset-task",
+      title: "Research draft",
+      titleState: "fixed",
+      createdAt: 1,
+      updatedAt: 1,
+      schemaVersion: 3,
+      backend,
+      mode: "agent",
+      status: "ready",
+      context: {},
+      lockedContext: emptyLockedContext(1),
+      capabilityProfile: "zotero_only",
+      permissionMode: "ask",
+      artifactIds: ["existing-report"],
+      draft: {
+        text: "只检查方法部分，保留我修改的内容。",
+        references: [{ kind: "task", taskId: "evidence-task", title: "证据" }],
+      },
+    };
+    return {
+      record,
+      loadedSkills: new Set(["custom-skill"]),
+      activeTurnId: null as string | null,
+    };
+  }
+
+  for (const backend of ["native", "codex", "kimi"] as const) {
+    it(`${backend} persists preset cancellation without changing the draft, sources, or results`, async () => {
+      const state = task(backend);
+      const original = structuredClone(state.record);
+      let saved = "";
+      const persist = async () => {
+        saved = JSON.stringify({
+          record: state.record,
+          loadedSkills: [...state.loadedSkills],
+        });
+      };
+      await setTaskPreset(state, "deep-read", persist);
+      assert.ok(presetWorkflow(state.record.templateId));
+      assert.equal(state.loadedSkills.has("paper-deep-reading"), true);
+      // Editing the prompt does not remove the structured preset.
+      state.record.draft!.text += " 不要生成额外标注。";
+      assert.equal(state.record.templateId, "deep-read");
+      await setTaskPreset(state, null, persist);
+      const restored = JSON.parse(saved);
+      assert.equal(restored.record.templateId, undefined);
+      assert.equal(presetWorkflow(restored.record.templateId), undefined);
+      assert.deepEqual(restored.loadedSkills, ["custom-skill"]);
+      assert.deepEqual(restored.record.draft, state.record.draft);
+      assert.deepEqual(
+        restored.record.draft.references,
+        original.draft!.references,
+      );
+      for (const key of [
+        "id",
+        "title",
+        "backend",
+        "mode",
+        "permissionMode",
+        "lockedContext",
+        "artifactIds",
+      ] as const)
+        assert.deepEqual(restored.record[key], original[key]);
+    });
+  }
+
+  it("switching presets removes only the previous preset's implicit skill", async () => {
+    const state = task();
+    await setTaskPreset(state, "deep-read", async () => {});
+    await setTaskPreset(state, "evidence-audit", async () => {});
+    assert.equal(state.record.templateId, "evidence-audit");
+    assert.deepEqual([...state.loadedSkills], ["custom-skill"]);
+  });
+
+  it("keeps the preset and skills intact when persistence fails", async () => {
+    const state = task();
+    await setTaskPreset(state, "deep-read", async () => {});
+    const before = structuredClone(state);
+    for (const next of [null, "evidence-audit"]) {
+      await assert.rejects(
+        setTaskPreset(state, next, async () => {
+          throw new Error("Disk full");
+        }),
+        /Disk full/,
+      );
+      assert.deepEqual(state, before);
+    }
+  });
+
+  it("rejects invalid choices and changes to running or approval-waiting research", async () => {
+    const state = task();
+    const persist = async () => {
+      assert.fail("Rejected preset changes must not persist");
+    };
+    for (const invalid of [undefined, "", "unknown"])
+      await assert.rejects(
+        setTaskPreset(state, invalid, persist),
+        /Unknown task template/,
+      );
+    for (const status of ["running", "awaiting_approval"] as const) {
+      state.record.status = status;
+      await assert.rejects(
+        setTaskPreset(state, null, persist),
+        /running research/,
+      );
+    }
+    state.record.status = "ready";
+    state.activeTurnId = "starting-turn";
+    await assert.rejects(
+      setTaskPreset(state, "deep-read", persist),
+      /running research/,
+    );
+  });
+});
 
 describe("preset research workflows", () => {
   it("defines separate research and delivery contexts for all featured modes", () => {

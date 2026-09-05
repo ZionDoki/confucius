@@ -5,6 +5,25 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const workspaceSource = () =>
+  [
+    "WorkspaceView",
+    "workspaceTheme",
+    "workspaceReading",
+    "workspaceTasks",
+    "workspaceComposer",
+    "workspaceActivity",
+    "workspaceSourcePicker",
+    "workspaceMenus",
+    "workspaceControls",
+    "workspaceSurface",
+    "workspaceDrafts",
+    "workspaceTypography",
+  ]
+    .map((name) =>
+      readFileSync(join(root, `src/modules/ui/${name}.ts`), "utf8"),
+    )
+    .join("\n");
 
 test("workspace document is HTML with a visible loading fallback", () => {
   const xhtml = readFileSync(
@@ -25,10 +44,7 @@ test("Zotero workspace UI is mounted from privileged TypeScript, not an injected
     join(root, "src/modules/ui/workspaceWindow.ts"),
     "utf8",
   );
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   assert.equal(source.includes("openDialog"), true);
   assert.equal(source.includes("openWorkspaceSidebar"), true);
   assert.equal(source.includes("setWorkspaceLayout"), true);
@@ -37,7 +53,7 @@ test("Zotero workspace UI is mounted from privileged TypeScript, not an injected
   assert.equal(view.includes('id: "confucius-prompt"'), true);
   assert.equal(view.includes('type: "text"'), true);
   assert.equal(view.includes("createElementNS"), true);
-  assert.equal(view.includes('minHeight: "40px"'), true);
+  assert.equal(view.includes('"textarea"'), true);
   assert.equal(view.includes('id: "confucius-layout"'), true);
   assert.equal(view.includes("workspace-layout-sidebar"), true);
 });
@@ -73,10 +89,7 @@ test("workspace layout can switch between window and sidebar", () => {
     join(root, "src/modules/ui/workspaceWindow.ts"),
     "utf8",
   );
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   const prefs = readFileSync(join(root, "addon/prefs.js"), "utf8");
   assert.equal(prefs.includes('pref("workspaceLayout", "sidebar")'), true);
   assert.equal(source.includes('SIDEBAR_ID = "confucius-sidebar"'), true);
@@ -119,13 +132,10 @@ test("external runtimes are hosted in the add-on with auto and manual paths", ()
     "utf8",
   );
   const runtime = readFileSync(
-    join(root, "src/modules/host/RuntimeProcess.ts"),
+    join(root, "src/modules/host/RuntimeDiscovery.ts"),
     "utf8",
   );
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   const prefs = readFileSync(join(root, "addon/prefs.js"), "utf8");
   const prefsPane = readFileSync(
     join(root, "addon/content/preferences.xhtml"),
@@ -156,10 +166,7 @@ test("dev server does not launch the Firefox debugger toolbox", () => {
 });
 
 test("workspace exposes in-window model settings and config RPC wiring", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   const host = readFileSync(
     join(root, "src/modules/host/AgentHost.ts"),
     "utf8",
@@ -173,13 +180,10 @@ test("workspace exposes in-window model settings and config RPC wiring", () => {
 });
 
 test("composer has plus menu, slash commands, context ring, single send/stop", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   assert.equal(view.includes("slashCommands"), true);
   assert.equal(view.includes("task/setPermissions"), true);
-  assert.equal(view.includes("task/compact"), true);
+  assert.equal(view.includes("task/new-context"), true);
   assert.equal(view.includes("task/context"), true);
   assert.equal(view.includes("logs/list"), true);
   assert.equal(view.includes("reasoningEffort"), true);
@@ -188,7 +192,7 @@ test("composer has plus menu, slash commands, context ring, single send/stop", (
   assert.equal(view.includes('id: "confucius-plus"'), true);
   assert.equal(view.includes('id: "confucius-endpoint"'), true);
   assert.equal(view.includes("confucius-endpoint-menu"), true);
-  assert.equal(view.includes("confucius-endpoint-submenu"), true);
+  assert.equal(view.includes("confucius-endpoint-submenu"), false);
   assert.equal(view.includes("toggleEndpointMenu"), true);
   assert.equal(view.includes('id: "confucius-context-ring"'), true);
   assert.equal(view.includes('id: "confucius-slash-menu"'), true);
@@ -228,21 +232,15 @@ test("composer has plus menu, slash commands, context ring, single send/stop", (
 });
 
 test("pending approvals render as timeline cards", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   assert.equal(view.includes("renderApprovalCard"), true);
-  assert.equal(view.includes("newApprovalsArrived"), true);
+  assert.equal(view.includes("state.approvals.length"), true);
   assert.equal(view.includes("showReview"), false);
   assert.equal(view.includes("reviewPane"), false);
 });
 
 test("approval cards show tool + object summary, args behind a toggle", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   const host = readFileSync(
     join(root, "src/modules/host/AgentHost.ts"),
     "utf8",
@@ -275,10 +273,7 @@ test("approval cards show tool + object summary, args behind a toggle", () => {
 });
 
 test("permission changes are committed before prompts and gate auto memory", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   const host = readFileSync(
     join(root, "src/modules/host/AgentHost.ts"),
     "utf8",
@@ -307,16 +302,21 @@ test("failed native turns keep the last committed conversation recoverable", () 
     host.includes("state.messages = context.committedBeforeTurn"),
     true,
   );
-  assert.equal(host.includes('result.phase !== "failed" &&'), true);
+  assert.equal(host.includes('call.status === "started"'), true);
+  assert.match(host, /state\.record\.recoverableTurn = \{\s+turnId:/);
+  assert.equal(host.includes("await compactHistory("), false);
 });
 
 test("task switches restore per-task drafts and timeline viewports", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
+  const view = workspaceSource();
+  assert.equal(
+    view.includes("const composerDrafts = cachedView?.drafts"),
+    true,
   );
-  assert.equal(view.includes("const composerDrafts = new Map"), true);
-  assert.equal(view.includes("const timelineViewports = new Map"), true);
+  assert.equal(
+    /const timelineViewports =\s+cachedView\?\.viewports/.test(view),
+    true,
+  );
   assert.equal(view.includes("rememberComposerDraft(previousTaskId)"), true);
   assert.equal(view.includes("rememberTimelineViewport()"), true);
   assert.equal(
@@ -327,10 +327,7 @@ test("task switches restore per-task drafts and timeline viewports", () => {
 });
 
 test("conversation Markdown follows the configured UI font size", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   assert.equal(
     view.includes("font-size: var(--confucius-markdown-font-size, 13px)"),
     true,
@@ -346,10 +343,7 @@ test("conversation Markdown follows the configured UI font size", () => {
 });
 
 test("settings effort control is a button group, not a native select", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   // The effort control stays a paintable button group in Zotero chrome.
   const effortBlock = view.slice(
     view.indexOf("const effortRow"),
@@ -362,10 +356,7 @@ test("settings effort control is a button group, not a native select", () => {
 });
 
 test("settings security profile uses a styled custom listbox", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   const security = view.slice(
     view.indexOf("const settingsTask = currentTask()"),
     view.indexOf("let fontChoice"),
@@ -380,15 +371,12 @@ test("settings security profile uses a styled custom listbox", () => {
   assert.equal(security.includes('"ArrowDown", "ArrowUp"'), true);
   assert.equal(security.includes("placeMenu("), true);
   assert.equal(security.includes("overlay,"), true);
-  assert.equal(view.includes("#fff1ed"), true);
-  assert.equal(view.includes("inset 2px 0 #b44732"), true);
+  assert.equal(view.includes("background: #f0ede6;"), true);
+  assert.equal(view.includes("inset 2px 0 #b44732"), false);
 });
 
 test("preset templates stage an editable draft and preserve task context", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   const stage = view.slice(
     view.indexOf("async function stageTemplate"),
     view.indexOf("async function consumeLaunchIntent"),
@@ -407,10 +395,7 @@ test("preset templates stage an editable draft and preserve task context", () =>
 });
 
 test("settings are tabbed with font appearance controls", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   const host = readFileSync(
     join(root, "src/modules/host/AgentHost.ts"),
     "utf8",
@@ -440,10 +425,7 @@ test("settings are tabbed with font appearance controls", () => {
 });
 
 test("settings use Zotero's native updater for checks and automatic updates", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   const host = readFileSync(
     join(root, "src/modules/host/AgentHost.ts"),
     "utf8",
@@ -465,10 +447,7 @@ test("settings use Zotero's native updater for checks and automatic updates", ()
 });
 
 test("long model rounds expose their real stage after tool results", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   const host = readFileSync(
     join(root, "src/modules/host/AgentHost.ts"),
     "utf8",
@@ -483,10 +462,7 @@ test("long model rounds expose their real stage after tool results", () => {
 });
 
 test("timeline is TUI-style: foldable thinking/tools, unfolded answers", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   assert.equal(view.includes("nextReasoningFold"), true);
   assert.equal(view.includes("renderAnswer"), true);
   assert.equal(view.includes("tui-tools") || view.includes("toolsOpen"), true);
@@ -500,10 +476,7 @@ test("timeline is TUI-style: foldable thinking/tools, unfolded answers", () => {
 });
 
 test("activity stream is the primary workspace and artifacts open as files", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   assert.equal(view.includes('id: "confucius-activity-stream"'), true);
   assert.equal(view.includes("confucius-activity-shell"), true);
   assert.equal(view.includes("renderActivityOverview"), true);
@@ -521,10 +494,7 @@ test("activity stream is the primary workspace and artifacts open as files", () 
 });
 
 test("artifact viewer uses unclipped custom menus instead of native selects", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   const viewer = view.slice(
     view.indexOf("function renderArtifactViewer"),
     view.indexOf(
@@ -545,15 +515,12 @@ test("artifact viewer uses unclipped custom menus instead of native selects", ()
 });
 
 test("artifact viewer is a full-bleed reading surface with a right action rail", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   const viewer = view.slice(
     view.indexOf("function renderArtifactViewer"),
     view.indexOf("let lastListSignature"),
   );
-  assert.equal(view.includes("backdrop-filter: blur(22px)"), true);
+  assert.equal(viewer.includes("bindDialogNavigation(overlay"), true);
   assert.equal(view.includes("right: 12px;"), true);
   assert.equal(viewer.includes("confucius-artifact-action-rail"), true);
   assert.equal(viewer.includes('"aria-orientation": "vertical"'), true);
@@ -564,10 +531,7 @@ test("artifact viewer is a full-bleed reading surface with a right action rail",
 });
 
 test("sidebar artifact files use a compact two-line layout", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   assert.equal(
     view.includes(
       '.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-file',
@@ -586,33 +550,27 @@ test("sidebar artifact files use a compact two-line layout", () => {
   assert.equal(view.includes('width: compact ? "100%" : "auto"'), false);
 });
 
-test("composer model picker is the single cascading Runtime/model control", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+test("composer selects a model before showing model-specific thinking options", () => {
+  const view = workspaceSource();
   assert.equal(view.includes("config/listModels"), true);
   assert.equal(view.includes("activeEndpointId"), true);
   assert.equal(view.includes("data-model"), true);
   assert.equal(view.includes("toggleEndpointMenu"), true);
-  assert.equal(view.includes("openModelsSubmenu"), true);
-  assert.equal(view.includes("applyModelSelection"), true);
-  assert.equal(view.includes("confucius-endpoint-submenu"), true);
+  assert.equal(view.includes("openModelsSubmenu"), false);
+  assert.equal(view.includes("selectComposerModel"), true);
+  assert.equal(view.includes("confucius-endpoint-submenu"), false);
   const composerBlock = view.slice(
     view.indexOf('id: "confucius-endpoint"'),
     view.indexOf("const contextRing"),
   );
   assert.equal(/,\s*"select"/.test(composerBlock), false);
   assert.equal(view.includes('id: "confucius-task-runtime"'), false);
-  assert.equal(view.includes("onEnter: clearEndpointSubmenuHighlight"), true);
-  assert.equal(view.includes("highlighted: open"), true);
+  assert.equal(view.includes("onEnter: clearEndpointSubmenuHighlight"), false);
+  assert.equal(view.includes("highlighted: open"), false);
 });
 
 test("settings can add and save multiple model endpoints", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   const host = readFileSync(
     join(root, "src/modules/host/AgentHost.ts"),
     "utf8",
@@ -630,10 +588,7 @@ test("settings can add and save multiple model endpoints", () => {
 });
 
 test("workspace exposes an editable research knowledge base and mind maps", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   assert.equal(view.includes("knowledge/list"), true);
   assert.equal(view.includes("knowledge/get"), true);
   assert.equal(view.includes("knowledge/saveEntry"), true);
@@ -645,10 +600,7 @@ test("workspace exposes an editable research knowledge base and mind maps", () =
 });
 
 test("tasks preserve their sources and expose context controls", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   const host = readFileSync(
     join(root, "src/modules/host/AgentHost.ts"),
     "utf8",
@@ -678,20 +630,14 @@ test("tasks preserve their sources and expose context controls", () => {
   assert.equal(view.includes('rpc("context/live"'), true);
   assert.equal(view.includes('rpc("reader/open"'), true);
   assert.equal(view.includes('rpc("task/setContext"'), true);
-  assert.equal(
-    view.includes('section(getString("workspace-context-heading"))'),
-    true,
-  );
-  assert.equal(view.includes('updateTaskContext("add")'), true);
-  assert.equal(view.includes('updateTaskContext("replace")'), true);
+  assert.equal(view.includes('id: "confucius-task-sources"'), true);
+  assert.equal(view.includes('const mode of ["add", "replace"]'), true);
+  assert.equal(view.includes("updateTaskContext(mode)"), true);
   assert.equal(view.includes("suppressedSelectionKey"), false);
 });
 
 test("composer @ picker searches and incrementally adds library papers", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   const host = readFileSync(
     join(root, "src/modules/host/AgentHost.ts"),
     "utf8",
@@ -715,24 +661,28 @@ test("composer @ picker searches and incrementally adds library papers", () => {
 });
 
 test("composer slash picker shares the @ picker panel and placement", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   const slashStart = view.indexOf("function renderSlashMenu");
   const slashEnd = view.indexOf("function highlightSlashRows", slashStart);
   const slash = view.slice(slashStart, slashEnd);
 
-  assert.equal(slash.includes('borderRadius: "12px"'), true);
-  assert.equal(
-    slash.includes('boxShadow: "0 12px 32px rgba(28,25,23,0.2)"'),
-    true,
+  const picker = readFileSync(
+    join(root, "src/modules/ui/workspaceSourcePicker.ts"),
+    "utf8",
   );
+  for (const shared of [
+    "createMenuSurface(",
+    "createMenuHeader(",
+    "createMenuGlyph(",
+  ])
+    assert.equal(slash.includes(shared) && picker.includes(shared), true);
   assert.equal(slash.includes('id = "confucius-slash-results"'), true);
-  assert.equal(slash.includes('minHeight: "50px"'), true);
+  assert.equal(slash.includes('"confucius-composer-menu-row"'), true);
   assert.equal(slash.includes("placeComposerMenu(menu, header, list)"), true);
   assert.equal(
-    view.match(/placeComposerMenu\(menu, header, list\)/g)?.length,
+    view.match(
+      /placeComposerMenu\(menu, header, list\)|place: placeComposerMenu/g,
+    )?.length,
     2,
   );
 });
@@ -751,10 +701,7 @@ test("reading loop: selection menu, locate links and write-back navigation", () 
     join(root, "src/modules/host/AgentHost.ts"),
     "utf8",
   );
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   const enFtl = readFileSync(
     join(root, "addon/locale/en-US/addon.ftl"),
     "utf8",
@@ -852,10 +799,7 @@ test("triage entry and knowledge output: item menu, launch queue, propose_note",
     join(root, "../../packages/zotero-tools/src/catalog.ts"),
     "utf8",
   );
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   const rpc = readFileSync(
     join(root, "../../packages/protocol/src/rpc.ts"),
     "utf8",
@@ -960,10 +904,7 @@ test("triage entry and knowledge output: item menu, launch queue, propose_note",
 });
 
 test("zotero uri links render as underlined anchors and navigate on click", () => {
-  const view = readFileSync(
-    join(root, "src/modules/ui/WorkspaceView.ts"),
-    "utf8",
-  );
+  const view = workspaceSource();
   const navigatorSource = readFileSync(
     join(root, "src/modules/ui/linkNavigator.ts"),
     "utf8",

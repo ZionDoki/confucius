@@ -1,3 +1,4 @@
+import { CONFUCIUS_VERSION } from "@confucius/protocol";
 import { randomBytes } from "node:crypto";
 import {
   createServer,
@@ -54,7 +55,7 @@ async function route(
       send(response, 200, {
         ok: true,
         name: "confucius-agent-sidecar",
-        version: "0.3.6",
+        version: CONFUCIUS_VERSION,
       });
       return;
     }
