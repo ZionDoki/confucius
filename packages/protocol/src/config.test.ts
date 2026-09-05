@@ -7,6 +7,7 @@ import {
   clampMaxIterations,
   clampMaxToolCalls,
   isUiLanguage,
+  isUiTheme,
   isUiLineHeight,
   RPC_METHODS,
   UI_LINE_HEIGHT_VALUES,
@@ -14,6 +15,14 @@ import {
 } from "./rpc";
 
 describe("validateConfigPatch", () => {
+  it("accepts supported appearance choices and rejects invalid themes", () => {
+    for (const theme of ["auto", "light", "dark"]) {
+      assert.equal(isUiTheme(theme), true);
+      assert.equal(validateConfigPatch({ uiTheme: theme }).ok, true);
+    }
+    assert.equal(validateConfigPatch({ uiTheme: "night" }).ok, false);
+    assert.equal(isUiTheme(null), false);
+  });
   it("accepts a valid patch", () => {
     const result = validateConfigPatch({
       baseUrl: "http://172.30.111.252:54321/api/chat",

@@ -1,0 +1,189 @@
+/* Only Confucius surfaces own these tokens. Zotero supplies the color scheme,
+   including live changes; its library, reader and other preference panes keep
+   their own styles. The standalone document also loads this before mounting. */
+:where(
+  [data-confucius-window],
+  .confucius-workspace-root,
+  .confucius-menu-surface,
+  .confucius-dialog,
+  #confucius-artifact-overlay,
+  #confucius-knowledge-overlay,
+  #confucius-preferences,
+  #confucius-sidebar,
+  #confucius-sidebar-splitter,
+  [data-confucius-preferences-scroll]
+) {
+  color-scheme: light;
+  --confucius-paper: #faf9f6;
+  --confucius-canvas: #f5f3ee;
+  --confucius-elevated: #fffefa;
+  --confucius-surface: #f2efe8;
+  --confucius-hover: #eeebe3;
+  --confucius-selected: #ede7db;
+  --confucius-ink: #33302a;
+  --confucius-secondary: #575249;
+  --confucius-muted: #6d665c;
+  --confucius-line: #e7e2d8;
+  --confucius-line-strong: #c9b697;
+  --confucius-accent: #805f38;
+  --confucius-accent-text: #805c37;
+  --confucius-danger: #a04432;
+  --confucius-danger-surface: #f7e9e2;
+  --confucius-success: #476d4f;
+  --confucius-success-surface: #e5eee5;
+  --confucius-warning-surface: #f4ecdf;
+  --confucius-primary: #33302a;
+  --confucius-primary-ink: #fffefa;
+  --confucius-primary-hover: #51483b;
+  --confucius-focus: #8c6a3f;
+  --confucius-scrollbar: #908577;
+  --confucius-scrollbar-hover: #807565;
+  --confucius-selection: #e6d7bd;
+  --confucius-selection-ink: #33302a;
+  --confucius-scrim: #332a1c22;
+  --confucius-drop-surface: #faf8f2e8;
+  --confucius-shadow: 0 16px 48px #332a1c14, 0 2px 8px #332a1c08;
+  --confucius-shadow-soft: 0 4px 24px #463b2b0e;
+  --confucius-shadow-hover: 0 8px 22px #463b2b17;
+}
+
+@media (prefers-color-scheme: dark) {
+  :where(:root:not([data-confucius-theme="light"]))
+    :where(
+      .confucius-workspace-root,
+      .confucius-menu-surface,
+      .confucius-dialog,
+      #confucius-artifact-overlay,
+      #confucius-knowledge-overlay,
+      #confucius-preferences,
+      #confucius-sidebar,
+      #confucius-sidebar-splitter,
+      [data-confucius-preferences-scroll]
+    ),
+  :where(:root[data-confucius-window]:not([data-confucius-theme="light"])) {
+    color-scheme: dark;
+    --confucius-paper: #201f1c;
+    --confucius-canvas: #1b1a18;
+    --confucius-elevated: #292722;
+    --confucius-surface: #302d27;
+    --confucius-hover: #3a362f;
+    --confucius-selected: #443c2f;
+    --confucius-ink: #f0ece4;
+    --confucius-secondary: #d0c8bb;
+    --confucius-muted: #b4ab9d;
+    --confucius-line: #403b33;
+    --confucius-line-strong: #75644b;
+    --confucius-accent: #d4b17e;
+    --confucius-accent-text: #dec196;
+    --confucius-danger: #efaa99;
+    --confucius-danger-surface: #432d27;
+    --confucius-success: #a8c8a5;
+    --confucius-success-surface: #2c3a2d;
+    --confucius-warning-surface: #3d3223;
+    --confucius-primary: #eadfcb;
+    --confucius-primary-ink: #28231c;
+    --confucius-primary-hover: #fff0d9;
+    --confucius-focus: #cfb58c;
+    --confucius-scrollbar: #827868;
+    --confucius-scrollbar-hover: #a39783;
+    --confucius-selection: #655137;
+    --confucius-selection-ink: #fff5e6;
+    --confucius-scrim: #09080599;
+    --confucius-drop-surface: #292722ee;
+    --confucius-shadow: 0 16px 48px #00000052, 0 2px 8px #00000029;
+    --confucius-shadow-soft: 0 4px 24px #00000029;
+    --confucius-shadow-hover: 0 8px 22px #00000047;
+  }
+}
+
+/* An explicit preference overrides the host scheme for Confucius only. */
+:where(:root[data-confucius-theme="dark"])
+  :where(
+    .confucius-workspace-root,
+    .confucius-menu-surface,
+    .confucius-dialog,
+    #confucius-artifact-overlay,
+    #confucius-knowledge-overlay,
+    #confucius-preferences,
+    #confucius-sidebar,
+    #confucius-sidebar-splitter,
+    [data-confucius-preferences-scroll]
+  ),
+:where(:root[data-confucius-window][data-confucius-theme="dark"]) {
+  color-scheme: dark;
+  --confucius-paper: #201f1c;
+  --confucius-canvas: #1b1a18;
+  --confucius-elevated: #292722;
+  --confucius-surface: #302d27;
+  --confucius-hover: #3a362f;
+  --confucius-selected: #443c2f;
+  --confucius-ink: #f0ece4;
+  --confucius-secondary: #d0c8bb;
+  --confucius-muted: #b4ab9d;
+  --confucius-line: #403b33;
+  --confucius-line-strong: #75644b;
+  --confucius-accent: #d4b17e;
+  --confucius-accent-text: #dec196;
+  --confucius-danger: #efaa99;
+  --confucius-danger-surface: #432d27;
+  --confucius-success: #a8c8a5;
+  --confucius-success-surface: #2c3a2d;
+  --confucius-warning-surface: #3d3223;
+  --confucius-primary: #eadfcb;
+  --confucius-primary-ink: #28231c;
+  --confucius-primary-hover: #fff0d9;
+  --confucius-focus: #cfb58c;
+  --confucius-scrollbar: #827868;
+  --confucius-scrollbar-hover: #a39783;
+  --confucius-selection: #655137;
+  --confucius-selection-ink: #fff5e6;
+  --confucius-scrim: #09080599;
+  --confucius-drop-surface: #292722ee;
+  --confucius-shadow: 0 16px 48px #00000052, 0 2px 8px #00000029;
+  --confucius-shadow-soft: 0 4px 24px #00000029;
+  --confucius-shadow-hover: 0 8px 22px #00000047;
+}
+
+@media (forced-colors: active) {
+  :where(
+    [data-confucius-window],
+    .confucius-workspace-root,
+    .confucius-menu-surface,
+    .confucius-dialog,
+    #confucius-artifact-overlay,
+    #confucius-knowledge-overlay,
+    #confucius-preferences,
+    #confucius-sidebar,
+    #confucius-sidebar-splitter,
+    [data-confucius-preferences-scroll]
+  ) {
+    --confucius-paper: Canvas;
+    --confucius-canvas: Canvas;
+    --confucius-elevated: Canvas;
+    --confucius-surface: ButtonFace;
+    --confucius-hover: ButtonFace;
+    --confucius-selected: ButtonFace;
+    --confucius-ink: CanvasText;
+    --confucius-secondary: CanvasText;
+    --confucius-muted: CanvasText;
+    --confucius-line: GrayText;
+    --confucius-line-strong: CanvasText;
+    --confucius-accent: LinkText;
+    --confucius-accent-text: LinkText;
+    --confucius-danger: CanvasText;
+    --confucius-danger-surface: Canvas;
+    --confucius-success: CanvasText;
+    --confucius-success-surface: Canvas;
+    --confucius-warning-surface: Canvas;
+    --confucius-primary: ButtonText;
+    --confucius-primary-ink: ButtonFace;
+    --confucius-primary-hover: ButtonText;
+    --confucius-focus: Highlight;
+    --confucius-selection: Highlight;
+    --confucius-selection-ink: HighlightText;
+    --confucius-drop-surface: Canvas;
+    --confucius-shadow: none;
+    --confucius-shadow-soft: none;
+    --confucius-shadow-hover: none;
+  }
+}

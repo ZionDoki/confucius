@@ -1,6 +1,11 @@
 pref-title = Confucius
 pref-help = Research workspace for Zotero.
 pref-model-title = Model
+pref-appearance-title = Appearance
+pref-ui-theme = Theme
+pref-ui-theme-auto = Follow Zotero
+pref-ui-theme-light = Light
+pref-ui-theme-dark = Dark
 pref-model-help = Edit the active endpoint here. Manage other endpoints in the Confucius workspace (⚙ Settings).
 pref-base-url = Base URL
 pref-api-key = API key

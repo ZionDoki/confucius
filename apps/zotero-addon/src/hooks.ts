@@ -20,6 +20,7 @@ import {
   closeWorkspaceWindow,
 } from "./modules/ui/workspaceWindow";
 import { AgentHost } from "./modules/host/AgentHost";
+import { disposeAppearanceBindings } from "./modules/ui/workspaceAppearance";
 import {
   bindPrefsWindow,
   registerPreferencePane,
@@ -90,6 +91,7 @@ async function onShutdown(): Promise<void> {
     ztoolkit.log("[Confucius] Runtime Host shutdown failed", error);
   }
   closeWorkspaceWindow();
+  disposeAppearanceBindings();
   unregisterReaderContextMenu();
   unregisterHttpBridge();
   addon.data.alive = false;

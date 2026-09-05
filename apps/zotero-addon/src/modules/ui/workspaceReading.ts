@@ -101,13 +101,13 @@ export function renderReadingSurface(
     for (const node of body.nodes) {
       const row = el(doc, "div", {
         padding: "8px 0",
-        borderBottom: "1px solid #ece8df",
+        borderBottom: "1px solid var(--confucius-line)",
       });
       const name = el(doc, "strong");
       name.textContent = node.label;
       row.appendChild(name);
       if (node.summary) {
-        const summary = el(doc, "div", { color: "#6b665c" });
+        const summary = el(doc, "div", { color: "var(--confucius-muted)" });
         summary.textContent = node.summary;
         row.appendChild(summary);
       }
@@ -173,7 +173,7 @@ export function renderReadingSurface(
         ];
     const legendHeading = el(doc, "div", {
       marginBottom: "7px",
-      color: "#6b665c",
+      color: "var(--confucius-muted)",
       fontSize: "11px",
       fontWeight: "700",
       letterSpacing: ".06em",
@@ -185,7 +185,7 @@ export function renderReadingSurface(
     container.appendChild(legendHeading);
     const legendList = el(doc, "div", {
       marginBottom: "18px",
-      borderTop: "1px solid #e5e1d8",
+      borderTop: "1px solid var(--confucius-line)",
     });
     for (const entry of legend) {
       const row = el(doc, "div", {
@@ -193,8 +193,8 @@ export function renderReadingSurface(
         alignItems: "center",
         gap: "8px",
         padding: "7px 0",
-        borderBottom: "1px solid #eeeae2",
-        color: "#575249",
+        borderBottom: "1px solid var(--confucius-line)",
+        color: "var(--confucius-secondary)",
         fontSize: ".9em",
       });
       const swatch = el(doc, "span", {
@@ -203,9 +203,9 @@ export function renderReadingSurface(
         flex: "0 0 10px",
         borderRadius: "3px",
         background: entry.color ?? DEFAULT_ANNOTATION_COLORS[entry.type],
-        boxShadow: "inset 0 0 0 1px rgba(28,25,23,.12)",
+        boxShadow: "inset 0 0 0 1px var(--confucius-line-strong)",
       });
-      const label = el(doc, "strong", { color: "#33302a" });
+      const label = el(doc, "strong", { color: "var(--confucius-ink)" });
       label.textContent = getString(
         `workspace-artifact-annotation-${entry.type}`,
       );
@@ -223,17 +223,17 @@ export function renderReadingSurface(
         marginBottom: "16px",
         padding: "0 0 16px 14px",
         borderLeft: `3px solid ${color}`,
-        borderBottom: "1px solid #eeeae2",
+        borderBottom: "1px solid var(--confucius-line)",
       });
       const meta = el(doc, "div", {
         display: "flex",
         alignItems: "center",
         gap: "7px",
         marginBottom: "7px",
-        color: "#777166",
+        color: "var(--confucius-muted)",
         fontSize: ".82em",
       });
-      const type = el(doc, "strong", { color: "#4b4740" });
+      const type = el(doc, "strong", { color: "var(--confucius-secondary)" });
       type.textContent = getString(
         `workspace-artifact-annotation-${annotation.type}`,
       );
@@ -247,10 +247,10 @@ export function renderReadingSurface(
           height: "148px",
           margin: "4px 0 9px",
           overflow: "hidden",
-          border: "1px solid #d8d1c4",
+          border: "1px solid var(--confucius-line-strong)",
           borderRadius: "4px",
           background:
-            "repeating-linear-gradient(0deg,#faf9f6,#faf9f6 11px,#f0ece3 12px)",
+            "repeating-linear-gradient(0deg,var(--confucius-paper),var(--confucius-paper) 11px,var(--confucius-surface) 12px)",
         });
         const [x, y, width, height] = annotation.rect;
         const crop = el(doc, "span", {
@@ -286,7 +286,7 @@ export function renderReadingSurface(
       }
       if (annotation.comment) {
         const comment = el(doc, "div", {
-          color: "#575249",
+          color: "var(--confucius-secondary)",
           lineHeight: "1.5",
         });
         comment.textContent = annotation.comment;

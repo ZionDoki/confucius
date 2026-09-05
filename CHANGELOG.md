@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.3.8 - 2026-09-05
+
+- Added a complete dark appearance that follows Zotero's theme, including the
+  workspace, reader sidebar, composer, menus, settings, knowledge base and
+  artifact reader. Shared colors also cover status messages and thin scrollbars;
+  theme changes preserve drafts, focus and reading position.
+- Added Follow Zotero, Light and Dark choices in Appearance settings with live
+  preview and saved preferences, and replaced the text send arrow with a balanced
+  rounded SVG icon.
+- Relaxed sidebar list and navigation spacing, removed inherited native button
+  height limits that clipped multi-line labels, and kept keyboard focus rings
+  inside controls without showing them after pointer clicks.
+- Added warm white and dark ink logo variants. Toolbar, preference, progress,
+  and add-on icons adapt to the active color scheme; the workspace mark follows
+  its surrounding text color.
+- Updated the product film in the English and Chinese READMEs.
 
 ## 0.3.7 - 2026-09-05
 

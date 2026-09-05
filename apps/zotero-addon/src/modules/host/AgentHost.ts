@@ -71,6 +71,7 @@ import {
   validateTemplateContext,
   withLockedContextFingerprint,
   isUiFont,
+  isUiTheme,
   isUiLanguage,
   isUiLineHeight,
   resolveEndpointStore,
@@ -1315,6 +1316,9 @@ export class AgentHost {
     if (isUiFont(params.uiFont)) {
       setPref("uiFont", params.uiFont);
     }
+    if (isUiTheme(params.uiTheme)) {
+      setPref("uiTheme", params.uiTheme);
+    }
     if (params.uiFontSize !== undefined) {
       setPref("uiFontSize", clampUiFontSize(params.uiFontSize));
     }
@@ -1399,6 +1403,9 @@ export class AgentHost {
         ? (getPref("uiFont") as typeof DEFAULT_UI_FONT)
         : DEFAULT_UI_FONT,
       uiFontSize: clampUiFontSize(getPref("uiFontSize")),
+      uiTheme: isUiTheme(getPref("uiTheme"))
+        ? (getPref("uiTheme") as "auto" | "light" | "dark")
+        : "auto",
       uiLanguage: configuredUiLanguage(),
       uiLineHeight: isUiLineHeight(getPref("uiLineHeight"))
         ? (getPref("uiLineHeight") as typeof DEFAULT_UI_LINE_HEIGHT)

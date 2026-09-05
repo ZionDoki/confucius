@@ -1,6 +1,6 @@
 # Confucius
 
-[播放 44 秒产品短片](https://github.com/user-attachments/assets/3a39a858-3aa5-4198-a4b5-4f13002d19e4)
+[播放产品短片](https://github.com/user-attachments/assets/8cf1175e-d3f9-4c31-b19f-5e3b171456fc)
 
 <p align="center">
   <a href="README.md">English</a> · <strong>简体中文</strong>

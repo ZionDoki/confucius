@@ -125,7 +125,7 @@ export function renderSourcePicker(
       overflow: "hidden",
       textOverflow: "ellipsis",
       whiteSpace: "nowrap",
-      color: "#33302a",
+      color: "var(--confucius-ink)",
       fontWeight: "500",
       fontSize: "1em",
     });
@@ -136,7 +136,7 @@ export function renderSourcePicker(
       overflow: "hidden",
       textOverflow: "ellipsis",
       whiteSpace: "nowrap",
-      color: "#70695f",
+      color: "var(--confucius-muted)",
       fontSize: ".86em",
     });
     meta.textContent = item.taskReference
@@ -151,7 +151,7 @@ export function renderSourcePicker(
     if (included) {
       const mark = el(doc, "span", {
         flex: "0 0 auto",
-        color: "#6b665c",
+        color: "var(--confucius-muted)",
         fontSize: ".86em",
       });
       mark.textContent = `✓ ${getString("workspace-mention-added")}`;
@@ -169,7 +169,7 @@ export function renderSourcePicker(
   if (mentionState.error) {
     const error = el(doc, "div", {
       padding: "12px 9px",
-      color: "#b3452f",
+      color: "var(--confucius-danger)",
       fontSize: "1em",
     });
     error.textContent = mentionState.error;
@@ -177,7 +177,7 @@ export function renderSourcePicker(
   } else if (!mentionState.loading && mentionState.items.length === 0) {
     const empty = el(doc, "div", {
       padding: "14px 9px",
-      color: "#70695f",
+      color: "var(--confucius-muted)",
       fontSize: "1em",
     });
     empty.textContent = getString("workspace-mention-empty");
@@ -186,7 +186,7 @@ export function renderSourcePicker(
   if (mentionState.loading) {
     const loading = el(doc, "div", {
       padding: "9px",
-      color: "#70695f",
+      color: "var(--confucius-muted)",
       fontSize: ".86em",
       textAlign: "center",
     });

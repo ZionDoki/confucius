@@ -328,7 +328,7 @@ export function openWorkspaceSidebar(win?: Window): Window | undefined {
     width: "5px",
     flex: "0 0 5px",
     cursor: "col-resize",
-    background: "#e5e1d8",
+    background: "var(--confucius-line)",
     alignSelf: "stretch",
   });
 
@@ -345,8 +345,8 @@ export function openWorkspaceSidebar(win?: Window): Window | undefined {
     overflow: "hidden",
     zIndex: "6",
     boxSizing: "border-box",
-    borderLeft: "1px solid #e5e1d8",
-    background: "#f5f3ee",
+    borderLeft: "1px solid var(--confucius-line)",
+    background: "var(--confucius-canvas)",
   });
 
   const root = doc.createElementNS(HTML_NS, "div") as HTMLElement;

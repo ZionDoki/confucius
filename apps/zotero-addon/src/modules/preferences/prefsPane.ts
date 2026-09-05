@@ -1,11 +1,12 @@
 import { UI_FONT_STACKS } from "../ui/workspaceTypography";
-import { SURFACE_CSS } from "../ui/workspaceSurface";
+import { ensurePaletteStyles, SURFACE_CSS } from "../ui/workspaceSurface";
 import { getPref, setPref } from "../../utils/prefs";
 import { getString } from "../../utils/locale";
 import { config } from "../../../package.json";
 import {
   clampUiFontSize,
   isUiFont,
+  isUiTheme,
   isUiLineHeight,
   UI_LINE_HEIGHT_VALUES,
   clampMaxIterations,
@@ -38,6 +39,7 @@ export async function registerPreferencePane(): Promise<void> {
 
 export function bindPrefsWindow(win: Window): void {
   const doc = win.document;
+  ensurePaletteStyles(doc);
   bindPreferenceScrollbars(win);
   if (!doc.getElementById("confucius-preferences-style")) {
     const style = doc.createElementNS("http://www.w3.org/1999/xhtml", "style");
@@ -48,6 +50,12 @@ export function bindPrefsWindow(win: Window): void {
   const pane = doc.getElementById(
     "confucius-preferences",
   ) as HTMLElement | null;
+  const theme = doc.getElementById(
+    "confucius-pref-uiTheme",
+  ) as HTMLSelectElement | null;
+  theme?.addEventListener("change", () => {
+    if (isUiTheme(theme.value)) setPref("uiTheme", theme.value);
+  });
   if (pane) {
     const font = getPref("uiFont");
     const lineHeight = getPref("uiLineHeight");

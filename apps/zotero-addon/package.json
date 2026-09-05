@@ -1,6 +1,6 @@
 {
   "name": "@confucius/zotero-addon",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "description": "Read, compare, annotate, and organize papers in Zotero.",
   "config": {
     "addonName": "Confucius",

@@ -1,6 +1,6 @@
 # Confucius
 
-[Watch the 44-second product film](https://github.com/user-attachments/assets/3a39a858-3aa5-4198-a4b5-4f13002d19e4)
+[Watch the product film](https://github.com/user-attachments/assets/8cf1175e-d3f9-4c31-b19f-5e3b171456fc)
 
 <p align="center">
   <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>

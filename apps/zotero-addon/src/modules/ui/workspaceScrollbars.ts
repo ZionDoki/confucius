@@ -6,9 +6,9 @@ const scope =
 export const SCROLLBAR_CSS = `
 ${scope} {
   scrollbar-width: thin;
-  scrollbar-color: #9c9283 transparent;
+  scrollbar-color: var(--confucius-scrollbar, #908577) transparent;
 }
-${scope}:is(:hover, :focus-within) { scrollbar-color: #807565 transparent; }
+${scope}:is(:hover, :focus-within) { scrollbar-color: var(--confucius-scrollbar-hover, #807565) transparent; }
 [data-confucius-scroll], [data-confucius-preferences-scroll] { scrollbar-gutter: stable; }
 /* Gecko's native textarea does not reserve its anonymous inner scrollbar
    with gutter: stable. A permanent, transparent rail keeps line wrapping fixed. */
@@ -18,8 +18,8 @@ ${scope} textarea { overflow-x: hidden; overflow-y: scroll; scrollbar-gutter: st
 ${scope}::-webkit-scrollbar { width: 6px; height: 6px; }
 ${scope}::-webkit-scrollbar-track,
 ${scope}::-webkit-scrollbar-corner { background: transparent; }
-${scope}::-webkit-scrollbar-thumb { background: #9c9283; border-radius: 999px; }
-${scope}::-webkit-scrollbar-thumb:hover { background: #807565; }
+${scope}::-webkit-scrollbar-thumb { background: var(--confucius-scrollbar, #908577); border-radius: 999px; }
+${scope}::-webkit-scrollbar-thumb:hover { background: var(--confucius-scrollbar-hover, #807565); }
 @media (forced-colors: active) {
   ${scope}, ${scope}:is(:hover, :focus-within) { scrollbar-color: auto; }
   ${scope}::-webkit-scrollbar-thumb,

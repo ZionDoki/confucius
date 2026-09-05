@@ -371,7 +371,10 @@ test("settings security profile uses a styled custom listbox", () => {
   assert.equal(security.includes('"ArrowDown", "ArrowUp"'), true);
   assert.equal(security.includes("placeMenu("), true);
   assert.equal(security.includes("overlay,"), true);
-  assert.equal(view.includes("background: #f0ede6;"), true);
+  assert.match(
+    view,
+    /\.confucius-settings-choice\[data-selected="true"\]\s*\{\s*background: var\(--confucius-surface\);/,
+  );
   assert.equal(view.includes("inset 2px 0 #b44732"), false);
 });
 

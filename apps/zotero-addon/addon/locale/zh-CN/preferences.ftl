@@ -1,6 +1,11 @@
 pref-title = Confucius
 pref-help = Zotero 研究工作区。
 pref-model-title = 模型
+pref-appearance-title = 外观
+pref-ui-theme = 主题
+pref-ui-theme-auto = 跟随 Zotero
+pref-ui-theme-light = 浅色
+pref-ui-theme-dark = 深色
 pref-model-help = 此处编辑当前端点。其他端点在 Confucius 工作区的 ⚙ 设置中管理。
 pref-base-url = Base URL
 pref-api-key = API key

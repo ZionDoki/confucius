@@ -28,6 +28,7 @@ declare namespace _ZoteroTypes {
       "reasoningEffort": string;
       "contextWindowTokens": number;
       "uiFont": string;
+      "uiTheme": string;
       "uiFontSize": number;
       "uiLanguage": string;
       "uiLineHeight": string;

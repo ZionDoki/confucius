@@ -19,6 +19,7 @@ pref("alwaysAllowedTools", "[]");
 pref("reasoningEffort", "auto");
 pref("contextWindowTokens", 32768);
 pref("uiFont", "sans");
+pref("uiTheme", "auto");
 pref("uiFontSize", 13);
 pref("uiLanguage", "");
 pref("uiLineHeight", "standard");

@@ -16,6 +16,11 @@ import {
 } from "./workspaceMenus";
 import { renderReadingSurface } from "./workspaceReading";
 import { TUI_CSS } from "./workspaceTheme";
+import { ensurePaletteStyles } from "./workspaceSurface";
+import {
+  applyDocumentTheme,
+  restoreDocumentTheme,
+} from "./workspaceAppearance";
 import {
   ensureScrollbarStyles,
   markScrollContainer,
@@ -64,6 +69,7 @@ import {
   clampUiFontSize,
   emptyLockedContext,
   isUiFont,
+  isUiTheme,
   isUiLanguage,
   isUiLineHeight,
   mergeLockedContexts,
@@ -77,6 +83,7 @@ import {
   type TimelineToolCall,
   type MindMapNode,
   type UiFont,
+  type UiTheme,
   type UiLanguage,
   type UiLineHeight,
   type LaunchConsumeResult,
@@ -151,7 +158,7 @@ function reportLinkError(from: Element, message: string): void {
   if (!status) {
     return;
   }
-  status.style.color = "#b3452f";
+  status.style.color = "var(--confucius-danger)";
   status.textContent = message;
 }
 
@@ -271,6 +278,7 @@ type ModelConfig = {
   maxIterations?: number;
   maxToolCalls?: number;
   uiFont?: UiFont;
+  uiTheme?: UiTheme;
   uiFontSize?: number;
   uiLanguage?: UiLanguage;
   uiLineHeight?: UiLineHeight;
@@ -328,6 +336,7 @@ function el(
 }
 
 function ensureTuiStyles(doc: Document): void {
+  ensurePaletteStyles(doc);
   ensureScrollbarStyles(doc);
   const existing = doc.getElementById("confucius-tui-css");
   if (existing) {
@@ -551,8 +560,8 @@ function applyFill(node: HTMLElement, compact = false): void {
     overflow: "hidden",
     containerType: "inline-size",
     boxSizing: "border-box",
-    background: "#f5f3ee",
-    color: "#33302a",
+    background: "var(--confucius-canvas)",
+    color: "var(--confucius-ink)",
     font: '13px/1.45 "Segoe UI", "SF Pro Text", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif',
   });
 }
@@ -562,7 +571,7 @@ function paneLabel(doc: Document, text: string): HTMLElement {
     fontSize: "11px",
     letterSpacing: "0.08em",
     textTransform: "uppercase",
-    color: "#6b665c",
+    color: "var(--confucius-muted)",
     marginBottom: "10px",
   });
   node.textContent = text;
@@ -570,7 +579,7 @@ function paneLabel(doc: Document, text: string): HTMLElement {
 }
 
 function muted(doc: Document, text: string): HTMLElement {
-  const node = el(doc, "div", { color: "#6b665c" });
+  const node = el(doc, "div", { color: "var(--confucius-muted)" });
   node.textContent = text;
   return node;
 }
@@ -591,7 +600,7 @@ function brandMark(doc: Document): Element {
     "d",
     "M200 76 A 90 90 0 1 0 200 180 Q 187 178 173 164 A 58 58 0 1 1 173 92 Q 187 80 200 76 Z",
   );
-  mark.setAttribute("fill", "#201d1a");
+  mark.setAttribute("fill", "currentColor");
   svg.appendChild(mark);
   return svg;
 }
@@ -627,6 +636,22 @@ function workspaceLayoutIcon(doc: Document, target: WorkspaceLayout): Element {
     dot.setAttribute("stroke", "none");
     svg.appendChild(dot);
   }
+  return svg;
+}
+
+function composerSendIcon(doc: Document): Element {
+  const svg = doc.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  const arrow = doc.createElementNS(SVG_NS, "path");
+  arrow.setAttribute("d", "M12 19V5m-7 7 7-7 7 7");
+  svg.appendChild(arrow);
   return svg;
 }
 
@@ -811,8 +836,9 @@ function effortPicker(doc: Document, id: string, value: string) {
           font: "inherit",
           minHeight: "28px",
           lineHeight: "1.2",
-          background: current === effort ? "#ebe5d9" : "transparent",
-          color: "#4a4135",
+          background:
+            current === effort ? "var(--confucius-selected)" : "transparent",
+          color: "var(--confucius-secondary)",
         },
         {
           type: "button",
@@ -908,14 +934,14 @@ function buildContextRing(doc: Document): {
   bg.setAttribute("cy", String(size / 2));
   bg.setAttribute("r", String(radius));
   bg.setAttribute("fill", "none");
-  bg.setAttribute("stroke", "#ddd8cc");
+  bg.setAttribute("stroke", "var(--confucius-line)");
   bg.setAttribute("stroke-width", String(stroke));
   const fg = doc.createElementNS(SVG_NS, "circle");
   fg.setAttribute("cx", String(size / 2));
   fg.setAttribute("cy", String(size / 2));
   fg.setAttribute("r", String(radius));
   fg.setAttribute("fill", "none");
-  fg.setAttribute("stroke", "#33302a");
+  fg.setAttribute("stroke", "var(--confucius-ink)");
   fg.setAttribute("stroke-width", String(stroke));
   fg.setAttribute("stroke-linecap", "round");
   fg.setAttribute("transform", `rotate(-90 ${size / 2} ${size / 2})`);
@@ -925,7 +951,7 @@ function buildContextRing(doc: Document): {
   text.setAttribute("text-anchor", "middle");
   text.setAttribute("dominant-baseline", "middle");
   text.setAttribute("font-size", "9");
-  text.setAttribute("fill", "#33302a");
+  text.setAttribute("fill", "var(--confucius-ink)");
   text.textContent = "—";
   svg.appendChild(bg);
   svg.appendChild(fg);
@@ -941,7 +967,11 @@ function buildContextRing(doc: Document): {
     );
     fg.setAttribute(
       "stroke",
-      clamped >= 90 ? "#b3452f" : clamped >= 70 ? "#8c6a3f" : "#33302a",
+      clamped >= 90
+        ? "var(--confucius-danger)"
+        : clamped >= 70
+          ? "var(--confucius-accent)"
+          : "var(--confucius-ink)",
     );
     text.textContent = unknown ? "—" : `${Math.round(clamped)}%`;
     node.setAttribute("aria-label", label);
@@ -967,8 +997,8 @@ function showMountError(root: HTMLElement, error: unknown): void {
   applyFill(root, root.getAttribute("data-confucius-layout") === "sidebar");
   const panel = el(doc, "div", {
     padding: "24px",
-    color: "#8a2e1d",
-    background: "#f5f3ee",
+    color: "var(--confucius-danger)",
+    background: "var(--confucius-canvas)",
   });
   const title = el(doc, "div", { fontWeight: "700", marginBottom: "8px" });
   title.textContent = getString("workspace-mount-error");
@@ -991,6 +1021,7 @@ export function unmountWorkspace(root?: HTMLElement | null): void {
     return;
   }
   const doc = requireDocument(root);
+  restoreDocumentTheme(doc);
   const win = doc.defaultView;
   const timer = pollTimers.get(root);
   if (timer && win) {
@@ -1031,16 +1062,17 @@ export function mountWorkspace(
   }
 
   if (!compact) {
+    html.setAttribute("data-confucius-window", "");
     html.style.margin = "0";
     html.style.padding = "0";
     html.style.width = "100%";
     html.style.height = "100%";
-    html.style.background = "#f5f3ee";
+    html.style.background = "var(--confucius-canvas)";
     body.style.margin = "0";
     body.style.padding = "0";
     body.style.width = "100%";
     body.style.height = "100%";
-    body.style.background = "#f5f3ee";
+    body.style.background = "var(--confucius-canvas)";
     try {
       win.document.title = getString("workspace-title");
     } catch {
@@ -1207,7 +1239,7 @@ function bindWorkspace(
     gap: "10px",
     padding: "10px 14px",
     borderBottom: "0",
-    background: "#faf9f6",
+    background: "var(--confucius-paper)",
     minHeight: "48px",
     boxSizing: "border-box",
     flex: "0 0 auto",
@@ -1235,7 +1267,7 @@ function bindWorkspace(
       overflow: "hidden",
       textOverflow: "ellipsis",
       whiteSpace: "nowrap",
-      color: "#8c6a3f",
+      color: "var(--confucius-accent)",
     },
     { id: "confucius-status" },
   );
@@ -1284,7 +1316,7 @@ function bindWorkspace(
     "button",
     {
       background: "transparent",
-      color: "#33302a",
+      color: "var(--confucius-ink)",
       border: "0",
       borderRadius: "8px",
       padding: "6px 10px",
@@ -1331,7 +1363,7 @@ function bindWorkspace(
     overflowX: "hidden",
     overflowY: "auto",
     borderRight: "0",
-    background: "#f5f3ee",
+    background: "var(--confucius-canvas)",
     boxSizing: "border-box",
     display: showSessions ? "block" : "none",
   });
@@ -1347,7 +1379,7 @@ function bindWorkspace(
     display: "flex",
     flexDirection: "column",
     overflow: "hidden",
-    background: "#f5f3ee",
+    background: "var(--confucius-canvas)",
   });
   workbenchPane.className = "confucius-workbench-pane";
   const timelinePane = el(
@@ -1361,7 +1393,7 @@ function bindWorkspace(
       overflowX: "hidden",
       overflowY: "auto",
       padding: compact ? "12px 10px" : "18px 24px",
-      background: "#faf9f6",
+      background: "var(--confucius-paper)",
       boxSizing: "border-box",
     },
     {
@@ -1409,7 +1441,7 @@ function bindWorkspace(
       minWidth: "0px",
       border: "0",
       background: "transparent",
-      color: "#33302a",
+      color: "var(--confucius-ink)",
       fontFamily: "inherit",
       fontSize: "inherit",
     },
@@ -1495,6 +1527,7 @@ function bindWorkspace(
     title: getString("workspace-send"),
   });
   sendBtn.className = "confucius-composer-action";
+  sendBtn.appendChild(composerSendIcon(doc));
   const stopBtn = el(doc, "button", undefined, {
     id: "confucius-stop",
     type: "button",
@@ -1509,7 +1542,7 @@ function bindWorkspace(
     "button",
     {
       background: "transparent",
-      color: "#555046",
+      color: "var(--confucius-secondary)",
       border: "0",
       cursor: "pointer",
       font: "inherit",
@@ -1553,7 +1586,7 @@ function bindWorkspace(
       margin: "0",
       border: "0",
       background: "transparent",
-      color: "#33302a",
+      color: "var(--confucius-ink)",
       cursor: "pointer",
       font: "inherit",
       boxSizing: "border-box",
@@ -1576,7 +1609,7 @@ function bindWorkspace(
   endpointName.className = "confucius-endpoint-name";
   const endpointChevron = el(doc, "span", {
     flex: "0 0 auto",
-    color: "#6b665c",
+    color: "var(--confucius-muted)",
   });
   endpointChevron.textContent = "▾";
   endpointBtn.appendChild(endpointName);
@@ -1676,8 +1709,8 @@ function bindWorkspace(
 
   function paintToggle(node: HTMLElement, active: boolean): void {
     node.setAttribute("aria-pressed", active ? "true" : "false");
-    node.style.background = active ? "#eeebe3" : "transparent";
-    node.style.color = "#33302a";
+    node.style.background = active ? "var(--confucius-hover)" : "transparent";
+    node.style.color = "var(--confucius-ink)";
   }
 
   function syncAuxiliaryPanes(): void {
@@ -1710,7 +1743,7 @@ function bindWorkspace(
       width: `${drawerWidth}px`,
       minWidth: "0px",
       maxWidth: "100%",
-      boxShadow: "8px 0 32px rgba(51, 42, 28, 0.08)",
+      boxShadow: "var(--confucius-shadow)",
       display: showSessions ? "block" : "none",
     });
   }
@@ -1768,7 +1801,6 @@ function bindWorkspace(
     newSessionBtn.textContent = narrow ? "+" : newSessionLabel;
     sessionsToggle.textContent = narrow ? "☰" : sessionsLabel;
 
-    sendBtn.textContent = "↑";
     stopBtn.textContent = "■";
     timelinePane.style.padding = stacked ? "10px" : "18px 24px";
     sessionPane.style.padding = stacked ? "10px" : "14px";
@@ -2209,7 +2241,7 @@ function bindWorkspace(
       renderKnowledgeWindow();
     });
     header.appendChild(back);
-    const icon = el(doc, "div", { color: "#33302a" });
+    const icon = el(doc, "div", { color: "var(--confucius-ink)" });
     icon.appendChild(workspaceKnowledgeIcon(doc));
     const copy = el(doc, "div");
     copy.className = "confucius-knowledge-header-copy";
@@ -2381,7 +2413,7 @@ function bindWorkspace(
       card.className = "confucius-kb-memory";
       const memoryTitle = el(doc, "div", {
         fontSize: "11px",
-        color: "#33302a",
+        color: "var(--confucius-ink)",
         fontWeight: "700",
       });
       const tags = memory.tags ?? [];
@@ -2398,7 +2430,7 @@ function bindWorkspace(
         {
           border: "none",
           background: "transparent",
-          color: "#b3452f",
+          color: "var(--confucius-danger)",
           cursor: "pointer",
           font: "inherit",
           fontSize: "11px",
@@ -2450,7 +2482,7 @@ function bindWorkspace(
     title.textContent = knowledgeUi.base.title;
     const description = el(doc, "div", {
       marginTop: "3px",
-      color: "#6b665c",
+      color: "var(--confucius-muted)",
       fontSize: "12px",
       lineHeight: "1.45",
     });
@@ -2464,7 +2496,7 @@ function bindWorkspace(
       "confucius-kb-edit-base",
       getString("workspace-knowledge-edit-topic"),
     );
-    editBase.style.background = "#ffffff";
+    editBase.style.background = "var(--confucius-elevated)";
     editBase.style.padding = "4px 8px";
     editBase.addEventListener("click", () => {
       knowledgeLoadGeneration += 1;
@@ -2552,7 +2584,7 @@ function bindWorkspace(
         entry.id === knowledgeUi.entryId ? " active" : ""
       }`;
       const kind = el(doc, "div", {
-        color: "#33302a",
+        color: "var(--confucius-ink)",
         fontSize: "10px",
         fontWeight: "700",
         letterSpacing: ".08em",
@@ -3093,7 +3125,7 @@ function bindWorkspace(
     turnId?: string,
   ): HTMLElement {
     const shell = tuiBlock(targetDoc, {
-      color: "#33302a",
+      color: "var(--confucius-ink)",
       fontSize: "1.08em",
       lineHeight: "1.7",
       margin: "6px 0 14px",
@@ -3229,7 +3261,7 @@ function bindWorkspace(
   ): HTMLElement {
     const fold = reasoningFold.get(key) ?? "preview";
     const row = tuiBlock(targetDoc, {
-      color: "#7b766b",
+      color: "var(--confucius-muted)",
       fontSize: "0.93em",
       cursor: "pointer",
       margin: "0 0 8px",
@@ -3239,7 +3271,7 @@ function bindWorkspace(
       fontSize: "0.85em",
       letterSpacing: "0.04em",
       textTransform: "uppercase",
-      color: "#70695f",
+      color: "var(--confucius-muted)",
       marginBottom: "2px",
     });
     head.textContent = `${fold === "open" ? "▾" : "▸"} ${getString("workspace-tui-thinking")}`;
@@ -3307,7 +3339,7 @@ function bindWorkspace(
       {
         border: "none",
         background: "transparent",
-        color: "#b3452f",
+        color: "var(--confucius-danger)",
         cursor: "pointer",
         font: "inherit",
         fontSize: "0.85em",
@@ -3339,11 +3371,11 @@ function bindWorkspace(
   ): HTMLElement {
     const open = toolsOpen.has(key);
     const wrap = tuiBlock(targetDoc, {
-      color: "#7b766b",
+      color: "var(--confucius-muted)",
       fontSize: "0.93em",
       fontFamily: UI_FONT_STACKS.mono,
       margin: "0 0 8px",
-      background: "#efece4",
+      background: "var(--confucius-hover)",
       borderRadius: "8px",
       padding: "6px 10px",
     });
@@ -3388,8 +3420,8 @@ function bindWorkspace(
             margin: "2px 0 6px 24px",
             padding: "6px 8px",
             fontSize: "0.85em",
-            color: "#555046",
-            background: "#faf9f6",
+            color: "var(--confucius-secondary)",
+            background: "var(--confucius-paper)",
             borderRadius: "6px",
             whiteSpace: "pre-wrap",
           });
@@ -3513,7 +3545,7 @@ function bindWorkspace(
       plan.className = "confucius-plan";
       const heading = el(targetDoc, "div", {
         marginBottom: "4px",
-        color: "#6b665c",
+        color: "var(--confucius-muted)",
         fontSize: "11px",
         fontWeight: "700",
         textTransform: "uppercase",
@@ -3523,7 +3555,10 @@ function bindWorkspace(
       for (const step of block.steps) {
         const row = el(targetDoc, "div", {
           padding: "2px 0",
-          color: step.status === "failed" ? "#b3452f" : "#4f4a42",
+          color:
+            step.status === "failed"
+              ? "var(--confucius-danger)"
+              : "var(--confucius-secondary)",
         });
         row.textContent = `${
           step.status === "done"
@@ -3544,8 +3579,8 @@ function bindWorkspace(
       const heading = el(targetDoc, "div", {
         color:
           block.status === "failed" || block.status === "rejected"
-            ? "#b3452f"
-            : "#555046",
+            ? "var(--confucius-danger)"
+            : "var(--confucius-secondary)",
       });
       heading.textContent =
         block.kind === "command"
@@ -3567,7 +3602,10 @@ function bindWorkspace(
       return action;
     }
     const row = tuiBlock(targetDoc, {
-      color: block.tone === "fail" ? "#8a2e1d" : "#7b766b",
+      color:
+        block.tone === "fail"
+          ? "var(--confucius-danger)"
+          : "var(--confucius-muted)",
       fontSize: "0.93em",
       padding: "0 4px",
     });
@@ -3607,14 +3645,14 @@ function bindWorkspace(
       fontSize: "11px",
       fontWeight: "600",
       letterSpacing: "0.04em",
-      color: "#b05c2e",
+      color: "var(--confucius-accent)",
     });
     name.textContent = item.toolName;
     // Default view: the tool plus the object it acts on. Raw args stay
     // behind the params toggle below.
     if (item.summary) {
       const summary = el(targetDoc, "div", {
-        color: "#33302a",
+        color: "var(--confucius-ink)",
         fontSize: "0.95em",
         lineHeight: "1.45",
         margin: "2px 0 0",
@@ -3632,7 +3670,7 @@ function bindWorkspace(
       ]) {
         const column = el(targetDoc, "div");
         const heading = el(targetDoc, "div", {
-          color: "#6b665c",
+          color: "var(--confucius-muted)",
           fontSize: "10px",
           fontWeight: "700",
           letterSpacing: ".06em",
@@ -3664,9 +3702,9 @@ function bindWorkspace(
       getString("workspace-approval-allow-task"),
     );
     const deny = button(targetDoc, "", getString("workspace-approval-deny"));
-    deny.style.background = "#ffffff";
-    deny.style.border = "1px solid #b3452f";
-    deny.style.color = "#b3452f";
+    deny.style.background = "var(--confucius-elevated)";
+    deny.style.border = "1px solid var(--confucius-danger)";
+    deny.style.color = "var(--confucius-danger)";
     allow.addEventListener("click", () => {
       void resolveApproval(item.id, "allow", "once");
     });
@@ -3696,7 +3734,7 @@ function bindWorkspace(
     );
     paramsToggle.style.background = "transparent";
     paramsToggle.style.border = "none";
-    paramsToggle.style.color = "#70695f";
+    paramsToggle.style.color = "var(--confucius-muted)";
     paramsToggle.style.fontSize = "11px";
     paramsToggle.style.padding = "2px 0";
     paramsToggle.style.marginTop = "4px";
@@ -4310,7 +4348,7 @@ function bindWorkspace(
     const heading = el(doc, "div", {
       marginTop: "22px",
       fontSize: "11px",
-      color: "#70695f",
+      color: "var(--confucius-muted)",
       fontWeight: "700",
       letterSpacing: "0.09em",
       textTransform: "uppercase",
@@ -4420,9 +4458,9 @@ function bindWorkspace(
         width: "100%",
         height: "34px",
         marginBottom: "10px",
-        border: "1px solid #ddd8cc",
+        border: "1px solid var(--confucius-line)",
         borderRadius: "7px",
-        background: "#fff",
+        background: "var(--confucius-elevated)",
       },
       { id: "confucius-writeback-target" },
     ) as HTMLSelectElement;
@@ -4441,7 +4479,7 @@ function bindWorkspace(
         marginBottom: "10px",
         padding: "0 8px",
         boxSizing: "border-box",
-        border: "1px solid #ddd8cc",
+        border: "1px solid var(--confucius-line)",
         borderRadius: "7px",
       },
       {
@@ -4454,7 +4492,7 @@ function bindWorkspace(
     const errorLine = el(doc, "div", {
       minHeight: "18px",
       marginTop: "8px",
-      color: "#b3452f",
+      color: "var(--confucius-danger)",
     });
     const actions = el(doc, "div", {
       display: "flex",
@@ -4486,7 +4524,7 @@ function bindWorkspace(
         ]) {
           const column = el(doc, "div");
           const title = el(doc, "div", {
-            color: "#6b665c",
+            color: "var(--confucius-muted)",
             fontSize: "11px",
             fontWeight: "700",
           });
@@ -4564,7 +4602,7 @@ function bindWorkspace(
 
     if (!task) {
       const eyebrow = el(doc, "div", {
-        color: "#9a4f25",
+        color: "var(--confucius-accent-text)",
         fontSize: "11px",
         fontWeight: "700",
         letterSpacing: ".11em",
@@ -4582,7 +4620,7 @@ function bindWorkspace(
       const copy = el(doc, "p", {
         maxWidth: "620px",
         margin: "0",
-        color: "#6b665c",
+        color: "var(--confucius-muted)",
         lineHeight: "1.55",
       });
       copy.textContent = getString("workspace-empty-copy");
@@ -4593,7 +4631,7 @@ function bindWorkspace(
       if (context) {
         const source = el(doc, "div", {
           marginTop: "12px",
-          color: "#6b665c",
+          color: "var(--confucius-muted)",
           fontSize: ".9em",
         });
         source.textContent = `${getString("workspace-current-source")}: ${contextSummary(context)}`;
@@ -4607,7 +4645,7 @@ function bindWorkspace(
     header.className = "confucius-task-overview-header";
     const headerCopy = el(doc, "div", { minWidth: "0px", flex: "1 1 280px" });
     const meta = el(doc, "div", {
-      color: "#70695f",
+      color: "var(--confucius-muted)",
       fontSize: "11px",
       fontWeight: "700",
       letterSpacing: ".08em",
@@ -4620,7 +4658,7 @@ function bindWorkspace(
       doc,
       "button",
       {
-        color: "#6b665c",
+        color: "var(--confucius-muted)",
         fontSize: ".9em",
         fontFamily: "inherit",
         textAlign: "start",
@@ -4727,7 +4765,7 @@ function bindWorkspace(
       !state.events.some((event) => event.type === "turn_started")
     ) {
       const guide = el(doc, "p", {
-        color: "#70695f",
+        color: "var(--confucius-muted)",
         margin: "20px 0 8px",
         lineHeight: "1.6",
       });
@@ -5136,7 +5174,7 @@ function bindWorkspace(
       alignItems: "center",
       flexWrap: "wrap",
       gap: "7px",
-      color: "#70695f",
+      color: "var(--confucius-muted)",
       fontSize: "11px",
       fontWeight: "700",
       letterSpacing: ".07em",
@@ -5151,7 +5189,7 @@ function bindWorkspace(
       artifact.writeback?.state === "committed" &&
       artifact.writeback.revision === revision.revision
     ) {
-      const committed = el(doc, "span", { color: "#4f7657" });
+      const committed = el(doc, "span", { color: "var(--confucius-success)" });
       committed.textContent = getString("workspace-writeback-committed");
       paperMeta.appendChild(committed);
     }
@@ -5176,7 +5214,7 @@ function bindWorkspace(
       const citationHeading = el(doc, "h3", {
         margin: "28px 0 8px",
         paddingTop: "14px",
-        borderTop: "1px solid #e5e1d8",
+        borderTop: "1px solid var(--confucius-line)",
         fontSize: "13px",
       });
       citationHeading.textContent = getString("workspace-artifact-citations");
@@ -5356,7 +5394,7 @@ function bindWorkspace(
       activityStream.appendChild(renderUserLine(doc, state.pendingUserText));
     }
     if (state.sendError) {
-      const err = tuiBlock(doc, { color: "#8a2e1d" });
+      const err = tuiBlock(doc, { color: "var(--confucius-danger)" });
       err.textContent = state.sendError;
       activityStream.appendChild(err);
     }
@@ -5667,7 +5705,7 @@ function bindWorkspace(
       return;
     }
     if (pendingAttachments.some((item) => item.status === "preparing")) {
-      status.style.color = "#8c6a3f";
+      status.style.color = "var(--confucius-accent)";
       status.textContent = getString("workspace-attachment-wait");
       return;
     }
@@ -5705,7 +5743,7 @@ function bindWorkspace(
     state.sendError = "";
     state.pendingUserText = text;
     sendBtn.setAttribute("disabled", "true");
-    status.style.color = "#8c6a3f";
+    status.style.color = "var(--confucius-accent)";
     status.textContent = getString("workspace-sending");
     renderLists();
     try {
@@ -5791,7 +5829,7 @@ function bindWorkspace(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       state.sendError = message;
-      status.style.color = "#b3452f";
+      status.style.color = "var(--confucius-danger)";
       status.textContent = message;
       renderLists();
     } finally {
@@ -5822,6 +5860,7 @@ function bindWorkspace(
     const existing = doc.getElementById("confucius-settings-overlay");
     if (existing) {
       existing.remove();
+      restoreDocumentTheme(doc);
       return;
     }
     const config = state.config;
@@ -5834,6 +5873,7 @@ function bindWorkspace(
     const closeSettings = () => {
       doc.getElementById("confucius-security-profile-menu")?.remove();
       overlay.remove();
+      restoreDocumentTheme(doc);
       if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
     };
     bindDialogNavigation(overlay, closeSettings);
@@ -6009,7 +6049,7 @@ function bindWorkspace(
 
     const listLabel = el(doc, "div", {
       fontSize: "11px",
-      color: "#6b665c",
+      color: "var(--confucius-muted)",
       marginBottom: "4px",
     });
     listLabel.textContent = getString("workspace-endpoints");
@@ -6098,7 +6138,7 @@ function bindWorkspace(
     const effortLabel = el(doc, "label", {
       display: "block",
       fontSize: "11px",
-      color: "#6b665c",
+      color: "var(--confucius-muted)",
       marginBottom: "3px",
     });
     effortLabel.textContent = getString("workspace-thinking");
@@ -6139,7 +6179,7 @@ function bindWorkspace(
     const sectionIntro = (target: HTMLElement, text: string): void => {
       const intro = el(doc, "p", {
         margin: "0 0 12px",
-        color: "#6b665c",
+        color: "var(--confucius-muted)",
         lineHeight: "1.5",
       });
       intro.textContent = text;
@@ -6185,7 +6225,7 @@ function bindWorkspace(
     );
     const runtimeError = el(doc, "div", {
       minHeight: "18px",
-      color: "#b3452f",
+      color: "var(--confucius-danger)",
     });
     const executableInputs = new Map<
       Exclude<AgentBackendKind, "native">,
@@ -6216,7 +6256,7 @@ function bindWorkspace(
       });
       const label = el(doc, "label", {
         display: "block",
-        color: "#6b665c",
+        color: "var(--confucius-muted)",
         fontSize: "11px",
         marginBottom: "5px",
       });
@@ -6334,7 +6374,10 @@ function bindWorkspace(
         }`;
         const detail = el(doc, "div", {
           minWidth: "0px",
-          color: runtime.state === "error" ? "#b3452f" : "#6b665c",
+          color:
+            runtime.state === "error"
+              ? "var(--confucius-danger)"
+              : "var(--confucius-muted)",
           overflowWrap: "anywhere",
         });
         detail.textContent = `${getString(
@@ -6433,7 +6476,10 @@ function bindWorkspace(
       const copy = el(doc, "div");
       const name = el(doc, "div", { fontWeight: "650" });
       name.textContent = getString(`workspace-memory-${choice}`);
-      const help = el(doc, "div", { color: "#6b665c", fontSize: ".9em" });
+      const help = el(doc, "div", {
+        color: "var(--confucius-muted)",
+        fontSize: ".9em",
+      });
       help.textContent = getString(`workspace-memory-${choice}-help`);
       copy.appendChild(name);
       copy.appendChild(help);
@@ -6445,7 +6491,7 @@ function bindWorkspace(
     const proposalHeading = el(doc, "div", {
       marginBottom: "6px",
       fontSize: "11px",
-      color: "#6b665c",
+      color: "var(--confucius-muted)",
       fontWeight: "700",
       letterSpacing: ".07em",
       textTransform: "uppercase",
@@ -6470,7 +6516,7 @@ function bindWorkspace(
         });
         const op = el(doc, "div", {
           marginBottom: "5px",
-          color: "#8a4b26",
+          color: "var(--confucius-accent-text)",
           fontSize: "11px",
           fontWeight: "700",
           textTransform: "uppercase",
@@ -6621,7 +6667,7 @@ function bindWorkspace(
       gap: "6px",
       alignItems: "flex-start",
       marginBottom: "12px",
-      color: "#6b665c",
+      color: "var(--confucius-muted)",
     });
     const confirmCopy = el(doc, "span");
     confirmCopy.textContent = getString("workspace-security-confirm");
@@ -6630,7 +6676,7 @@ function bindWorkspace(
     const securityPathStatus = el(doc, "div", {
       minHeight: "18px",
       margin: "-2px 0 8px",
-      color: "#6b665c",
+      color: "var(--confucius-muted)",
       fontSize: "11px",
       overflowWrap: "anywhere",
     });
@@ -6845,14 +6891,15 @@ function bindWorkspace(
     let lineHeightChoice: UiLineHeight = isUiLineHeight(live.uiLineHeight)
       ? live.uiLineHeight
       : DEFAULT_UI_LINE_HEIGHT;
+    let themeChoice: UiTheme = isUiTheme(live.uiTheme) ? live.uiTheme : "auto";
 
     const appearanceLabel = (text: string): void => {
       const name = el(doc, "label", {
         display: "block",
         fontSize: "11px",
-        color: "#6b665c",
-        marginBottom: "3px",
-        marginTop: "10px",
+        color: "var(--confucius-muted)",
+        marginBottom: "8px",
+        marginTop: "16px",
       });
       name.textContent = text;
       appearanceTab.appendChild(name);
@@ -6877,14 +6924,60 @@ function bindWorkspace(
       for (const [value, btn] of buttons) {
         const active = value === current;
         Object.assign(btn.style, {
-          background: active ? "#33302a" : "#ffffff",
-          color: active ? "#f5f3ee" : "#33302a",
-          border: `1px solid ${active ? "#33302a" : "#ddd8cc"}`,
+          background: active
+            ? "var(--confucius-primary)"
+            : "var(--confucius-elevated)",
+          color: active
+            ? "var(--confucius-primary-ink)"
+            : "var(--confucius-ink)",
+          border: `1px solid ${active ? "var(--confucius-ink)" : "var(--confucius-line)"}`,
           fontWeight: active ? "600" : "400",
         });
         btn.setAttribute("aria-checked", active ? "true" : "false");
       }
     };
+
+    appearanceLabel(getString("workspace-ui-theme"));
+    const themePicker = segmentedRow("confucius-cfg-theme");
+    themePicker.row.setAttribute("aria-label", getString("workspace-ui-theme"));
+    for (const theme of ["auto", "light", "dark"] as UiTheme[]) {
+      const btn = button(doc, "", getString(`workspace-ui-theme-${theme}`));
+      btn.setAttribute("role", "radio");
+      btn.dataset.theme = theme;
+      const choose = () => {
+        themeChoice = theme;
+        paintSegmented(themePicker.buttons, themeChoice);
+        for (const [value, item] of themePicker.buttons)
+          item.tabIndex = value === themeChoice ? 0 : -1;
+        applyDocumentTheme(doc, themeChoice);
+      };
+      btn.addEventListener("click", choose);
+      themePicker.buttons.set(theme, btn);
+      themePicker.row.appendChild(btn);
+    }
+    themePicker.row.addEventListener("keydown", (event) => {
+      const key = event as KeyboardEvent;
+      if (
+        key.isComposing ||
+        !["ArrowLeft", "ArrowRight", "Home", "End"].includes(key.key)
+      )
+        return;
+      const choices = [...themePicker.buttons.values()];
+      const index = choices.indexOf(doc.activeElement as HTMLElement);
+      const next =
+        key.key === "Home"
+          ? 0
+          : key.key === "End"
+            ? choices.length - 1
+            : (index + (key.key === "ArrowLeft" ? -1 : 1) + choices.length) %
+              choices.length;
+      event.preventDefault();
+      choices[next].click();
+      choices[next].focus();
+    });
+    paintSegmented(themePicker.buttons, themeChoice);
+    for (const [value, item] of themePicker.buttons)
+      item.tabIndex = value === themeChoice ? 0 : -1;
 
     appearanceLabel(getString("workspace-ui-language"));
     const languagePicker = segmentedRow("confucius-cfg-language");
@@ -7019,11 +7112,11 @@ function bindWorkspace(
     const fontPreview = el(doc, "div", {
       border: "0",
       borderRadius: "8px",
-      background: "#faf9f6",
+      background: "var(--confucius-paper)",
       padding: "12px",
       marginTop: "12px",
       lineHeight: "1.6",
-      color: "#33302a",
+      color: "var(--confucius-ink)",
     });
     fontPreview.textContent = getString("workspace-font-preview");
     appearanceTab.appendChild(fontPreview);
@@ -7047,7 +7140,7 @@ function bindWorkspace(
     });
     updateHeading.textContent = getString("workspace-update-title");
     const updateHelp = el(doc, "div", {
-      color: "#6b665c",
+      color: "var(--confucius-muted)",
       fontSize: "12px",
       marginBottom: "14px",
     });
@@ -7078,7 +7171,7 @@ function bindWorkspace(
     const updateStateLine = el(doc, "div", {
       minHeight: "20px",
       margin: "5px 0 10px",
-      color: "#6b665c",
+      color: "var(--confucius-muted)",
     });
     const updateButtons = el(doc, "div", {
       display: "flex",
@@ -7124,7 +7217,9 @@ function bindWorkspace(
         `workspace-update-state-${stateName}`,
       )}${version}${updateView?.message ? ` · ${updateView.message}` : ""}`;
       updateStateLine.style.color =
-        stateName === "error" ? "#b3452f" : "#6b665c";
+        stateName === "error"
+          ? "var(--confucius-danger)"
+          : "var(--confucius-muted)";
     };
     const runUpdateAction = async (
       method: "update/status" | "update/check" | "update/install",
@@ -7230,12 +7325,13 @@ function bindWorkspace(
           gap: "8px",
           padding: "6px 8px",
           cursor: "pointer",
-          background: ep.id === editingId ? "#f0ece3" : "transparent",
+          background:
+            ep.id === editingId ? "var(--confucius-surface)" : "transparent",
           borderRadius: "8px",
           borderBottom: "0",
         });
         const mark = el(doc, "span", {
-          color: "#33302a",
+          color: "var(--confucius-ink)",
           fontWeight: "700",
           fontSize: "10px",
           flex: "0 0 14px",
@@ -7255,7 +7351,7 @@ function bindWorkspace(
         headline.textContent = ep.name || ep.model || "Untitled";
         const sub = el(doc, "div", {
           fontSize: "11px",
-          color: "#6b665c",
+          color: "var(--confucius-muted)",
           whiteSpace: "nowrap",
           overflow: "hidden",
           textOverflow: "ellipsis",
@@ -7272,7 +7368,7 @@ function bindWorkspace(
             appearance: "none",
             background: "transparent",
             border: "none",
-            color: "#b3452f",
+            color: "var(--confucius-danger)",
             cursor: "pointer",
             font: "inherit",
             padding: "0 4px",
@@ -7301,7 +7397,7 @@ function bindWorkspace(
       if (editingId === "") {
         const draft = el(doc, "div", {
           padding: "6px 8px",
-          background: "#f0ece3",
+          background: "var(--confucius-surface)",
           fontWeight: "600",
         });
         draft.textContent = getString("workspace-endpoint-new");
@@ -7383,7 +7479,7 @@ function bindWorkspace(
         closeSettings();
       }
     });
-    cancel.addEventListener("click", () => overlay.remove());
+    cancel.addEventListener("click", closeSettings);
     save.addEventListener("click", () => {
       if (save.disabled) return;
       save.disabled = true;
@@ -7426,6 +7522,7 @@ function bindWorkspace(
             maxToolCalls:
               Number(toolCallsInput.value) || DEFAULT_MAX_TOOL_CALLS,
             uiFont: fontChoice,
+            uiTheme: themeChoice,
             uiFontSize: sizeChoice,
             uiLanguage: languageChoice,
             uiLineHeight: lineHeightChoice,
@@ -7890,7 +7987,7 @@ function bindWorkspace(
       return;
     }
     try {
-      status.style.color = "#8c6a3f";
+      status.style.color = "var(--confucius-accent)";
       status.textContent = getString("workspace-compacting");
       const stats = (await rpc("task/new-context", {
         taskId: state.sessionId,
@@ -7903,7 +8000,7 @@ function bindWorkspace(
         ringLabel(stats),
       );
     } catch (error) {
-      status.style.color = "#b3452f";
+      status.style.color = "var(--confucius-danger)";
       status.textContent =
         error instanceof Error ? error.message : String(error);
     }
@@ -8083,7 +8180,7 @@ function bindWorkspace(
         overflow: "hidden",
         textOverflow: "ellipsis",
         whiteSpace: "nowrap",
-        color: "#33302a",
+        color: "var(--confucius-ink)",
         fontWeight: "500",
         fontSize: "1em",
       });
@@ -8094,7 +8191,7 @@ function bindWorkspace(
         overflow: "hidden",
         textOverflow: "ellipsis",
         whiteSpace: "nowrap",
-        color: "#70695f",
+        color: "var(--confucius-muted)",
         fontSize: ".86em",
       });
       hint.textContent = command.description;
@@ -8218,14 +8315,17 @@ function bindWorkspace(
         overflow: "hidden",
         textOverflow: "ellipsis",
         whiteSpace: "nowrap",
-        color: "#6b665c",
+        color: "var(--confucius-muted)",
         fontSize: ".86em",
       });
       hint.textContent = opts.hint;
       row.appendChild(hint);
     }
     if (opts.active) {
-      const mark = el(doc, "span", { color: "#33302a", fontWeight: "700" });
+      const mark = el(doc, "span", {
+        color: "var(--confucius-ink)",
+        fontWeight: "700",
+      });
       mark.textContent = "✓";
       row.appendChild(mark);
     }
@@ -8665,7 +8765,7 @@ function bindWorkspace(
       );
     if (modelMenuError) {
       const error = createMenuHeading(doc, modelMenuError);
-      error.style.color = "#a63d28";
+      error.style.color = "var(--confucius-danger)";
       error.setAttribute("role", "alert");
       menu.appendChild(error);
     }
@@ -9048,10 +9148,10 @@ function bindWorkspace(
         syncEndpointButton();
       }
       if (state.sending) {
-        status.style.color = "#8c6a3f";
+        status.style.color = "var(--confucius-accent)";
         status.textContent = getString("workspace-sending");
       } else if (state.running) {
-        status.style.color = "#8c6a3f";
+        status.style.color = "var(--confucius-accent)";
         const workText = runningStageText(state.events);
         status.textContent = workText;
         const waitingText = timelinePane.querySelector(
@@ -9059,11 +9159,11 @@ function bindWorkspace(
         ) as HTMLElement | null;
         if (waitingText) waitingText.textContent = workText;
       } else {
-        status.style.color = "#33302a";
+        status.style.color = "var(--confucius-ink)";
         status.textContent = getString("workspace-host-zotero");
       }
     } catch (error) {
-      status.style.color = "#b3452f";
+      status.style.color = "var(--confucius-danger)";
       status.textContent =
         error instanceof Error ? error.message : String(error);
     } finally {

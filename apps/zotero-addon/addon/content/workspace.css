@@ -1,3 +1,5 @@
+@import url("workspacePalette.css");
+
 html,
 body {
   margin: 0;
@@ -5,8 +7,8 @@ body {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: #faf9f6;
-  color: #33302a;
+  background: var(--confucius-paper);
+  color: var(--confucius-ink);
   font:
     13px/1.45 Inter,
     "Segoe UI",
@@ -21,8 +23,8 @@ body {
   width: 100%;
   height: 100%;
   box-sizing: border-box;
-  background: #faf9f6;
-  color: #33302a;
+  background: var(--confucius-paper);
+  color: var(--confucius-ink);
 }
 
 .topbar {
@@ -31,8 +33,8 @@ body {
   gap: 12px;
   align-items: center;
   padding: 8px 14px;
-  border-bottom: 1px solid #ddd8cc;
-  background: #faf9f6;
+  border-bottom: 1px solid var(--confucius-line);
+  background: var(--confucius-paper);
 }
 
 .topbar strong {
@@ -43,9 +45,9 @@ body {
 .topbar button,
 .composer button,
 .event button {
-  background: #ffffff;
-  color: #33302a;
-  border: 1px solid #ddd8cc;
+  background: var(--confucius-elevated);
+  color: var(--confucius-ink);
+  border: 1px solid var(--confucius-line);
   border-radius: 8px;
   padding: 6px 10px;
   cursor: pointer;
@@ -54,10 +56,10 @@ body {
 .topbar select {
   height: 32px;
   min-width: 160px;
-  border: 1px solid #ddd8cc;
+  border: 1px solid var(--confucius-line);
   border-radius: 8px;
-  background: #ffffff;
-  color: #33302a;
+  background: var(--confucius-elevated);
+  color: var(--confucius-ink);
   padding: 0 8px;
 }
 
@@ -66,15 +68,15 @@ body {
   overflow-x: hidden;
   overflow-y: auto;
   scrollbar-gutter: stable;
-  border-right: 1px solid #e5e1d8;
-  background: #faf9f6;
+  border-right: 1px solid var(--confucius-line);
+  background: var(--confucius-paper);
 }
 
 .pane-label {
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #8a857c;
+  color: var(--confucius-muted);
   margin-bottom: 10px;
 }
 
@@ -85,33 +87,33 @@ body {
 }
 
 .session.active {
-  background: #33302a;
-  color: #faf9f6;
+  background: var(--confucius-primary);
+  color: var(--confucius-primary-ink);
 }
 
 .session:hover:not(.active) {
-  background: #efece4;
+  background: var(--confucius-hover);
 }
 
 .event {
-  border: 1px solid #e5e1d8;
+  border: 1px solid var(--confucius-line);
   border-radius: 8px;
   padding: 8px 10px;
   margin-bottom: 8px;
-  background: #ffffff;
+  background: var(--confucius-elevated);
 }
 
 .event.tool {
-  border-color: #ddd8cc;
-  background: #f5f3ee;
+  border-color: var(--confucius-line);
+  background: var(--confucius-canvas);
 }
 
 .event.approval {
-  border-color: #b05c2e;
+  border-color: var(--confucius-accent);
 }
 
 .muted {
-  color: #8a857c;
+  color: var(--confucius-muted);
 }
 
 pre {
@@ -119,7 +121,7 @@ pre {
   word-break: break-word;
   margin: 6px 0 0;
   font-size: 11px;
-  color: #555046;
+  color: var(--confucius-secondary);
 }
 
 .composer {
@@ -128,37 +130,37 @@ pre {
   gap: 8px;
   align-items: center;
   padding: 12px 16px;
-  border-top: 1px solid #ddd8cc;
-  background: #faf9f6;
+  border-top: 1px solid var(--confucius-line);
+  background: var(--confucius-paper);
 }
 
 .composer input,
 .composer select {
   flex: 1;
   height: 40px;
-  border: 1px solid #ddd8cc;
+  border: 1px solid var(--confucius-line);
   border-radius: 8px;
-  background: #ffffff;
-  color: #33302a;
+  background: var(--confucius-elevated);
+  color: var(--confucius-ink);
   padding: 0 12px;
 }
 
 .status.ok {
-  color: #5f8a5a;
+  color: var(--confucius-success);
 }
 
 .status.wait {
-  color: #8c6a3f;
+  color: var(--confucius-accent);
 }
 
 .status.err {
-  color: #b3452f;
+  color: var(--confucius-danger);
 }
 
 .confucius-kb-md-preview {
-  border: 1px solid #e7e3da;
+  border: 1px solid var(--confucius-line);
   border-radius: 8px;
-  background: #fbfaf7;
+  background: var(--confucius-paper);
   padding: 10px 12px;
   margin-top: 6px;
   max-height: 220px;

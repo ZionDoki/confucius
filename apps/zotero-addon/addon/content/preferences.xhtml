@@ -6,6 +6,21 @@
   onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })"
 >
   <groupbox>
+    <label><html:h2 data-l10n-id="pref-appearance-title"></html:h2></label>
+    <label id="confucius-pref-theme-label" data-l10n-id="pref-ui-theme" />
+    <html:select
+      id="confucius-pref-uiTheme"
+      aria-labelledby="confucius-pref-theme-label"
+    >
+      <html:option value="auto" data-l10n-id="pref-ui-theme-auto"></html:option>
+      <html:option
+        value="light"
+        data-l10n-id="pref-ui-theme-light"
+      ></html:option>
+      <html:option value="dark" data-l10n-id="pref-ui-theme-dark"></html:option>
+    </html:select>
+  </groupbox>
+  <groupbox>
     <label><html:h2 data-l10n-id="pref-model-title"></html:h2></label>
     <html:p data-l10n-id="pref-model-help"></html:p>
     <label data-l10n-id="pref-base-url" />

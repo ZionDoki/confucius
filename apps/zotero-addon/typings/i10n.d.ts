@@ -381,6 +381,10 @@ export type FluentMessageId =
   | 'confucius-workspace-ui-language'
   | 'confucius-workspace-ui-language-en'
   | 'confucius-workspace-ui-language-zh'
+  | 'confucius-workspace-ui-theme'
+  | 'confucius-workspace-ui-theme-auto'
+  | 'confucius-workspace-ui-theme-dark'
+  | 'confucius-workspace-ui-theme-light'
   | 'confucius-workspace-untitled-task'
   | 'confucius-workspace-update-auto'
   | 'confucius-workspace-update-check'
@@ -436,6 +440,7 @@ export type FluentMessageId =
   | 'pref-agent-help'
   | 'pref-agent-title'
   | 'pref-api-key'
+  | 'pref-appearance-title'
   | 'pref-base-url'
   | 'pref-bridge-help'
   | 'pref-bridge-title'
@@ -473,4 +478,8 @@ export type FluentMessageId =
   | 'pref-security-title'
   | 'pref-security-workspace'
   | 'pref-stream-responses'
-  | 'pref-title';
+  | 'pref-title'
+  | 'pref-ui-theme'
+  | 'pref-ui-theme-auto'
+  | 'pref-ui-theme-dark'
+  | 'pref-ui-theme-light';

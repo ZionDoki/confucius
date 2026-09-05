@@ -539,6 +539,12 @@ export function clampMaxToolCalls(value: unknown): number {
 
 export type UiFont = "sans" | "serif" | "mono";
 
+export type UiTheme = "auto" | "light" | "dark";
+
+export function isUiTheme(value: unknown): value is UiTheme {
+  return value === "auto" || value === "light" || value === "dark";
+}
+
 export type UiLanguage = "en-US" | "zh-CN";
 
 export const UI_LANGUAGES: readonly UiLanguage[] = ["zh-CN", "en-US"];
@@ -622,6 +628,8 @@ export interface ModelConfigView {
   maxToolCalls: number;
   /** Workspace UI font family preset. */
   uiFont?: UiFont;
+  /** Auto follows Zotero; explicit choices apply only to Confucius. */
+  uiTheme?: UiTheme;
   /** Workspace UI base font size in px (12-18). */
   uiFontSize?: number;
   /** Explicit workspace interface language. */
@@ -652,6 +660,7 @@ export interface ConfigSetParams {
   maxToolCalls?: number;
   /** Workspace UI font family preset. */
   uiFont?: UiFont;
+  uiTheme?: UiTheme;
   /** Workspace UI base font size in px (12-18). */
   uiFontSize?: number;
   /** Explicit workspace interface language. */
@@ -723,6 +732,9 @@ export function validateConfigPatch(
   patch: Record<string, unknown>,
 ): ConfigValidation {
   const errors: string[] = [];
+  if (patch.uiTheme !== undefined && !isUiTheme(patch.uiTheme)) {
+    errors.push("UI theme must be one of auto, light, dark");
+  }
   const baseUrl =
     patch.baseUrl === undefined ? undefined : String(patch.baseUrl).trim();
   if (baseUrl !== undefined) {

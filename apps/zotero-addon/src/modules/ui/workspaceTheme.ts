@@ -31,13 +31,13 @@ export const TUI_CSS = `
   font-size: 12.5px;
   font-weight: 500;
   letter-spacing: 0.04em;
-  color: #70695f;
+  color: var(--confucius-muted);
 }
 .tui-waiting-mark {
   width: 11px;
   height: 11px;
   flex: none;
-  color: #55504a;
+  color: var(--confucius-secondary);
   transform-origin: 50% 50%;
   animation: confucius-waiting-turn 5.6s cubic-bezier(0.65, 0, 0.35, 1) infinite;
 }
@@ -60,13 +60,13 @@ export const TUI_CSS = `
 .tui-answer th, .tui-answer td {
   min-width: 100px;
   border: 0;
-  border-bottom: 1px solid #e7e2d8;
+  border-bottom: 1px solid var(--confucius-line);
   padding: 4px 8px;
   font-size: 1em;
 }
-.tui-answer th { background: #f0ece3; }
+.tui-answer th { background: var(--confucius-surface); }
 .tui-answer pre {
-  background: #f0ece3;
+  background: var(--confucius-surface);
   padding: 8px 10px;
   overflow-x: scroll;
   overflow-y: hidden;
@@ -109,23 +109,23 @@ export const TUI_CSS = `
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: #777166;
+  color: var(--confucius-muted);
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease, transform 120ms ease;
 }
 .confucius-answer-action:hover:not(:disabled) {
-  background: #eee9df;
-  color: #33302a;
+  background: var(--confucius-hover);
+  color: var(--confucius-ink);
 }
 .confucius-answer-action:active:not(:disabled) { transform: translateY(1px); }
 .confucius-answer-action:focus-visible {
-  outline: 2px solid #9a6842;
+  outline: 2px solid var(--confucius-focus);
   outline-offset: 1px;
 }
 .confucius-answer-action:disabled { cursor: default; opacity: .38; }
 .confucius-answer-action[data-state="success"] {
-  background: #e5eee5;
-  color: #3f6d49;
+  background: var(--confucius-success-surface);
+  color: var(--confucius-success);
 }
 .confucius-answer-action svg { width: 15px; height: 15px; display: block; }
 .confucius-menu-surface {
@@ -136,9 +136,9 @@ export const TUI_CSS = `
   padding: 8px;
   border: 0;
   border-radius: 12px;
-  background: #fffefa;
-  color: #33302a;
-  box-shadow: 0 12px 32px rgba(45, 38, 26, .12), 0 2px 6px rgba(45, 38, 26, .06);
+  background: var(--confucius-elevated);
+  color: var(--confucius-ink);
+  box-shadow: var(--confucius-shadow);
   box-sizing: border-box;
   overscroll-behavior: contain;
   font: inherit;
@@ -148,22 +148,24 @@ export const TUI_CSS = `
 .confucius-menu-picker > :last-child { min-height: 0; }
 .confucius-menu-header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 6px 8px 8px; }
 .confucius-menu-header strong { flex: none; font-size: .92em; font-weight: 600; }
-.confucius-menu-header > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .82em; color: #80776b; }
-.confucius-menu-heading { margin: 12px 8px 4px; color: #80776b; font-size: .82em; font-weight: 500; }
+.confucius-menu-header > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .82em; color: var(--confucius-muted); }
+.confucius-menu-heading { margin: 12px 8px 4px; color: var(--confucius-muted); font-size: .82em; font-weight: 500; }
 .confucius-menu-heading:first-child { margin-top: 6px; }
 .confucius-menu-row, .confucius-composer-menu-row {
   display: flex;
   align-items: center;
   gap: 10px;
   min-width: 0;
-  min-height: 36px;
+  height: auto;
+  max-height: none;
+  min-height: 40px;
   width: 100%;
   margin: 0;
-  padding: 8px;
+  padding: 10px 8px;
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: #33302a;
+  color: var(--confucius-ink);
   box-shadow: none;
   box-sizing: border-box;
   appearance: none;
@@ -177,12 +179,12 @@ export const TUI_CSS = `
 .confucius-menu-row:focus-visible,
 .confucius-menu-row[data-active="true"],
 .confucius-menu-row[data-highlighted="true"],
-.confucius-composer-menu-row[aria-selected="true"] { background: #f0ede6; box-shadow: none; }
-.confucius-menu-row:focus-visible { outline: 2px solid #a79a86; outline-offset: -2px; }
-.confucius-menu-glyph { display: inline-flex; flex: 0 0 22px; align-items: center; justify-content: center; height: 24px; color: #8c7b64; font-size: 16px; }
-.confucius-menu-back { margin-bottom: 4px; color: #80776b; }
+.confucius-composer-menu-row[aria-selected="true"] { background: var(--confucius-surface); box-shadow: none; }
+.confucius-menu-row:focus-visible { outline: 2px solid var(--confucius-focus); outline-offset: -2px; }
+.confucius-menu-glyph { display: inline-flex; flex: 0 0 22px; align-items: center; justify-content: center; height: 24px; color: var(--confucius-accent-text); font-size: 16px; }
+.confucius-menu-back { margin-bottom: 4px; color: var(--confucius-muted); }
 .confucius-context-details p { margin: 6px 8px 12px; line-height: 1.6; overflow-wrap: anywhere; }
-.confucius-context-details p + p { color: #80776b; font-size: .9em; }
+.confucius-context-details p + p { color: var(--confucius-muted); font-size: .9em; }
 .confucius-menu-footer { display: flex; justify-content: flex-end; gap: 4px; margin-top: 8px; }
 .confucius-menu-footer .confucius-menu-row { width: auto; }
 .confucius-composer {
@@ -193,7 +195,7 @@ export const TUI_CSS = `
   margin: 0;
   padding: 12px 24px 18px;
   box-sizing: border-box;
-  background: var(--confucius-paper, #faf9f6);
+  background: var(--confucius-paper);
 }
 .confucius-composer-card {
   --confucius-composer-control-size: 36px;
@@ -207,8 +209,8 @@ export const TUI_CSS = `
   box-sizing: border-box;
   border: 0;
   border-radius: 16px;
-  background: #fffefa;
-  box-shadow: 0 4px 24px rgba(70, 59, 43, .055);
+  background: var(--confucius-elevated);
+  box-shadow: var(--confucius-shadow-soft);
 }
 .confucius-composer-sources {
   min-width: 0;
@@ -249,12 +251,12 @@ export const TUI_CSS = `
   appearance: none; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
   flex: 0 1 auto; min-width: var(--confucius-composer-control-size); max-width: 100%;
   height: var(--confucius-composer-control-size); min-height: var(--confucius-composer-control-size);
-  margin: 0; padding: 0 8px; border: 0; border-radius: 8px; background: #f0ede6; color: #805c37;
+  margin: 0; padding: 0 8px; border: 0; border-radius: 8px; background: var(--confucius-surface); color: var(--confucius-accent-text);
   font: inherit; font-size: .9em; line-height: 1; cursor: pointer; box-sizing: border-box;
 }
 .confucius-composer-toolbar .confucius-composer-status[hidden] { display: none; }
-.confucius-composer-status:hover:not(:disabled) { background: #e8e2d6; }
-.confucius-composer-status:focus-visible { outline: 2px solid #a79a86; outline-offset: 2px; }
+.confucius-composer-status:hover:not(:disabled) { background: var(--confucius-hover); }
+.confucius-composer-status:focus-visible { outline: 2px solid var(--confucius-focus); outline-offset: 2px; }
 .confucius-composer-status:disabled { cursor: default; opacity: .55; }
 .confucius-composer-status-glyph { flex: none; display: grid; place-items: center; width: 16px; height: 16px; }
 .confucius-composer-status-glyph svg { grid-area: 1 / 1; display: block; width: 16px; height: 16px; }
@@ -288,12 +290,14 @@ export const TUI_CSS = `
   min-height: var(--confucius-composer-control-size);
   max-height: var(--confucius-composer-control-size);
 }
-#confucius-plus:hover, #confucius-endpoint:hover { background: #f0ece3; }
+#confucius-plus:hover, #confucius-endpoint:hover { background: var(--confucius-surface); }
 .confucius-composer-toolbar #confucius-context-ring { grid-area: 1 / 3; margin: 0; }
-.confucius-composer-toolbar .confucius-composer-action { grid-area: 1 / 4; border: 0; background: #33302a; color: #fffefa; cursor: pointer; font: inherit; font-size: 20px; line-height: 1; }
-.confucius-composer-action:hover:not(:disabled) { background: #51483b; }
+.confucius-composer-toolbar .confucius-composer-action { grid-area: 1 / 4; border: 0; background: var(--confucius-primary); color: var(--confucius-primary-ink); cursor: pointer; font: inherit; font-size: 20px; line-height: 1; }
+.confucius-composer-action:hover:not(:disabled) { background: var(--confucius-primary-hover); }
+#confucius-send { display: inline-flex; align-items: center; justify-content: center; }
+#confucius-send svg { display: block; width: 22px; height: 22px; flex: none; }
 .confucius-composer-action:disabled { opacity: .45; cursor: default; }
-.confucius-composer-toolbar #confucius-stop { border: 1px solid #8c6a3f; background: transparent; color: #8c6a3f; font-size: 13px; }
+.confucius-composer-toolbar #confucius-stop { border: 1px solid var(--confucius-accent); background: transparent; color: var(--confucius-accent); font-size: 13px; }
 .confucius-workspace-root:is([data-confucius-density="compact"], [data-confucius-density="narrow"]) .confucius-composer { padding: 8px 10px 10px; }
 .confucius-workspace-root[data-confucius-density="narrow"] .confucius-composer-card { --confucius-composer-control-size: 32px; padding: 10px; }
 .confucius-workspace-root[data-confucius-density="narrow"] .confucius-composer-toolbar { grid-template-columns: 32px minmax(0, 1fr) 32px; gap: 4px; }
@@ -320,31 +324,31 @@ export const TUI_CSS = `
   padding: 5px 6px 5px 8px;
   border: 0;
   border-radius: 8px;
-  background: #f2efe8;
-  color: #33302a;
+  background: var(--confucius-surface);
+  color: var(--confucius-ink);
   box-sizing: border-box;
   box-shadow: none;
 }
-.confucius-attachment-chip[data-status="preparing"] { color: #7a684e; }
+.confucius-attachment-chip[data-status="preparing"] { color: var(--confucius-accent-text); }
 .confucius-attachment-chip[data-status="error"] {
-  border-color: #dfb3a6;
-  background: #fff8f5;
-  color: #9c3f2b;
+  border-color: var(--confucius-danger);
+  background: var(--confucius-danger-surface);
+  color: var(--confucius-danger);
 }
 .confucius-attachment-kind {
   min-width: 30px;
   padding: 3px 5px;
   border-radius: 5px;
   background: transparent;
-  color: #795b36;
+  color: var(--confucius-accent-text);
   font-size: .75em;
   font-weight: 800;
   letter-spacing: .06em;
   text-align: center;
 }
 .confucius-attachment-chip[data-status="error"] .confucius-attachment-kind {
-  background: #f4dfd8;
-  color: #9c3f2b;
+  background: var(--confucius-danger-surface);
+  color: var(--confucius-danger);
 }
 .confucius-attachment-copy { min-width: 0; }
 .confucius-attachment-name {
@@ -360,7 +364,7 @@ export const TUI_CSS = `
   display: block;
   overflow: hidden;
   margin-top: 1px;
-  color: #70695f;
+  color: var(--confucius-muted);
   font-size: .78em;
   line-height: 1.2;
   text-overflow: ellipsis;
@@ -377,11 +381,11 @@ export const TUI_CSS = `
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: #70695f;
+  color: var(--confucius-muted);
   cursor: pointer;
   font: 600 16px/1 system-ui, sans-serif;
 }
-.confucius-attachment-remove:hover { background: #eee9df; color: #33302a; }
+.confucius-attachment-remove:hover { background: var(--confucius-hover); color: var(--confucius-ink); }
 .confucius-drop-hint {
   position: absolute;
   inset: 6px;
@@ -389,11 +393,11 @@ export const TUI_CSS = `
   display: grid;
   place-items: center;
   padding: 24px;
-  border: 1px dashed rgba(138, 90, 43, .72);
+  border: 1px dashed var(--confucius-accent);
   border-radius: 12px;
-  background: rgba(250, 248, 242, .91);
+  background: var(--confucius-drop-surface);
   backdrop-filter: blur(4px);
-  color: #795b36;
+  color: var(--confucius-accent-text);
   font-size: 12px;
   font-weight: 700;
   letter-spacing: .01em;
@@ -423,18 +427,18 @@ export const TUI_CSS = `
   border: 0 !important;
   border-radius: 8px !important;
   background: transparent !important;
-  color: #33302a !important;
+  color: var(--confucius-ink) !important;
   box-sizing: border-box;
   cursor: pointer;
   line-height: 1;
   transition: background 120ms ease, color 120ms ease;
 }
 .confucius-icon-button:hover {
-  background: #f0ece3 !important;
-  color: #33302a !important;
+  background: var(--confucius-surface) !important;
+  color: var(--confucius-ink) !important;
 }
 .confucius-icon-button:focus-visible {
-  outline: 2px solid #33302a;
+  outline: 2px solid var(--confucius-ink);
   outline-offset: 2px;
 }
 .confucius-icon-button svg {
@@ -449,7 +453,7 @@ export const TUI_CSS = `
   display: flex;
   padding: 24px;
   box-sizing: border-box;
-  background: #332a1c22;
+  background: var(--confucius-scrim);
   backdrop-filter: blur(8px);
 }
 .confucius-knowledge-shell {
@@ -463,8 +467,8 @@ export const TUI_CSS = `
   overflow: hidden;
   border: 0;
   border-radius: 16px;
-  background: #fffefa;
-  box-shadow: 0 18px 50px rgba(90, 80, 60, 0.16);
+  background: var(--confucius-elevated);
+  box-shadow: var(--confucius-shadow);
 }
 .confucius-knowledge-header {
   display: flex;
@@ -473,11 +477,11 @@ export const TUI_CSS = `
   min-width: 0;
   padding: 20px 24px 16px;
   border-bottom: 0;
-  background: #fffefa;
+  background: var(--confucius-elevated);
 }
 .confucius-knowledge-header-copy { min-width: 0; flex: 1; }
 .confucius-knowledge-eyebrow {
-  color: #70695f;
+  color: var(--confucius-muted);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: .12em;
@@ -485,7 +489,7 @@ export const TUI_CSS = `
 }
 .confucius-knowledge-heading {
   overflow: hidden;
-  color: #33302a;
+  color: var(--confucius-ink);
   font: inherit; font-size: 1.3em; font-weight: 650;
   letter-spacing: -0.01em;
   text-overflow: ellipsis;
@@ -503,40 +507,47 @@ export const TUI_CSS = `
   overflow-x: hidden;
   overflow-y: auto;
   scrollbar-gutter: stable;
+  scroll-padding-block: 12px;
   box-sizing: border-box;
 }
 .confucius-knowledge-topics {
   padding: 8px 16px 20px;
   border-right: 0;
-  background: #fffefa;
+  background: var(--confucius-elevated);
 }
 .confucius-knowledge-entries {
   padding: 8px 16px 20px;
   border-right: 0;
-  background: #fffefa;
+  background: var(--confucius-elevated);
 }
-.confucius-knowledge-editor { padding: 8px 24px 20px; background: #fffefa; }
+.confucius-knowledge-editor { padding: 8px 24px 20px; background: var(--confucius-elevated); }
 .confucius-kb-row, .confucius-kb-entry-row {
+  display: block;
   width: 100%;
-  padding: 9px 10px;
+  height: auto;
+  max-height: none;
+  margin: 0 0 8px;
+  padding: 12px;
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: #33302a;
+  color: var(--confucius-ink);
   text-align: left;
   cursor: pointer;
   box-sizing: border-box;
+  font: inherit;
+  overflow-wrap: anywhere;
 }
-.confucius-kb-row:hover, .confucius-kb-entry-row:hover { background: #efece4; }
+.confucius-kb-row:hover, .confucius-kb-entry-row:hover { background: var(--confucius-hover); }
 .confucius-kb-row.active, .confucius-kb-entry-row.active {
-  background: #f0ece3;
-  color: #33302a;
+  background: var(--confucius-surface);
+  color: var(--confucius-ink);
   box-shadow: none;
 }
-.confucius-kb-meta { margin-top: 2px; color: #70695f; font-size: .86em; }
+.confucius-kb-meta { margin-top: 6px; color: var(--confucius-muted); font-size: .86em; }
 .confucius-kb-section-label {
   margin: 12px 0 8px;
-  color: #70695f;
+  color: var(--confucius-muted);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: .1em;
@@ -551,13 +562,13 @@ export const TUI_CSS = `
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: #6b665c;
+  color: var(--confucius-muted);
   cursor: pointer;
   font: inherit;
   font-size: .9em;
 }
-.confucius-kb-filter.active { background: #f0ece3; border-color: #33302a; color: #33302a; }
-.confucius-kb-field { display: grid; gap: 5px; margin-bottom: 12px; color: #555046; font-size: 11px; }
+.confucius-kb-filter.active { background: var(--confucius-surface); border-color: var(--confucius-ink); color: var(--confucius-ink); }
+.confucius-kb-field { display: grid; gap: 5px; margin-bottom: 12px; color: var(--confucius-secondary); font-size: 11px; }
 .confucius-kb-field input, .confucius-kb-field textarea, .confucius-kb-field select,
 .confucius-kb-toolbar input {
   min-width: 0;
@@ -565,14 +576,14 @@ export const TUI_CSS = `
   padding: 8px 9px;
   border: 0;
   border-radius: 8px;
-  background: #f2efe8;
-  color: #33302a;
+  background: var(--confucius-surface);
+  color: var(--confucius-ink);
   box-sizing: border-box;
   font: inherit;
 }
 .confucius-kb-field input:focus, .confucius-kb-field textarea:focus, .confucius-kb-field select:focus,
 .confucius-kb-toolbar input:focus {
-  outline: 2px solid #b5a68d;
+  outline: 2px solid var(--confucius-focus);
   outline-offset: 0;
 }
 .confucius-kb-field textarea { min-height: 180px; resize: vertical; line-height: 1.5; }
@@ -585,15 +596,15 @@ export const TUI_CSS = `
   padding: 12px;
   border: 0;
   border-radius: 8px;
-  background: #f7f5ef;
+  background: var(--confucius-surface);
 }
-.confucius-mindmap-preview ul { margin: 4px 0 4px 14px; padding-left: 12px; border-left: 1px solid #ddd8cc; }
+.confucius-mindmap-preview ul { margin: 4px 0 4px 14px; padding-left: 12px; border-left: 1px solid var(--confucius-line); }
 .confucius-mindmap-preview > ul { margin-left: 0; padding-left: 0; border-left: 0; }
-.confucius-mindmap-preview li { margin: 5px 0; color: #33302a; }
+.confucius-mindmap-preview li { margin: 5px 0; color: var(--confucius-ink); }
 .confucius-kb-actions { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
-.confucius-kb-danger { margin-left: auto; color: #b3452f !important; background: transparent !important; border-color: #e3c0b6 !important; }
-.confucius-kb-empty { display: grid; place-items: center; min-height: 180px; padding: 18px; color: #70695f; text-align: center; }
-.confucius-kb-error { margin: 8px 0; color: #b3452f; font-size: 12px; white-space: pre-wrap; }
+.confucius-kb-danger { margin-left: auto; color: var(--confucius-danger) !important; background: transparent !important; border-color: var(--confucius-danger) !important; }
+.confucius-kb-empty { display: grid; place-items: center; min-height: 180px; padding: 18px; color: var(--confucius-muted); text-align: center; }
+.confucius-kb-error { margin: 8px 0; color: var(--confucius-danger); font-size: 12px; white-space: pre-wrap; }
 @media (max-width: 760px) {
   .confucius-knowledge-overlay { padding: 0; }
   .confucius-knowledge-shell { border: 0; border-radius: 0; }
@@ -613,9 +624,9 @@ export const TUI_CSS = `
   .confucius-kb-field textarea { min-height: 150px; }
 }
 .confucius-workspace-root a {
-  color: #8a5a2b;
+  color: var(--confucius-accent);
   text-decoration: underline;
-  text-decoration-color: #cbb890;
+  text-decoration-color: var(--confucius-line-strong);
   text-underline-offset: 2px;
   cursor: pointer;
 }
@@ -623,7 +634,7 @@ export const TUI_CSS = `
   border: 0;
   transition: background 120ms ease, border-color 120ms ease;
 }
-.confucius-task-row:hover { background: #f0ece3 !important; }
+.confucius-task-row:hover { background: var(--confucius-surface) !important; }
 
 .confucius-activity-shell {
   width: min(900px, 100%);
@@ -676,22 +687,22 @@ export const TUI_CSS = `
   padding: 13px 14px;
   border: 0;
   border-radius: 12px;
-  background: #fffefa;
-  color: #33302a;
+  background: var(--confucius-elevated);
+  color: var(--confucius-ink);
   box-sizing: border-box;
-  box-shadow: 0 4px 20px rgba(70, 59, 43, .045);
+  box-shadow: var(--confucius-shadow-soft);
   font: inherit;
   text-align: left;
   cursor: pointer;
   transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
 }
 .confucius-artifact-file:hover {
-  border-color: #b8ad9d;
-  box-shadow: 0 8px 22px rgba(70, 59, 43, .09);
+  border-color: var(--confucius-line-strong);
+  box-shadow: var(--confucius-shadow-hover);
   transform: translateY(-1px);
 }
 .confucius-artifact-file:focus-visible {
-  outline: 2px solid #8a5a2b;
+  outline: 2px solid var(--confucius-accent);
   outline-offset: 2px;
 }
 .confucius-artifact-file-icon {
@@ -702,20 +713,20 @@ export const TUI_CSS = `
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: #8a5a2b;
+  color: var(--confucius-accent);
   font: 700 17px/1 Georgia, serif;
   box-shadow: none;
 }
 .confucius-artifact-file[data-update="true"] .confucius-artifact-file-icon {
-  border-color: #9db09f;
+  border-color: var(--confucius-success);
   background: transparent;
-  color: #4f7657;
+  color: var(--confucius-success);
 }
 .confucius-artifact-file-copy { min-width: 0; }
 .confucius-artifact-file-kind {
   display: block;
   margin-bottom: 2px;
-  color: #70695f;
+  color: var(--confucius-muted);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: .08em;
@@ -724,7 +735,7 @@ export const TUI_CSS = `
 .confucius-artifact-file-title {
   display: block;
   overflow: hidden;
-  color: #33302a;
+  color: var(--confucius-ink);
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -733,13 +744,13 @@ export const TUI_CSS = `
   display: block;
   margin-top: 3px;
   overflow: hidden;
-  color: #777166;
+  color: var(--confucius-muted);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .confucius-artifact-file-open {
-  color: #8a5a2b;
+  color: var(--confucius-accent);
   font-size: 11px;
   font-weight: 700;
   white-space: nowrap;
@@ -798,16 +809,16 @@ export const TUI_CSS = `
   padding: 0;
   box-sizing: border-box;
   background:
-    #faf9f6;
+    var(--confucius-paper);
   backdrop-filter: none;
   animation: confucius-artifact-overlay-in 150ms ease-out;
 }
 .confucius-artifact-overlay[data-refresh="true"] { animation: none; }
 .confucius-artifact-overlay[data-mount="window"] { position: fixed; }
 .confucius-artifact-overlay a {
-  color: #8a5a2b;
+  color: var(--confucius-accent);
   text-decoration: underline;
-  text-decoration-color: #cbb890;
+  text-decoration-color: var(--confucius-line-strong);
   text-underline-offset: 2px;
   cursor: pointer;
 }
@@ -867,7 +878,7 @@ export const TUI_CSS = `
   border-radius: 10px;
   background: transparent;
   backdrop-filter: none;
-  color: #5d574d;
+  color: var(--confucius-secondary);
   box-sizing: border-box;
   box-shadow: none;
   font: inherit;
@@ -877,20 +888,20 @@ export const TUI_CSS = `
 }
 .confucius-artifact-rail-button:hover,
 .confucius-artifact-menu-trigger:hover {
-  border-color: #c5b9a8;
-  background: #eeebe3;
-  color: #33302a;
+  border-color: var(--confucius-line-strong);
+  background: var(--confucius-hover);
+  color: var(--confucius-ink);
   transform: none;
   box-shadow: none;
 }
 .confucius-artifact-menu-trigger[aria-expanded="true"] {
-  border-color: #c5b9a8;
-  background: #fffefa;
-  color: #8a5a2b;
+  border-color: var(--confucius-line-strong);
+  background: var(--confucius-elevated);
+  color: var(--confucius-accent);
 }
 .confucius-artifact-rail-button:focus-visible,
 .confucius-artifact-menu-trigger:focus-visible {
-  outline: 2px solid #8a5a2b;
+  outline: 2px solid var(--confucius-accent);
   outline-offset: 1px;
 }
 .confucius-artifact-rail-button svg,
@@ -905,7 +916,7 @@ export const TUI_CSS = `
   position: absolute;
   right: 4px;
   bottom: 2px;
-  color: #9a9387;
+  color: var(--confucius-muted);
   font-size: 11px;
   line-height: 1;
   transition: transform 100ms ease;
@@ -920,18 +931,18 @@ export const TUI_CSS = `
   border-radius: 50%;
   background: transparent;
   backdrop-filter: blur(10px);
-  color: #6f695f;
+  color: var(--confucius-muted);
   box-sizing: border-box;
   font-size: 11px;
   font-weight: 700;
   pointer-events: auto;
 }
 #confucius-artifact-writeback {
-  color: #8a5a2b;
+  color: var(--confucius-accent);
 }
 #confucius-artifact-writeback:hover {
-  border-color: #cabca9;
-  background: #fffefa;
+  border-color: var(--confucius-line-strong);
+  background: var(--confucius-elevated);
 }
 .confucius-artifact-rail-button:disabled {
   opacity: .38;
@@ -947,17 +958,19 @@ export const TUI_CSS = `
 .confucius-settings-select {
   appearance: none;
   width: 100%;
-  height: 34px;
+  height: auto;
+  min-height: 36px;
+  max-height: none;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 18px;
   align-items: center;
   gap: 8px;
   margin-bottom: 10px;
-  padding: 0 9px 0 10px;
-  border: 1px solid #ddd8cc;
+  padding: 8px 10px;
+  border: 1px solid var(--confucius-line);
   border-radius: 7px;
-  background: #fff;
-  color: #33302a;
+  background: var(--confucius-elevated);
+  color: var(--confucius-ink);
   box-sizing: border-box;
   font: inherit;
   text-align: left;
@@ -966,14 +979,14 @@ export const TUI_CSS = `
     box-shadow 100ms ease;
 }
 .confucius-settings-select:hover:not(:disabled) {
-  border-color: #c4bbad;
-  background: #fffefa;
+  border-color: var(--confucius-line-strong);
+  background: var(--confucius-elevated);
 }
 .confucius-settings-select:focus-visible,
 .confucius-settings-select[aria-expanded="true"] {
   outline: none;
-  border-color: #9a6430;
-  box-shadow: 0 0 0 2px rgba(154, 100, 48, 0.14);
+  border-color: var(--confucius-accent);
+  box-shadow: 0 0 0 2px var(--confucius-line-strong);
 }
 .confucius-settings-select:disabled {
   opacity: .48;
@@ -985,7 +998,7 @@ export const TUI_CSS = `
   white-space: nowrap;
 }
 .confucius-settings-select-chevron {
-  color: #70695f;
+  color: var(--confucius-muted);
   font-size: 12px;
   line-height: 1;
   text-align: center;
@@ -1000,15 +1013,18 @@ export const TUI_CSS = `
   appearance: none;
   width: 100%;
   min-width: 0;
+  height: auto;
+  max-height: none;
+  min-height: 40px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 18px;
   align-items: center;
   gap: 10px;
-  padding: 8px 9px;
+  padding: 10px;
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: #33302a;
+  color: var(--confucius-ink);
   box-sizing: border-box;
   font: inherit;
   text-align: left;
@@ -1019,11 +1035,11 @@ export const TUI_CSS = `
 .confucius-settings-choice:hover,
 .confucius-settings-choice:focus-visible {
   outline: none;
-  background: #f0ede6;
+  background: var(--confucius-surface);
 }
 .confucius-artifact-choice[data-selected="true"],
 .confucius-settings-choice[data-selected="true"] {
-  background: #f0ede6;
+  background: var(--confucius-surface);
   box-shadow: none;
 }
 .confucius-settings-choice-label {
@@ -1033,7 +1049,7 @@ export const TUI_CSS = `
   white-space: nowrap;
 }
 .confucius-settings-choice-check {
-  color: #8c6a3f;
+  color: var(--confucius-accent);
   font-weight: 700;
   text-align: center;
 }
@@ -1048,11 +1064,11 @@ export const TUI_CSS = `
 .confucius-artifact-choice-meta {
   display: block;
   margin-top: 1px;
-  color: #70695f;
+  color: var(--confucius-muted);
   font-size: 10px;
 }
 .confucius-artifact-choice-check {
-  color: #8a5a2b;
+  color: var(--confucius-accent);
   font-weight: 700;
   text-align: center;
 }
@@ -1119,11 +1135,11 @@ export const TUI_CSS = `
 .confucius-artifact-paper th,
 .confucius-artifact-paper td {
   padding: 8px 10px;
-  border-bottom: 1px solid #e5e1d8;
+  border-bottom: 1px solid var(--confucius-line);
   text-align: left;
   vertical-align: top;
 }
-.confucius-artifact-paper th { color: #6b665c; font-size: .82em; letter-spacing: .05em; text-transform: uppercase; }
+.confucius-artifact-paper th { color: var(--confucius-muted); font-size: .82em; letter-spacing: .05em; text-transform: uppercase; }
 .confucius-template-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1139,30 +1155,32 @@ export const TUI_CSS = `
   align-items: flex-start;
   justify-content: flex-start;
   min-width: 0;
+  height: auto;
+  max-height: none;
   min-height: 86px;
   padding: 16px;
   border: 0;
   border-radius: 12px;
-  background: #f2efe880;
-  color: #33302a;
+  background: var(--confucius-surface);
+  color: var(--confucius-ink);
   box-sizing: border-box;
   white-space: normal;
   text-align: left;
   cursor: pointer;
 }
-.confucius-template-button:hover { color: #8c6a3f; background: #eeebe3; }
+.confucius-template-button:hover { color: var(--confucius-accent); background: var(--confucius-hover); }
 .confucius-template-title { display: block; margin-bottom: 3px; font-weight: 700; }
-.confucius-template-copy { display: block; color: #777166; font-size: .9em; line-height: 1.4; }
+.confucius-template-copy { display: block; color: var(--confucius-muted); font-size: .9em; line-height: 1.4; }
 .confucius-runtime-dot {
   width: 7px;
   height: 7px;
   flex: 0 0 7px;
   border-radius: 50%;
-  background: #9b968b;
+  background: var(--confucius-muted);
 }
-.confucius-runtime-dot[data-state="ready"] { background: #4f7657; }
-.confucius-runtime-dot[data-state="auth_required"] { background: #bf762f; }
-.confucius-runtime-dot[data-state="error"] { background: #b3452f; }
+.confucius-runtime-dot[data-state="ready"] { background: var(--confucius-success); }
+.confucius-runtime-dot[data-state="auth_required"] { background: var(--confucius-accent); }
+.confucius-runtime-dot[data-state="error"] { background: var(--confucius-danger); }
 .confucius-before-after {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1178,7 +1196,7 @@ export const TUI_CSS = `
   scrollbar-gutter: stable;
   border: 0;
   border-radius: 6px;
-  background: #fffefa;
+  background: var(--confucius-elevated);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font: 11px/1.45 ui-monospace, Consolas, monospace;
@@ -1229,45 +1247,46 @@ export const TUI_CSS = `
 #confucius-settings-overlay :is(button, input, textarea, select, summary):focus-visible,
 #confucius-knowledge-overlay :is(button, input, textarea, select, summary):focus-visible,
 #confucius-artifact-overlay :is(button, a, summary):focus-visible {
-  outline: 2px solid var(--confucius-accent, #8c6a3f); outline-offset: 3px;
+  outline: 2px solid var(--confucius-accent); outline-offset: 3px;
 }
 .confucius-workspace-root :is(input, textarea, select) { color: var(--confucius-ink); accent-color: var(--confucius-accent); }
 :is(#confucius-settings-overlay, #confucius-knowledge-overlay) :is(input, textarea, select) { color: var(--confucius-ink); accent-color: var(--confucius-accent); }
 .confucius-workspace-root :is(button, input, select, summary) { min-height: 28px; }
 .confucius-workspace-root textarea::placeholder { color: var(--confucius-muted); opacity: 1; }
-.confucius-workspace-root .confucius-task-search { width: 100%; box-sizing: border-box; padding: 10px 12px; margin-bottom: 12px; border: 0; border-radius: 10px; background: #f0ede6; font: inherit; }
-.confucius-session-pane h3 { margin: 16px 8px 8px; font-size: .82em; font-weight: 600; color: var(--confucius-muted); }
-.confucius-session-pane .confucius-task-row { position: relative; display: flex; align-items: center; gap: 4px; margin-bottom: 4px; padding: 4px; border-radius: 8px; }
-.confucius-task-row[data-active=true] { background: #ede7db; }
-.confucius-task-row:hover { background: #f1ede5; }
-.confucius-task-open { flex: 1; min-width: 0; padding: 8px; border: 0; background: transparent; color: var(--confucius-ink); text-align: left; cursor: pointer; font: inherit; }
+.confucius-workspace-root .confucius-task-search { width: 100%; height: auto; max-height: none; min-height: 40px; box-sizing: border-box; padding: 10px 12px; margin-bottom: 12px; border: 0; border-radius: 10px; background: var(--confucius-surface); font: inherit; }
+.confucius-session-pane { scroll-padding-block: 12px; }
+.confucius-session-pane h3 { margin: 20px 8px 12px; font-size: .82em; font-weight: 600; color: var(--confucius-muted); }
+.confucius-session-pane .confucius-task-row { position: relative; display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding: 4px; border-radius: 8px; }
+.confucius-task-row[data-active=true] { background: var(--confucius-selected); }
+.confucius-task-row:hover { background: var(--confucius-hover); }
+.confucius-task-open { appearance: none; display: block; flex: 1; min-width: 0; height: auto; max-height: none; min-height: 60px; margin: 0; padding: 10px 8px; border: 0; border-radius: 6px; box-sizing: border-box; background: transparent; color: var(--confucius-ink); text-align: left; cursor: pointer; font: inherit; }
 .confucius-task-open span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
-.confucius-task-open small { display: block; margin-top: 4px; color: var(--confucius-muted); font-size: .82em; }
+.confucius-task-open small { display: block; margin-top: 6px; color: var(--confucius-muted); font-size: .82em; }
 .confucius-task-row[data-task-status=running] .confucius-task-open small,
-.confucius-task-row[data-task-status=awaiting_approval] .confucius-task-open small { color: #86521f; }
+.confucius-task-row[data-task-status=awaiting_approval] .confucius-task-open small { color: var(--confucius-accent-text); }
 .confucius-task-empty { padding: 8px; color: var(--confucius-muted); font-size: .9em; }
 .confucius-activity-shell { max-width: 880px; margin: 0 auto; padding-bottom: 16px; }
 .confucius-activity-head { display: none; }
 .confucius-task-overview { border: 0; padding: 8px 0 20px; }
 .confucius-source-tray { display: flex; flex-wrap: wrap; gap: 8px; }
-.confucius-source-tag { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; border: 0; border-radius: 8px; background: #f2efe8; padding: 2px 4px 2px 8px; font-size: .86em; }
-.confucius-source-tag button { min-width: 24px; border: 0; background: transparent; color: #665036; cursor: pointer; font: inherit; }
+.confucius-source-tag { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; border: 0; border-radius: 8px; background: var(--confucius-surface); padding: 2px 4px 2px 8px; font-size: .86em; }
+.confucius-source-tag button { min-width: 24px; border: 0; background: transparent; color: var(--confucius-accent-text); cursor: pointer; font: inherit; }
 .confucius-source-tag .confucius-source-title { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
 .confucius-source-tag[data-unavailable=true] { color: var(--confucius-muted); border-style: dashed; }
 .confucius-source-unavailable { flex-shrink: 0; color: var(--confucius-muted); font-size: .9em; }
 .confucius-history-sources { margin: 12px 0; border: 0; padding: 12px 0; font-size: .9em; color: var(--confucius-muted); }
 .confucius-history-sources > summary { cursor: pointer; }
-.confucius-history-sources button { border: 0; background: transparent; color: #715230; text-align: left; cursor: pointer; font: inherit; }
+.confucius-history-sources button { border: 0; background: transparent; color: var(--confucius-accent-text); text-align: left; cursor: pointer; font: inherit; }
 .confucius-history-sources pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; max-height: 240px; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; padding: 12px; background: var(--confucius-surface); }
 .confucius-mention-tabs { display: flex; gap: 4px; padding: 0 2px 6px; }
-.confucius-mention-tabs button { appearance: none; border: 0; border-radius: 6px; background: transparent; color: #80776b; padding: 6px 10px; cursor: pointer; font: inherit; font-size: .9em; }
-.confucius-mention-tabs button[aria-pressed=true] { background: #f0ede6; color: #33302a; }
-.confucius-mention-tabs button:focus-visible { outline: 2px solid #a79a86; outline-offset: -2px; }
-.confucius-reading-surface { color: #33302a; font-size: var(--confucius-markdown-font-size, 13px); line-height: var(--confucius-reading-line-height, 1.6); overflow-wrap: anywhere; }
+.confucius-mention-tabs button { appearance: none; border: 0; border-radius: 6px; background: transparent; color: var(--confucius-muted); padding: 6px 10px; cursor: pointer; font: inherit; font-size: .9em; }
+.confucius-mention-tabs button[aria-pressed=true] { background: var(--confucius-surface); color: var(--confucius-ink); }
+.confucius-mention-tabs button:focus-visible { outline: 2px solid var(--confucius-focus); outline-offset: -2px; }
+.confucius-reading-surface { color: var(--confucius-ink); font-size: var(--confucius-markdown-font-size, 13px); line-height: var(--confucius-reading-line-height, 1.6); overflow-wrap: anywhere; }
 .confucius-reading-surface table { display: block; border-collapse: collapse; max-width: 100%; overflow-x: scroll; overflow-y: hidden; }
-.confucius-reading-surface :is(th, td) { min-width: 100px; padding: 10px 12px; border: 0; border-bottom: 1px solid #e7e2d8; text-align: left; vertical-align: top; }
-.confucius-reading-surface th { background: #f2efe8; font-weight: 600; }
-.confucius-reading-surface blockquote { border-left: 3px solid #c9b697; padding-left: 16px; margin-left: 0; color: #5b5348; }
+.confucius-reading-surface :is(th, td) { min-width: 100px; padding: 10px 12px; border: 0; border-bottom: 1px solid var(--confucius-line); text-align: left; vertical-align: top; }
+.confucius-reading-surface th { background: var(--confucius-surface); font-weight: 600; }
+.confucius-reading-surface blockquote { border-left: 3px solid var(--confucius-line-strong); padding-left: 16px; margin-left: 0; color: var(--confucius-secondary); }
 @media (prefers-reduced-motion: reduce) { .confucius-workspace-root * { animation: none !important; transition: none !important; } }
 .confucius-workspace-root[data-confucius-layout=sidebar] .confucius-source-title { max-width: 170px; }
 .confucius-workspace-root[data-confucius-layout=sidebar] .confucius-task-overview { padding: 4px 0 12px; }
