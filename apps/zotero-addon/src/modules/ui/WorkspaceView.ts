@@ -7270,6 +7270,20 @@ function bindWorkspace(
     autoUpdateCopy.textContent = getString("workspace-update-auto");
     autoUpdateRow.appendChild(autoUpdateToggle);
     autoUpdateRow.appendChild(autoUpdateCopy);
+    const prereleaseRow = autoUpdateRow.cloneNode(false) as HTMLLabelElement;
+    const prereleaseToggle = el(
+      doc,
+      "input",
+      {},
+      {
+        id: "confucius-cfg-update-prerelease",
+        type: "checkbox",
+      },
+    ) as HTMLInputElement;
+    const prereleaseCopy = el(doc, "span");
+    prereleaseCopy.textContent = getString("workspace-update-prerelease");
+    prereleaseRow.appendChild(prereleaseToggle);
+    prereleaseRow.appendChild(prereleaseCopy);
     const updateStateLine = el(doc, "div", {
       minHeight: "20px",
       margin: "5px 0 10px",
@@ -7297,6 +7311,7 @@ function bindWorkspace(
     updateTab.appendChild(updateHelp);
     updateTab.appendChild(updateVersion);
     updateTab.appendChild(autoUpdateRow);
+    updateTab.appendChild(prereleaseRow);
     updateTab.appendChild(updateStateLine);
     updateTab.appendChild(updateButtons);
 
@@ -7308,6 +7323,9 @@ function bindWorkspace(
       }`;
       autoUpdateToggle.checked = updateView?.autoUpdate !== false;
       autoUpdateToggle.disabled = updateBusy || !updateView;
+      prereleaseToggle.checked = updateView?.includePrerelease === true;
+      prereleaseToggle.disabled =
+        updateBusy || !updateView || updateView.state === "ready";
       (checkUpdate as HTMLButtonElement).disabled = updateBusy;
       (installUpdate as HTMLButtonElement).disabled =
         updateBusy || !updateView?.canInstall;
@@ -7353,6 +7371,27 @@ function bindWorkspace(
     });
     installUpdate.addEventListener("click", () => {
       void runUpdateAction("update/install");
+    });
+    prereleaseToggle.addEventListener("change", () => {
+      const enabled = prereleaseToggle.checked;
+      updateBusy = true;
+      paintUpdate();
+      void rpc("update/setPrerelease", { enabled })
+        .then((next) => {
+          updateView = next as UpdateStatus;
+        })
+        .catch((error) => {
+          if (updateView)
+            updateView = {
+              ...updateView,
+              state: "error",
+              message: error instanceof Error ? error.message : String(error),
+            };
+        })
+        .finally(() => {
+          updateBusy = false;
+          paintUpdate();
+        });
     });
     autoUpdateToggle.addEventListener("change", () => {
       const enabled = autoUpdateToggle.checked;

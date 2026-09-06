@@ -1,5 +1,98 @@
 # Changelog
 
+## Unreleased
+
+## 0.4.0 - 2026-09-06
+
+Confucius 0.4.0 brings resumable research tasks, diagnostic exports and an
+independent plugin updater to the stable channel. This release includes the
+0.4.0 Beta changes and the subsequent Windows fixes.
+
+### Added
+
+- Export a task diagnostic report from the task header or task menu. The offline
+  HTML includes searchable events, history and artifact revisions, with a JSON
+  download. Recognized credentials are redacted; external-engine data that is
+  unavailable to Confucius is identified as such.
+- A saved Include prereleases switch controls Beta updates independently of
+  automatic checks. Stable packages default to stable updates; an explicit
+  channel choice survives upgrades. Disabling previews never downgrades.
+
+### Changed
+
+- Native, Kimi and Codex share task coordination, cumulative budgets and explicit
+  stop reasons. Continuing a task preserves its request, history and saved work;
+  Kimi and Codex retain their own internal execution and context management.
+- Tasks track evidence, drafts, proposed changes and saved results. Partially
+  completed annotation batches retain successful items so recovery can address
+  the remainder. Restarted tasks wait for explicit continuation.
+- Task state, history, logs and generated artifacts now live in the local Zotero
+  profile, with resumable migration and retained identities and source backups.
+- Confucius discovers, compares, downloads and verifies GitHub releases itself,
+  independently of Zotero's global automatic-update setting. Automatic checks run
+  after startup and every six hours; installation requires a click.
+- User documentation now focuses on setup, model selection, recovery, data and
+  updates. Release rules and acceptance records live in the maintainer guide;
+  obsolete design drafts have been removed.
+
+### Fixed
+
+- Fixed toolbar registration and first-open layout changes while restoring tasks
+  and preferences. Saved diagnostic events survive activity-view trimming.
+- Improved streamed model responses, reasoning replay, incomplete tool-call
+  handling, parameter validation and timeout recovery.
+- PDF reading can be cancelled, and expensive regular-expression searches run in
+  a separate Worker with a deadline.
+- Failed release requests, incomplete assets and checksum mismatches remain
+  visible as errors instead of being reported as an up-to-date installation.
+- External engines connect to the active Zotero profile's HTTP port. Codex
+  0.153.4 MCP consent requests now reach the existing host tool permission policy.
+- Blank and scanned PDF pages no longer fail with a cross-compartment Worker
+  cloning error during physical-page text extraction.
+- Windows runtime IO supports long history paths, allowing queued history to
+  recover without changing task IDs or replaying completed writes.
+- Diagnostic redaction preserves scientific numbers and entity IDs when a local
+  endpoint uses a short dummy credential.
+
+### Upgrade notes
+
+- This is a stable release and supersedes both 0.3.8 and 0.4.0-beta.1. If an older
+  updater cannot find it, install `confucius.xpi` manually through Zotero's add-on
+  manager once, then restart Zotero. Future checks use Confucius Settings → Update;
+  enable Include prereleases only if you want Beta releases.
+- Back up the Zotero library and local Confucius runtime directory before
+  upgrading. Migration retains the old source and backup, but downgrading does
+  not copy new task progress back to the old directory. Native Zotero notes,
+  annotations and attachments remain managed by Zotero.
+- Zotero 7–10 are supported by the package manifest. This release's native
+  Windows acceptance used Zotero 10.0.1; Zotero 7/8 were not retested.
+
+### Validation and known limits
+
+- The 0.4.0 local package passed 719 automated tests, typecheck, lint, build,
+  version and release-note checks. A normal 0.3.8 → 0.4.0 upgrade and two restarts
+  preserved task history, budgets, report revisions and a real note without
+  duplicating it. See [0.4.0 release acceptance](https://github.com/ZionDoki/confucius/blob/v0.4.0/.github/maintainers/acceptance/release-0.4.0.md).
+- [Windows acceptance](https://github.com/ZionDoki/confucius/blob/v0.4.0/.github/maintainers/acceptance/windows-acceptance-2026-09-06.md)
+  records the earlier candidate's engine and fault tests. It includes the same
+  product fixes; package hashes differ from the final versioned build.
+- Real Native, Kimi and Codex runs each created a report and two PDF highlights
+  from Attention Is All You Need. Long-context, cancellation and process-restart
+  checks preserved saved reports, budgets and annotation identities. Kimi/Codex
+  recalled the original test constraint; Native failed that semantic recall
+  check, and its first report required a factual correction. These are individual
+  task samples, not a general model-quality or success-rate claim.
+- Windows installed-package upgrade, interrupted migration, long-path recovery,
+  exclusive file locks, partial annotation recovery and PDF Worker edge cases
+  passed their scoped checks. WPS Cloud results cover only local synced-folder
+  IO and lock recovery; cloud synchronization, reconnects, multiple devices and
+  hosting the whole Zotero database there remain unverified.
+- Disk-full, separate filesystem permission denial, Windows export-dialog UI and
+  the full cross-engine fault matrix remain unverified. Native PDF annotation
+  lookup can take about five seconds per entry; large batches may hit the deadline.
+- Released-package updater acceptance must be checked after assets are published;
+  local checks do not establish a completed public download/install/restart cycle.
+
 ## 0.4.0-beta.1 - 2026-09-06
 
 This is a preview release of the Harness upgrade. Install its XPI manually;

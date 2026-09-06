@@ -17,7 +17,7 @@ a model read papers, collections, PDF selections, and local text files in
 Zotero.
 
 [Download the latest release](https://github.com/ZionDoki/confucius/releases/latest)
-· [Changelog](CHANGELOG.md) · [Build from source](#build-from-source)
+· [User guide](docs/README.md) · [Changelog](CHANGELOG.md) · [Build from source](#build-from-source)
 
 ## Features
 
@@ -63,7 +63,12 @@ model-step limit is configurable and defaults to 128.
 3. Open the gear menu and choose **Install Add-on From File**.
 4. Select `confucius.xpi`, then use the Confucius toolbar button.
 
-Zotero can install later releases from **Confucius Settings → Update**.
+Install later releases from **Confucius Settings → Update**. Confucius checks
+and verifies updates itself. Turn on **Include prereleases** to receive Betas;
+turning it off checks stable releases only and never downgrades the installation.
+Automatic checks and the Beta preference are saved independently; installation
+requires clicking **Download and install**. Older packages using the previous
+updater may need a manual XPI installation to get the new updater.
 
 For the Native runtime, add a Base URL, model name, and API key under
 **Zotero → Settings → Confucius**. A local Ollama endpoint usually does not need
@@ -72,21 +77,33 @@ that runtime.
 
 ## Files and data
 
-- Tasks, files, and conversations are stored under the Zotero data directory.
+- Task state, generated files, history, and conversation logs are stored under
+  the local Zotero profile's `confucius/runtime-v1/`. Settings shows the actual path.
 - Research memories are Markdown files under
   `<Zotero data>/confucius/memory/`.
-- Conversation logs are stored under `<Zotero data>/confucius/logs/`.
+- Zotero manages native notes, annotations, and attachments in its library.
 - Model requests follow the data policy of the endpoint or runtime you choose.
 
 New installations use Review mode for memory. You can edit, accept, or reject a
 memory before it is saved. Auto and Off modes are available in Settings.
+
+Upgrading from 0.3.x migrates runtime state to the local profile and retains the
+old source and backup. Downgrading does not copy new progress back. Back up both
+the library and the runtime directory; syncing the library alone does not sync
+complete tasks. See [task recovery and data](docs/tasks-and-data.md).
+
+In the Windows acceptance sample, Native lost an early constraint after a long
+context and restart; its first paper report also needed a factual correction.
+Check important requirements and citations when resuming. WPS Cloud testing
+covers local synced-folder IO and recovery from file locks; cloud sync, multiple
+devices, and hosting the entire Zotero database there remain unverified.
 
 ## Permissions
 
 - External runtimes receive Zotero read tools and `artifact_upsert` by default.
 - Shell commands and general file writes require a selected working directory.
 - Zotero writes show their proposed changes and require approval.
-- The local MCP endpoint listens on `127.0.0.1:23119` and requires the pairing
+- The local MCP endpoint uses Zotero's HTTP port (normally `127.0.0.1:23119`) and requires the pairing
   token shown in Settings. `/health` is the only unauthenticated route.
 - PDF text, web content, and metadata are handled as data, not instructions.
 
@@ -153,6 +170,10 @@ The local read-only MCP endpoint is:
 ```text
 http://127.0.0.1:23119/confucius/v1/mcp
 ```
+
+Use the active Zotero HTTP port if it differs from the default above.
+Architecture, release rules, and acceptance records are in the
+[maintainer guide](.github/maintainers/README.md).
 
 ## License
 

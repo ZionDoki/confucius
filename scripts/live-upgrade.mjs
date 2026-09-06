@@ -56,7 +56,7 @@ const report = {
     candidate: { path: newXpi, sha256: sha256(await readFile(newXpi)) },
   },
   scope:
-    "Released old package, actual Zotero entities and host execution; deterministic local model. Real Native/Kimi/Codex model quality and Windows platform acceptance are deferred.",
+    "Released old package, actual Zotero entities, host execution and platform restart recovery; deterministic local model. This does not measure real Native/Kimi/Codex model quality or unexecuted platform fault scenarios.",
   checks: [],
 };
 const check = (name, details = {}) => {
@@ -310,7 +310,7 @@ async function launch(xpi, version) {
       "-start-debugger-server",
       String(port),
     ],
-    { stdio: ["ignore", log.fd, log.fd] },
+    { stdio: ["ignore", log.fd, log.fd], windowsHide: true },
   );
   await log.close();
   await until(
@@ -377,17 +377,24 @@ async function launch(xpi, version) {
   return actual;
 }
 async function stop() {
-  rdp?.close();
-  rdp = undefined;
-  if (
-    !processHandle ||
-    processHandle.exitCode !== null ||
-    processHandle.signalCode
-  )
+  if (!rdp) {
+    if (processHandle?.exitCode === null) processHandle.kill("SIGKILL");
     return;
-  const stopped = new Promise((resolve) => processHandle.once("exit", resolve));
-  processHandle.kill("SIGKILL");
-  await stopped;
+  }
+  const pid = await rdp.evaluate(
+    `if(PathUtils.profileDir!==${JSON.stringify(profile)}||Zotero.DataDirectory.dir!==${JSON.stringify(data)})throw new Error("Wrong test profile");return Services.appinfo.processID;`,
+  );
+  rdp.close();
+  rdp = undefined;
+  process.kill(pid, "SIGKILL");
+  await until(() => {
+    try {
+      process.kill(pid, 0);
+      return false;
+    } catch {
+      return true;
+    }
+  });
 }
 let sequence = 0;
 async function rpc(method, params = {}) {

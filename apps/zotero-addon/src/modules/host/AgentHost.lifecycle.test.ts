@@ -137,6 +137,7 @@ function fixture() {
   const host = Object.create(AgentHost.prototype) as LifecycleHost;
   let sequence = 0;
   Object.assign(host, {
+    updates: { dispose() {} },
     taskTraceBuffer: new TaskTraceBuffer(),
     sessions: new Map([[record.id, state]]),
     ids: () => `test-${++sequence}`,

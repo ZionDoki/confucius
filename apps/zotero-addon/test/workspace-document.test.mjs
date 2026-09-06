@@ -409,7 +409,7 @@ test("settings are tabbed with font appearance controls", () => {
   assert.equal(view.includes("mask-image"), true);
 });
 
-test("settings use Zotero's native updater for checks and automatic updates", () => {
+test("settings expose the plugin's own updater and release channel", () => {
   const view = workspaceSource();
   const host = readFileSync(
     join(root, "src/modules/host/AgentHost.ts"),
@@ -426,8 +426,11 @@ test("settings use Zotero's native updater for checks and automatic updates", ()
   assert.equal(view.includes('rpc("update/setAuto"'), true);
   assert.equal(host.includes("case RPC_METHODS.updateStatus"), true);
   assert.equal(host.includes("case RPC_METHODS.updateInstall"), true);
-  assert.equal(updater.includes("AddonManager.sys.mjs"), true);
-  assert.equal(updater.includes("applyBackgroundUpdates"), true);
+  assert.equal(updater.includes("fetchReleases"), true);
+  assert.equal(updater.includes("findUpdates"), false);
+  assert.equal(updater.includes("applyBackgroundUpdates"), false);
+  assert.equal(view.includes('rpc("update/setPrerelease"'), true);
+  assert.equal(host.includes('getPref("updateAutoCheck")'), true);
   assert.equal(manifest.includes('"update_url": "__updateURL__"'), true);
 });
 

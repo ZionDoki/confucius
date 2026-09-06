@@ -1,4 +1,6 @@
 pref("pairingToken", "");
+pref("updateAutoCheck", true);
+pref("updateChannel", "auto");
 pref("workspaceWidth", 1100);
 pref("workspaceHeight", 760);
 pref("workspaceLayout", "sidebar");

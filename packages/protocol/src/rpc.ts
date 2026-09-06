@@ -127,6 +127,7 @@ export const RPC_METHODS = {
   updateCheck: "update/check",
   updateInstall: "update/install",
   updateSetAuto: "update/setAuto",
+  updateSetPrerelease: "update/setPrerelease",
   memoryProposalList: "memory/proposal/list",
   memoryProposalResolve: "memory/proposal/resolve",
 } as const;
@@ -146,6 +147,7 @@ export interface UpdateStatus {
   currentVersion: string;
   availableVersion?: string;
   autoUpdate: boolean;
+  includePrerelease?: boolean;
   state: UpdateState;
   canInstall: boolean;
   restartRequired?: boolean;

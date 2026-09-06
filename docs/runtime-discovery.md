@@ -1,68 +1,45 @@
-# Codex / Kimi 运行时识别
+# Codex / Kimi 检测与连接
 
-在 Confucius 设置中将路径留空，点击“重新检测”。安装或登录 CLI 后无需重启
-Zotero。自定义目录可以填写程序的绝对路径；支持带空格、中文、外层引号和
-`~/` 的路径。Windows 也支持 `%USERPROFILE%` 等常用路径变量。
+先在本机安装并登录相应 CLI，再打开 Confucius 设置。可执行文件路径留空时使用
+自动检测；安装或登录后点击“重新检测”，无需重启 Zotero。
 
 ## 自动检测范围
 
-| 平台       | 安装入口                                                                                                                                                                |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| macOS      | Apple Silicon / Intel Homebrew、`~/.kimi-code/bin`、`~/.local/bin`、`~/Library/Python/*/bin`、`/Applications` 与 `~/Applications` 中 Codex / ChatGPT 应用内的 Codex CLI |
-| Linux      | 系统目录、Linuxbrew、`~/.kimi-code/bin`、`~/.local/bin`、常见用户安装目录                                                                                               |
-| Windows    | Codex Desktop 版本目录、`~/.kimi-code/bin`、npm、Python 用户安装的 Scripts、WinGet Links、Scoop shims、App Paths 注册项                                                 |
-| 各平台共有 | 继承的 PATH、npm 自定义前缀、pnpm、Bun、Volta、uv / pipx 配置的 bin 目录；适用平台的 nvm、fnm、asdf、mise 安装目录                                                      |
+| 平台       | 常见安装位置                                                                           |
+| ---------- | -------------------------------------------------------------------------------------- |
+| macOS      | Homebrew、用户 bin 目录、Python 安装目录、Codex / ChatGPT 应用内附带的 CLI             |
+| Windows    | Codex Desktop、npm、Python Scripts、WinGet、Scoop、App Paths 和用户 bin 目录           |
+| Linux      | 系统和用户 bin 目录、Linuxbrew                                                         |
+| 各平台共有 | PATH、npm 自定义前缀、pnpm、Bun、Volta、uv / pipx，以及适用平台的 nvm、fnm、asdf、mise |
 
-没有 PATH 的图形界面启动也会检查这些目录。版本管理器的安装目录仅作有限深度
-枚举；PATH 中的选择优先，未配置 PATH 时按目录修改时间和名称检查版本目录。
-Windows 保留优先选择最新 Codex Desktop 版本的行为。
+设置会展示实际使用的程序位置和版本。安装了多份 CLI 时，可以填写路径来指定其中
+一份。自动检测覆盖这些常见布局，但不表示所有安装方式都经过实机验收。
 
-Codex 的 npm、pnpm、Bun 入口会解析到平台原生程序，覆盖 x64 / ARM64 的嵌套和
-提升依赖，以及旧 `vendor/<target>/codex/codex`、新 `vendor/<target>/bin/codex`
-布局。不需要在插件内引入 Node。Kimi 支持原生独立安装、Unix Python 脚本和
-uv / pipx 符号链接，以及 Windows 的 Python `.exe` 启动器。
+## 手动指定路径
 
-自定义 shell alias、只在交互式 shell 脚本中定义的安装位置、Windows 的 WSL
-内安装，以及不在上述目录中的发行版需要手动指定宿主系统可执行的程序。
-不执行登录 shell 来读取环境，也不通过 cmd / PowerShell 启动任意批处理脚本。
-Windows 可以选 Codex 的 npm `.cmd`，宿主会解析其原生二进制；Kimi 请选择 `.exe`。
+填写宿主系统可以运行的程序绝对路径。路径可以包含空格、中文、外层引号和 `~/`；
+Windows 也支持 `%USERPROFILE%` 等常用路径变量。
 
-## 修复与诊断
+- Windows 的 Codex 可以选择 npm 的 `.cmd` 入口，Confucius 会解析到随包安装的
+  原生程序。Kimi 请选择 `.exe`。
+- macOS / Linux 可以选择原生程序或受支持的 Kimi Python 启动入口。
+- 只在 shell 中定义的 alias 和 Windows 的 WSL 内安装不能直接作为宿主程序。
 
-此前 macOS 的自动发现会对尚不存在的候选目录调用 `PathUtils.normalize`。
-Gecko 在 macOS 下会实际访问文件系统，因此一个缺失目录就会终止两个引擎的
-全部发现过程。现在仅规范化已存在的候选文件；断开的符号链接、不可访问目录、
-缺失的脚本解释器和没有执行权限的文件会被跳过，继续寻找下一项。
+手动路径无效时会显示错误，不会静默改用其他安装。清空路径并重新检测即可恢复
+自动选择。
 
-版本探测与实际连接使用相同的路径解析和子进程环境。子进程 PATH 包含已选入口、
-原生程序目录和已知安装目录；Windows 去除大小写重复的 PATH，Python 使用 UTF-8。
-参数以数组原样传递，包含空格和中文的程序路径不会变成 shell 命令。
+## 常见问题
 
-手动填写的路径不会静默切换到另一份自动安装。设置会展示程序实际位置，故障区分：
+| 设置中显示的状态 | 处理方法                                                                                  |
+| ---------------- | ----------------------------------------------------------------------------------------- |
+| 不可用           | 检查程序是否安装、路径是否存在及是否可执行；npm 安装缺少平台依赖时，修复该 CLI 安装后重试 |
+| 需要登录         | 在对应 CLI 完成登录，再点击“重新检测”                                                     |
+| 错误             | 核对显示的路径和版本，尝试更新 CLI；仍失败时保留错误信息并导出任务诊断报告                |
 
-- **不可用**：没有可用程序、执行权限不足、npm 平台依赖缺失，或版本命令不能运行。
-- **需要登录**：程序已找到，但 Codex 账户或 Kimi 会话创建报告需要认证。
-- **错误**：程序已找到，但 App Server / ACP 协议连接失败；保留已探测的版本与路径。
+如果终端能运行而 Confucius 找不到，填写程序的完整路径。图形界面启动的 Zotero
+可能没有继承终端的 PATH。版本检测成功也不代表账号有权使用所有模型，实际模型
+列表以服务返回为准。
 
-Codex 探测会读取账户状态；Kimi 会创建并关闭临时 ACP 会话以核实认证。
-版本探测涵盖进程退出及管道读取的完整超时。初始化失败时关闭进程，避免反复点击
-检测留下后台实例。
-
-## 验证
-
-回归测试使用模拟 Gecko 的文件系统语义，覆盖三个平台、六个平台 / 架构组合、
-包布局、坏路径、引号与中文、环境变量、Python 解释器、权限、超时、认证与初始化
-进程清理。Windows 和 Linux 是平台模拟测试，尚未进行原生系统实机验收。
-
-macOS 实机在独立 Zotero 10 测试配置中复现了修复前两个引擎的
-`PathUtils.normalize: NS_ERROR_FILE_NOT_FOUND`。修复后检测到 Codex 0.153.0
-和 Kimi 0.40.1，并通过实际 App Server / ACP 就绪检查；未发送模型任务。
-本机旧 npm Codex 缺少平台依赖，自动检测成功使用桌面应用内的 Codex CLI。
-
-生产 XPI 安装到独立配置后，以 `PATH=/usr/bin:/bin` 冷启动 Zotero，两个引擎仍为
-可用。另验证了手动指定损坏的 npm 入口会报告平台依赖缺失、带引号的 tilde Kimi
-路径可连接、无效手动路径不会切换到另一安装，以及清空路径后两者恢复自动检测。
-
-0.3.7 发布验收中，`npm test` 共 534 项通过，`npm run typecheck`、`npm run lint`、
-技能同步与版本检查通过。macOS Zotero 10 的 113 项界面与运行时检查全部通过，
-包括 Codex / Kimi 实际就绪检测；构建后另检查 XPI、版本号与更新文件的校验值。
+0.4.0 的 Windows 实机任务使用 Zotero 10.0.1、Codex CLI 0.153.4 和 Kimi CLI
+0.40.1。此前 macOS Zotero 10 已验证两者的检测与连接；Linux 安装识别目前主要由
+自动化平台模拟覆盖。完整记录见[维护者验收文档](../.github/maintainers/README.md)。

@@ -2,6 +2,8 @@
 
 2026-09-06 在 macOS、Zotero 10.0.1 完成。结论：**本轮第 1 项通过**。真实基础模型与 Windows 验收按发布取舍留到下个版本，见 [Windows 后续验收](windows-acceptance.md)。
 
+以上结论保留为已发布 beta.1 的历史记录。后续对本地未发布修改的 Windows 升级、真实引擎和恢复实测，见 [2026-09-06 Windows 验收](windows-acceptance-2026-09-06.md)，不将新修复追记为已发布包的能力。
+
 ## 使用的包与环境
 
 旧包直接下载自 GitHub 已发布的 `v0.3.8/confucius.xpi`，SHA-256 为 `4c0a498a3a52597d7c38fb32d892021e1585102dff84b05ab1713402ea451b32`，与发布资产的摘要一致。候选为仓库构建的 `0.4.0-beta.1` XPI。

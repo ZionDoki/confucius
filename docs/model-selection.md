@@ -1,31 +1,34 @@
-# Model selection and thinking controls
+# 模型与思考选项
 
-The composer opens a flat list of models. Each row identifies its endpoint or CLI. Selecting a model replaces that panel with the thinking choices reported for that model; models without adjustable thinking finish selection immediately. The settings gear remains the entry point for configuring endpoints and runtime installations.
+在设置中连接一个模型来源，再在任务输入框旁选择模型。
 
-## Capability sources
+| 运行方式 | 需要准备                                                    | 适用情况                                  |
+| -------- | ----------------------------------------------------------- | ----------------------------------------- |
+| Native   | OpenAI 兼容接口的 Base URL、模型名和 API Key，或本地 Ollama | 直接连接模型服务，使用 Confucius 管理任务 |
+| Codex    | 本机已安装并登录的 Codex CLI                                | 使用 Codex 的模型和执行循环               |
+| Kimi     | 本机已安装并登录的 Kimi CLI                                 | 使用 Kimi Code 的模型和执行循环           |
 
-- **Codex:** `model/list` from the installed App Server, including pagination, `supportedReasoningEfforts`, and `defaultReasoningEffort`. CLI values are opaque, so new levels do not require a UI release. They are passed as `model` and `effort` to `turn/start`. [Official App Server reference](https://learn.chatgpt.com/docs/app-server#models).
-- **Kimi:** ACP `session/new` / resume responses supply `configOptions`. Thinking options belong to the current model only. The host switches a disposable probe session to discover another model's choices, then uses `session/set_config_option` to select the actual task's model before setting its thinking option. Legacy ACP catalogs retain model selection without fabricated thinking levels. Probe configuration and credentials are copied to private disposable directories, because older CLI versions can persist model switches into their global config. These directories are removed after probing. [ACP reference](https://www.kimi.com/code/docs/en/kimi-code-cli/reference/kimi-acp), [data locations](https://www.kimi.com/code/docs/en/kimi-code-cli/configuration/data-locations.html).
-- **Native API:** the shared resolver in `packages/protocol/src/modelReasoning.ts` supplies documented profiles for known model IDs. Unknown IDs and variants keep the provider default and send no guessed reasoning parameter. Endpoint model discovery continues to use the provider's model list; a standard OpenAI `/models` response does not report reasoning capabilities. A custom gateway must honor the advertised model's API semantics for its documented profile to apply.
+本地 Ollama 通常不需要 API Key。Codex、Kimi 的安装或登录未被识别时，参阅
+[检测与连接](runtime-discovery.md)。模型请求的费用与数据处理政策取决于所选服务。
 
-Native examples, verified against official documentation on 2026-09-05:
+## 选择思考强度
 
-| Model / API                | Choices beyond provider default    | Request mapping                         |
-| -------------------------- | ---------------------------------- | --------------------------------------- |
-| GPT-6 Astra                | low, medium, high, xhigh, max      | `reasoning_effort`                      |
-| GPT-5.6 Sol / Terra / Luna | off, low, medium, high, xhigh, max | off → `reasoning_effort: "none"`        |
-| GPT-5.5                    | off, low, medium, high, xhigh      | `reasoning_effort`                      |
-| Kimi K2.5 / K2.6           | off, on                            | `thinking.type: "disabled" / "enabled"` |
-| DeepSeek V4                | off, low, high, max                | `thinking.type` and `reasoning_effort`  |
-| Ollama GPT-OSS             | low, medium, high                  | `think` as a level; no off switch       |
-| Ollama Qwen3 / DeepSeek R1 | off, on                            | `think: false / true`                   |
+先选择模型，再选择该模型提供的思考选项。不同模型的选项可能不同，不应把某个
+引擎的强度名称或上下文用量直接与另一个引擎比较。
 
-Sources: [GPT-6 Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [GPT-5.6 Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna), [GPT-5.5](https://developers.openai.com/api/docs/models/gpt-5.5), [Kimi models](https://platform.kimi.ai/docs/api/models-overview), [DeepSeek thinking](https://api-docs.deepseek.com/guides/thinking_mode/), [Ollama thinking](https://docs.ollama.com/capabilities/thinking).
+Codex 和 Kimi 的模型与思考选项来自当前 CLI 返回的能力列表。Native 对已知模型
+使用对应的接口配置；对于没有已知配置的模型，保留服务默认值，不猜测思考参数。
+自定义网关需要支持所选模型的接口语义。
 
-## State and failures
+“默认”让服务自行决定；“关闭”仅在支持明确关闭思考的模型上出现。切换模型后，
+不再适用的旧思考设置会重置。若服务拒绝某个模型或选项，请确认账号权限和服务
+支持范围，再重新选择。
 
-Native preferences belong to the selected endpoint. Switching a model resets an unsupported saved effort to the provider default. “Default” omits the parameter; “Off” sends an explicit supported disable value. The composer, settings picker, and outbound request builder share this rule.
+## 切换模型与继续任务
 
-Codex and Kimi choices are stored in the schema-v3 task's optional `runtimeModel` field. Changing a model within the same runtime preserves the task ID, history, window, sources, workflow preset, draft, and artifacts. Changing the runtime clears the previous runtime's model choice. Host persistence rolls back the choice on failure; active turns cannot change models. The CLI's current catalog is validated before applying explicit selections, and failed model/effort changes never proceed to a prompt. Capability lookup alone sends no inference request.
+任务运行期间不能切换模型。任务停止后，在同一运行方式中切换模型会保留任务、
+历史、来源和成果；切换运行方式时，旧运行方式的模型选择会清除。
 
-Task source actions now live on the task header's source menu. The composer `+` menu keeps execution mode and permission choices; `@` remains the entry point for adding individual papers and task references. The source menu preserves adding or replacing the current Zotero selection, including collection and reader context.
+Native 的模型步骤上限可在设置中调整，默认 128。额度与上下文容量是不同设置，
+增加步骤上限不保证模型能正确找回全部历史。长任务和重启后的核对方法见
+[任务恢复](tasks-and-data.md#继续未完成的任务)。

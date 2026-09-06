@@ -741,9 +741,9 @@ async function directMatchPositions(
   await view._ensureBasicPageData?.(pageIndex);
   let chars = view._pdfPages?.[pageIndex]?.chars || [];
   if (!chars.length) {
-    const pageData = await view._findController?._pdfDocument?.getPageData?.({
-      pageIndex,
-    });
+    const pageData = await view._findController?._pdfDocument?.getPageData?.(
+      readerPageDataInput(view, pageIndex),
+    );
     chars = pageData?.chars || [];
   }
   if (!chars.length) {
@@ -1028,6 +1028,14 @@ function normalizeAnnotationList(
   });
 }
 
+function readerPageDataInput(view: PdfPrimaryView, pageIndex: number) {
+  // PDF.js forwards this object to its Worker. Privileged objects cannot be
+  // structured-cloned from the Reader compartment, including on empty pages.
+  return view._iframeWindow
+    ? Components.utils.cloneInto({ pageIndex }, view._iframeWindow)
+    : { pageIndex };
+}
+
 async function pageChars(
   view: PdfPrimaryView,
   pageIndex: number,
@@ -1050,12 +1058,16 @@ async function pageChars(
   );
   if (cached.length) return cached;
   const documentData = waiveReaderXrays(
-    await readerPdfDocument(primary)?.getPageData?.({ pageIndex }),
+    await readerPdfDocument(primary)?.getPageData?.(
+      readerPageDataInput(primary, pageIndex),
+    ),
   );
   const documentChars = copyChars(documentData?.chars);
   if (documentChars.length) return documentChars;
   const findData = waiveReaderXrays(
-    await primary._findController?._pdfDocument?.getPageData?.({ pageIndex }),
+    await primary._findController?._pdfDocument?.getPageData?.(
+      readerPageDataInput(primary, pageIndex),
+    ),
   );
   return copyChars(findData?.chars);
 }

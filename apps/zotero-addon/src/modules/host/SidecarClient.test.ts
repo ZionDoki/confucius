@@ -60,6 +60,7 @@ describe("SidecarClient", () => {
       reader,
       fetchImpl,
       () => "pairing-secret",
+      () => "http://127.0.0.1:55831",
     );
     const result = await client.listRuntimes();
     assert.equal(result.sidecarConnected, true);
@@ -67,6 +68,10 @@ describe("SidecarClient", () => {
       entry.body.includes("host/register"),
     );
     assert.ok(registration?.body.includes("pairing-secret"));
+    assert.equal(
+      JSON.parse(registration!.body).params.baseUrl,
+      "http://127.0.0.1:55831/confucius/v1",
+    );
     assert.equal(registration?.authorization, `Bearer ${descriptor.token}`);
     assert.equal((await reader.read()).includes("pairing-secret"), false);
   });
@@ -111,6 +116,7 @@ describe("SidecarClient", () => {
       reader,
       fetchImpl,
       () => "pairing-secret",
+      () => "http://127.0.0.1:55831",
     );
     assert.equal((await client.listRuntimes()).sidecarConnected, true);
     current = restarted;

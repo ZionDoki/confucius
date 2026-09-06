@@ -23,7 +23,7 @@ jobs:
       - run: npm run versions:check
       - name: Validate release notes
         if: startsWith(github.ref, 'refs/tags/v')
-        run: node scripts/release-notes.mjs "$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-notes.md"
+        run: npm run release:check -- "$GITHUB_REF_NAME"
       - run: npm run typecheck
       - run: npm test
       - run: npm run lint

@@ -248,6 +248,15 @@ function withConfigFixture(check) {
   const run = (mode, extraEnv = {}) => {
     const env = { ...process.env };
     delete env[VARIABLE];
+    // Windows treats PATH and Path as the same variable; avoid passing both.
+    for (const key of Object.keys(env)) {
+      if (
+        Object.keys(extraEnv).some(
+          (name) => name.toLowerCase() === key.toLowerCase(),
+        )
+      )
+        delete env[key];
+    }
     return execFileSync(
       process.execPath,
       [
@@ -289,7 +298,12 @@ test("an explicit shell environment takes precedence over .env", () => {
 
 test("real scaffold resolves an unconfigured PATH installation before its early binary check", () => {
   withConfigFixture(({ root, executable, run }) => {
-    assert.ok(run("serve", { PATH: root }).includes(executable));
+    const output = run("serve", { PATH: root });
+    assert.ok(
+      process.platform === "win32"
+        ? output.toLowerCase().includes(executable.toLowerCase())
+        : output.includes(executable),
+    );
   });
 });
 

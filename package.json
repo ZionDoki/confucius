@@ -1,6 +1,6 @@
 {
   "name": "confucius",
-  "version": "0.4.0-beta.1",
+  "version": "0.4.0",
   "private": true,
   "description": "Research workspace for Zotero",
   "license": "AGPL-3.0-or-later",
@@ -13,14 +13,15 @@
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
-    "test": "npm run sync-skills --silent && npm test --workspaces --if-present",
+    "test": "npm run sync-skills --silent && node --test scripts/release-notes.test.mjs && npm test --workspaces --if-present",
     "verify": "npm run sync-skills:check && npm run versions:check && npm run typecheck && npm test",
     "test:live": "node --import tsx scripts/live-e2e.mjs",
     "test:live:approval": "node scripts/live-approval.mjs",
     "test:live:zotero-tools": "node --import tsx scripts/live-zotero-tools.mjs",
     "sync-skills": "node scripts/sync-skills.mjs",
     "sync-skills:check": "node scripts/sync-skills.mjs --check",
-    "versions:check": "node scripts/check-versions.mjs"
+    "versions:check": "node scripts/check-versions.mjs",
+    "release:check": "npm run versions:check && node scripts/release-notes.mjs"
   },
   "engines": {
     "node": ">=22.8"

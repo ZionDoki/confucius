@@ -21,6 +21,7 @@ import type { HistoryAppend } from "@confucius/memory";
 import { isContinueRequest } from "./PresetWorkflow";
 import {
   runtimePath,
+  runtimeIoPath,
   migrateRuntimeStorage,
   writeRuntimeText,
 } from "./RuntimeStorage";
@@ -220,6 +221,10 @@ import { compactTaskEvents, isTerminalTaskEventType } from "./TaskEventHistory";
 import { durableToolResult, mcpToolResult } from "./McpToolResult";
 import { stringifyDurableHostState } from "./StatePersistence";
 import { UpdateService } from "../update/UpdateService";
+import {
+  cancelUpdateTimeout,
+  scheduleUpdateTimeout,
+} from "../update/UpdateTimer";
 import {
   presetWorkflow,
   presetToolCallInScope,
@@ -513,10 +518,22 @@ export class AgentHost {
   private readonly updates = new UpdateService({
     addonId: pkg.config.addonID,
     currentVersion: pkg.version,
-    scheduleTimeout: (callback, delayMs) =>
-      Zotero.getMainWindow().setTimeout(callback, delayMs),
-    cancelTimeout: (handle) =>
-      Zotero.getMainWindow().clearTimeout(Number(handle)),
+    getAutoUpdate: () => getPref("updateAutoCheck") !== false,
+    setAutoUpdate: (enabled) => {
+      setPref("updateAutoCheck", enabled);
+    },
+    getIncludePrerelease: () => {
+      const channel = getPref("updateChannel");
+      return (
+        channel === "beta" ||
+        (channel !== "stable" && pkg.version.includes("-"))
+      );
+    },
+    setIncludePrerelease: (enabled) => {
+      setPref("updateChannel", enabled ? "beta" : "stable");
+    },
+    scheduleTimeout: scheduleUpdateTimeout,
+    cancelTimeout: cancelUpdateTimeout,
   });
   private readonly sessions = new Map<string, SessionState>();
   private readonly pendingApprovals = new Map<string, PendingApproval>();
@@ -600,6 +617,7 @@ export class AgentHost {
     }
     ztoolkit.log("[Confucius] Runtime storage", runtimePath());
     await this.reloadMcp();
+    this.updates.start();
   }
 
   private async initializeStorage(): Promise<void> {
@@ -638,6 +656,7 @@ export class AgentHost {
   shutdown(): Promise<void> {
     if (this.shutdownTask) return this.shutdownTask;
     this.shuttingDown = true;
+    this.updates.dispose();
     this.shutdownTask = (async () => {
       if (this.persistTimer !== null) {
         Zotero.getMainWindows()[0]?.clearTimeout(this.persistTimer);
@@ -713,7 +732,7 @@ export class AgentHost {
 
   private async restore(): Promise<void> {
     try {
-      const path = this.statePath();
+      const path = runtimeIoPath(this.statePath());
       if (!(await IOUtils.exists(path))) {
         return;
       }
@@ -1169,7 +1188,7 @@ export class AgentHost {
       memoryProposals: [...this.memoryProposals.values()],
     };
     try {
-      const path = this.statePath();
+      const path = runtimeIoPath(this.statePath());
       await IOUtils.makeDirectory(PathUtils.parent(path)!, {
         ignoreExisting: true,
       });
@@ -1386,6 +1405,8 @@ export class AgentHost {
         return this.updates.install();
       case RPC_METHODS.updateSetAuto:
         return this.updates.setAuto(params.enabled !== false);
+      case RPC_METHODS.updateSetPrerelease:
+        return this.updates.setPrerelease(params.enabled === true);
       case RPC_METHODS.memoryProposalList:
         return { proposals: [...this.memoryProposals.values()] };
       case RPC_METHODS.memoryProposalResolve:

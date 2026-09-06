@@ -1,12 +1,12 @@
 import {
   CONFUCIUS_HTTP_PREFIX,
-  CONFUCIUS_LOOPBACK_ORIGIN,
   type ApprovalResolution,
   type ConfuciusEvent,
   type RuntimeListResult,
   type RuntimeStatus,
 } from "@confucius/protocol";
 import { getPref } from "../../utils/prefs";
+import { zoteroLoopbackOrigin } from "../bridge/LoopbackOrigin";
 import { createAbortController, hostFetch } from "../../utils/webPlatform";
 
 export interface SidecarDescriptor {
@@ -54,6 +54,7 @@ export class SidecarClient {
     private readonly fetchImpl: typeof fetch = hostFetch,
     private readonly pairingToken: () => string = () =>
       String(getPref("pairingToken") || ""),
+    private readonly hostOrigin: () => string = zoteroLoopbackOrigin,
   ) {}
 
   async listRuntimes(refresh = false): Promise<RuntimeListResult> {
@@ -121,7 +122,8 @@ export class SidecarClient {
 
   private async connect(): Promise<SidecarDescriptor> {
     const descriptor = await this.loadDescriptor();
-    const key = `${descriptor.pid}:${descriptor.startedAt}:${descriptor.baseUrl}`;
+    const origin = this.hostOrigin();
+    const key = `${descriptor.pid}:${descriptor.startedAt}:${descriptor.baseUrl}:${origin}`;
     if (this.registeredDescriptorKey !== key) {
       const response = await this.fetchImpl(`${descriptor.baseUrl}/health`, {
         method: "GET",
@@ -130,7 +132,7 @@ export class SidecarClient {
       // The Zotero pairing token crosses only this authenticated loopback
       // request. It is never copied into the descriptor or runtime config.
       await this.request(descriptor, "host/register", {
-        baseUrl: `${CONFUCIUS_LOOPBACK_ORIGIN}${CONFUCIUS_HTTP_PREFIX}`,
+        baseUrl: `${origin}${CONFUCIUS_HTTP_PREFIX}`,
         pairingToken: this.pairingToken(),
       });
       this.registeredDescriptorKey = key;

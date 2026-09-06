@@ -397,6 +397,7 @@ export type FluentMessageId =
   | 'confucius-workspace-update-current'
   | 'confucius-workspace-update-help'
   | 'confucius-workspace-update-install'
+  | 'confucius-workspace-update-prerelease'
   | 'confucius-workspace-update-state-available'
   | 'confucius-workspace-update-state-checking'
   | 'confucius-workspace-update-state-downloading'

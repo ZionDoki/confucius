@@ -1164,6 +1164,54 @@ describe("annotation recovery and review pipeline", () => {
         ],
       );
   });
+  it("clones empty-page fallback parameters into the Reader before PDF Worker dispatch", async () => {
+    const installed = installHost({ pageTexts: [""] });
+    const globals = globalThis as unknown as {
+      Zotero: {
+        Reader: {
+          _readers: Array<{
+            _internalReader: {
+              _primaryView: {
+                _iframeWindow: {
+                  PDFViewerApplication: {
+                    pdfDocument: {
+                      getPageData?: (arg: unknown) => Promise<unknown>;
+                    };
+                  };
+                };
+              };
+            };
+          }>;
+        };
+      };
+      Components: {
+        utils: { cloneInto: (value: unknown, target?: unknown) => unknown };
+      };
+    };
+    const view = globals.Zotero.Reader._readers[0]._internalReader._primaryView;
+    const cloned = new WeakSet<object>();
+    globals.Components.utils.cloneInto = (value, target) => {
+      assert.equal(target, view._iframeWindow);
+      const copy = { ...(value as object) };
+      cloned.add(copy);
+      return copy;
+    };
+    view._iframeWindow.PDFViewerApplication.pdfDocument.getPageData = async (
+      arg,
+    ) => {
+      assert.ok(
+        cloned.has(arg as object),
+        "Privileged params cannot be posted to PDF Worker",
+      );
+      return { chars: [] };
+    };
+    const result = await installed.execute("get_pages", {
+      ...ref,
+      start: 1,
+      end: 1,
+    });
+    assert.equal(result.ok, true);
+  });
 });
 
 it("freezes eligible candidates without blocking unrelated annotation edits", async () => {

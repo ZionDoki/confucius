@@ -1,4 +1,4 @@
-import { runtimePath, writeRuntimeText } from "./RuntimeStorage";
+import { runtimePath, runtimeIoPath, writeRuntimeText } from "./RuntimeStorage";
 import {
   artifactBodyMatchesKind,
   isCitation,
@@ -18,7 +18,7 @@ export interface ArtifactFileSystem {
 
 class ZoteroArtifactFileSystem implements ArtifactFileSystem {
   async read(path: string): Promise<string> {
-    return IOUtils.readUTF8(path);
+    return IOUtils.readUTF8(runtimeIoPath(path));
   }
 
   async writeAtomic(path: string, content: string): Promise<void> {
@@ -26,11 +26,11 @@ class ZoteroArtifactFileSystem implements ArtifactFileSystem {
   }
 
   async exists(path: string): Promise<boolean> {
-    return IOUtils.exists(path);
+    return IOUtils.exists(runtimeIoPath(path));
   }
 
   async makeDirectory(path: string): Promise<void> {
-    await IOUtils.makeDirectory(path, { ignoreExisting: true });
+    await IOUtils.makeDirectory(runtimeIoPath(path), { ignoreExisting: true });
   }
 }
 

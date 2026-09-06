@@ -1,6 +1,6 @@
 # Windows 后续验收：真实引擎与平台恢复
 
-`0.4.0-beta.1` 发布时，第 2、3 项验收明确留到下个版本，由维护者在 Windows 实机完成。下列结果当前均为**待验证**；macOS 的确定性测试和模拟平台测试不替代它们。旧版升级与重启恢复属于本轮第 1 项，结果另见 [升级验收](upgrade-acceptance.md)。
+`0.4.0-beta.1` 发布时，第 2、3 项验收留到下个版本。2026-09-06 已对本地未发布修改完成一轮 Windows 实机测试，见 [实测结果与剩余项](windows-acceptance-2026-09-06.md)：Kimi、Codex 完成真实任务、长上下文和重启续接；Native 的原始约束标记召回仍未通过。下表是完整验收清单，不能将部分通过视为全部通过；macOS 和模拟平台测试不替代 Windows 实测。历史升级记录另见 [升级验收](upgrade-acceptance.md)。
 
 ## 环境与记录
 
@@ -23,7 +23,7 @@
 | 人工修改     | 改动相关批注或笔记，再恢复；另测无关元数据变更及人工删除                | 相关变更重新准备，无关字段不误冲突，已提交后被人工删除的内容不自动重建          |
 | 响应丢失     | 使用可控本地代理或测试故障注入，让写入成功后的响应丢失，再重启续接      | 宿主对账后复用实际效果，不新增重复笔记或批注，报告保留不确定性及回执            |
 
-已有脚本：`scripts/live-e2e.mjs`、`scripts/live-matrix.mjs`、`scripts/live-zotero-tools.mjs`、`scripts/live-zotero-recovery.mjs`。其中 Zotero 故障脚本目前含 macOS 进程校验方式；Windows 使用前须将配置/进程识别适配为 Windows 实现，保留独立测试库限制。`--dry-run` 和模拟模型运行均不算真实引擎验收。
+真实 Windows 入口为 `scripts/live-windows-acceptance.mjs`，上下文和重启测试见同目录 `live-windows-context.mjs`、`live-windows-restart.mjs`；复现顺序及证据范围见上述实测记录。原有 `scripts/live-e2e.mjs`、`scripts/live-matrix.mjs` 使用模拟库，`scripts/live-zotero-recovery.mjs` 仍含 macOS 进程校验，不能直接代替本轮 Windows 真实引擎验收。`--dry-run` 和模拟模型运行均不算真实引擎验收。
 
 ## 第 3 项：Windows 存储、PDF 与 Worker
 

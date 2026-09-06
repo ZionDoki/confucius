@@ -1,6 +1,18 @@
 import { schedule } from "../tools/Deadline";
 import type { ToolExecutionScope } from "@confucius/protocol";
 import { runInScope } from "./ExecutionScope";
+/** IOUtils on Windows still applies MAX_PATH unless given an extended path. */
+export function runtimeIoPath(path: string): string {
+  if (/^[A-Za-z]:[\\/]/.test(path))
+    return `\\\\?\\${path.replace(/\//g, "\\")}`;
+  if (path.startsWith("\\\\") && !path.startsWith("\\\\?\\"))
+    return `\\\\?\\UNC\\${path.slice(2)}`;
+  return path;
+}
+export function runtimeLogicalPath(path: string): string {
+  if (path.startsWith("\\\\?\\UNC\\")) return `\\\\${path.slice(8)}`;
+  return path.startsWith("\\\\?\\") ? path.slice(4) : path;
+}
 /** Plugin execution state only. Native notes, annotations and attachments stay in Zotero. */
 export function runtimePath(...parts: string[]): string {
   const root = PathUtils.localProfileDir;
@@ -61,10 +73,13 @@ export interface AtomicWriter {
 }
 const geckoWriter: AtomicWriter = {
   write: async (path, text, tmpPath) => {
-    await IOUtils.writeUTF8(path, text, { tmpPath, flush: true });
+    await IOUtils.writeUTF8(runtimeIoPath(path), text, {
+      tmpPath: runtimeIoPath(tmpPath),
+      flush: true,
+    });
   },
   mkdir: async (path) => {
-    await IOUtils.makeDirectory(path, {
+    await IOUtils.makeDirectory(runtimeIoPath(path), {
       ignoreExisting: true,
       createAncestors: true,
     });
@@ -138,8 +153,8 @@ export function runtimeJsonStorage(folder = "records"): JsonStorage {
       if (prefix && !/^[a-zA-Z0-9_-]+$/.test(prefix))
         throw new Error("Invalid runtime record prefix");
       const root = runtimePath(folder);
-      if (!(await IOUtils.exists(root))) return [];
-      return (await IOUtils.getChildren(root))
+      if (!(await IOUtils.exists(runtimeIoPath(root)))) return [];
+      return (await IOUtils.getChildren(runtimeIoPath(root)))
         .map((path) => PathUtils.filename(path))
         .filter((name) => name.endsWith(".json"))
         .map((name) => name.slice(0, -5))
@@ -147,9 +162,9 @@ export function runtimeJsonStorage(folder = "records"): JsonStorage {
     },
     async read<T>(key: string): Promise<T | null> {
       const path = runtimePath(folder, `${safeKey(key)}.json`);
-      if (!(await IOUtils.exists(path))) return null;
+      if (!(await IOUtils.exists(runtimeIoPath(path)))) return null;
       // IO failures and corrupt JSON are never interpreted as a missing record.
-      return JSON.parse(await IOUtils.readUTF8(path)) as T;
+      return JSON.parse(await IOUtils.readUTF8(runtimeIoPath(path))) as T;
     },
     async write<T>(key: string, value: T) {
       await writeRuntimeText(
@@ -187,14 +202,16 @@ export interface MigrationFs {
   basename(path: string): string;
 }
 const migrationFs: MigrationFs = {
-  exists: (path) => IOUtils.exists(path),
-  children: (path) => IOUtils.getChildren(path),
-  directory: async (path) => (await IOUtils.stat(path)).type === "directory",
-  read: (path) => IOUtils.readUTF8(path),
-  copy: (from, to) => IOUtils.copy(from, to),
-  digest: (path) => IOUtils.computeHexDigest(path, "sha256"),
+  exists: (path) => IOUtils.exists(runtimeIoPath(path)),
+  children: async (path) =>
+    (await IOUtils.getChildren(runtimeIoPath(path))).map(runtimeLogicalPath),
+  directory: async (path) =>
+    (await IOUtils.stat(runtimeIoPath(path))).type === "directory",
+  read: (path) => IOUtils.readUTF8(runtimeIoPath(path)),
+  copy: (from, to) => IOUtils.copy(runtimeIoPath(from), runtimeIoPath(to)),
+  digest: (path) => IOUtils.computeHexDigest(runtimeIoPath(path), "sha256"),
   mkdir: async (path) => {
-    await IOUtils.makeDirectory(path, {
+    await IOUtils.makeDirectory(runtimeIoPath(path), {
       ignoreExisting: true,
       createAncestors: true,
     });

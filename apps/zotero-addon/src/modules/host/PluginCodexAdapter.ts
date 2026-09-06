@@ -756,6 +756,26 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
       return;
     }
     const turnId = session.hostTurnId;
+    if (message.method === "mcpServer/elicitation/request") {
+      // Current Codex clients request transport consent before every MCP call.
+      // Confucius owns this endpoint; its scoped lease and tool approval policy
+      // still authorize the actual operation. Never accept arbitrary forms or
+      // another server's elicitation as user input.
+      const schema = asRecord(params.requestedSchema);
+      const delegated =
+        params.threadId === session.threadId &&
+        params.serverName === "confucius" &&
+        params.mode === "form" &&
+        asRecord(params._meta).codex_approval_kind === "mcp_tool_call" &&
+        schema.type === "object" &&
+        Object.keys(asRecord(schema.properties)).length === 0 &&
+        (!Array.isArray(schema.required) || schema.required.length === 0);
+      session.rpc.respond(
+        id,
+        delegated ? { action: "accept", content: {} } : { action: "decline" },
+      );
+      return;
+    }
     if (message.method === "item/commandExecution/requestApproval") {
       const allowed = await this.reviewRuntimeAction(
         session,

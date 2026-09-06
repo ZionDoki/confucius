@@ -199,6 +199,30 @@ test("credentials in fields, URLs, headers, text and encoded JSON are redacted; 
   });
 });
 
+test("short local credentials do not corrupt literature numbers or entity identifiers", () => {
+  const result = redactTrace(
+    {
+      apiKey: "1",
+      authorization: "Bearer 1",
+      token: "abc",
+      value: "abc",
+      key: "ART1KEY7",
+      text: "Table 1: 38.1 / 41.8, page 8",
+      nested: JSON.stringify({ password: "1", itemId: "tool_123" }),
+    },
+    ["1", "abc"],
+  );
+  assert.equal(result.value.apiKey, "[REDACTED]");
+  assert.equal(result.value.authorization, "[REDACTED]");
+  assert.equal(result.value.value, "[REDACTED]");
+  assert.equal(result.value.key, "ART1KEY7");
+  assert.equal(result.value.text, "Table 1: 38.1 / 41.8, page 8");
+  assert.deepEqual(JSON.parse(result.value.nested), {
+    password: "[REDACTED]",
+    itemId: "tool_123",
+  });
+});
+
 test("repeated executor event IDs across turns do not overwrite trace batches", async () => {
   const buffer = new TaskTraceBuffer();
   const window = initialContextWindow(task.id, "native", 1);

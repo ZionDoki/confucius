@@ -16,7 +16,7 @@ Confucius 是面向 Zotero 7 及以上版本的开源研究工作区。你可以
 里让模型读取论文、集合、PDF 选区和本地文本文件。
 
 [下载最新版本](https://github.com/ZionDoki/confucius/releases/latest) ·
-[更新记录](CHANGELOG.md) · [从源码构建](#从源码构建)
+[使用文档](docs/README.md) · [更新记录](CHANGELOG.md) · [从源码构建](#从源码构建)
 
 ## 功能
 
@@ -61,6 +61,9 @@ Native Runtime 支持流式文本和单独的推理输出。模型步骤上限�
 4. 选择 `confucius.xpi`，安装后点击 Confucius 工具栏按钮。
 
 后续版本可在 **Confucius 设置 → 更新** 中安装。
+Confucius 自行检查和校验更新；打开 **接收测试版更新** 可接收 Beta，关闭后只检查
+稳定版，不会自动降级。自动检查与 Beta 开关各自保存，安装需点击“下载并安装”。
+首次使用仍运行旧更新器的版本时，可手动安装包含新更新器的 XPI。
 
 使用 Native Runtime 时，在 **Zotero → Settings → Confucius** 中填写 Base URL、
 模型名和 API Key。本地 Ollama 一般不需要 API Key。使用 Codex 或 Kimi 前，
@@ -68,20 +71,29 @@ Native Runtime 支持流式文本和单独的推理输出。模型步骤上限�
 
 ## 文件与数据
 
-- 任务、生成文件和会话记录保存在 Zotero 数据目录中。
+- 任务状态、生成文件、历史和会话日志保存在本机 Zotero local profile 的
+  `confucius/runtime-v1/` 中，设置中可查看实际路径。
 - 研究记忆位于 `<Zotero 数据目录>/confucius/memory/`，格式为 Markdown。
-- 会话日志位于 `<Zotero 数据目录>/confucius/logs/`。
+- 原生笔记、PDF 批注和附件由 Zotero 文库管理。
 - 模型请求遵循所选端点或 Runtime 的数据政策。
 
 新安装默认使用记忆“审查”模式。记忆保存前可以编辑、接受或拒绝，也可以在
 设置中改为“自动”或“关闭”。
+
+从 0.3.x 升级时会迁移任务运行数据，并保留源文件与备份；降级不会反向迁移新版
+进度。备份时需要同时保留文库和本机运行时目录，只同步文库不能同步完整任务。
+详见[任务恢复、文件与更新](docs/tasks-and-data.md)。
+
+Windows 实测中，Native 曾在长上下文及重启后遗漏早期要求，首次文献报告也需要
+事实纠正，续接时应核对关键约束和引用。WPS Cloud 目前验证了本地同步目录的读写
+及文件占用恢复；云端同步、多机使用及整个 Zotero 数据库放入云盘仍未验证。
 
 ## 权限
 
 - 外部 Runtime 默认只能使用 Zotero 读取工具和 `artifact_upsert`。
 - Shell 命令和普通文件写入需要先选择工作目录。
 - Zotero 写入会显示拟议变更并等待审批。
-- 本地 MCP 监听 `127.0.0.1:23119`，除 `/health` 外都需要设置中显示的配对
+- 本地 MCP 使用 Zotero 当前 HTTP 端口（通常为 `127.0.0.1:23119`），除 `/health` 外都需要设置中显示的配对
   令牌。
 - PDF 文本、网页内容和元数据按数据处理，不作为指令执行。
 
@@ -146,6 +158,9 @@ npm run build
 ```text
 http://127.0.0.1:23119/confucius/v1/mcp
 ```
+
+如果当前 Zotero 使用其他 HTTP 端口，请相应替换。架构、发布规范和验收记录见
+[维护者文档](.github/maintainers/README.md)。
 
 ## 许可证
 

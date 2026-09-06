@@ -14,7 +14,10 @@ import type {
 describe("in-plugin Runtime support", () => {
   it("rotates continuation leases and drops late output even when the host turn id is unchanged", async () => {
     const previous = Reflect.get(globalThis, "Zotero");
-    Reflect.set(globalThis, "Zotero", { Prefs: { get: () => undefined } });
+    Reflect.set(globalThis, "Zotero", {
+      Prefs: { get: () => undefined },
+      Server: { port: 55831 },
+    });
     const host = new PluginRuntimeHost();
     const executions: Array<{
       input: PluginRuntimeTurnInput;
@@ -45,6 +48,10 @@ describe("in-plugin Runtime support", () => {
     };
     try {
       await host.rpc("task/startTurn", params);
+      assert.equal(
+        executions[0].input.mcp.url,
+        "http://127.0.0.1:55831/confucius/v1/mcp",
+      );
       const firstLease = host.resolveCapability(executions[0].input.mcp.token)!;
       const signal = host.leaseSignal(firstLease)!;
       await host.rpc("task/startTurn", params);

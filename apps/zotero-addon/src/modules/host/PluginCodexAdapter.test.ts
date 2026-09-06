@@ -10,6 +10,54 @@ import { PluginKimiAdapter } from "./PluginKimiAdapter";
 import { RuntimeUsageCounter } from "@confucius/protocol";
 
 describe("in-plugin Codex adapter", () => {
+  it("delegates only the current Confucius MCP transport consent to host tool policy", async () => {
+    const adapter = new PluginCodexAdapter() as unknown as {
+      onServerRequest(session: unknown, message: unknown): Promise<void>;
+    };
+    const answers: unknown[] = [];
+    const session = {
+      threadId: "thread",
+      turnId: "turn",
+      hostTurnId: "host",
+      rpc: {
+        respond: (_id: unknown, result: unknown) => answers.push(result),
+        respondError: () => answers.push("stale"),
+      },
+    };
+    const params = {
+      threadId: "thread",
+      turnId: "turn",
+      serverName: "confucius",
+      mode: "form",
+      _meta: { codex_approval_kind: "mcp_tool_call" },
+      requestedSchema: { type: "object", properties: {} },
+    };
+    for (const override of [
+      {},
+      { serverName: "other" },
+      { threadId: "other" },
+      { mode: "url" },
+      { _meta: {} },
+      {
+        requestedSchema: {
+          type: "object",
+          properties: { password: { type: "string" } },
+        },
+      },
+      { turnId: "old" },
+    ]) {
+      await adapter.onServerRequest(session, {
+        id: 1,
+        method: "mcpServer/elicitation/request",
+        params: { ...params, ...override },
+      });
+    }
+    assert.deepEqual(answers, [
+      { action: "accept", content: {} },
+      ...Array.from({ length: 5 }, () => ({ action: "decline" })),
+      "stale",
+    ]);
+  });
   it("binds early provider events to the returned turn and ignores stale nested turn ids", async () => {
     const adapter = new PluginCodexAdapter();
     const internals = adapter as unknown as {

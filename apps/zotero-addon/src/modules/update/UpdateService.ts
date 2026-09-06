@@ -1,97 +1,81 @@
 import type { UpdateStatus } from "@confucius/protocol";
-
-export interface ManagedAddonInstall {
-  version?: string;
-  error?: unknown;
-  install(): Promise<unknown> | unknown;
-  addListener?(listener: AddonInstallListener): void;
-  removeListener?(listener: AddonInstallListener): void;
-}
-
-export interface ManagedAddon {
-  id: string;
-  version: string;
-  applyBackgroundUpdates: number;
-  findUpdates(
-    listener: AddonUpdateListener,
-    reason: number,
-  ): Promise<unknown> | unknown;
-}
-
-export interface AddonUpdateListener {
-  onUpdateAvailable?(addon: ManagedAddon, install: ManagedAddonInstall): void;
-  onNoUpdateAvailable?(addon: ManagedAddon): void;
-  onUpdateFinished?(addon: ManagedAddon, error?: unknown): void;
-  onCompatibilityUpdateAvailable?(addon: ManagedAddon): void;
-  onNoCompatibilityUpdateAvailable?(addon: ManagedAddon): void;
-}
-
-export interface AddonInstallListener {
-  onDownloadStarted?(install: ManagedAddonInstall): void;
-  onDownloadEnded?(install: ManagedAddonInstall): void;
-  onDownloadFailed?(install: ManagedAddonInstall): void;
-  onDownloadCancelled?(install: ManagedAddonInstall): void;
-  onInstallStarted?(install: ManagedAddonInstall): void;
-  onInstallEnded?(install: ManagedAddonInstall): void;
-  onInstallPostponed?(install: ManagedAddonInstall): void;
-  onInstallFailed?(install: ManagedAddonInstall): void;
-  onInstallCancelled?(install: ManagedAddonInstall): void;
-}
-
-export interface AddonManagerFacade {
-  UPDATE_WHEN_USER_REQUESTED: number;
-  AUTOUPDATE_DISABLE: number;
-  AUTOUPDATE_ENABLE: number;
-  getAddonByID(id: string): Promise<ManagedAddon | null>;
-  shouldAutoUpdate?(addon: ManagedAddon): boolean;
-}
+import {
+  fetchReleases,
+  selectUpdate,
+  type ReleaseUpdate,
+} from "./GitHubRelease";
+import { installRelease } from "./ReleaseInstaller";
 
 export interface UpdateServiceOptions {
   addonId: string;
   currentVersion: string;
-  loadAddonManager?: () => AddonManagerFacade;
+  getAutoUpdate: () => boolean;
+  setAutoUpdate: (enabled: boolean) => void;
+  getIncludePrerelease: () => boolean;
+  setIncludePrerelease: (enabled: boolean) => void;
+  loadReleases?: () => Promise<unknown>;
+  installRelease?: (release: ReleaseUpdate, addonId: string) => Promise<void>;
   now?: () => number;
   checkTimeoutMs?: number;
-  installTimeoutMs?: number;
   scheduleTimeout?: (callback: () => void, delayMs: number) => unknown;
   cancelTimeout?: (handle: unknown) => void;
 }
 
-/** Thin, testable wrapper around Zotero/Firefox's signed add-on updater. */
+/** Confucius owns release discovery, preferences, and automatic checks. */
 export class UpdateService {
-  private readonly loadManager: () => AddonManagerFacade;
   private readonly now: () => number;
-  private readonly scheduleTimeout: (
-    callback: () => void,
-    delayMs: number,
-  ) => unknown;
-  private readonly cancelTimeout: (handle: unknown) => void;
-  private pendingInstall: ManagedAddonInstall | null = null;
-  private last: Omit<UpdateStatus, "currentVersion" | "autoUpdate"> = {
-    state: "idle",
-    canInstall: false,
-  };
+  private readonly scheduleTimeout: NonNullable<
+    UpdateServiceOptions["scheduleTimeout"]
+  >;
+  private readonly cancelTimeout: NonNullable<
+    UpdateServiceOptions["cancelTimeout"]
+  >;
+  private pendingRelease: ReleaseUpdate | null = null;
+  private last: Omit<
+    UpdateStatus,
+    "currentVersion" | "autoUpdate" | "includePrerelease"
+  > = { state: "idle", canInstall: false };
   private checking: Promise<UpdateStatus> | null = null;
   private installing: Promise<UpdateStatus> | null = null;
+  private backgroundTimer: unknown = null;
+  private started = false;
+  private disposed = false;
 
   constructor(private readonly options: UpdateServiceOptions) {
-    this.loadManager = options.loadAddonManager ?? loadAddonManager;
-    this.now = options.now ?? (() => Date.now());
+    this.now = options.now ?? Date.now;
     this.scheduleTimeout =
       options.scheduleTimeout ??
-      ((callback, delayMs) => globalThis.setTimeout(callback, delayMs));
+      ((callback, delay) => globalThis.setTimeout(callback, delay));
     this.cancelTimeout =
       options.cancelTimeout ??
       ((handle) =>
         globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>));
   }
 
+  start(): void {
+    if (this.started || this.disposed) return;
+    this.started = true;
+    this.scheduleBackgroundCheck(30_000);
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.started = false;
+    this.cancelBackgroundCheck();
+  }
+
   async status(): Promise<UpdateStatus> {
-    const { manager, addon } = await this.addon();
-    return this.snapshot(manager, addon);
+    return {
+      currentVersion: this.options.currentVersion,
+      autoUpdate: this.options.getAutoUpdate(),
+      includePrerelease: this.options.getIncludePrerelease(),
+      ...this.last,
+    };
   }
 
   check(): Promise<UpdateStatus> {
+    if (this.disposed || this.last.state === "ready") return this.status();
+    if (this.installing) return this.installing;
     if (this.checking) return this.checking;
     this.checking = this.performCheck().finally(() => {
       this.checking = null;
@@ -100,100 +84,67 @@ export class UpdateService {
   }
 
   install(): Promise<UpdateStatus> {
+    if (this.disposed || this.last.state === "ready") return this.status();
     if (this.installing) return this.installing;
-    this.installing = this.performInstall().finally(() => {
+    // Finish discovery before setting installing: check() also joins installs.
+    if (this.checking) return this.checking.then(() => this.install());
+    if (!this.pendingRelease)
+      return this.check().then((status) =>
+        status.canInstall ? this.install() : status,
+      );
+    const release = this.pendingRelease;
+    this.installing = this.performInstall(release).finally(() => {
       this.installing = null;
     });
     return this.installing;
   }
 
   async setAuto(enabled: boolean): Promise<UpdateStatus> {
-    const { manager, addon } = await this.addon();
-    addon.applyBackgroundUpdates = enabled
-      ? manager.AUTOUPDATE_ENABLE
-      : manager.AUTOUPDATE_DISABLE;
-    return this.snapshot(manager, addon);
+    this.options.setAutoUpdate(enabled);
+    this.cancelBackgroundCheck();
+    this.scheduleBackgroundCheck(30_000);
+    return this.status();
+  }
+
+  async setPrerelease(enabled: boolean): Promise<UpdateStatus> {
+    if (this.installing || this.last.state === "ready") return this.status();
+    await this.checking;
+    this.options.setIncludePrerelease(enabled);
+    this.pendingRelease = null;
+    this.last = { state: "idle", canInstall: false };
+    return this.check();
   }
 
   private async performCheck(): Promise<UpdateStatus> {
-    const { manager, addon } = await this.addon();
-    this.pendingInstall = null;
+    this.pendingRelease = null;
     this.last = { state: "checking", canInstall: false };
+    let timer: unknown;
     try {
-      await new Promise<void>((resolve, reject) => {
-        let settled = false;
-        let found: ManagedAddonInstall | null = null;
-        const finish = (action: () => void): void => {
-          if (settled) return;
-          settled = true;
-          this.cancelTimeout(timer);
-          action();
-          resolve();
-        };
-        const fail = (error: unknown): void => {
-          if (settled) return;
-          settled = true;
-          this.cancelTimeout(timer);
-          reject(error);
-        };
-        const timer = this.scheduleTimeout(
-          () => fail(new Error("Update check timed out")),
-          this.options.checkTimeoutMs ?? 30_000,
-        );
-        const listener: AddonUpdateListener = {
-          onUpdateAvailable: (_current, install) => {
-            found = install;
-            finish(() => {
-              this.pendingInstall = install;
-              this.last = {
-                state: "available",
-                canInstall: true,
-                availableVersion: install.version,
-                checkedAt: this.now(),
-              };
-            });
-          },
-          onNoUpdateAvailable: () =>
-            finish(() => {
-              this.last = {
-                state: "up-to-date",
-                canInstall: false,
-                checkedAt: this.now(),
-              };
-            }),
-          onUpdateFinished: (_current, error) => {
-            if (error && Number(error) !== 0) {
-              finish(() => {
-                this.last = {
-                  state: "error",
-                  canInstall: false,
-                  checkedAt: this.now(),
-                  message: `Update check failed (${String(error)})`,
-                };
-              });
-            } else if (!found) {
-              finish(() => {
-                this.last = {
-                  state: "up-to-date",
-                  canInstall: false,
-                  checkedAt: this.now(),
-                };
-              });
-            }
-          },
-        };
-        try {
-          const returned = addon.findUpdates(
-            listener,
-            manager.UPDATE_WHEN_USER_REQUESTED,
+      const data = await Promise.race([
+        (this.options.loadReleases ?? fetchReleases)(),
+        new Promise<never>((_, reject) => {
+          timer = this.scheduleTimeout(
+            () =>
+              reject(
+                new Error("GitHub update check timed out. Please try again."),
+              ),
+            this.options.checkTimeoutMs ?? 30_000,
           );
-          if (isPromiseLike(returned)) {
-            void returned.catch(fail);
-          }
-        } catch (error) {
-          fail(error);
-        }
-      });
+        }),
+      ]);
+      if (this.disposed) return this.status();
+      const release = selectUpdate(
+        data,
+        this.options.currentVersion,
+        this.options.getIncludePrerelease(),
+      );
+      this.pendingRelease = release;
+      this.last = {
+        state: release ? "available" : "up-to-date",
+        canInstall: Boolean(release),
+        availableVersion: release?.version,
+        checkedAt: this.now(),
+      };
     } catch (error) {
       this.last = {
         state: "error",
@@ -201,17 +152,13 @@ export class UpdateService {
         checkedAt: this.now(),
         message: readableError(error),
       };
+    } finally {
+      if (timer !== undefined) this.cancelTimeout(timer);
     }
-    return this.snapshot(manager, addon);
+    return this.status();
   }
 
-  private async performInstall(): Promise<UpdateStatus> {
-    const { manager, addon } = await this.addon();
-    if (!this.pendingInstall) {
-      const checked = await this.check();
-      if (!this.pendingInstall || !checked.canInstall) return checked;
-    }
-    const install = this.pendingInstall;
+  private async performInstall(release: ReleaseUpdate): Promise<UpdateStatus> {
     this.last = {
       ...this.last,
       state: "downloading",
@@ -219,54 +166,15 @@ export class UpdateService {
       message: undefined,
     };
     try {
-      await new Promise<void>((resolve, reject) => {
-        let settled = false;
-        const finish = (error?: unknown): void => {
-          if (settled) return;
-          settled = true;
-          this.cancelTimeout(timer);
-          install.removeListener?.(listener);
-          if (error) reject(error);
-          else resolve();
-        };
-        const timer = this.scheduleTimeout(
-          () => finish(new Error("Update installation timed out")),
-          this.options.installTimeoutMs ?? 5 * 60_000,
-        );
-        const listener: AddonInstallListener = {
-          onDownloadFailed: (failed) =>
-            finish(failed.error ?? new Error("Update download failed")),
-          onDownloadCancelled: () =>
-            finish(new Error("Update download was cancelled")),
-          onInstallFailed: (failed) =>
-            finish(failed.error ?? new Error("Update installation failed")),
-          onInstallCancelled: () =>
-            finish(new Error("Update installation was cancelled")),
-          onInstallEnded: () => finish(),
-          onInstallPostponed: () => finish(),
-        };
-        install.addListener?.(listener);
-        try {
-          const returned = install.install();
-          if (isPromiseLike(returned)) {
-            void returned.then(
-              () => {
-                if (!install.addListener) finish();
-              },
-              (error) => finish(error),
-            );
-          } else if (!install.addListener) {
-            finish();
-          }
-        } catch (error) {
-          finish(error);
-        }
-      });
-      this.pendingInstall = null;
+      await (this.options.installRelease ?? installRelease)(
+        release,
+        this.options.addonId,
+      );
+      this.pendingRelease = null;
       this.last = {
         state: "ready",
         canInstall: false,
-        availableVersion: install.version,
+        availableVersion: release.version,
         restartRequired: true,
         checkedAt: this.now(),
       };
@@ -274,67 +182,32 @@ export class UpdateService {
       this.last = {
         ...this.last,
         state: "error",
-        canInstall: Boolean(this.pendingInstall),
-        message: readableError(error),
+        canInstall: true,
         checkedAt: this.now(),
+        message: readableError(error),
       };
     }
-    return this.snapshot(manager, addon);
+    return this.status();
   }
 
-  private async addon(): Promise<{
-    manager: AddonManagerFacade;
-    addon: ManagedAddon;
-  }> {
-    const manager = this.loadManager();
-    const addon = await manager.getAddonByID(this.options.addonId);
-    if (!addon) throw new Error("Confucius add-on is not registered");
-    return { manager, addon };
+  private cancelBackgroundCheck(): void {
+    if (this.backgroundTimer !== null) this.cancelTimeout(this.backgroundTimer);
+    this.backgroundTimer = null;
   }
 
-  private snapshot(
-    manager: AddonManagerFacade,
-    addon: ManagedAddon,
-  ): UpdateStatus {
-    // `shouldAutoUpdate()` folds in Firefox/Zotero-wide policy and can return
-    // false for a development install even after this add-on was explicitly
-    // set to AUTOUPDATE_ENABLE. The switch represents the add-on's own choice,
-    // so preserve explicit enable/disable values and consult the global policy
-    // only for the manager's implicit/default mode.
-    const autoUpdate =
-      addon.applyBackgroundUpdates === manager.AUTOUPDATE_ENABLE
-        ? true
-        : addon.applyBackgroundUpdates === manager.AUTOUPDATE_DISABLE
-          ? false
-          : manager.shouldAutoUpdate
-            ? manager.shouldAutoUpdate(addon)
-            : true;
-    return {
-      currentVersion: addon.version || this.options.currentVersion,
-      autoUpdate,
-      ...this.last,
-    };
+  private scheduleBackgroundCheck(delay: number): void {
+    if (!this.started || !this.options.getAutoUpdate()) return;
+    this.backgroundTimer = this.scheduleTimeout(() => {
+      this.backgroundTimer = null;
+      void this.check().finally(() => {
+        this.cancelBackgroundCheck();
+        this.scheduleBackgroundCheck(6 * 60 * 60_000);
+      });
+    }, delay);
   }
-}
-
-function loadAddonManager(): AddonManagerFacade {
-  return (
-    ChromeUtils.importESModule(
-      "resource://gre/modules/AddonManager.sys.mjs",
-    ) as { AddonManager: AddonManagerFacade }
-  ).AddonManager;
-}
-
-function isPromiseLike(value: unknown): value is Promise<unknown> {
-  return Boolean(
-    value &&
-    typeof value === "object" &&
-    typeof (value as { then?: unknown }).then === "function",
-  );
 }
 
 function readableError(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message;
   const message = (error as { message?: unknown } | null)?.message;
   return typeof message === "string" && message ? message : String(error);
 }

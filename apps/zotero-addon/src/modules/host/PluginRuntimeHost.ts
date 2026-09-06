@@ -1,6 +1,5 @@
 import { runtimePath } from "./RuntimeStorage";
 import {
-  CONFUCIUS_LOOPBACK_ORIGIN,
   CONFUCIUS_MCP_PATH,
   artifactUpsertGuidance,
   runtimeModelSelection,
@@ -11,6 +10,7 @@ import {
   type RuntimeTurnLease,
 } from "@confucius/protocol";
 import { getPref, setPref } from "../../utils/prefs";
+import { zoteroLoopbackOrigin } from "../bridge/LoopbackOrigin";
 import type { ExternalRuntimeClient, RuntimeEventPage } from "./AgentBackend";
 import { PluginCodexAdapter } from "./PluginCodexAdapter";
 import { PluginKimiAdapter } from "./PluginKimiAdapter";
@@ -306,7 +306,7 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
           ? params.externalSessionId
           : undefined,
       mcp: {
-        url: `${CONFUCIUS_LOOPBACK_ORIGIN}${CONFUCIUS_MCP_PATH}`,
+        url: `${zoteroLoopbackOrigin()}${CONFUCIUS_MCP_PATH}`,
         token: capability.token,
       },
       developerInstructions: externalInstructions(capabilityProfile, {

@@ -68,7 +68,7 @@ node --import tsx scripts/live-zotero-recovery.mjs
 
 确定性回归覆盖协议切块和异常结束、非法参数零派发、累计预算、取消竞态、部分成功与重放、迁移、receipt 保存失败及上下文恢复。`AgentHost.lifecycle.test.ts` 直接调用宿主生命周期方法验证准备失败、并发提交和迟到回调，而不以源码字符串代替行为。
 
-`0.4.0-beta.1` 发布候选 `npm test` 为 696/696 通过，所有 workspace 类型检查、lint、构建、技能同步及版本一致性检查通过。已核对 XPI 内 bootstrap、主脚本、Worker、图标和工作区页面资源。旧版包升级与多次重启验收见 [升级验收](upgrade-acceptance.md)。真实三引擎与 Windows 验收明确留到下个版本，由维护者按 [Windows 后续验收](windows-acceptance.md) 完成。
+`0.4.0-beta.1` 发布候选曾通过 696 项测试及相应构建检查，历史安装记录见 [升级验收](acceptance/upgrade-acceptance.md)。之后针对 0.4.0 所含修复完成了 [Windows 三引擎与平台实测](acceptance/windows-acceptance-2026-09-06.md)：持久化与专项恢复通过，Native 语义召回未通过。按 [Windows 验收清单](acceptance/windows-acceptance.md) 区分已验证和剩余范围，不将历史结果作为所有版本的保证。
 
 `live-zotero-tools.mjs` 只接受 scaffold 开发 profile 和专用端口，以确定性模型驱动真实 Zotero API，并输出 `output/tool-e2e-report.json`。脚本核对实体和停止语义，记录清理结果；测试创建的开发库 fixture 单独列出，不操作真实主库。
 

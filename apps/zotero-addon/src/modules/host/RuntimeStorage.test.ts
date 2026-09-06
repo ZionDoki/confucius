@@ -6,10 +6,34 @@ import {
   migrateRuntimeStorage,
   ResourceLocks,
   writeRuntimeText,
+  runtimeIoPath,
+  runtimeLogicalPath,
   type AtomicWriter,
   type MigrationFs,
 } from "./RuntimeStorage";
 import { createExecutionScope } from "./ExecutionScope";
+
+describe("Windows IO paths", () => {
+  it("preserves logical file identity while supporting long drive and UNC paths", () => {
+    for (const path of [
+      String.raw`C:\profile\${"long".repeat(80)}.txt`,
+      String.raw`\\server\share\history\body.txt`,
+    ]) {
+      const io = runtimeIoPath(path);
+      assert.ok(io.startsWith("\\\\?\\"));
+      assert.equal(runtimeIoPath(io), io);
+      assert.equal(runtimeLogicalPath(io), path);
+    }
+    assert.equal(
+      runtimeIoPath("/home/profile/history"),
+      "/home/profile/history",
+    );
+    assert.equal(
+      runtimeIoPath("C:/profile/history"),
+      String.raw`\\?\C:\profile\history`,
+    );
+  });
+});
 
 describe("resource wait cancellation", () => {
   it("expires a queued waiter without letting later work overtake its predecessor", async () => {

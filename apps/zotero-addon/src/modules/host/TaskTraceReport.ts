@@ -17,11 +17,19 @@ export function redactTrace(value: unknown, secrets: readonly string[] = []) {
   };
   const text = (input: string): string => {
     let result = input;
-    for (const secret of known)
+    for (const secret of known) {
+      // Local APIs sometimes use a dummy credential such as "1". Replacing
+      // every occurrence would destroy IDs, page numbers and scientific data.
+      // Short credentials remain covered in exact values and labelled fields.
+      if (secret.length < 8) {
+        if (result === secret) result = replace();
+        continue;
+      }
       result = result
         .split(secret)
         .map((part, i) => (i ? replace() + part : part))
         .join("");
+    }
     result = result.replace(
       /\b(Bearer|Basic)\s+[A-Za-z0-9+/_.=~:-]+/gi,
       (_m, scheme) => `${scheme} ${replace()}`,

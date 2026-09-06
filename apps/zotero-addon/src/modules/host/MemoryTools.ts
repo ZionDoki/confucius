@@ -1,4 +1,9 @@
-import { runtimePath, writeRuntimeText } from "./RuntimeStorage";
+import {
+  runtimePath,
+  runtimeIoPath,
+  runtimeLogicalPath,
+  writeRuntimeText,
+} from "./RuntimeStorage";
 import type {
   JsonSchemaObject,
   ToolDefinition,
@@ -40,7 +45,9 @@ export class ZoteroMemoryFs implements MemoryFileSystem {
       return [];
     }
     const children = await IOUtils.getChildren(target);
-    return children.map((path) => path.replace(/\\/g, "/")).sort() as string[];
+    return children
+      .map((path) => runtimeLogicalPath(path).replace(/\\/g, "/"))
+      .sort() as string[];
   }
 
   async makeDirectory(dir: string): Promise<void> {
@@ -50,7 +57,7 @@ export class ZoteroMemoryFs implements MemoryFileSystem {
 
 function nativePath(path: string): string {
   const separator = Zotero.isWin ? "\\" : "/";
-  return path.replace(/[\\/]/g, separator);
+  return runtimeIoPath(path.replace(/[\\/]/g, separator));
 }
 
 export function createMemoryEngine(): MemoryEngine {
