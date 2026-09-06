@@ -1,4 +1,5 @@
 export { CONFUCIUS_VERSION } from "./version";
+export type { RuntimeTurnLease } from "./runtimeLease";
 
 export {
   CONFUCIUS_EVENTS_PATH,
@@ -54,12 +55,17 @@ export type {
   ToolFailure,
   ToolResult,
   ToolRuntimeMeta,
+  ToolExecutionContext,
+  PreparedOperation,
+  ToolExecutionScope,
+  ToolExecutionOutcome,
   ToolSuccess,
   ToolTransientMedia,
 } from "./tools";
 
 export type {
   ResearchTaskRecord,
+  WorkflowState,
   SessionContext,
   SessionMode,
   SessionRecord,
@@ -220,6 +226,8 @@ export {
   resolveEndpointStore,
 } from "./endpoints";
 export type {
+  EndpointModelProfile,
+  EndpointModelTimeouts,
   EndpointPatchResult,
   EndpointStore,
   LegacyModelPrefs,
@@ -308,3 +316,7 @@ export type {
 export * from "./history";
 
 export * from "./modelReasoning";
+
+export * from "./run";
+export * from "./runtimeOutcome";
+export * from "./trace";

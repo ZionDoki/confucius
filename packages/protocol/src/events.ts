@@ -39,6 +39,7 @@ export type ConfuciusEventType =
   | "context_drifted"
   | "memory_proposed"
   | "context_usage_updated"
+  | "model_usage_updated"
   | "context_window_changed"
   | "history_recalled";
 
@@ -58,6 +59,7 @@ export interface PlanStep {
 
 type EventPayloads = {
   context_usage_updated: { inputTokens: number; capacityTokens?: number };
+  model_usage_updated: { inputTokens: number; outputTokens: number; totalTokens: number };
   context_window_changed: { window: ContextWindowState };
   history_recalled: { ref: HistoryItemRef; title: string; sourceIds: string[] };
   session_created: { title: string; mode: SessionMode };
@@ -91,9 +93,9 @@ type EventPayloads = {
     title?: string;
     total: number;
   };
-  turn_completed: { phase: TurnPhase };
-  turn_failed: { message: string };
-  turn_aborted: { reason: string };
+  turn_completed: { phase: TurnPhase; stopReason?: string };
+  turn_failed: { message: string; stopReason?: string };
+  turn_aborted: { reason: string; stopReason?: string };
   task_status_changed: { status: TaskStatus; reason?: string };
   runtime_status: { runtime: RuntimeStatus };
   command_execution: {

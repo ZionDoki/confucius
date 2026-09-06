@@ -8,6 +8,13 @@ import {
 
 const PAIRING_TOKEN = "pairing-token-for-test";
 const TASK_TOKEN = "task-capability-for-test";
+const TASK_LEASE = {
+  taskId: "task-bound",
+  turnId: "turn-bound",
+  runId: "run-bound",
+  generation: 1,
+  namespace: "test-public-namespace",
+};
 const endpoints = {};
 const previousZotero = globalThis.Zotero;
 const previousToolkit = globalThis.ztoolkit;
@@ -28,14 +35,18 @@ describe("public Zotero MCP bridge", () => {
   const calls = [];
   const taskCalls = [];
   let capabilityActive = true;
+  let currentToken = TASK_TOKEN;
+  let currentLease = TASK_LEASE;
   let endpoint;
+  let toolWait;
+  let toolEntered;
 
   before(() => {
     registerHttpBridge({
       health: () => ({ ok: true }),
       resolveRuntimeCapability(token) {
-        return capabilityActive && token === TASK_TOKEN
-          ? { taskId: "task-bound" }
+        return capabilityActive && token === currentToken
+          ? { ...currentLease }
           : null;
       },
       rpc: async (method, params) => {
@@ -49,6 +60,8 @@ describe("public Zotero MCP bridge", () => {
           };
         }
         if (method === "task/toolCall") {
+          toolEntered?.();
+          await toolWait;
           return {
             content: [{ type: "text", text: '{"ok":true}' }],
             isError: false,
@@ -182,6 +195,82 @@ describe("public Zotero MCP bridge", () => {
     });
   });
 
+  it("coalesces transport retries during approval and uses a stable operation identity afterwards", async () => {
+    let release;
+    const entered = new Promise((resolve) => {
+      toolEntered = resolve;
+    });
+    toolWait = new Promise((resolve) => {
+      release = resolve;
+    });
+    const body = {
+      jsonrpc: "2.0",
+      id: "retry-10",
+      method: "tools/call",
+      params: { name: "create_note", arguments: { content: "Evidence" } },
+    };
+    const before = taskCalls.length;
+    const first = request("POST", body, TASK_TOKEN);
+    const retry = request("POST", body, TASK_TOKEN);
+    await entered;
+    const [, , conflict] = await request(
+      "POST",
+      {
+        ...body,
+        params: { ...body.params, arguments: { content: "Changed" } },
+      },
+      TASK_TOKEN,
+    );
+    assert.equal(JSON.parse(conflict).error.code, -32602);
+    assert.equal(taskCalls.length, before + 1);
+    const operation = taskCalls.at(-1).params.operationId;
+    assert.match(operation, /^mcp_test-public-namespace_[a-f0-9]{64}$/);
+    assert.equal(operation.includes(TASK_TOKEN), false);
+    release();
+    assert.deepEqual(await first, await retry);
+    toolWait = undefined;
+    toolEntered = undefined;
+    await request("POST", body, TASK_TOKEN);
+    assert.equal(taskCalls.at(-1).params.operationId, operation);
+  });
+
+  it("keeps an entered request on its captured lease and separates same-id calls after rotation", async () => {
+    let release;
+    let entered = new Promise((resolve) => {
+      toolEntered = resolve;
+    });
+    toolWait = new Promise((resolve) => {
+      release = resolve;
+    });
+    const body = {
+      jsonrpc: "2.0",
+      id: "same-id",
+      method: "tools/call",
+      params: { name: "create_note", arguments: { content: "Evidence" } },
+    };
+    const first = request("POST", body, TASK_TOKEN);
+    await entered;
+    const oldCall = taskCalls.at(-1).params;
+    currentToken = "next-dispatch-token";
+    currentLease = { ...TASK_LEASE, namespace: "next-dispatch" };
+    entered = new Promise((resolve) => {
+      toolEntered = resolve;
+    });
+    const next = request("POST", body, currentToken);
+    await entered;
+    const newCall = taskCalls.at(-1).params;
+    assert.notEqual(oldCall.operationId, newCall.operationId);
+    assert.deepEqual(oldCall.lease, TASK_LEASE);
+    assert.deepEqual(newCall.lease, currentLease);
+    assert.equal((await request("POST", body, TASK_TOKEN))[0], 401);
+    release();
+    await Promise.all([first, next]);
+    toolWait = undefined;
+    toolEntered = undefined;
+    currentToken = TASK_TOKEN;
+    currentLease = TASK_LEASE;
+  });
+
   it("binds task capabilities to their task and rejects them after revocation", async () => {
     const [, , listJson] = await request(
       "POST",
@@ -192,7 +281,7 @@ describe("public Zotero MCP bridge", () => {
     assert.deepEqual(listed, ["search_items", "artifact_upsert"]);
     assert.deepEqual(taskCalls.at(-1), {
       method: "task/toolList",
-      params: { taskId: "task-bound" },
+      params: { taskId: "task-bound", lease: TASK_LEASE },
     });
 
     const [, , callJson] = await request(

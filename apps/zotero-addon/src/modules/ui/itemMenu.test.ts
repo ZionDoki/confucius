@@ -1,10 +1,67 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { hasPdfForMenu, type MenuProbeItem } from "./itemMenu";
+import {
+  hasPdfForMenu,
+  registerItemMenu,
+  unregisterItemMenu,
+  type MenuProbeItem,
+} from "./itemMenu";
 
 function attachment(contentType: string): MenuProbeItem {
   return { isAttachment: () => true, attachmentContentType: contentType };
 }
+
+it("removes the popup listener before a window is reloaded", () => {
+  const previousAddon = Reflect.get(globalThis, "addon");
+  const previousToolkit = Reflect.get(globalThis, "ztoolkit");
+  Reflect.set(globalThis, "addon", { data: {} });
+  Reflect.set(globalThis, "ztoolkit", { log() {} });
+  const nodes = new Map<string, unknown>();
+  const showing = new Set<EventListener>();
+  const menu = {
+    appendChild(node: { id: string }) {
+      nodes.set(node.id, node);
+    },
+    addEventListener(_type: string, handler: EventListener) {
+      showing.add(handler);
+    },
+    removeEventListener(_type: string, handler: EventListener) {
+      showing.delete(handler);
+    },
+  };
+  nodes.set("zotero-itemmenu", menu);
+  const win = {
+    document: {
+      getElementById: (id: string) => nodes.get(id),
+      createXULElement() {
+        return {
+          id: "",
+          setAttribute() {},
+          addEventListener() {},
+          remove() {
+            nodes.delete(this.id);
+          },
+        };
+      },
+    },
+  } as unknown as Window;
+  try {
+    registerItemMenu(win);
+    registerItemMenu(win);
+    assert.equal(showing.size, 1);
+    assert.equal(nodes.size, 9);
+    unregisterItemMenu(win);
+    assert.equal(showing.size, 0);
+    assert.equal(nodes.size, 1);
+    registerItemMenu(win);
+    assert.equal(showing.size, 1);
+    unregisterItemMenu(win);
+    assert.equal(showing.size, 0);
+  } finally {
+    Reflect.set(globalThis, "addon", previousAddon);
+    Reflect.set(globalThis, "ztoolkit", previousToolkit);
+  }
+});
 
 describe("hasPdfForMenu", () => {
   it("finds a PDF among a regular item's attachments", () => {

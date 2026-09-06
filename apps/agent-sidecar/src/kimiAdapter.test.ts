@@ -17,6 +17,63 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 }
 
 describe("Kimi ACP v1 contract", () => {
+  it("keeps token and request limits resumable instead of marking the task complete", async () => {
+    for (const [reason, expected] of [
+      ["max_tokens", "length"],
+      ["max_turn_requests", "iteration_budget"],
+    ]) {
+      const adapter = new KimiAdapter(process.execPath, [fixture]);
+      const events: ConfuciusEvent[] = [];
+      try {
+        await adapter.startTurn(
+          {
+            taskId: "limited",
+            turnId: "turn-limit",
+            prompt: `terminal=${reason}`,
+            mode: "agent",
+            capabilityProfile: "zotero_only",
+            cwd: process.cwd(),
+            mcp: { url: "http://127.0.0.1:1/mcp", token: "token" },
+            developerInstructions: "test",
+          },
+          {
+            emit(type, payload, turnId) {
+              events.push({
+                id: `e${events.length}`,
+                sessionId: "limited",
+                turnId,
+                type,
+                ts: Date.now(),
+                payload,
+              } as ConfuciusEvent);
+            },
+          },
+          {
+            request: async (request) => ({
+              id: request.id,
+              verdict: "deny",
+              scope: "once",
+            }),
+          },
+        );
+        await waitFor(() =>
+          events.some((event) => event.type === "turn_aborted"),
+        );
+        assert.equal(
+          events.some((event) => event.type === "turn_completed"),
+          false,
+        );
+        const stopped = events.find((event) => event.type === "turn_aborted");
+        assert.equal(
+          stopped?.type === "turn_aborted" && stopped.payload.stopReason,
+          expected,
+        );
+      } finally {
+        await adapter.dispose("limited");
+      }
+    }
+  });
+
   it("negotiates ACP, streams updates, and completes", async () => {
     const adapter = new KimiAdapter(process.execPath, [fixture]);
     const status = await adapter.probe();
@@ -27,7 +84,7 @@ describe("Kimi ACP v1 contract", () => {
       {
         taskId: "task_kimi",
         turnId: "turn_kimi",
-        prompt: "test",
+        prompt: "test usage",
         mode: "agent",
         capabilityProfile: "zotero_only",
         cwd: process.cwd(),
@@ -59,6 +116,12 @@ describe("Kimi ACP v1 contract", () => {
       events.some((event) => event.type === "turn_completed"),
     );
     assert.ok(events.some((event) => event.type === "reasoning_delta"));
+    assert.deepEqual(
+      events
+        .filter((event) => event.type === "model_usage_updated")
+        .map((event) => event.payload),
+      [{ inputTokens: 100, outputTokens: 20, totalTokens: 120 }],
+    );
     assert.equal(
       events
         .filter((event) => event.type === "text_delta")

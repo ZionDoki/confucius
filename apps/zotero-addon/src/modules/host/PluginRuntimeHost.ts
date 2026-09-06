@@ -1,3 +1,4 @@
+import { runtimePath } from "./RuntimeStorage";
 import {
   CONFUCIUS_LOOPBACK_ORIGIN,
   CONFUCIUS_MCP_PATH,
@@ -7,6 +8,7 @@ import {
   type ApprovalResolution,
   type RuntimeListResult,
   type RuntimeStatus,
+  type RuntimeTurnLease,
 } from "@confucius/protocol";
 import { getPref, setPref } from "../../utils/prefs";
 import type { ExternalRuntimeClient, RuntimeEventPage } from "./AgentBackend";
@@ -44,6 +46,7 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
   ]);
   private readonly activeTasks = new Map<string, ExternalKind>();
   private readonly activeTurnIds = new Map<string, string>();
+  private readonly starts = new Map<string, Promise<unknown>>();
   private cachedStatuses: RuntimeStatus[] | null = null;
 
   get enabled(): boolean {
@@ -162,9 +165,19 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
     return { ok: this.approvals.resolve(resolution) };
   }
 
-  resolveCapability(token: string): { taskId: string } | null {
+  resolveCapability(token: string): RuntimeTurnLease | null {
     const capability = this.capabilities.resolve(token);
-    return capability ? { taskId: capability.taskId } : null;
+    if (!capability) return null;
+    const { taskId, turnId, runId, generation, namespace } = capability;
+    return { taskId, turnId, runId, generation, namespace };
+  }
+
+  isCurrentLease(lease: RuntimeTurnLease): boolean {
+    return this.capabilities.isCurrent(lease);
+  }
+
+  leaseSignal(lease: RuntimeTurnLease): AbortSignal | undefined {
+    return this.capabilities.signal(lease);
   }
 
   async shutdown(): Promise<void> {
@@ -218,12 +231,57 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
   ): Promise<Record<string, unknown>> {
     if (!this.enabled)
       throw new Error("The in-plugin Runtime Host is disabled");
+    externalKind(params.backend);
+    const taskId = safeTaskId(String(params.taskId ?? ""));
+    const turnId = String(params.turnId ?? "");
+    const runId = String(params.runId ?? "");
+    const generation = params.generation;
+    if (
+      !turnId ||
+      !runId ||
+      typeof generation !== "number" ||
+      !Number.isSafeInteger(generation) ||
+      generation < 0
+    )
+      throw new Error(
+        "External execution requires a bound turn and run generation",
+      );
+    const capability = this.capabilities.issue({
+      taskId,
+      turnId,
+      runId,
+      generation,
+    });
+    this.approvals.rejectTask(taskId);
+    const previous = this.starts.get(taskId);
+    const started = (previous ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => this.startLeasedTurn(params, capability));
+    this.starts.set(taskId, started);
+    try {
+      return await started;
+    } catch (error) {
+      if (this.capabilities.isCurrent(capability))
+        this.capabilities.revoke(taskId);
+      throw error;
+    } finally {
+      if (this.starts.get(taskId) === started) this.starts.delete(taskId);
+    }
+  }
+
+  private async startLeasedTurn(
+    params: Record<string, unknown>,
+    capability: ReturnType<PluginRuntimeCapabilityStore["issue"]>,
+  ): Promise<Record<string, unknown>> {
+    if (!this.capabilities.isCurrent(capability)) return { superseded: true };
     const backend = externalKind(params.backend);
     const adapter = this.adapter(backend);
     const taskId = safeTaskId(String(params.taskId ?? ""));
     const previousBackend = this.activeTasks.get(taskId);
     if (previousBackend && previousBackend !== backend) {
-      await this.releaseTask(taskId, previousBackend);
+      await this.adapter(previousBackend).dispose(taskId);
+      this.activeTasks.delete(taskId);
+      this.activeTurnIds.delete(taskId);
     }
     const capabilityProfile =
       params.capabilityProfile === "workspace" ? "workspace" : "zotero_only";
@@ -234,10 +292,10 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
         ? params.workingDirectory
         : undefined,
     );
-    const capability = this.capabilities.issue(taskId);
+    if (!this.capabilities.isCurrent(capability)) return { superseded: true };
     const input: PluginRuntimeTurnInput = {
       taskId,
-      turnId: String(params.turnId ?? `turn_${Date.now().toString(36)}`),
+      turnId: capability.turnId,
       prompt: String(params.prompt ?? ""),
       mode: params.mode === "plan" ? "plan" : "agent",
       capabilityProfile,
@@ -259,16 +317,21 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
             : undefined,
       }),
     };
-    const sink = this.eventsBuffer.sink(taskId, (type, turnId) => {
-      if (
-        turnId === this.activeTurnIds.get(taskId) &&
-        (type === "turn_completed" ||
-          type === "turn_failed" ||
-          type === "turn_aborted")
-      ) {
-        this.activeTurnIds.delete(taskId);
-      }
-    });
+    const sink = this.eventsBuffer.sink(
+      taskId,
+      (type, turnId) => {
+        if (
+          turnId === this.activeTurnIds.get(taskId) &&
+          (type === "turn_completed" ||
+            type === "turn_failed" ||
+            type === "turn_aborted")
+        ) {
+          this.activeTurnIds.delete(taskId);
+          this.capabilities.revoke(taskId);
+        }
+      },
+      () => this.capabilities.isCurrent(capability),
+    );
     this.activeTasks.set(taskId, backend);
     this.activeTurnIds.set(taskId, input.turnId);
     sink.emit("task_status_changed", { status: "running" }, input.turnId);
@@ -276,9 +339,10 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
       const handle = await adapter.startTurn(input, sink, this.approvals);
       return { ...handle, cwd };
     } catch (error) {
+      const owned = this.capabilities.isCurrent(capability);
       sink.emit("task_status_changed", { status: "failed" }, input.turnId);
       sink.emit("turn_failed", { message: errorMessage(error) }, input.turnId);
-      await this.releaseTask(taskId, backend);
+      if (owned) await this.releaseTask(taskId, backend);
       throw error;
     }
   }
@@ -287,6 +351,7 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
     params: Record<string, unknown>,
   ): Promise<{ ok: true }> {
     const taskId = String(params.taskId ?? "");
+    this.capabilities.revoke(taskId);
     await this.adapterForTask(taskId, params.backend).interrupt(taskId);
     this.approvals.rejectTask(taskId);
     return { ok: true };
@@ -334,12 +399,7 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
       }
       return resolved;
     }
-    const isolated = PathUtils.join(
-      Zotero.DataDirectory.dir,
-      "confucius",
-      "runtime-workspaces",
-      taskId,
-    );
+    const isolated = runtimePath("runtime-workspaces", taskId);
     await IOUtils.makeDirectory(isolated, {
       createAncestors: true,
       ignoreExisting: true,

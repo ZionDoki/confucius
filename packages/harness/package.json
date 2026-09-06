@@ -1,6 +1,6 @@
 {
   "name": "@confucius/harness",
-  "version": "0.3.8",
+  "version": "0.4.0-beta.1",
   "private": true,
   "license": "AGPL-3.0-or-later",
   "type": "module",
@@ -12,10 +12,12 @@
     "test": "node --import tsx --test src/*.test.ts"
   },
   "dependencies": {
-    "@confucius/protocol": "*"
+    "@confucius/protocol": "*",
+    "ajv": "^8.20.0"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",
+    "esbuild": "^0.28.2",
     "tsx": "^4.23.0",
     "typescript": "^5.9.3"
   }

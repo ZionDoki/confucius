@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.4.0-beta.1 - 2026-09-06
+
+This is a preview release of the Harness upgrade. Install its XPI manually;
+the stable automatic-update channel remains on the latest stable release.
+
+### Task execution and recovery
+
+- Unified Native, Kimi and Codex task coordination, with explicit stop reasons,
+  cumulative budgets and continuation based on current proposals and artifacts.
+  Kimi and Codex retain their own internal agent loops.
+- Replaced fixed preset phases with evidence, drafts, versioned submissions and
+  actual results. Normal tasks can continue known unfinished work within their
+  existing request and budget.
+- Added prepared operations, shared execution deadlines and durable per-operation
+  intents and receipts. Partial annotation commits retain successful items;
+  recovery reconciles uncertain effects without requiring a model inspection
+  call or repeating completed writes.
+- Improved model protocol handling, reasoning replay, streamed tool-call
+  completeness, schema validation and request timeout recovery.
+- Moved runtime state into the local Zotero profile with resumable migration,
+  source backups and retained task, proposal and artifact identities.
+
+### Workspace and diagnostics
+
+- Fixed toolbar registration and first-open workspace layout changes while
+  restoring a task and loading preferences.
+- Added task diagnostic report export from the task header and task menu.
+  Offline HTML includes searchable events, history, checkpoints, operations,
+  proposals and artifact revisions, plus a full JSON download. Export progress
+  appears on the disabled export button.
+- Archived host events independently of UI retention and excluded diagnostic
+  batches from model history retrieval. Exports redact recognized credentials
+  and identify unavailable external-engine internals and legacy trace gaps.
+- Added cancellable PDF work and isolated regular-expression Worker execution.
+
+### Validation and known limits
+
+- Automated tests, type checking, lint and builds are required for this release.
+  macOS development Zotero acceptance covers actual tool writes, partial
+  annotation recovery, workspace startup and report export.
+- Installed the released 0.3.8 package in an isolated Zotero profile, upgraded
+  through AddonManager and verified restart recovery. Task/window identities,
+  history bodies, note and artifact revisions, and the completed write receipt
+  survived; explicit continuation kept one native note and consumed budget.
+  See [upgrade acceptance](https://github.com/ZionDoki/confucius/blob/v0.4.0-beta.1/docs/upgrade-acceptance.md).
+- Real-model end-to-end acceptance for Native, Kimi and Codex, plus Windows
+  storage and PDF Worker acceptance, are deferred to the next version. The
+  Windows follow-up procedures and result template are in
+  [Windows acceptance](https://github.com/ZionDoki/confucius/blob/v0.4.0-beta.1/docs/windows-acceptance.md).
+- Native Reader annotation lookup can take about five seconds per entry in the
+  tested environment. Large batches may reach the execution deadline; completed
+  items retain their receipts.
+- This release does not claim identical context-window behavior across engines
+  or improved task success rates across all base models.
+- Migration retains the old runtime source and backup. Downgrading does not
+  copy newly written runtime state back into the older version's directory.
+
 ## 0.3.8 - 2026-09-05
 
 - Added a complete dark appearance that follows Zotero's theme, including the

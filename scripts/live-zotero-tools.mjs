@@ -10,8 +10,10 @@
  */
 
 import { createServer } from "node:http";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { basename, dirname, resolve } from "node:path";
+import { execFileSync } from "node:child_process";
+import { readFile, writeFile, mkdir, mkdtemp, open } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, dirname, resolve, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   LIBRARY_READ_TOOLS,
@@ -31,7 +33,10 @@ const PDF_FIXTURE = resolve(
   ROOT,
   "scripts/fixtures/confucius-tool-e2e-fixture.pdf",
 );
-const REPORT_PATH = resolve(ROOT, "output/tool-e2e-report.json");
+const REPORT_PATH = resolve(
+  process.env.CONFUCIUS_E2E_REPORT ||
+    resolve(ROOT, "output/tool-e2e-report.json"),
+);
 const MOCK_PORT = Number(process.env.CONFUCIUS_E2E_MOCK_PORT || 18765);
 const MOCK_ORIGIN = `http://127.0.0.1:${MOCK_PORT}`;
 const MOCK_BASE_URL = `${MOCK_ORIGIN}/v1`;
@@ -50,10 +55,8 @@ const READ_ONLY_TOOLS = [
   ...MEMORY_READ_TOOLS,
 ];
 
-if (ALL_TOOLS.length !== 60 || new Set(ALL_TOOLS).size !== 60) {
-  throw new Error(
-    `Expected 60 unique built-in tools, found ${ALL_TOOLS.length}`,
-  );
+if (!ALL_TOOLS.length || new Set(ALL_TOOLS).size !== ALL_TOOLS.length) {
+  throw new Error(`Expected unique built-in tools, found ${ALL_TOOLS.length}`);
 }
 
 function parseUserPrefs(source) {
@@ -86,6 +89,7 @@ async function requestBody(request) {
 
 async function startDeterministicServer(pdfBytes) {
   let callSequence = 0;
+  const dispatchedRequests = new Set();
   const server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url || "/", MOCK_ORIGIN);
@@ -119,12 +123,14 @@ async function startDeterministicServer(pdfBytes) {
         if (message?.role !== "user" || typeof message.content !== "string") {
           continue;
         }
-        const markerIndex = message.content.indexOf(CALL_MARKER);
-        if (markerIndex < 0) continue;
+        // Coordinator continuation prompts quote the original request inside
+        // JSON. Only an actual directive line is executable fixture input.
+        const directive = message.content
+          .split("\n")
+          .find((line) => line.startsWith(CALL_MARKER));
+        if (!directive) continue;
         userIndex = index;
-        specification = JSON.parse(
-          message.content.slice(markerIndex + CALL_MARKER.length),
-        );
+        specification = JSON.parse(directive.slice(CALL_MARKER.length));
         break;
       }
       const hasToolResult =
@@ -132,27 +138,38 @@ async function startDeterministicServer(pdfBytes) {
         messages
           .slice(userIndex + 1)
           .some((message) => message?.role === "tool");
-      const message =
-        specification && !hasToolResult
-          ? {
-              role: "assistant",
-              content: null,
-              tool_calls: [
-                {
-                  id: `call_e2e_${++callSequence}`,
-                  type: "function",
-                  function: {
-                    name: String(specification.name),
-                    arguments: JSON.stringify(specification.args || {}),
-                  },
+      const shouldCall =
+        specification &&
+        !hasToolResult &&
+        (!specification.nonce || !dispatchedRequests.has(specification.nonce));
+      if (shouldCall && specification.nonce)
+        dispatchedRequests.add(specification.nonce);
+      const message = shouldCall
+        ? {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              {
+                id: `call_e2e_${++callSequence}`,
+                type: "function",
+                function: {
+                  name: String(specification.name),
+                  arguments: JSON.stringify(specification.args || {}),
                 },
-              ],
-            }
-          : { role: "assistant", content: "E2E tool call completed." };
+              },
+            ],
+          }
+        : { role: "assistant", content: "E2E tool call completed." };
       json(response, 200, {
         id: `chatcmpl-e2e-${callSequence}`,
         object: "chat.completion",
-        choices: [{ index: 0, finish_reason: "stop", message }],
+        choices: [
+          {
+            index: 0,
+            finish_reason: message.tool_calls?.length ? "tool_calls" : "stop",
+            message,
+          },
+        ],
         usage: { prompt_tokens: 16, completion_tokens: 4, total_tokens: 20 },
       });
     } catch (error) {
@@ -195,6 +212,8 @@ async function closeServer(server) {
   await new Promise((resolveClose) => server.close(resolveClose));
 }
 
+class HostUnavailableError extends Error {}
+
 async function main() {
   const startedAt = new Date().toISOString();
   const runId = `Confucius E2E ${new Date()
@@ -210,17 +229,72 @@ async function main() {
       23119,
   );
   if (!pairingToken) throw new Error("Development pairing token not found");
+  const configuredPort = Number(prefs.get("extensions.zotero.httpServer.port"));
+  if (zoteroPort !== configuredPort || zoteroPort === 23119)
+    throw new Error(
+      "Live fixtures require the configured non-default development-profile HTTP port",
+    );
+  const listenerPids = execFileSync(
+    "lsof",
+    ["-nP", `-iTCP:${zoteroPort}`, "-sTCP:LISTEN", "-t"],
+    { encoding: "utf8" },
+  )
+    .trim()
+    .split(/\s+/);
+  const processRows = execFileSync("ps", ["ax", "-o", "pid=,command="], {
+    encoding: "utf8",
+  }).split("\n");
+  const developmentProcess = processRows.find(
+    (row) =>
+      listenerPids.includes(row.trim().split(/\s+/)[0]) &&
+      row.includes(`-profile ${dirname(PROFILE_PREFS)}`) &&
+      row.includes(
+        `--dataDir ${resolve(ROOT, "apps/zotero-addon/.scaffold/data")}`,
+      ),
+  );
+  if (!developmentProcess)
+    throw new Error(
+      "HTTP listener is not the expected Zotero development profile; no fixture writes were performed",
+    );
   const origin = `http://127.0.0.1:${zoteroPort}`;
   const rpcUrl = `${origin}/confucius/v1/rpc`;
   const mcpUrl = `${origin}/confucius/v1/mcp`;
   let rpcId = 0;
+  let callRequestSequence = 0;
+  let hostUnavailable = false;
+  let privateBackupPath;
+  const bridgeFetch = async (url, options) => {
+    if (hostUnavailable)
+      throw new HostUnavailableError(
+        "Development Zotero is unavailable; suite stopped without replaying writes",
+      );
+    try {
+      return await fetch(url, options);
+    } catch (error) {
+      hostUnavailable = true;
+      throw new HostUnavailableError(
+        `Development Zotero connection failed: ${error instanceof Error ? error.message : String(error)}. Stop the suite and reconcile any in-flight operation.`,
+      );
+    }
+  };
+  const bridgeJson = async (response) => {
+    try {
+      return await response.json();
+    } catch (error) {
+      hostUnavailable = true;
+      throw new HostUnavailableError(
+        `Development Zotero response was incomplete or invalid: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  };
   const rpc = async (method, params = {}) => {
-    const response = await fetch(rpcUrl, {
+    const response = await bridgeFetch(rpcUrl, {
       method: "POST",
       headers: {
         authorization: `Bearer ${pairingToken}`,
         "content-type": "application/json",
       },
+      signal: AbortSignal.timeout(15_000),
       body: JSON.stringify({
         jsonrpc: "2.0",
         id: ++rpcId,
@@ -228,19 +302,20 @@ async function main() {
         params,
       }),
     });
-    const payload = await response.json();
+    const payload = await bridgeJson(response);
     if (!response.ok || payload.error) {
       throw new Error(payload.error?.message || `RPC HTTP ${response.status}`);
     }
     return payload.result;
   };
   const mcp = async (method, params = {}) => {
-    const response = await fetch(mcpUrl, {
+    const response = await bridgeFetch(mcpUrl, {
       method: "POST",
       headers: {
         authorization: `Bearer ${pairingToken}`,
         "content-type": "application/json",
       },
+      signal: AbortSignal.timeout(90_000),
       body: JSON.stringify({
         jsonrpc: "2.0",
         id: ++rpcId,
@@ -248,7 +323,7 @@ async function main() {
         params,
       }),
     });
-    const payload = await response.json();
+    const payload = await bridgeJson(response);
     if (!response.ok || payload.error) {
       throw new Error(payload.error?.message || `MCP HTTP ${response.status}`);
     }
@@ -262,6 +337,7 @@ async function main() {
     ]),
   );
   const exercisedArgs = new Map();
+  const turnValidationErrors = new WeakMap();
   const auxiliary = [];
   const mcpAudit = [];
   let originalConfig;
@@ -269,6 +345,23 @@ async function main() {
   let sessionId = "";
   let server;
   let temporaryKnowledgeBaseId = "";
+  let report;
+  const cleanup = [];
+  const trace = [];
+  const createdResources = [];
+  const countsOf = () =>
+    Object.fromEntries(
+      [
+        "pass",
+        "functional_defect",
+        "environment_blocked",
+        "fail",
+        "not_tested",
+      ].map((status) => [
+        status,
+        [...matrix.values()].filter((entry) => entry.status === status).length,
+      ]),
+    );
 
   const record = (tool, status, detail, result) => {
     matrix.set(tool, {
@@ -300,12 +393,25 @@ async function main() {
   };
 
   const callAgentTool = async (name, args, timeoutMs) => {
+    const calledAt = Date.now();
     exercisedArgs.set(name, args);
     const prompt = await rpc("session/prompt", {
       sessionId,
-      text: `${CALL_MARKER}${JSON.stringify({ name, args })}`,
+      text: `${CALL_MARKER}${JSON.stringify({ nonce: `${sessionId}:${++callRequestSequence}`, name, args })}`,
     });
     const turn = await waitForTurn(prompt.turnId, timeoutMs);
+    trace.push({
+      tool: name,
+      turnId: prompt.turnId,
+      elapsedMs: Date.now() - calledAt,
+      terminal: turn.terminal,
+      results: turn.events
+        .filter((event) => event.type === "tool_result")
+        .map((event) => ({
+          callId: event.payload.callId,
+          result: compactEvidence(event.payload.result),
+        })),
+    });
     const requested = turn.events.filter(
       (event) => event.type === "tool_requested",
     );
@@ -322,7 +428,50 @@ async function main() {
     if (!resultEvent) {
       throw new Error(`No tool_result event for ${name}`);
     }
-    return resultEvent.payload.result;
+    const result = resultEvent.payload.result;
+    if (
+      result.ok &&
+      [
+        "create_collection",
+        "create_item",
+        "create_saved_search",
+        "create_note",
+        "propose_note",
+        "attach_file",
+        "add_item",
+      ].includes(name)
+    )
+      createdResources.push({
+        tool: name,
+        arguments: args,
+        result: compactEvidence(result.data),
+      });
+    const proposalOnly = ["propose_highlights", "propose_annotations"].includes(
+      name,
+    );
+    if (proposalOnly && result.ok) {
+      const proposalId = result.data?.proposalId;
+      const interrupted =
+        turn.terminal.type === "turn_aborted" &&
+        turn.terminal.payload.stopReason === "stalled" &&
+        typeof proposalId === "string" &&
+        includesText(turn.terminal.payload, proposalId);
+      auxiliary.push({
+        check: `${name}_staged_work_is_not_completed`,
+        status: interrupted ? "pass" : "fail",
+        evidence: { proposalId, terminal: turn.terminal },
+      });
+      if (!interrupted)
+        turnValidationErrors.set(
+          result,
+          `${name} must preserve its pending proposal and stop as stalled, not claim completion: ${JSON.stringify(turn.terminal)}`,
+        );
+    } else if (turn.terminal.type !== "turn_completed") {
+      throw new Error(
+        `${name} ended with ${turn.terminal.type}: ${JSON.stringify(turn.terminal.payload)}`,
+      );
+    }
+    return result;
   };
 
   const exercise = async (
@@ -366,6 +515,11 @@ async function main() {
         );
         return result;
       }
+      const terminalError = turnValidationErrors.get(result);
+      if (terminalError) {
+        record(name, "fail", terminalError, result.data);
+        return result;
+      }
       const verdict = validate ? validate(result.data) : true;
       if (verdict === true || verdict === undefined) {
         record(name, "pass", okDetail, result.data);
@@ -386,18 +540,43 @@ async function main() {
         "fail",
         error instanceof Error ? error.message : String(error),
       );
+      if (error instanceof HostUnavailableError) throw error;
       return null;
     }
   };
 
   try {
-    const health = await fetch(`${origin}/confucius/v1/health`).then(
-      (response) => response.json(),
-    );
+    const healthResponse = await bridgeFetch(`${origin}/confucius/v1/health`, {
+      signal: AbortSignal.timeout(15_000),
+    });
+    const health = await bridgeJson(healthResponse);
+    if (!healthResponse.ok || health.ok !== true || health.name !== "confucius")
+      throw new Error("Development Confucius health check did not pass");
     auxiliary.push({ check: "health", status: "pass", evidence: health });
     const pdfBytes = await readFile(PDF_FIXTURE);
     server = await startDeterministicServer(pdfBytes);
     originalConfig = await rpc("config/get");
+    // Write and fsync the pre-run settings before the first mutation. This
+    // private recovery file may contain API keys; never copy it into output.
+    const backupDirectory = await mkdtemp(
+      join(tmpdir(), "confucius-tool-e2e-"),
+    );
+    privateBackupPath = join(backupDirectory, "original-config.json");
+    const backup = await open(privateBackupPath, "wx", 0o600);
+    try {
+      await backup.writeFile(
+        JSON.stringify({
+          schemaVersion: 1,
+          createdAt: startedAt,
+          origin,
+          originalConfig,
+        }),
+      );
+      await backup.sync();
+    } finally {
+      await backup.close();
+    }
+    console.log(`Private configuration recovery file: ${privateBackupPath}`);
     const configured = await rpc("config/set", {
       endpoint: {
         name: "Confucius deterministic E2E",
@@ -410,7 +589,7 @@ async function main() {
       },
       streamResponses: false,
       memoryAutoExtract: false,
-      maxIterations: 8,
+      maxIterations: 32,
       maxToolCalls: 8,
     });
     temporaryEndpointId = configured.activeEndpointId;
@@ -489,17 +668,43 @@ async function main() {
           data.title === titleA || "metadata update returned the wrong item",
       },
     );
+    const tagConflict = await callAgentTool("batch_update_tags", {
+      libraryID: 1,
+      key: itemAKey,
+      add: [tag, `${tag}-temporary`],
+      remove: [`${tag}-temporary`],
+    });
+    auxiliary.push({
+      check: "tag_add_remove_conflict_rejected_before_write",
+      status:
+        !tagConflict.ok &&
+        tagConflict.code === "invalid_args" &&
+        tagConflict.effect === "none"
+          ? "pass"
+          : "fail",
+      evidence: compactEvidence(tagConflict),
+    });
+    const addedTags = await callAgentTool("batch_update_tags", {
+      libraryID: 1,
+      key: itemAKey,
+      add: [tag, `${tag}-temporary`],
+    });
+    auxiliary.push({
+      check: "tag_add_persisted",
+      status:
+        addedTags.ok && includesText(addedTags.data.tags, `${tag}-temporary`)
+          ? "pass"
+          : "fail",
+      evidence: compactEvidence(addedTags),
+    });
     await exercise(
       "batch_update_tags",
-      {
-        libraryID: 1,
-        key: itemAKey,
-        add: [tag, `${tag}-temporary`],
-        remove: [`${tag}-temporary`],
-      },
+      { libraryID: 1, key: itemAKey, remove: [`${tag}-temporary`] },
       {
         validate: (data) =>
-          includesText(data.tags, tag) || "tag was not persisted",
+          (includesText(data.tags, tag) &&
+            !includesText(data.tags, `${tag}-temporary`)) ||
+          "final tag state did not preserve the retained tag and remove the temporary tag",
       },
     );
     await exercise("add_to_collection", {
@@ -553,6 +758,35 @@ async function main() {
       key: noteKey,
       content: noteText,
     });
+    const proposedNote = await exercise(
+      "propose_note",
+      {
+        libraryID: 1,
+        parentKey: itemAKey,
+        title: `${runId} Proposed Note`,
+        markdown: `${runId} PROPOSED-NOTE-8181`,
+      },
+      {
+        validate: (data) =>
+          (Boolean(data.key) && data.parentKey === itemAKey) ||
+          "approved note was not linked to the explicit parent",
+      },
+    );
+    if (proposedNote?.ok) {
+      const persistedNote = await callAgentTool("get_note_content", {
+        libraryID: 1,
+        key: proposedNote.data.key,
+      });
+      auxiliary.push({
+        check: "proposed_note_persisted",
+        status:
+          persistedNote.ok &&
+          includesText(persistedNote.data.html, "PROPOSED-NOTE-8181")
+            ? "pass"
+            : "fail",
+        evidence: compactEvidence(persistedNote),
+      });
+    }
     const attachmentAttempts = [];
     for (const source of [
       { kind: "url", args: { url: `${MOCK_ORIGIN}/fixture.pdf` } },
@@ -607,13 +841,27 @@ async function main() {
         "",
     );
 
+    const ambiguousPdf = await mcp("tools/call", {
+      name: "get_page_count",
+      arguments: { libraryID: 1, key: itemAKey },
+    });
+    auxiliary.push({
+      check: "multiple_pdfs_require_explicit_attachment",
+      status:
+        ambiguousPdf.isError &&
+        includesText(ambiguousPdf, "Multiple PDF attachments") &&
+        includesText(ambiguousPdf, "attachmentKey")
+          ? "pass"
+          : "fail",
+      evidence: compactEvidence(ambiguousPdf),
+    });
     let indexed = false;
     if (itemAKey) {
       const deadline = Date.now() + 90_000;
       while (Date.now() < deadline) {
         const probe = await mcp("tools/call", {
           name: "get_page_count",
-          arguments: { libraryID: 1, key: itemAKey },
+          arguments: { libraryID: 1, key: itemAKey, attachmentKey },
         });
         if (!probe.isError) {
           indexed = true;
@@ -771,7 +1019,7 @@ async function main() {
       await exercise(name, args, { ...options, validate });
     }
 
-    const paperArgs = { libraryID: 1, key: itemAKey };
+    const paperArgs = { libraryID: 1, key: itemAKey, attachmentKey };
     const indexVerdict = (check) => (data) =>
       !indexed
         ? { status: "environment_blocked", detail: "PDF index was not ready" }
@@ -853,6 +1101,17 @@ async function main() {
         "transport returned current selection state; non-empty selection requires Computer Use",
     });
 
+    for (const page of [1, 3]) {
+      const inspected = await callAgentTool("inspect_pdf_page", {
+        ...paperArgs,
+        page,
+      });
+      auxiliary.push({
+        check: `inspect_annotation_page_${page}`,
+        status: inspected.ok && inspected.data.page === page ? "pass" : "fail",
+        evidence: compactEvidence(inspected),
+      });
+    }
     outcome = await exercise(
       "inspect_pdf_page",
       { ...paperArgs, page: 2 },
@@ -891,7 +1150,10 @@ async function main() {
       },
       {
         validate: (data) =>
-          (data.count === 1 && data.persisted === false) ||
+          (data.count === 1 &&
+            data.persisted === true &&
+            typeof data.proposalId === "string" &&
+            data.attachmentKey === attachmentKey) ||
           "legacy highlight proposal state mismatch",
       },
     );
@@ -926,29 +1188,71 @@ async function main() {
           },
         ]
       : [];
-    await exercise(
+    const proposedAnnotations = await exercise(
       "propose_annotations",
       { ...paperArgs, annotations: annotationDrafts },
       {
         validate: (data) =>
-          (regionRect && data.count === 4 && data.persisted === false) ||
+          (regionRect &&
+            data.count === 4 &&
+            data.persisted === true &&
+            typeof data.proposalId === "string" &&
+            data.attachmentKey === attachmentKey) ||
           "canonical annotation proposal was not staged from inspected coordinates",
       },
     );
-    outcome = await exercise("commit_annotations", paperArgs, {
-      validate: (data) =>
-        (data.mode === "annotations" &&
-          data.count === 4 &&
-          data.itemKey === itemAKey &&
-          data.attachmentKey === attachmentKey &&
-          Array.isArray(data.annotationKeys) &&
-          data.annotationKeys.length === 4 &&
-          data.annotations?.every(
-            (annotation) =>
-              annotation.zoteroUri?.includes("annotation=") &&
-              annotation.zoteroUri?.includes("page="),
-          )) ||
-        "real Zotero annotation batch or canonical location URIs were incomplete",
+    const proposalRun = (await rpc("task/list")).tasks.find(
+      (task) => task.id === sessionId,
+    )?.run;
+    auxiliary.push({
+      check: "pending_proposals_share_original_run_budget",
+      status:
+        proposalRun?.budget.iterationsUsed >= 8 &&
+        proposalRun?.budget.maxIterations === 32
+          ? "pass"
+          : "fail",
+      evidence: { runId: proposalRun?.id, budget: proposalRun?.budget },
+    });
+    outcome = await exercise(
+      "commit_annotations",
+      {
+        ...paperArgs,
+        proposalId: proposedAnnotations?.ok
+          ? proposedAnnotations.data.proposalId
+          : undefined,
+      },
+      {
+        validate: (data) =>
+          (data.mode === "annotations" &&
+            data.count === 4 &&
+            data.proposalId === proposedAnnotations.data.proposalId &&
+            data.attachmentKey === attachmentKey &&
+            Array.isArray(data.annotationKeys) &&
+            data.annotationKeys.length === 4 &&
+            data.annotations?.every(
+              (annotation) =>
+                annotation.zoteroUri?.includes("annotation=") &&
+                annotation.zoteroUri?.includes("page="),
+            )) ||
+          "real Zotero annotation batch or canonical location URIs were incomplete",
+      },
+    );
+    const committedRun = (await rpc("task/list")).tasks.find(
+      (task) => task.id === sessionId,
+    )?.run;
+    auxiliary.push({
+      check: "annotation_commit_completes_same_run_with_cumulative_budget",
+      status:
+        committedRun?.id === proposalRun?.id &&
+        committedRun?.status === "completed" &&
+        committedRun?.budget.maxIterations === 32 &&
+        committedRun?.budget.iterationsUsed >
+          proposalRun?.budget.iterationsUsed &&
+        committedRun?.budget.toolCallsUsed ===
+          proposalRun?.budget.toolCallsUsed + 1
+          ? "pass"
+          : "fail",
+      evidence: { runId: committedRun?.id, budget: committedRun?.budget },
     });
     annotationKey = outcome?.ok
       ? String(outcome.data.annotationKeys?.[3] || "")
@@ -1361,7 +1665,7 @@ async function main() {
         [...matrix.values()].filter((entry) => entry.status === status).length,
       ]),
     );
-    const report = {
+    report = {
       runId,
       startedAt,
       finishedAt: new Date().toISOString(),
@@ -1380,6 +1684,14 @@ async function main() {
         knowledgeBaseId: temporaryKnowledgeBaseId,
       },
       counts,
+      developmentProfile: {
+        path: dirname(PROFILE_PREFS),
+        pid: Number(developmentProcess.trim().split(/\s+/)[0]),
+        verifiedListener: true,
+      },
+      createdResources,
+      trace,
+      cleanup,
       matrix: [...matrix.values()],
       auxiliary,
       mcpAudit,
@@ -1388,38 +1700,95 @@ async function main() {
         note: "Run separately with the Computer Use skill against the real windows.",
       },
     };
-    await mkdir(dirname(REPORT_PATH), { recursive: true });
-    await writeFile(REPORT_PATH, `${JSON.stringify(report, null, 2)}\n`);
     console.log(`\nReport: ${REPORT_PATH}`);
     console.log(`Counts: ${JSON.stringify(counts)}`);
     if (
       counts.fail > 0 ||
       counts.functional_defect > 0 ||
-      counts.not_tested > 0
+      counts.not_tested > 0 ||
+      auxiliary.some((entry) =>
+        ["fail", "functional_defect"].includes(entry.status),
+      ) ||
+      mcpAudit.some((entry) => entry.status === "fail")
     ) {
       process.exitCode = 1;
     }
+  } catch (error) {
+    auxiliary.push({
+      check: "run_fatal",
+      status: "fail",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    process.exitCode = 1;
   } finally {
-    if (temporaryKnowledgeBaseId) {
-      await rpc("knowledge/delete", {
-        id: temporaryKnowledgeBaseId,
-      }).catch(() => undefined);
-    }
-    if (sessionId) {
-      await rpc("session/delete", { sessionId }).catch(() => undefined);
-    }
+    const clean = async (check, operation) => {
+      if (hostUnavailable) {
+        cleanup.push({
+          check,
+          status: "not_attempted",
+          reason:
+            "Host unavailable; restore using privateBackupPath after development-profile restart",
+        });
+        return;
+      }
+      try {
+        await operation();
+        cleanup.push({ check, status: "pass" });
+      } catch (error) {
+        cleanup.push({
+          check,
+          status: "fail",
+          error: error instanceof Error ? error.message : String(error),
+        });
+        process.exitCode = 1;
+      }
+    };
+    if (temporaryKnowledgeBaseId)
+      await clean("temporary_knowledge_base_deleted", () =>
+        rpc("knowledge/delete", { id: temporaryKnowledgeBaseId }),
+      );
+    if (sessionId)
+      await clean("temporary_session_deleted", () =>
+        rpc("session/delete", { sessionId }),
+      );
     if (originalConfig && temporaryEndpointId) {
-      await rpc("config/set", {
-        activeEndpointId: originalConfig.activeEndpointId,
-        streamResponses: originalConfig.streamResponses,
-        memoryAutoExtract: originalConfig.memoryAutoExtract,
-        maxIterations: originalConfig.maxIterations,
-        maxToolCalls: originalConfig.maxToolCalls,
-      }).catch(() => undefined);
-      await rpc("config/set", {
-        deleteEndpointId: temporaryEndpointId,
-      }).catch(() => undefined);
+      await clean("original_configuration_restored", () =>
+        rpc("config/set", {
+          activeEndpointId: originalConfig.activeEndpointId,
+          streamResponses: originalConfig.streamResponses,
+          memoryAutoExtract: originalConfig.memoryAutoExtract,
+          maxIterations: originalConfig.maxIterations,
+          maxToolCalls: originalConfig.maxToolCalls,
+        }),
+      );
+      await clean("temporary_endpoint_deleted", () =>
+        rpc("config/set", { deleteEndpointId: temporaryEndpointId }),
+      );
     }
+    cleanup.push({
+      check: "zotero_fixture_resources",
+      status: "retained",
+      detail:
+        "Only this development profile received fixture writes. Items, attachments, annotations, collections, and saved searches are retained for inspection; no library deletion was attempted.",
+      resources: createdResources,
+    });
+    report = {
+      ...(report ?? { runId, startedAt, zoteroOrigin: origin }),
+      finishedAt: new Date().toISOString(),
+      counts: countsOf(),
+      ...(privateBackupPath ? { privateBackupPath } : {}),
+      hostUnavailable,
+      matrix: [...matrix.values()],
+      auxiliary,
+      mcpAudit,
+      createdResources,
+      trace,
+      cleanup,
+    };
+    await mkdir(dirname(REPORT_PATH), { recursive: true });
+    await writeFile(REPORT_PATH, `${JSON.stringify(report, null, 2)}\n`);
+    console.log(`Report including cleanup: ${REPORT_PATH}`);
+
     await closeServer(server);
   }
 }

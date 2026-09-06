@@ -1,5 +1,7 @@
 import type {
   JsonSchemaObject,
+  ToolExecutionContext,
+  ToolFailure,
   ToolDefinition,
   ToolResult,
   ToolRuntimeMeta,
@@ -9,10 +11,21 @@ export interface ToolProvider {
   listTools(): ToolDefinition[];
   getMeta(name: string): ToolRuntimeMeta | null;
   getSchema(name: string): JsonSchemaObject | undefined;
+  prepare?(
+    name: string,
+    args: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ): Promise<ToolFailure | null>;
+  recordDenied?(
+    name: string,
+    args: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ): Promise<void>;
   call(
     name: string,
     args: Record<string, unknown>,
     signal?: AbortSignal,
+    context?: ToolExecutionContext,
   ): Promise<ToolResult>;
 }
 
@@ -44,10 +57,35 @@ export class FilteredToolProvider implements ToolProvider {
     return this.inner.getSchema(name);
   }
 
+  async prepare(
+    name: string,
+    args: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ): Promise<ToolFailure | null> {
+    if (this.allowed && !this.allowed.has(name))
+      return {
+        ok: false,
+        toolName: name,
+        code: "permission_denied",
+        effect: "none",
+        message: `Tool "${name}" is not allowed by the active skill`,
+      };
+    return this.inner.prepare?.(name, args, context) ?? null;
+  }
+
+  async recordDenied(
+    name: string,
+    args: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ): Promise<void> {
+    await this.inner.recordDenied?.(name, args, context);
+  }
+
   async call(
     name: string,
     args: Record<string, unknown>,
     signal?: AbortSignal,
+    context?: ToolExecutionContext,
   ): Promise<ToolResult> {
     if (this.allowed && !this.allowed.has(name)) {
       return {
@@ -57,7 +95,7 @@ export class FilteredToolProvider implements ToolProvider {
         message: `Tool "${name}" is not allowed by the active skill`,
       };
     }
-    return this.inner.call(name, args, signal);
+    return this.inner.call(name, args, signal, context);
   }
 }
 
@@ -91,12 +129,29 @@ export class HookedToolProvider implements ToolProvider {
     return this.inner.getSchema(name);
   }
 
+  async prepare(
+    name: string,
+    args: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ): Promise<ToolFailure | null> {
+    return this.inner.prepare?.(name, args, context) ?? null;
+  }
+
+  async recordDenied(
+    name: string,
+    args: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ): Promise<void> {
+    await this.inner.recordDenied?.(name, args, context);
+  }
+
   async call(
     name: string,
     args: Record<string, unknown>,
     signal?: AbortSignal,
+    context?: ToolExecutionContext,
   ): Promise<ToolResult> {
-    const result = await this.inner.call(name, args, signal);
+    const result = await this.inner.call(name, args, signal, context);
     try {
       await this.afterCall({ toolName: name, args, result });
     } catch {
@@ -144,14 +199,33 @@ export class CompositeToolProvider implements ToolProvider {
     return undefined;
   }
 
+  async prepare(
+    name: string,
+    args: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ): Promise<ToolFailure | null> {
+    const provider = this.providers.find((entry) => entry.getMeta(name));
+    return provider?.prepare?.(name, args, context) ?? null;
+  }
+
+  async recordDenied(
+    name: string,
+    args: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ): Promise<void> {
+    const provider = this.providers.find((entry) => entry.getMeta(name));
+    await provider?.recordDenied?.(name, args, context);
+  }
+
   async call(
     name: string,
     args: Record<string, unknown>,
     signal?: AbortSignal,
+    context?: ToolExecutionContext,
   ): Promise<ToolResult> {
     for (const provider of this.providers) {
       if (provider.listTools().some((tool) => tool.name === name)) {
-        return provider.call(name, args, signal);
+        return provider.call(name, args, signal, context);
       }
     }
     return {

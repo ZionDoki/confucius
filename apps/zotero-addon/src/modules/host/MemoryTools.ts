@@ -1,10 +1,12 @@
+import { runtimePath, writeRuntimeText } from "./RuntimeStorage";
 import type {
   JsonSchemaObject,
   ToolDefinition,
   ToolResult,
   ToolRuntimeMeta,
+  ToolExecutionContext,
 } from "@confucius/protocol";
-import type { ToolProvider } from "@confucius/harness";
+import { validateArgs, type ToolProvider } from "@confucius/harness";
 import {
   ConversationLogEngine,
   MemoryEngine,
@@ -25,10 +27,7 @@ export class ZoteroMemoryFs implements MemoryFileSystem {
     await IOUtils.makeDirectory(PathUtils.parent(target)!, {
       ignoreExisting: true,
     });
-    await IOUtils.writeUTF8(target, content, {
-      tmpPath: `${target}.tmp`,
-      flush: true,
-    });
+    await writeRuntimeText(target, content);
   }
 
   async deleteFile(path: string): Promise<void> {
@@ -50,7 +49,7 @@ export class ZoteroMemoryFs implements MemoryFileSystem {
 }
 
 function nativePath(path: string): string {
-  const separator = Zotero.DataDirectory.dir.includes("\\") ? "\\" : "/";
+  const separator = Zotero.isWin ? "\\" : "/";
   return path.replace(/[\\/]/g, separator);
 }
 
@@ -64,7 +63,7 @@ export function createMemoryEngine(): MemoryEngine {
 }
 
 export function createConversationLogEngine(): ConversationLogEngine {
-  const root = PathUtils.join(Zotero.DataDirectory.dir, "confucius", "logs");
+  const root = runtimePath("logs");
   return new ConversationLogEngine({
     fs: new ZoteroMemoryFs(),
     root,
@@ -84,6 +83,8 @@ const MEMORY_TOOL_NAMES = new Set([
   "knowledge_base_create",
   "knowledge_base_update",
   "knowledge_base_save_entry",
+  "conversation_log_search",
+  "conversation_log_read",
 ]);
 
 /** ToolProvider over the persistent memory engine and conversation logs. */
@@ -108,6 +109,26 @@ export class ConfuciusMemoryToolProvider implements ToolProvider {
       : undefined;
   }
 
+  async prepare(
+    name: string,
+    args: Record<string, unknown>,
+    context: ToolExecutionContext = {},
+  ) {
+    const invalid = validateArgs(name, this.getSchema(name), args);
+    if (invalid) return invalid;
+    // The memory index is one aggregate shared by all entries and knowledge bases.
+    context.resources = ["memory:index"];
+    context.preparedOperation = {
+      schemaVersion: 1,
+      domain: "memory",
+      name,
+      args: { ...args },
+      resources: context.resources,
+      recovery: {},
+    };
+    return null;
+  }
+
   async call(
     name: string,
     args: Record<string, unknown>,
@@ -118,8 +139,5 @@ export class ConfuciusMemoryToolProvider implements ToolProvider {
 }
 
 export function createHistoryStore(): HistoryStore {
-  return new HistoryStore(
-    new ZoteroMemoryFs(),
-    PathUtils.join(Zotero.DataDirectory.dir, "confucius", "history"),
-  );
+  return new HistoryStore(new ZoteroMemoryFs(), runtimePath("history"));
 }

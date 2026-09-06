@@ -1,4 +1,5 @@
 import { UI_FONT_STACKS } from "./workspaceTypography";
+import { getPref } from "../../utils/prefs";
 import { WorkspaceFormDrafts } from "./workspaceDrafts";
 import {
   createComposerStatusChip,
@@ -26,6 +27,7 @@ import {
   markScrollContainer,
 } from "./workspaceScrollbars";
 import { createTaskList } from "./workspaceTasks";
+import { exportTaskTrace } from "./taskTraceExport";
 import { keyedTimeline, reconcileActivity } from "./workspaceActivity";
 import {
   composerKeyAction,
@@ -261,6 +263,8 @@ type ModelEndpoint = {
 };
 
 type ModelConfig = {
+  runtimeStoragePath?: string;
+  storageStatus?: "ready" | "unsaved";
   baseUrl: string;
   apiKey: string;
   model: string;
@@ -449,7 +453,11 @@ function formatToolResult(call: TimelineToolCall): string {
   if (!call.result) {
     return call.progress || "";
   }
-  if (call.result.ok) {
+  if (
+    call.result.ok &&
+    !call.result.warnings?.length &&
+    call.result.effect !== "partial"
+  ) {
     return JSON.stringify(call.result.data, null, 2).slice(0, 4000);
   }
   return JSON.stringify(call.result, null, 2).slice(0, 4000);
@@ -1145,6 +1153,12 @@ function bindWorkspace(
   }
 
   const cachedView = workspaceViewState;
+  // Appearance is local: use it for the first paint while model config loads.
+  const initialAppearance = {
+    uiFont: getPref("uiFont"),
+    uiFontSize: getPref("uiFontSize"),
+    uiLineHeight: getPref("uiLineHeight"),
+  };
   const state = {
     sessions: [] as SessionRow[],
     sessionId: cachedView?.taskId ?? (null as string | null),
@@ -1171,6 +1185,8 @@ function bindWorkspace(
     runtimeHostEnabled: true,
     runtimeHostConnected: false,
   };
+  let initialViewReady = false;
+  const traceExports = new Set<string>();
   const composerDrafts = cachedView?.drafts ?? new Map<string, string>();
   const referenceDrafts =
     cachedView?.references ?? new Map<string, TaskContextReference[]>();
@@ -1357,6 +1373,7 @@ function bindWorkspace(
   columns.className = "confucius-columns";
   let showSessions = !compact;
   const sessionPane = el(doc, "div", {
+    flex: "0 0 auto",
     width: compact ? "160px" : "220px",
     minWidth: compact ? "140px" : "180px",
     padding: "14px",
@@ -1373,7 +1390,7 @@ function bindWorkspace(
     getString("workspace-toggle-sessions"),
   );
   const workbenchPane = el(doc, "div", {
-    flex: "1 1 auto",
+    flex: "1 1 0px",
     minWidth: "0px",
     minHeight: "0px",
     display: "flex",
@@ -3485,9 +3502,12 @@ function bindWorkspace(
         `${revision.citations.length} ${getString("workspace-artifact-citations")}`,
       );
     }
-    if (summary.writeback?.state === "committed") {
+    if (summary.writeback?.state === "committed")
       details.push(getString("workspace-writeback-committed"));
-    }
+    if (summary.writeback?.state === "partial")
+      details.push(getString("workspace-writeback-partial"));
+    if (summary.writeback?.state === "unknown")
+      details.push(getString("workspace-writeback-unknown"));
     meta.textContent = details.join(" · ");
     copy.appendChild(kind);
     copy.appendChild(title);
@@ -3614,14 +3634,13 @@ function bindWorkspace(
   }
 
   function applyAppearance(): void {
-    const font = isUiFont(state.config?.uiFont)
-      ? state.config.uiFont
+    const appearance = state.config ?? initialAppearance;
+    const font = isUiFont(appearance.uiFont)
+      ? appearance.uiFont
       : DEFAULT_UI_FONT;
-    const size = clampUiFontSize(
-      state.config?.uiFontSize ?? DEFAULT_UI_FONT_SIZE,
-    );
-    const lineHeight = isUiLineHeight(state.config?.uiLineHeight)
-      ? state.config.uiLineHeight
+    const size = clampUiFontSize(appearance.uiFontSize ?? DEFAULT_UI_FONT_SIZE);
+    const lineHeight = isUiLineHeight(appearance.uiLineHeight)
+      ? appearance.uiLineHeight
       : DEFAULT_UI_LINE_HEIGHT;
     root.style.fontFamily = UI_FONT_STACKS[font];
     root.style.fontSize = `${size}px`;
@@ -4596,6 +4615,12 @@ function bindWorkspace(
   function renderActivityOverview(): HTMLElement {
     const task = currentTask();
     const overview = el(doc, "section");
+    if (!initialViewReady && !task) {
+      overview.className = "confucius-task-overview";
+      overview.setAttribute("role", "status");
+      overview.textContent = getString("workspace-task-loading");
+      return overview;
+    }
     overview.className = task
       ? "confucius-task-overview"
       : "confucius-task-empty";
@@ -4717,6 +4742,19 @@ function bindWorkspace(
     headerCopy.appendChild(source);
 
     header.appendChild(headerCopy);
+    const exportButton = button(
+      doc,
+      "confucius-export-trace",
+      getString(
+        traceExports.has(task.id)
+          ? "workspace-export-trace-running"
+          : "workspace-export-trace",
+      ),
+    );
+    exportButton.disabled = traceExports.has(task.id);
+    exportButton.setAttribute("aria-busy", String(exportButton.disabled));
+    exportButton.addEventListener("click", () => void saveTaskTrace(task.id));
+    header.appendChild(exportButton);
     if (state.artifacts.length) {
       const files = button(
         doc,
@@ -4728,7 +4766,11 @@ function bindWorkspace(
       );
       header.append(files);
     }
-    if (task.status === "interrupted") {
+    if (
+      task.run &&
+      task.run.status !== "completed" &&
+      (task.status === "interrupted" || task.status === "failed")
+    ) {
       const controls = el(doc, "div", {
         display: "flex",
         alignItems: "center",
@@ -5193,6 +5235,17 @@ function bindWorkspace(
       committed.textContent = getString("workspace-writeback-committed");
       paperMeta.appendChild(committed);
     }
+    if (
+      ["partial", "unknown"].includes(artifact.writeback?.state ?? "") &&
+      artifact.writeback?.revision === revision.revision
+    ) {
+      const status = el(doc, "span", { color: "var(--confucius-muted)" });
+      status.textContent =
+        artifact.writeback.state === "partial"
+          ? getString("workspace-writeback-partial")
+          : getString("workspace-writeback-unknown");
+      paperMeta.appendChild(status);
+    }
     const artifactTitle = el(
       doc,
       "h2",
@@ -5260,9 +5313,43 @@ function bindWorkspace(
     if (!wasOpen) closeButton.focus();
   }
 
+  function syncTraceExportButton(): void {
+    const button = doc.getElementById(
+      "confucius-export-trace",
+    ) as HTMLButtonElement | null;
+    if (!button || !state.sessionId) return;
+    const pending = traceExports.has(state.sessionId);
+    button.disabled = pending;
+    button.setAttribute("aria-busy", String(pending));
+    button.textContent = getString(
+      pending ? "workspace-export-trace-running" : "workspace-export-trace",
+    );
+  }
+
+  async function saveTaskTrace(taskId: string): Promise<void> {
+    if (!win || traceExports.has(taskId)) return;
+    traceExports.add(taskId);
+    renderLists();
+    try {
+      await exportTaskTrace(
+        win,
+        taskId,
+        getString("workspace-export-trace"),
+        rpc,
+      );
+    } catch (error) {
+      state.sendError = `${getString("workspace-export-trace-failed")}: ${String(error)}`;
+    } finally {
+      traceExports.delete(taskId);
+      renderLists();
+    }
+  }
+
   const updateTaskList = createTaskList(doc, sessionPane, {
     text: (key) => getString(key),
     status: taskStatusLabel,
+    exportTrace: (taskId) => void saveTaskTrace(taskId),
+    isExporting: (taskId) => traceExports.has(taskId),
     open: (taskId) => {
       void loadTask(taskId).then(() => {
         if (auxiliaryOverlay) {
@@ -5305,6 +5392,7 @@ function bindWorkspace(
 
   function listSignature(): string {
     return [
+      initialViewReady ? "ready" : "loading",
       state.sessionId ?? "",
       state.lastEventId ?? "",
       String(state.events.length),
@@ -5333,7 +5421,9 @@ function bindWorkspace(
     syncEndpointButton();
     syncPresetChip();
     lastListSignature = listSignature();
-    updateTaskList(state.sessions, state.sessionId);
+    if (initialViewReady || state.sessions.length) {
+      updateTaskList(state.sessions, state.sessionId);
+    }
     renderSourceTags();
 
     const timelineTaskId = state.sessionId;
@@ -5457,6 +5547,8 @@ function bindWorkspace(
     rememberTimelineViewport();
     syncLatest();
     renderArtifactViewer();
+    // Focused overview controls retain their DOM during reconciliation.
+    syncTraceExportButton();
   }
 
   function renderHistorySources(): HTMLElement | null {
@@ -5852,7 +5944,8 @@ function bindWorkspace(
     try {
       state.config = (await rpc("config/get", {})) as ModelConfig;
     } catch {
-      state.config = null;
+      // A transient read failure must not reset the visible appearance or model.
+      // Keep the last known configuration; an initial failure remains retryable.
     }
   }
 
@@ -6438,6 +6531,15 @@ function bindWorkspace(
       });
     });
     runtimeActions.appendChild(runtimeRefresh);
+    if (config?.runtimeStoragePath) {
+      const storage = el(doc, "div", {
+        fontSize: "12px",
+        overflowWrap: "anywhere",
+        margin: "8px 0",
+      });
+      storage.textContent = `${getString("workspace-runtime-storage")}: ${config.runtimeStoragePath}${config.storageStatus === "unsaved" ? ` · ${getString("workspace-storage-unsaved")}` : ""}`;
+      runtimeTab.appendChild(storage);
+    }
     runtimeTab.appendChild(runtimeHostRow);
     runtimeTab.appendChild(runtimeHostLine);
     runtimeTab.appendChild(runtimeList);
@@ -8903,6 +9005,7 @@ function bindWorkspace(
           {
             type:
               | "turn_started"
+              | "tool_progress"
               | "tool_requested"
               | "tool_result"
               | "approval_required"
@@ -8941,6 +9044,7 @@ function bindWorkspace(
         workflowStartedAt = event.ts;
       }
       if (
+        event.type === "tool_progress" ||
         event.type === "tool_requested" ||
         event.type === "tool_result" ||
         event.type === "approval_required" ||
@@ -8956,10 +9060,16 @@ function bindWorkspace(
       return getString("workspace-waiting-model");
     }
     let label = getString("workspace-working-model");
-    if (stage.type === "tool_requested") {
+    if (stage.type === "tool_progress") {
+      label = stage.payload.message;
+    } else if (stage.type === "tool_requested") {
       label = `${getString("workspace-working-tool")} · ${stage.payload.toolName}`;
     } else if (stage.type === "tool_result") {
-      if (stage.payload.result.toolName === "inspect_pdf_page") {
+      if (stage.payload.result.effect === "partial") {
+        label = "部分完成 · 正在核对剩余项目";
+      } else if (stage.payload.result.effect === "unknown") {
+        label = "结果待核对 · 正在读取 Zotero 实际记录";
+      } else if (stage.payload.result.toolName === "inspect_pdf_page") {
         const data =
           stage.payload.result.ok &&
           stage.payload.result.data &&
@@ -8984,6 +9094,7 @@ function bindWorkspace(
     }
     if (workflowStatus) {
       label =
+        stage.type === "tool_progress" ||
         stage.type === "tool_requested" ||
         stage.type === "tool_result" ||
         stage.type === "approval_required" ||
@@ -9057,13 +9168,8 @@ function bindWorkspace(
     try {
       if (!state.config) {
         await refreshConfig();
-        renderLists();
       }
-      await ensureSkills();
       await refreshSessions();
-      await refreshMemories();
-      if (!state.runtimes.length) await refreshRuntimes(false);
-      if (!state.memoryProposals.length) await refreshMemoryProposals();
       try {
         const live = (await rpc("context/live", {})) as LiveContextResult;
         state.live = live;
@@ -9141,6 +9247,10 @@ function bindWorkspace(
           /* stats are cosmetic */
         }
       }
+      // Restore the task and its contents before presenting the first view.
+      // Runtime discovery and other auxiliary data can take seconds on a cold
+      // start; they must not leave a temporary welcome page on screen.
+      initialViewReady = true;
       if (listSignature() !== lastListSignature) {
         renderLists();
       } else {
@@ -9162,6 +9272,13 @@ function bindWorkspace(
         status.style.color = "var(--confucius-ink)";
         status.textContent = getString("workspace-host-zotero");
       }
+      await Promise.all([
+        ensureSkills(),
+        refreshMemories(),
+        !state.runtimes.length ? refreshRuntimes(false) : undefined,
+        !state.memoryProposals.length ? refreshMemoryProposals() : undefined,
+      ]);
+      if (listSignature() !== lastListSignature) renderLists();
     } catch (error) {
       status.style.color = "var(--confucius-danger)";
       status.textContent =

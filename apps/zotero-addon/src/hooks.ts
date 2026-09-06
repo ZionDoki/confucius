@@ -1,6 +1,5 @@
 import { config } from "../package.json";
 import { initLocale } from "./utils/locale";
-import { createZToolkit } from "./utils/ztoolkit";
 import {
   registerHttpBridge,
   unregisterHttpBridge,
@@ -34,10 +33,12 @@ async function onStartup() {
     Zotero.unlockPromise,
     Zotero.uiReadyPromise,
   ]);
+  if (!addon.data.alive) return;
 
   initLocale();
   ensurePairingToken();
   await host.start();
+  if (!addon.data.alive) return;
   registerHttpBridge(host);
   try {
     registerReaderContextMenu();
@@ -52,6 +53,8 @@ async function onStartup() {
     ztoolkit.log("[Confucius] preference pane registration failed", error);
   }
 
+  if (!addon.data.alive) return;
+
   for (const win of Zotero.getMainWindows()) {
     try {
       await onMainWindowLoad(win);
@@ -65,7 +68,7 @@ async function onStartup() {
 }
 
 async function onMainWindowLoad(win: Window): Promise<void> {
-  addon.data.ztoolkit = createZToolkit();
+  if (!addon.data.alive) return;
   try {
     registerToolbarButton(win);
   } catch (error) {
@@ -79,24 +82,35 @@ async function onMainWindowLoad(win: Window): Promise<void> {
 }
 
 async function onMainWindowUnload(win: Window): Promise<void> {
-  unregisterToolbarButton(win);
-  unregisterItemMenu(win);
-  closeWorkspaceSidebar(win);
+  cleanup(() => unregisterToolbarButton(win), "toolbar");
+  cleanup(() => unregisterItemMenu(win), "item menu");
+  cleanup(() => closeWorkspaceSidebar(win), "sidebar");
 }
 
 async function onShutdown(): Promise<void> {
+  if (!addon.data.alive) return;
+  addon.data.alive = false;
+  cleanup(unregisterHttpBridge, "HTTP bridge");
+  for (const win of Zotero.getMainWindows()) await onMainWindowUnload(win);
+  cleanup(closeWorkspaceWindow, "workspace window");
+  cleanup(disposeAppearanceBindings, "appearance bindings");
+  cleanup(unregisterReaderContextMenu, "reader context menu");
   try {
     await host.shutdown();
   } catch (error) {
     ztoolkit.log("[Confucius] Runtime Host shutdown failed", error);
   }
-  closeWorkspaceWindow();
-  disposeAppearanceBindings();
-  unregisterReaderContextMenu();
-  unregisterHttpBridge();
-  addon.data.alive = false;
+  cleanup(() => addon.data.ztoolkit.unregisterAll(), "toolkit");
   // @ts-expect-error Plugin instance is removed on shutdown.
   delete Zotero[addon.data.config.addonInstance];
+}
+
+function cleanup(dispose: () => void, name: string): void {
+  try {
+    dispose();
+  } catch (error) {
+    ztoolkit.log(`[Confucius] ${name} cleanup failed`, error);
+  }
 }
 
 function onPrefsEvent(type: string, data: { window: Window }): void {

@@ -1,4 +1,16 @@
-import { abortError } from "./abort";
+import { abortError, isAbortError } from "./abort";
+import {
+  ModelError,
+  type ModelEnd,
+  type ModelReplayState,
+} from "./ModelAdapter";
+import {
+  ModelDeadline,
+  cancelModelTimeout,
+  scheduleModelTimeout,
+  type ModelTimers,
+  type ModelTimeouts,
+} from "./ModelDeadline";
 import type {
   ModelAdapter,
   ModelMessage,
@@ -17,11 +29,25 @@ import {
 
 export type ApiStyle = "openai" | "ollama";
 
-export interface OpenAICompatibleConfig {
+export interface ModelProfile {
+  /** Stable route identity, used to prevent cross-provider replay. */
+  id?: string;
+  reasoningReplay?: "none" | "reasoning_content" | "thinking";
+  ollamaToolCalls?: "incremental" | "snapshot";
+  maxOutputField?: "max_tokens" | "max_completion_tokens";
+  streamUsage?: boolean;
+}
+
+export interface OpenAICompatibleConfig extends ModelTimers {
+  profile?: ModelProfile;
+  timeouts?: ModelTimeouts;
+  createAbortController?: () => AbortController;
   apiKey: string;
   baseUrl: string;
   model: string;
   maxTokens?: number;
+  /** Native Ollama context allocation; OpenAI context admission belongs to WindowContext. */
+  contextWindowTokens?: number;
   /** Stream tokens as they arrive instead of waiting for the full response. */
   stream?: boolean;
   /**
@@ -121,11 +147,18 @@ export function describeNonJsonModelBody(
 }
 
 export class OpenAICompatibleAdapter implements ModelAdapter {
+  readonly accountsAttempts = true;
   private readonly style: ApiStyle;
   private readonly baseUrl: string;
+  private readonly profile: ModelProfile;
 
   constructor(private readonly config: OpenAICompatibleConfig) {
     this.style = config.apiStyle ?? detectApiStyle(config.baseUrl);
+    this.profile = resolveModelProfile(
+      this.style,
+      config.model,
+      config.profile,
+    );
     this.baseUrl =
       this.style === "ollama"
         ? config.baseUrl.replace(/\/+$/, "")
@@ -136,51 +169,95 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     request: ModelRequest,
     signal?: AbortSignal,
   ): Promise<ModelTurn> {
-    const response = await this.fetchWithRetry(request, signal);
-    if (!response.ok) {
-      const bodyText = await response.text().catch(() => "");
-      throw new Error(
-        `Model HTTP ${response.status}: ${bodyText.slice(0, 500)}`,
+    const deadline = new ModelDeadline(
+      signal,
+      {
+        ...this.config.timeouts,
+        absoluteMs: Math.max(
+          1,
+          Math.min(
+            this.config.timeouts?.absoluteMs ?? 600_000,
+            request.deadlineMs ?? Infinity,
+          ),
+        ),
+      },
+      this.config.createAbortController,
+      this.config,
+    );
+    try {
+      const response = await deadline.race(
+        this.fetchWithRetry(request, deadline.signal, deadline),
       );
+      if (!response.ok) {
+        const bodyText = await deadline.race(response.text()).catch(() => "");
+        throw httpModelError(
+          response.status,
+          bodyText,
+          headerValue(response, "retry-after"),
+        );
+      }
+      const contentType = headerValue(response, "content-type");
+      const liveBody = readableBody(response);
+      if (this.config.stream !== false && liveBody) {
+        if (this.style === "ollama" && isOllamaStreamType(contentType)) {
+          return await this.readOllamaStream(
+            response,
+            deadline.signal,
+            deadline,
+          );
+        }
+        if (
+          this.style === "openai" &&
+          contentType.includes("text/event-stream")
+        ) {
+          return await this.readStream(response, deadline.signal, deadline);
+        }
+      }
+      const text = await deadline.race(response.text());
+      deadline.received();
+      if (this.config.stream !== false) {
+        // Zotero.HTTP buffers the whole body and has no ReadableStream.
+        // Parse the buffered SSE/NDJSON so a completed stream still yields a turn.
+        if (
+          this.style === "ollama" &&
+          (isOllamaStreamType(contentType) || looksLikeNdjson(text))
+        ) {
+          return await this.readOllamaStream(
+            bufferedResponse(text),
+            deadline.signal,
+            deadline,
+          );
+        }
+        if (
+          this.style === "openai" &&
+          (contentType.includes("text/event-stream") || looksLikeSse(text))
+        ) {
+          return await this.readStream(
+            bufferedResponse(text),
+            deadline.signal,
+            deadline,
+          );
+        }
+      }
+      return this.style === "ollama"
+        ? this.parseOllamaResponse(text)
+        : this.parseJsonResponse(text);
+    } catch (error) {
+      if (isAbortError(error) || error instanceof ModelError) throw error;
+      throw new ModelError(
+        error instanceof Error ? error.message : String(error),
+        "transport",
+        { retryable: true },
+      );
+    } finally {
+      deadline.dispose();
     }
-    const contentType = headerValue(response, "content-type");
-    const liveBody = readableBody(response);
-    if (this.config.stream !== false && liveBody) {
-      if (this.style === "ollama" && isOllamaStreamType(contentType)) {
-        return this.readOllamaStream(response, signal);
-      }
-      if (
-        this.style === "openai" &&
-        contentType.includes("text/event-stream")
-      ) {
-        return this.readStream(response, signal);
-      }
-    }
-    const text = await response.text();
-    if (this.config.stream !== false) {
-      // Zotero.HTTP buffers the whole body and has no ReadableStream.
-      // Parse the buffered SSE/NDJSON so a completed stream still yields a turn.
-      if (
-        this.style === "ollama" &&
-        (isOllamaStreamType(contentType) || looksLikeNdjson(text))
-      ) {
-        return this.readOllamaStream(bufferedResponse(text), signal);
-      }
-      if (
-        this.style === "openai" &&
-        (contentType.includes("text/event-stream") || looksLikeSse(text))
-      ) {
-        return this.readStream(bufferedResponse(text), signal);
-      }
-    }
-    return this.style === "ollama"
-      ? this.parseOllamaResponse(text)
-      : this.parseJsonResponse(text);
   }
 
   private async fetchWithRetry(
     request: ModelRequest,
     signal?: AbortSignal,
+    deadline?: ModelDeadline,
   ): Promise<Response> {
     const fetchImpl = this.config.fetchImpl ?? fetch;
     const url =
@@ -194,15 +271,30 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         : this.buildOpenAIBody(request, stream);
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      const response = await fetchImpl(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.config.apiKey}`,
-        },
-        body: JSON.stringify(body),
-        signal,
-      });
+      if (signal?.aborted) throw abortError();
+      await request.onAttempt?.();
+      if (signal?.aborted) throw abortError();
+      const response = await (deadline
+        ? deadline.race(
+            fetchImpl(url, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${this.config.apiKey}`,
+              },
+              body: JSON.stringify(body),
+              signal,
+            }),
+          )
+        : fetchImpl(url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${this.config.apiKey}`,
+            },
+            body: JSON.stringify(body),
+            signal,
+          }));
       if (
         response.ok ||
         !RETRYABLE_STATUS.has(response.status) ||
@@ -210,9 +302,17 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       ) {
         return response;
       }
-      await response.text().catch(() => "");
+      await (deadline ? deadline.race(response.text()) : response.text()).catch(
+        () => "",
+      );
       if (attempt < MAX_ATTEMPTS && !signal?.aborted) {
-        await delay(800 * attempt, signal);
+        const wait = retryDelay(
+          headerValue(response, "retry-after"),
+          800 * attempt,
+        );
+        await (deadline
+          ? deadline.race(delay(wait, signal, this.config))
+          : delay(wait, signal, this.config));
       }
     }
     throw new Error("Model request retry loop exited unexpectedly");
@@ -224,14 +324,21 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
   ): Record<string, unknown> {
     const body: Record<string, unknown> = {
       model: this.config.model,
-      messages: request.messages.map(toOpenAIMessage),
+      messages: request.messages.map((message) =>
+        toOpenAIMessage(
+          message,
+          this.replayRoute(),
+          this.profile.reasoningReplay,
+        ),
+      ),
       stream,
     };
     if (stream) {
-      body.stream_options = { include_usage: true };
+      if (this.profile.streamUsage !== false)
+        body.stream_options = { include_usage: true };
     }
     if (this.config.maxTokens && this.config.maxTokens > 0) {
-      body.max_tokens = this.config.maxTokens;
+      body[this.profile.maxOutputField ?? "max_tokens"] = this.config.maxTokens;
     }
     Object.assign(
       body,
@@ -260,11 +367,24 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
   ): Record<string, unknown> {
     const body: Record<string, unknown> = {
       model: this.config.model,
-      messages: toOllamaMessages(request.messages),
+      messages: toOllamaMessages(
+        request.messages,
+        this.replayRoute(),
+        this.profile.reasoningReplay,
+      ),
       stream,
     };
     if (this.config.maxTokens && this.config.maxTokens > 0) {
       body.options = { num_predict: this.config.maxTokens };
+    }
+    if (
+      this.config.contextWindowTokens &&
+      this.config.contextWindowTokens > 0
+    ) {
+      body.options = {
+        ...((body.options as object) ?? {}),
+        num_ctx: this.config.contextWindowTokens,
+      };
     }
     Object.assign(
       body,
@@ -287,9 +407,19 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     return body;
   }
 
+  private replayRoute(): string {
+    return `${this.style}:${this.baseUrl}:${this.config.model}:${this.profile.id ?? "default"}`;
+  }
+  private replay(reasoning: string): ModelReplayState | undefined {
+    return reasoning
+      ? { provider: this.replayRoute(), version: 1, data: { reasoning } }
+      : undefined;
+  }
+
   private async readStream(
     response: Response,
     signal?: AbortSignal,
+    deadline?: ModelDeadline,
   ): Promise<ModelTurn> {
     const reader = response.body!.getReader() as unknown as ByteReader;
     const decoder = new TextDecoder();
@@ -301,6 +431,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     let usage: ModelUsage | undefined;
     let sawData = false;
     let ended = false;
+    let finish: ModelEnd | undefined;
 
     const handleChunk = (payloadText: string) => {
       if (payloadText === "[DONE]") {
@@ -309,6 +440,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       }
       let payload: {
         choices?: Array<{
+          finish_reason?: string | null;
           delta?: {
             content?: string | null;
             reasoning_content?: string | null;
@@ -321,13 +453,22 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
           };
         }>;
         usage?: ModelUsage | null;
+        error?: { message?: string; code?: string };
       };
       try {
         payload = JSON.parse(payloadText);
       } catch {
-        return;
+        throw new ModelError("Malformed JSON in model stream", "protocol");
       }
+      if (payload.error)
+        throw new ModelError(
+          payload.error.message ?? "Model stream error",
+          "server",
+          { retryable: true },
+        );
       sawData = true;
+      if (payload.choices?.[0]?.finish_reason)
+        finish = normalizeFinish(payload.choices[0].finish_reason);
       if (payload.usage) {
         usage = normalizeUsage(payload.usage);
       }
@@ -365,14 +506,17 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     try {
       for (;;) {
         if (signal?.aborted) {
-          await reader.cancel().catch(() => undefined);
+          void reader.cancel().catch(() => undefined);
           throw abortError();
         }
         if (ended) {
-          await reader.cancel().catch(() => undefined);
+          void reader.cancel().catch(() => undefined);
           break;
         }
-        const { done, value } = await reader.read();
+        const { done, value } = await (deadline
+          ? deadline.race(reader.read())
+          : reader.read());
+        if (value?.length) deadline?.received();
         if (done) {
           break;
         }
@@ -395,12 +539,36 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       if (remainder.startsWith("data:")) {
         handleChunk(remainder.slice(5).trim());
       }
+      if (!ended && !finish)
+        throw new ModelError(
+          "Model stream ended before a terminal event",
+          "protocol",
+          { retryable: true },
+        );
+      if (!sawData)
+        throw new ModelError("Model stream contains no response", "protocol");
     } catch (error) {
-      // Some endpoints close the stream without a terminal newline but have
-      // already delivered a usable payload; fall back to what we have.
-      if (!sawData) {
+      void reader.cancel().catch(() => undefined);
+      if (
+        isAbortError(error) ||
+        (signal?.aborted && !(error instanceof ModelError))
+      )
         throw error;
-      }
+      const base =
+        error instanceof ModelError
+          ? error
+          : new ModelError(String(error), "transport", { retryable: true });
+      throw new ModelError(base.message, base.code, {
+        ...base.options,
+        partial: {
+          text: text || undefined,
+          reasoning: reasoning || undefined,
+          end: "incomplete",
+          streamed: true,
+          usage,
+          replayState: this.replay(reasoning),
+        },
+      });
     }
 
     const tail = thinkTags.finish();
@@ -412,6 +580,8 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       this.config.onUsage?.(usage);
     }
     return {
+      end: finish ?? (toolCalls.size ? "tool_calls" : "stop"),
+      replayState: this.replay(reasoning),
       text: text || undefined,
       reasoning: reasoning || undefined,
       toolCalls: materializeToolCalls(toolCalls),
@@ -427,6 +597,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
   private async readOllamaStream(
     response: Response,
     signal?: AbortSignal,
+    deadline?: ModelDeadline,
   ): Promise<ModelTurn> {
     const reader = response.body!.getReader() as unknown as ByteReader;
     const decoder = new TextDecoder();
@@ -438,6 +609,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     let usage: ModelUsage | undefined;
     let sawData = false;
     let ended = false;
+    let finish: ModelEnd | undefined;
 
     const handleLine = (line: string) => {
       if (!line.trim()) {
@@ -452,14 +624,18 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
           }>;
         };
         done?: boolean;
+        done_reason?: string;
+        error?: string;
         prompt_eval_count?: number;
         eval_count?: number;
       };
       try {
         chunk = JSON.parse(line);
       } catch {
-        return;
+        throw new ModelError("Malformed JSON in Ollama stream", "protocol");
       }
+      if (chunk.error)
+        throw new ModelError(chunk.error, "server", { retryable: true });
       sawData = true;
       if (chunk.message?.thinking) {
         thinking += chunk.message.thinking;
@@ -472,29 +648,44 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         emitThinkTaggedContent(this.config, parsed);
       }
       if (chunk.message?.tool_calls?.length) {
-        toolCalls = mapOllamaToolCalls(chunk.message.tool_calls);
+        const mapped = mapOllamaToolCalls(chunk.message.tool_calls);
+        if (this.profile.ollamaToolCalls === "snapshot") toolCalls = mapped;
+        else
+          toolCalls = [
+            ...(toolCalls ?? []),
+            ...mapped.map((call, index) => ({
+              ...call,
+              id: `call_${(toolCalls?.length ?? 0) + index + 1}`,
+            })),
+          ];
       }
       if (chunk.done) {
         ended = true;
-        usage = {
-          promptTokens: chunk.prompt_eval_count,
-          completionTokens: chunk.eval_count,
-          totalTokens: (chunk.prompt_eval_count ?? 0) + (chunk.eval_count ?? 0),
-        };
+        finish = normalizeFinish(
+          chunk.done_reason ?? (toolCalls?.length ? "tool_calls" : "stop"),
+        );
+        usage =
+          chunk.prompt_eval_count !== undefined ||
+          chunk.eval_count !== undefined
+            ? normalizeUsage(chunk)
+            : undefined;
       }
     };
 
     try {
       for (;;) {
         if (signal?.aborted) {
-          await reader.cancel().catch(() => undefined);
+          void reader.cancel().catch(() => undefined);
           throw abortError();
         }
         if (ended) {
-          await reader.cancel().catch(() => undefined);
+          void reader.cancel().catch(() => undefined);
           break;
         }
-        const { done, value } = await reader.read();
+        const { done, value } = await (deadline
+          ? deadline.race(reader.read())
+          : reader.read());
+        if (value?.length) deadline?.received();
         if (done) {
           break;
         }
@@ -517,10 +708,34 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         }
       }
       handleLine(buffer);
+      if (!ended || !sawData)
+        throw new ModelError(
+          "Ollama stream ended before done:true",
+          "protocol",
+          { retryable: true },
+        );
     } catch (error) {
-      if (!sawData) {
+      void reader.cancel().catch(() => undefined);
+      if (
+        isAbortError(error) ||
+        (signal?.aborted && !(error instanceof ModelError))
+      )
         throw error;
-      }
+      const base =
+        error instanceof ModelError
+          ? error
+          : new ModelError(String(error), "transport", { retryable: true });
+      throw new ModelError(base.message, base.code, {
+        ...base.options,
+        partial: {
+          text: text || undefined,
+          reasoning: thinking || undefined,
+          end: "incomplete",
+          streamed: true,
+          usage,
+          replayState: this.replay(thinking),
+        },
+      });
     }
 
     const tail = thinkTags.finish();
@@ -532,6 +747,8 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       this.config.onUsage?.(usage);
     }
     return {
+      end: finish ?? (toolCalls?.length ? "tool_calls" : "stop"),
+      replayState: this.replay(thinking),
       text: text || undefined,
       reasoning: thinking || undefined,
       toolCalls,
@@ -543,6 +760,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
   private parseJsonResponse(text: string): ModelTurn {
     let payload: {
       choices?: Array<{
+        finish_reason?: string | null;
         message?: {
           content?: string | null;
           reasoning_content?: string | null;
@@ -558,11 +776,17 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     try {
       payload = JSON.parse(text) as typeof payload;
     } catch {
-      throw new Error(describeNonJsonModelBody("response", text));
+      throw new ModelError(
+        describeNonJsonModelBody("response", text),
+        "protocol",
+      );
     }
     const message = payload.choices?.[0]?.message;
     if (!message) {
-      throw new Error("Model response missing choices[0].message");
+      throw new ModelError(
+        "Model response missing choices[0].message",
+        "protocol",
+      );
     }
 
     const toolCalls: ModelToolCall[] = [];
@@ -571,14 +795,17 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         continue;
       }
       let args: Record<string, unknown> = {};
+      let argumentsError: string | undefined;
       try {
         args = call.function.arguments
           ? (JSON.parse(call.function.arguments) as Record<string, unknown>)
           : {};
       } catch {
         args = { _raw: call.function.arguments };
+        argumentsError = "Tool arguments are not valid JSON";
       }
       toolCalls.push({
+        ...(argumentsError ? { argumentsError } : {}),
         id: call.id || `call_${toolCalls.length + 1}`,
         name: call.function.name,
         args,
@@ -593,6 +820,11 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       message.reasoning_content ?? message.reasoning ?? "";
 
     return {
+      end: normalizeFinish(
+        payload.choices?.[0]?.finish_reason ??
+          (toolCalls.length ? "tool_calls" : "stop"),
+      ),
+      replayState: this.replay(explicitReasoning),
       text: tagged.text || undefined,
       reasoning: joinReasoning(explicitReasoning, tagged.reasoning),
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
@@ -602,7 +834,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
 
   /** Ollama native non-streaming: {message: {content, thinking, tool_calls}}. */
   private parseOllamaResponse(text: string): ModelTurn {
-    const payload = JSON.parse(text) as {
+    const payload = parseJsonObject(text) as {
       message?: {
         content?: string;
         thinking?: string;
@@ -612,24 +844,32 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       };
       prompt_eval_count?: number;
       eval_count?: number;
+      done_reason?: string;
     };
     const message = payload.message;
     if (!message) {
-      throw new Error("Ollama response missing message");
+      throw new ModelError("Ollama response missing message", "protocol");
     }
-    const usage: ModelUsage | undefined = payload.eval_count
-      ? {
-          promptTokens: payload.prompt_eval_count,
-          completionTokens: payload.eval_count,
-          totalTokens:
-            (payload.prompt_eval_count ?? 0) + (payload.eval_count ?? 0),
-        }
-      : undefined;
+    const usage: ModelUsage | undefined =
+      payload.eval_count !== undefined ||
+      payload.prompt_eval_count !== undefined
+        ? {
+            promptTokens: payload.prompt_eval_count,
+            completionTokens: payload.eval_count,
+            totalTokens:
+              (payload.prompt_eval_count ?? 0) + (payload.eval_count ?? 0),
+          }
+        : undefined;
     if (usage) {
       this.config.onUsage?.(usage);
     }
     const tagged = splitThinkTaggedContent(message.content || "");
     return {
+      end: normalizeFinish(
+        payload.done_reason ??
+          (message.tool_calls?.length ? "tool_calls" : "stop"),
+      ),
+      replayState: this.replay(message.thinking ?? ""),
       text: tagged.text || undefined,
       reasoning: joinReasoning(message.thinking || "", tagged.reasoning),
       toolCalls: message.tool_calls?.length
@@ -659,6 +899,12 @@ function normalizeUsage(raw: ModelUsage | Record<string, unknown>): ModelUsage {
   const source = raw as Record<string, unknown>;
   const read = (...keys: string[]): number | undefined => {
     for (const key of keys) {
+      if (
+        source[key] === null ||
+        source[key] === undefined ||
+        source[key] === ""
+      )
+        continue;
       const value = Number(source[key]);
       if (Number.isFinite(value) && value >= 0) {
         return value;
@@ -678,7 +924,9 @@ function normalizeUsage(raw: ModelUsage | Record<string, unknown>): ModelUsage {
   );
   const totalTokens =
     read("total_tokens", "totalTokens") ??
-    (promptTokens ?? 0) + (completionTokens ?? 0);
+    (promptTokens === undefined && completionTokens === undefined
+      ? undefined
+      : (promptTokens ?? 0) + (completionTokens ?? 0));
   return { promptTokens, completionTokens, totalTokens };
 }
 
@@ -692,19 +940,19 @@ function mapOllamaToolCalls(
       continue;
     }
     let args: Record<string, unknown> = {};
+    let argumentsError: string | undefined;
     if (typeof call.function.arguments === "string") {
       try {
         args = JSON.parse(call.function.arguments) as Record<string, unknown>;
       } catch {
         args = { _raw: call.function.arguments };
+        argumentsError = "Tool arguments are not valid JSON";
       }
-    } else if (
-      call.function.arguments &&
-      typeof call.function.arguments === "object"
-    ) {
+    } else if (call.function.arguments !== undefined) {
       args = call.function.arguments as Record<string, unknown>;
     }
     mapped.push({
+      ...(argumentsError ? { argumentsError } : {}),
       id: `call_${index + 1}`,
       name: call.function.name,
       args,
@@ -724,14 +972,17 @@ function materializeToolCalls(
       continue;
     }
     let args: Record<string, unknown> = {};
+    let argumentsError: string | undefined;
     try {
       args = entry.args
         ? (JSON.parse(entry.args) as Record<string, unknown>)
         : {};
     } catch {
       args = { _raw: entry.args };
+      argumentsError = "Tool arguments are not valid JSON";
     }
     calls.push({
+      ...(argumentsError ? { argumentsError } : {}),
       id: entry.id || `call_${index + 1}`,
       name: entry.name,
       args,
@@ -799,17 +1050,26 @@ function bufferedResponse(text: string): Response {
   return { body: { getReader: () => reader } } as unknown as Response;
 }
 
-function delay(ms: number, signal?: AbortSignal): Promise<void> {
+function delay(
+  ms: number,
+  signal?: AbortSignal,
+  timers: ModelTimers = {},
+): Promise<void> {
+  if (signal?.aborted) return Promise.reject(abortError());
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      "abort",
+    const onAbort = () => {
+      cancelModelTimeout(timers, timer);
+      reject(abortError());
+    };
+    const timer = scheduleModelTimeout(
+      timers,
       () => {
-        clearTimeout(timer);
-        reject(abortError());
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
       },
-      { once: true },
+      ms,
     );
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -825,7 +1085,11 @@ function joinUrl(base: string, path: string): string {
   return `${base.replace(/\/+$/, "")}${path}`;
 }
 
-function toOpenAIMessage(message: ModelMessage) {
+function toOpenAIMessage(
+  message: ModelMessage,
+  route: string,
+  replay?: ModelProfile["reasoningReplay"],
+) {
   if (message.role === "tool") {
     return {
       role: "tool",
@@ -836,6 +1100,7 @@ function toOpenAIMessage(message: ModelMessage) {
   if (message.role === "assistant" && message.toolCalls?.length) {
     return {
       role: "assistant",
+      ...replayFields(message, route, replay),
       content: message.content || null,
       tool_calls: message.toolCalls.map((call) => ({
         id: call.id,
@@ -863,6 +1128,7 @@ function toOpenAIMessage(message: ModelMessage) {
   }
   return {
     role: message.role,
+    ...replayFields(message, route, replay),
     content: message.content,
   };
 }
@@ -873,6 +1139,8 @@ function toOpenAIMessage(message: ModelMessage) {
  */
 function toOllamaMessages(
   messages: ModelMessage[],
+  route: string,
+  replay?: ModelProfile["reasoningReplay"],
 ): Array<Record<string, unknown>> {
   const callNames = new Map<string, string>();
   return messages.map((message) => {
@@ -882,6 +1150,7 @@ function toOllamaMessages(
       }
       return {
         role: "assistant",
+        ...replayFields(message, route, replay),
         content: message.content || "",
         tool_calls: message.toolCalls.map((call) => ({
           id: call.id,
@@ -908,6 +1177,97 @@ function toOllamaMessages(
         images: message.images.map((image) => image.data),
       };
     }
-    return { role: message.role, content: message.content };
+    return {
+      role: message.role,
+      ...replayFields(message, route, replay),
+      content: message.content,
+    };
   });
+}
+
+function replayFields(
+  message: ModelMessage,
+  route: string,
+  field?: ModelProfile["reasoningReplay"],
+): Record<string, string> {
+  if (
+    !field ||
+    field === "none" ||
+    message.role !== "assistant" ||
+    message.replayState?.provider !== route ||
+    message.replayState.version !== 1
+  )
+    return {};
+  return { [field]: message.replayState.data.reasoning ?? "" };
+}
+function normalizeFinish(reason: string): ModelEnd {
+  if (
+    reason === "stop" ||
+    reason === "tool_calls" ||
+    reason === "length" ||
+    reason === "content_filter"
+  )
+    return reason;
+  return "incomplete";
+}
+function retryDelay(header: string, fallback: number): number {
+  const seconds = Number(header);
+  const delayMs =
+    header && Number.isFinite(seconds)
+      ? seconds * 1000
+      : Date.parse(header) - Date.now();
+  return Math.min(
+    30_000,
+    Math.max(0, Number.isFinite(delayMs) ? delayMs : fallback),
+  );
+}
+function httpModelError(
+  status: number,
+  body: string,
+  retryAfter: string,
+): ModelError {
+  const code =
+    status === 401 || status === 403
+      ? "auth"
+      : status === 429
+        ? "rate_limit"
+        : status >= 500
+          ? "server"
+          : /context.{0,30}(length|window|limit)|token.{0,30}(limit|exceed)/i.test(
+                body,
+              )
+            ? "context_overflow"
+            : "invalid_request";
+  return new ModelError(`Model HTTP ${status}: ${body.slice(0, 500)}`, code, {
+    retryable: code === "server" || code === "rate_limit",
+    retryAfterMs: retryDelay(retryAfter, 800),
+  });
+}
+
+export function resolveModelProfile(
+  style: ApiStyle,
+  model: string,
+  overrides: ModelProfile = {},
+): ModelProfile {
+  return {
+    reasoningReplay:
+      style === "ollama"
+        ? "thinking"
+        : /^(deepseek|kimi|moonshot)(?:-|$)/i.test(model)
+          ? "reasoning_content"
+          : "none",
+    ollamaToolCalls: "incremental",
+    ...overrides,
+  };
+}
+
+function parseJsonObject(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new ModelError(
+      describeNonJsonModelBody("response", text),
+      "protocol",
+    );
+  }
 }

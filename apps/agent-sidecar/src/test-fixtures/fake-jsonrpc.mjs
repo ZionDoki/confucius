@@ -17,6 +17,8 @@ function send(value, fragmented = false) {
 }
 
 const lines = createInterface({ input: process.stdin });
+let lastSetup;
+let mcpAuthorization;
 for await (const line of lines) {
   let message;
   try {
@@ -59,6 +61,10 @@ for await (const line of lines) {
     continue;
   }
   if (message.method === "thread/start" || message.method === "thread/resume") {
+    lastSetup = message.method;
+    mcpAuthorization =
+      message.params?.config?.mcp_servers?.confucius?.http_headers
+        ?.Authorization;
     send({
       id: message.id,
       result: { thread: { id: message.params?.threadId || "thread_fake" } },
@@ -66,8 +72,23 @@ for await (const line of lines) {
     continue;
   }
   if (message.method === "turn/start") {
-    send({ id: message.id, result: { turn: { id: "turn_fake" } } });
     const prompt = message.params?.input?.[0]?.text || "";
+    const expectedLease = prompt.match(/verify-lease:([a-z]+)/)?.[1];
+    if (
+      expectedLease &&
+      (lastSetup !== "thread/resume" ||
+        mcpAuthorization !== `Bearer ${expectedLease}`)
+    ) {
+      send({
+        id: message.id,
+        error: {
+          code: -32000,
+          message: "MCP lease was not reconfigured on resume",
+        },
+      });
+      continue;
+    }
+    send({ id: message.id, result: { turn: { id: "turn_fake" } } });
     if (prompt.includes("crash")) {
       setTimeout(() => process.exit(7), 10);
       continue;
@@ -83,6 +104,21 @@ for await (const line of lines) {
         },
       });
       continue;
+    }
+    if (prompt.includes("usage")) {
+      for (let repeated = 0; repeated < 2; repeated++)
+        send({
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: message.params.threadId,
+            turnId: "turn_fake",
+            tokenUsage: {
+              total: { inputTokens: 100, outputTokens: 20, totalTokens: 120 },
+              last: { inputTokens: 80 },
+              modelContextWindow: 2000,
+            },
+          },
+        });
     }
     send(
       {
@@ -101,7 +137,15 @@ for await (const line of lines) {
           method: "turn/completed",
           params: {
             threadId: message.params.threadId,
-            turn: { id: "turn_fake", status: "completed" },
+            turn: {
+              id: "turn_fake",
+              ...(prompt.includes("missing-status")
+                ? {}
+                : {
+                    status:
+                      prompt.match(/terminal=([a-z_]+)/)?.[1] ?? "completed",
+                  }),
+            },
           },
         }),
       15,

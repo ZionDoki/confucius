@@ -13,14 +13,7 @@ export class CapabilityStore {
   private readonly byTask = new Map<string, string>();
 
   issue(taskId: string): Capability {
-    const existingToken = this.byTask.get(taskId);
-    const existing = existingToken
-      ? this.capabilities.get(existingToken)
-      : undefined;
-    if (existing) {
-      existing.expiresAt = Date.now() + CAPABILITY_TTL_MS;
-      return { ...existing };
-    }
+    this.revoke(taskId);
     const token = randomBytes(32).toString("base64url");
     const capability = {
       token,

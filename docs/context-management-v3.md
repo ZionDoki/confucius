@@ -1,5 +1,7 @@
 # 持续任务与上下文窗口（schema v3）
 
+本文保留 v3 的历史设计背景；当前执行状态、存储位置和自动对账机制以 [Harness v4](harness-v4.md) 为准。
+
 Confucius 的研究任务持有稳定 ID、来源、成果、草稿和执行记录。Native 的上下文窗口可以替换；替换窗口不调用模型生成会话摘要，也不重建当前 TurnLoop 的预算。旧的 `task/compact`、`session/compact` 作为兼容入口执行同一换窗流程。
 
 这个设计参考 Codex 的实验路径，并不假设所有 Codex 会话已采用该机制：[启用改动](https://github.com/openai/codex/pull/42385)、[固定版本的换窗实现](https://github.com/openai/codex/blob/459a79eb85400af759e9220c7bafb4429ae07516/codex-rs/core/src/compact_token_budget.rs)。Confucius 不修改 Codex 的实验配置。

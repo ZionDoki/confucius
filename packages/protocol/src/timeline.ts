@@ -268,5 +268,7 @@ export function toolLineStatus(call: TimelineToolCall): string {
   if (!call.result) {
     return call.progress || "…";
   }
+  if (call.result.effect === "partial") return "partial";
+  if (call.result.effect === "unknown") return "unknown";
   return call.result.ok ? "ok" : call.result.code;
 }

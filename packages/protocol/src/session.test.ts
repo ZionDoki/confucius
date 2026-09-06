@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { migrateSessionRecord, type SessionRecord } from "./session";
 
-describe("schema v1/v2 to v3 migration", () => {
+describe("schema v1/v2/v3 to v4 migration", () => {
   it("migrates legacy sessions to safe native tasks", () => {
     const legacy: SessionRecord = {
       id: "ses_old",
@@ -14,7 +14,7 @@ describe("schema v1/v2 to v3 migration", () => {
       permissionMode: "auto_allow",
     };
     const task = migrateSessionRecord(legacy, 30);
-    assert.equal(task.schemaVersion, 3);
+    assert.equal(task.schemaVersion, 4);
     assert.equal(task.backend, "native");
     assert.equal(task.capabilityProfile, "zotero_only");
     assert.equal(task.status, "ready");
@@ -109,4 +109,43 @@ describe("schema v1/v2 to v3 migration", () => {
     });
     assert.equal(task.titleState, "pending");
   });
+});
+
+it("retains all workflow recovery data and rejects a damaged workflow instead of restarting it", () => {
+  const base = migrateSessionRecord({
+    id: "task",
+    title: "Study",
+    createdAt: 1,
+    updatedAt: 1,
+    mode: "agent",
+    context: {},
+    permissionMode: "ask",
+  });
+  base.workflow = {
+    version: 1,
+    originalRequest: "Read the fixed paper",
+    phase: "delivery",
+    handoff: "Eight annotations saved, two skipped",
+    sources: base.lockedContext,
+    proposalIds: ["p"],
+    operationIds: ["op"],
+    artifactIds: ["report"],
+    remainingIterations: 7,
+    remainingToolCalls: 9,
+    updatedAt: 10,
+  };
+  const restored = migrateSessionRecord(JSON.parse(JSON.stringify(base)));
+  assert.equal(restored.workflow, undefined);
+  assert.equal(restored.run?.request, base.workflow.originalRequest);
+  assert.equal(restored.run?.recoveryNotes, base.workflow.handoff);
+  assert.equal(restored.run?.budget.toolCallsUsed, 87);
+  assert.equal(restored.run?.status, "interrupted");
+  assert.throws(
+    () =>
+      migrateSessionRecord({
+        ...base,
+        workflow: { ...base.workflow, operationIds: undefined } as never,
+      }),
+    /workflow is damaged/,
+  );
 });

@@ -189,7 +189,12 @@ export function bindTabNavigation(tabs: HTMLElement): void {
 /** A single anchored surface, including in XUL documents without a body. */
 export function openActionMenu(
   anchor: HTMLElement,
-  actions: Array<{ label: string; danger?: boolean; run: () => void }>,
+  actions: Array<{
+    label: string;
+    danger?: boolean;
+    disabled?: boolean;
+    run: () => void;
+  }>,
 ): void {
   const doc = anchor.ownerDocument;
   const win = doc?.defaultView;
@@ -235,6 +240,7 @@ export function openActionMenu(
     const item = createWorkspaceButton(doc, "", action.label);
     item.className = "confucius-menu-row";
     item.setAttribute("role", "menuitem");
+    item.disabled = action.disabled === true;
     if (action.danger) item.dataset.danger = "true";
     item.addEventListener("click", () => {
       close();
@@ -254,5 +260,7 @@ export function openActionMenu(
   doc.addEventListener("mousedown", outside, true);
   win.addEventListener("resize", onResize);
   observer.observe(doc.documentElement, { childList: true, subtree: true });
-  menu.querySelector<HTMLElement>("button")?.focus({ preventScroll: true });
+  menu
+    .querySelector<HTMLElement>("button:not(:disabled)")
+    ?.focus({ preventScroll: true });
 }

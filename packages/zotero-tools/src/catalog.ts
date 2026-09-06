@@ -17,10 +17,18 @@ import {
 
 const itemRef = {
   libraryID: { type: "integer", description: "Zotero libraryID" },
-  key: { type: "string", description: "Item key inside that library" },
+  key: {
+    type: "string",
+    minLength: 1,
+    description: "Item key inside that library",
+  },
+  attachmentKey: {
+    type: "string",
+    description: "Explicit PDF attachment key when the item has multiple PDFs",
+  },
 };
 
-const annotationSchema = {
+export const annotationSchema = {
   type: "object",
   properties: {
     type: { type: "string", enum: ["highlight", "underline", "image"] },
@@ -38,7 +46,20 @@ const annotationSchema = {
       minItems: 4,
       maxItems: 4,
     },
-    comment: { type: "string" },
+    comment: {
+      type: "string",
+      description:
+        "Explain evidence, implications, limitations, or relevance to the research question; do not merely repeat the quote",
+    },
+    importance: { type: "string", enum: ["key", "supporting"] },
+    rationale: {
+      type: "string",
+      description: "Compatibility alias for comment",
+    },
+    id: {
+      type: "string",
+      description: "Stable proposal entry ID returned by propose_annotations",
+    },
     color: {
       type: "string",
       pattern: "^#[0-9A-Fa-f]{6}$",
@@ -97,7 +118,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         enum: ["everywhere", "title", "creator", "tag"],
       },
       libraryID: { type: "integer" },
-      limit: { type: "integer" },
+      limit: { type: "integer", minimum: 1, maximum: 50 },
     },
     ["query"],
   ),
@@ -107,7 +128,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     {
       query: { type: "string" },
       libraryID: { type: "integer" },
-      limit: { type: "integer" },
+      limit: { type: "integer", minimum: 1, maximum: 50 },
     },
     ["query"],
   ),
@@ -117,7 +138,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     {
       query: { type: "string" },
       libraryID: { type: "integer" },
-      limit: { type: "integer" },
+      limit: { type: "integer", minimum: 1, maximum: 50 },
     },
     ["query"],
   ),
@@ -160,7 +181,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     {
       libraryID: { type: "integer" },
       key: { type: "string" },
-      limit: { type: "integer" },
+      limit: { type: "integer", minimum: 1, maximum: 50 },
     },
     ["libraryID", "key"],
   ),
@@ -169,7 +190,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   }),
   def("get_recent", "Recently modified items.", {
     libraryID: { type: "integer" },
-    limit: { type: "integer" },
+    limit: { type: "integer", minimum: 1, maximum: 50 },
   }),
   def("list_saved_searches", "List saved searches.", {
     libraryID: { type: "integer" },
@@ -362,17 +383,17 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   ),
   def(
     "get_pages",
-    "Get text for page numbers (1-based).",
+    "Read real physical PDF pages (1-based), preserving blank pages. Indexed text without reliable pages is never assigned invented page numbers.",
     {
       ...itemRef,
-      start: { type: "integer" },
-      end: { type: "integer" },
+      start: { type: "integer", minimum: 1 },
+      end: { type: "integer", minimum: 1 },
     },
     ["libraryID", "key"],
   ),
   def(
     "get_page_count",
-    "Number of pages in the PDF text extraction.",
+    "Number of real physical PDF pages, including blank and scanned pages.",
     itemRef,
     ["libraryID", "key"],
   ),
@@ -382,6 +403,12 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     {
       ...itemRef,
       query: { type: "string" },
+      start: {
+        type: "integer",
+        minimum: 1,
+        description:
+          "First physical page to search; use nextPage from a truncated result",
+      },
     },
     ["libraryID", "key", "query"],
   ),
@@ -391,12 +418,13 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     {
       ...itemRef,
       pattern: { type: "string" },
+      start: { type: "integer", minimum: 1 },
     },
     ["libraryID", "key", "pattern"],
   ),
   def(
     "get_annotations",
-    "List annotations as JSON. Each annotation carries a zoteroUri linking into the PDF.",
+    "Read actual Zotero annotations and this task's candidate proposals with outcomes projected from the operation journal. Each saved annotation includes its Zotero URI. Use this read when its contents are relevant; submission reconciles native state automatically.",
     itemRef,
     ["libraryID", "key"],
   ),
@@ -443,17 +471,18 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     "Propose highlights, underlines, and image-region notes without writing the PDF. Regions must come from inspect_pdf_page; never guess coordinates.",
     {
       ...itemRef,
-      annotations: { type: "array", items: annotationSchema },
+      annotations: { type: "array", maxItems: 100, items: annotationSchema },
     },
     ["libraryID", "key", "annotations"],
   ),
   def(
     "commit_annotations",
-    "Atomically write previously proposed or provided annotations. Copy the returned zoteroUri exactly; never construct a Zotero URI yourself.",
+    "Save eligible entries of a persistent proposal or provided annotation batch, retaining partial success. Use proposalId from propose_annotations. The host reconciles actual annotations before writing and preserves completed or manually removed marks; repair only remaining entries. Copy returned Zotero URIs exactly.",
     {
       ...itemRef,
+      proposalId: { type: "string" },
       highlights: { type: "array" },
-      annotations: { type: "array", items: annotationSchema },
+      annotations: { type: "array", maxItems: 100, items: annotationSchema },
     },
     ["libraryID", "key"],
   ),
@@ -481,7 +510,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         enum: memoryTypes,
       },
       tags: { type: "array", items: { type: "string" } },
-      limit: { type: "integer" },
+      limit: { type: "integer", minimum: 1, maximum: 50 },
     },
     ["query"],
   ),
@@ -491,7 +520,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       enum: memoryTypes,
     },
     tags: { type: "array", items: { type: "string" } },
-    limit: { type: "integer" },
+    limit: { type: "integer", minimum: 1, maximum: 50 },
   }),
   def(
     "memory_save",
@@ -531,7 +560,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     "List visible research knowledge bases with entry counts.",
     {
       query: { type: "string", description: "Optional title or topic filter" },
-      limit: { type: "integer" },
+      limit: { type: "integer", minimum: 1, maximum: 50 },
     },
   ),
   def(
@@ -540,7 +569,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     {
       id: { type: "string", description: "Knowledge base id" },
       kind: { type: "string", enum: knowledgeEntryKinds },
-      limit: { type: "integer" },
+      limit: { type: "integer", minimum: 1, maximum: 50 },
     },
     ["id"],
   ),
@@ -554,7 +583,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         description: "Optional knowledge base id; omit to search every topic",
       },
       kind: { type: "string", enum: knowledgeEntryKinds },
-      limit: { type: "integer" },
+      limit: { type: "integer", minimum: 1, maximum: 50 },
     },
     ["query"],
   ),
@@ -616,7 +645,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         type: "string",
         description: "What to look for in past conversations",
       },
-      limit: { type: "integer" },
+      limit: { type: "integer", minimum: 1, maximum: 50 },
     },
     ["query"],
   ),

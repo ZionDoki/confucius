@@ -2,8 +2,10 @@ import type {
   ApprovalRequest,
   ApprovalResolution,
   ConfuciusEvent,
+  RuntimeTurnLease,
 } from "@confucius/protocol";
 import type { PluginRuntimeEventSink } from "./PluginRuntimeTypes";
+import { createAbortController } from "../../utils/webPlatform";
 
 interface EventWaiter {
   afterId?: string;
@@ -26,9 +28,11 @@ export class PluginRuntimeEventBuffer {
   sink(
     taskId: string,
     onEmit?: (type: ConfuciusEvent["type"], turnId?: string) => void,
+    accepts?: () => boolean,
   ): PluginRuntimeEventSink {
     return {
       emit: (type, payload, turnId) => {
+        if (accepts && !accepts()) return;
         this.append({
           id: `runtime_${Date.now().toString(36)}_${(++this.sequence).toString(36)}`,
           sessionId: taskId,
@@ -164,9 +168,8 @@ export class PluginApprovalBroker {
   }
 }
 
-interface RuntimeCapability {
+interface RuntimeCapability extends RuntimeTurnLease {
   token: string;
-  taskId: string;
   expiresAt: number;
 }
 
@@ -175,25 +178,41 @@ const CAPABILITY_TTL_MS = 12 * 60 * 60 * 1_000;
 export class PluginRuntimeCapabilityStore {
   private readonly capabilities = new Map<string, RuntimeCapability>();
   private readonly byTask = new Map<string, string>();
+  private readonly controllers = new Map<string, AbortController>();
 
-  issue(taskId: string): RuntimeCapability {
-    const existingToken = this.byTask.get(taskId);
-    const existing = existingToken
-      ? this.capabilities.get(existingToken)
-      : undefined;
-    if (existing) {
-      existing.expiresAt = Date.now() + CAPABILITY_TTL_MS;
-      return { ...existing };
-    }
+  issue(scope: Omit<RuntimeTurnLease, "namespace">): RuntimeCapability {
+    const { taskId } = scope;
+    this.revoke(taskId);
     const token = randomToken();
     const capability = {
+      ...scope,
+      namespace: randomToken(),
       token,
-      taskId,
       expiresAt: Date.now() + CAPABILITY_TTL_MS,
     };
     this.capabilities.set(token, capability);
     this.byTask.set(taskId, token);
+    this.controllers.set(capability.namespace, createAbortController());
     return { ...capability };
+  }
+
+  isCurrent(lease: RuntimeTurnLease): boolean {
+    const token = this.byTask.get(lease.taskId);
+    const current = token ? this.resolve(token) : null;
+    return (
+      !!current &&
+      ["taskId", "turnId", "runId", "generation", "namespace"].every(
+        (key) =>
+          current[key as keyof RuntimeTurnLease] ===
+          lease[key as keyof RuntimeTurnLease],
+      )
+    );
+  }
+
+  signal(lease: RuntimeTurnLease): AbortSignal | undefined {
+    return this.isCurrent(lease)
+      ? this.controllers.get(lease.namespace)?.signal
+      : undefined;
   }
 
   resolve(token: string): RuntimeCapability | null {
@@ -209,11 +228,18 @@ export class PluginRuntimeCapabilityStore {
 
   revoke(taskId: string): void {
     const token = this.byTask.get(taskId);
-    if (token) this.capabilities.delete(token);
+    const capability = token ? this.capabilities.get(token) : undefined;
+    if (capability) {
+      this.controllers.get(capability.namespace)?.abort();
+      this.controllers.delete(capability.namespace);
+      this.capabilities.delete(token!);
+    }
     this.byTask.delete(taskId);
   }
 
   clear(): void {
+    for (const controller of this.controllers.values()) controller.abort();
+    this.controllers.clear();
     this.capabilities.clear();
     this.byTask.clear();
   }

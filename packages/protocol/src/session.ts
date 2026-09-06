@@ -1,3 +1,4 @@
+import { restoreRun, type RunState } from "./run";
 import {
   runtimeModelSelection,
   type RuntimeModelSelection,
@@ -58,9 +59,24 @@ export interface SessionRecord {
   permissionMode: PermissionMode;
 }
 
+export interface WorkflowState {
+  version: 1;
+  originalRequest: string;
+  phase: "research" | "review" | "delivery" | "completed";
+  handoff: string;
+  phaseNotes?: string;
+  sources: LockedContextSnapshot;
+  proposalIds: string[];
+  operationIds: string[];
+  artifactIds: string[];
+  remainingIterations: number;
+  remainingToolCalls: number;
+  updatedAt: number;
+}
+
 /** Schema-v3 task with a durable history and replaceable context windows. */
 export interface ResearchTaskRecord extends SessionRecord {
-  schemaVersion: 3;
+  schemaVersion: 4;
   contextWindow?: ContextWindowState;
   references?: TaskContextReference[];
   draft?: { text: string; references: TaskContextReference[] };
@@ -73,6 +89,9 @@ export interface ResearchTaskRecord extends SessionRecord {
   lockedContext: LockedContextSnapshot;
   artifactIds: string[];
   recoverableTurn?: RecoverableTurn;
+  /** Legacy decode only; new writes use run. */
+  workflow?: WorkflowState;
+  run?: RunState;
   capabilityProfile: CapabilityProfile;
   workingDirectory?: string;
   templateId?: string;
@@ -93,11 +112,11 @@ export function migrateSessionRecord(
     | SessionRecord
     | ResearchTaskRecord
     | (Omit<Partial<ResearchTaskRecord>, "schemaVersion"> &
-        SessionRecord & { schemaVersion: 2 }),
+        SessionRecord & { schemaVersion: 2 | 3 }),
   now = Date.now(),
 ): ResearchTaskRecord {
   const candidate = input as Partial<ResearchTaskRecord>;
-  if (Number(candidate.schemaVersion) === 2 || candidate.schemaVersion === 3) {
+  if ([2, 3, 4].includes(Number(candidate.schemaVersion))) {
     const locked = candidate.lockedContext;
     const backend = isAgentBackendKind(candidate.backend)
       ? candidate.backend
@@ -122,7 +141,7 @@ export function migrateSessionRecord(
       : undefined;
     return {
       ...(input as SessionRecord),
-      schemaVersion: 3,
+      schemaVersion: 4,
       backend,
       contextWindow:
         candidate.contextWindow &&
@@ -163,11 +182,17 @@ export function migrateSessionRecord(
         typeof candidate.activeKnowledgeBaseId === "string"
           ? candidate.activeKnowledgeBaseId
           : undefined,
-      recoverableTurn: ["running", "awaiting_approval", "interrupted"].includes(
-        status,
-      )
+      recoverableTurn: [
+        "running",
+        "awaiting_approval",
+        "interrupted",
+        "failed",
+      ].includes(status)
         ? recoverableTurn
         : undefined,
+      workflow: undefined,
+      run:
+        restoreRun(candidate.run) ?? migrateWorkflow(candidate, input.id, now),
       workingDirectory:
         capabilityProfile === "workspace" ? workingDirectory : undefined,
       templateId:
@@ -184,7 +209,7 @@ export function migrateSessionRecord(
   const legacy = input as SessionRecord;
   return {
     ...legacy,
-    schemaVersion: 3,
+    schemaVersion: 4,
     backend: "native",
     contextWindow: initialContextWindow(input.id, "native", now),
     references: [],
@@ -207,4 +232,85 @@ export function isTaskStatus(value: unknown): value is TaskStatus {
     value === "completed" ||
     value === "failed"
   );
+}
+
+function restoreWorkflow(
+  value: WorkflowState | undefined,
+): WorkflowState | undefined {
+  if (value === undefined) return undefined;
+  if (
+    !value ||
+    value.version !== 1 ||
+    !["research", "review", "delivery", "completed"].includes(value.phase) ||
+    typeof value.originalRequest !== "string" ||
+    typeof value.handoff !== "string" ||
+    !isLockedContextSnapshot(value.sources) ||
+    ![value.proposalIds, value.operationIds, value.artifactIds].every(
+      (entries) =>
+        Array.isArray(entries) &&
+        entries.every((entry) => typeof entry === "string"),
+    ) ||
+    !Number.isSafeInteger(value.remainingIterations) ||
+    value.remainingIterations < 0 ||
+    !Number.isSafeInteger(value.remainingToolCalls) ||
+    value.remainingToolCalls < 0 ||
+    (value.phaseNotes !== undefined && typeof value.phaseNotes !== "string")
+  )
+    throw new Error(
+      "Saved workflow is damaged; it must not be restarted as an empty plan",
+    );
+  return value;
+}
+
+function migrateWorkflow(
+  task: Partial<ResearchTaskRecord>,
+  taskId: string,
+  now: number,
+): RunState | undefined {
+  const workflow = restoreWorkflow(task.workflow);
+  const recovery =
+    isRecoverableTurn(task.recoverableTurn) &&
+    ["running", "awaiting_approval", "interrupted", "failed"].includes(
+      task.status ?? "",
+    )
+      ? task.recoverableTurn
+      : undefined;
+  if ((!workflow || workflow.phase === "completed") && !recovery)
+    return undefined;
+  const sources = workflow?.sources ?? task.lockedContext;
+  if (!sources) throw new Error("Interrupted task has no recoverable sources");
+  return {
+    version: 1,
+    id: `run_${taskId}_legacy`,
+    generation: 0,
+    intentRevision: 1,
+    request: workflow?.originalRequest ?? recovery!.userText,
+    sources,
+    templateId: task.templateId,
+    templateVersion: 1,
+    requiredArtifactKinds: [],
+    status: "interrupted",
+    stopReason: "host_restarted",
+    budget: {
+      maxIterations: 128,
+      maxToolCalls: 96,
+      iterationsUsed: Math.max(
+        recovery?.iteration ?? 0,
+        workflow ? 128 - workflow.remainingIterations : 0,
+      ),
+      toolCallsUsed: workflow
+        ? Math.max(0, 96 - workflow.remainingToolCalls)
+        : 0,
+      executorStarts: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      modelRequestsObservable: task.backend === "native",
+    },
+    createdAt: task.createdAt ?? now,
+    updatedAt: now,
+    recoveryNotes:
+      [workflow?.handoff, workflow?.phaseNotes].filter(Boolean).join("\n\n") ||
+      undefined,
+  };
 }

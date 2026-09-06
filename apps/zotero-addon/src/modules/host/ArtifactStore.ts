@@ -1,3 +1,4 @@
+import { runtimePath, writeRuntimeText } from "./RuntimeStorage";
 import {
   artifactBodyMatchesKind,
   isCitation,
@@ -21,8 +22,7 @@ class ZoteroArtifactFileSystem implements ArtifactFileSystem {
   }
 
   async writeAtomic(path: string, content: string): Promise<void> {
-    const tmpPath = `${path}.tmp`;
-    await IOUtils.writeUTF8(path, content, { tmpPath, flush: true });
+    await writeRuntimeText(path, content);
   }
 
   async exists(path: string): Promise<boolean> {
@@ -46,9 +46,16 @@ export class ArtifactStore {
       `art_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
   ) {}
 
-  async get(id: string): Promise<ArtifactRecord | null> {
+  allocateId(): string {
+    return safeId(this.createId());
+  }
+
+  async get(id: string, refresh = false): Promise<ArtifactRecord | null> {
     const cleanId = safeId(id);
-    return this.withArtifactLock(cleanId, () => this.getUnlocked(cleanId));
+    return this.withArtifactLock(cleanId, () => {
+      if (refresh) this.cache.delete(cleanId);
+      return this.getUnlocked(cleanId);
+    });
   }
 
   private async getUnlocked(id: string): Promise<ArtifactRecord | null> {
@@ -57,16 +64,13 @@ export class ArtifactStore {
     if (cached) return clone(cached);
     const path = this.path(cleanId);
     if (!(await this.fs.exists(path))) return null;
-    try {
-      const artifact = JSON.parse(await this.fs.read(path)) as ArtifactRecord;
-      if (artifact.id !== cleanId || !isArtifactRecord(artifact)) {
-        return null;
-      }
-      this.cache.set(cleanId, artifact);
-      return clone(artifact);
-    } catch {
-      return null;
-    }
+    const artifact = JSON.parse(await this.fs.read(path)) as ArtifactRecord;
+    if (artifact.id !== cleanId || !isArtifactRecord(artifact))
+      throw new Error(
+        "Artifact record is damaged; original data has been retained",
+      );
+    this.cache.set(cleanId, artifact);
+    return clone(artifact);
   }
 
   async list(ids: readonly string[]): Promise<ArtifactRecord[]> {
@@ -80,6 +84,8 @@ export class ArtifactStore {
     input: ArtifactUpsertInput,
     backend: AgentBackendKind,
     defaultSourceContextIds: string[] = [],
+    expectedRevision?: number,
+    execution?: import("@confucius/protocol").ExecutionBinding,
   ): Promise<ArtifactRecord> {
     if (!isArtifactKind(input.kind)) {
       throw new Error("Unknown artifact kind");
@@ -113,6 +119,13 @@ export class ArtifactStore {
     const id = input.id ? safeId(input.id) : safeId(this.createId());
     return this.withArtifactLock(id, async () => {
       const existing = input.id ? await this.getUnlocked(id) : null;
+      if (
+        expectedRevision !== undefined &&
+        (existing?.revision ?? 0) !== expectedRevision
+      )
+        throw new Error(
+          "Artifact changed after preflight; reload the latest draft before editing it",
+        );
       if (existing && existing.taskId !== taskId) {
         throw new Error("Artifact belongs to another task");
       }
@@ -137,6 +150,7 @@ export class ArtifactStore {
         backend,
       };
       const artifact: ArtifactRecord = {
+        execution: execution ?? existing?.execution,
         id,
         sessionId: taskId,
         taskId,
@@ -252,7 +266,5 @@ function clone<T>(value: T): T {
 }
 
 export function createArtifactStore(): ArtifactStore {
-  return new ArtifactStore(
-    PathUtils.join(Zotero.DataDirectory.dir, "confucius", "artifacts"),
-  );
+  return new ArtifactStore(runtimePath("artifacts"));
 }

@@ -3,6 +3,8 @@ import { createRequire } from "node:module";
 import { promisify } from "node:util";
 import {
   CONFUCIUS_VERSION,
+  runtimeOutcome,
+  RuntimeUsageCounter,
   type ApprovalRequest,
   type ApprovalResolution,
   type CapabilityProfile,
@@ -41,6 +43,11 @@ interface CodexSession {
   sink: RuntimeEventSink;
   approvals: ApprovalBrokerLike;
   policyViolationTurnId?: string;
+  usage?: RuntimeUsageCounter;
+  mcpToken?: string;
+  starting?: boolean;
+  terminalTurnIds?: Set<string>;
+  pendingNotifications?: JsonRpcMessage[];
 }
 
 const ALWAYS_DISABLED_FEATURES = [
@@ -186,6 +193,13 @@ export class CodexAdapter implements RuntimeAdapter {
     approvals: ApprovalBrokerLike,
   ): Promise<RuntimeTurnHandle> {
     let session = this.sessions.get(input.taskId);
+    const usage = session?.usage;
+    if (session?.mcpToken && session.mcpToken !== input.mcp.token) {
+      const externalSessionId = session.threadId;
+      await this.dispose(input.taskId);
+      input = { ...input, externalSessionId };
+      session = undefined;
+    }
     if (session && session.profile !== input.capabilityProfile) {
       if (session.turnId) {
         throw new Error(
@@ -252,8 +266,11 @@ export class CodexAdapter implements RuntimeAdapter {
       session.sink = sink;
       session.approvals = approvals;
       session.profile = input.capabilityProfile;
-      session.hostTurnId = input.turnId;
     }
+    session.usage ??=
+      usage ?? new RuntimeUsageCounter(!input.externalSessionId);
+    session.mcpToken = input.mcp.token;
+    session.hostTurnId = input.turnId;
 
     const turnParams = {
       threadId: session.threadId,
@@ -271,15 +288,30 @@ export class CodexAdapter implements RuntimeAdapter {
             }
           : { type: "readOnly", networkAccess: false },
     } satisfies TurnStartParams;
-    const response = await session.rpc.request<TurnStartResponse>(
-      "turn/start",
-      turnParams,
-    );
-    session.turnId = response.turn?.id;
-    return {
-      externalSessionId: session.threadId,
-      externalTurnId: session.turnId,
-    };
+    session.starting = true;
+    session.pendingNotifications = [];
+    let started = false;
+    try {
+      const response = await session.rpc.request<TurnStartResponse>(
+        "turn/start",
+        turnParams,
+      );
+      session.turnId = response.turn?.id;
+      if (!session.turnId)
+        throw new Error("Codex did not return a provider turn id");
+      started = true;
+      return {
+        externalSessionId: session.threadId,
+        externalTurnId: session.turnId,
+      };
+    } finally {
+      session.starting = false;
+      const pending = session.pendingNotifications;
+      session.pendingNotifications = undefined;
+      if (started)
+        for (const message of pending ?? [])
+          this.onNotification(session, message);
+    }
   }
 
   async interrupt(taskId: string): Promise<void> {
@@ -395,14 +427,44 @@ export class CodexAdapter implements RuntimeAdapter {
   }
 
   private onNotification(session: CodexSession, message: JsonRpcMessage): void {
+    if (session.starting) {
+      (session.pendingNotifications ??= []).push(message);
+      return;
+    }
     const params = asRecord(message.params);
-    const providerTurnId = String(params.turnId ?? session.turnId ?? "");
+    const providerTurnId = String(
+      params.turnId ?? asRecord(params.turn).id ?? session.turnId ?? "",
+    );
     if (session.turnId && providerTurnId && providerTurnId !== session.turnId) {
       return;
     }
+    if (providerTurnId && session.terminalTurnIds?.has(providerTurnId)) return;
     const turnId = session.hostTurnId;
     if (params.threadId && params.threadId !== session.threadId) return;
     switch (message.method) {
+      case "thread/tokenUsage/updated": {
+        const usage = asRecord(params.tokenUsage);
+        const delta = session.usage?.observe(usage.total);
+        if (delta) session.sink.emit("model_usage_updated", delta, turnId);
+        const inputTokens = asRecord(usage.last).inputTokens;
+        if (
+          typeof inputTokens === "number" &&
+          Number.isFinite(inputTokens) &&
+          inputTokens >= 0
+        )
+          session.sink.emit(
+            "context_usage_updated",
+            {
+              inputTokens,
+              capacityTokens:
+                typeof usage.modelContextWindow === "number"
+                  ? usage.modelContextWindow
+                  : undefined,
+            },
+            turnId,
+          );
+        return;
+      }
       case "item/agentMessage/delta":
         session.sink.emit(
           "text_delta",
@@ -446,8 +508,15 @@ export class CodexAdapter implements RuntimeAdapter {
         );
         return;
       case "turn/completed": {
+        if (providerTurnId) {
+          (session.terminalTurnIds ??= new Set()).add(providerTurnId);
+          if (session.terminalTurnIds.size > 32)
+            session.terminalTurnIds.delete(
+              session.terminalTurnIds.values().next().value!,
+            );
+        }
         const turn = asRecord(params.turn);
-        const status = String(turn.status ?? "completed");
+        const outcome = runtimeOutcome("codex", turn.status);
         if (session.policyViolationTurnId === turnId) {
           session.sink.emit(
             "task_status_changed",
@@ -461,39 +530,32 @@ export class CodexAdapter implements RuntimeAdapter {
           session.turnId = undefined;
           return;
         }
-        const phase =
-          status === "failed"
-            ? "failed"
-            : status === "interrupted"
-              ? "aborted"
-              : "done";
         session.sink.emit(
           "task_status_changed",
-          {
-            status:
-              phase === "done"
-                ? "completed"
-                : phase === "failed"
-                  ? "failed"
-                  : "interrupted",
-          },
+          { status: outcome.status },
           turnId,
         );
-        if (phase === "failed") {
+        if (outcome.phase === "failed")
           session.sink.emit(
             "turn_failed",
-            { message: errorFromTurn(turn) },
+            { message: errorFromTurn(turn), stopReason: outcome.stopReason },
             turnId,
           );
-        } else if (phase === "aborted") {
+        else if (outcome.phase === "aborted")
           session.sink.emit(
             "turn_aborted",
-            { reason: "runtime interrupted" },
+            {
+              reason: `Codex stopped: ${String(turn.status ?? "missing terminal status")}`,
+              stopReason: outcome.stopReason,
+            },
             turnId,
           );
-        } else {
-          session.sink.emit("turn_completed", { phase }, turnId);
-        }
+        else
+          session.sink.emit(
+            "turn_completed",
+            { phase: "done", stopReason: outcome.stopReason },
+            turnId,
+          );
         session.turnId = undefined;
         return;
       }

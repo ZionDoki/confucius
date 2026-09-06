@@ -8,6 +8,20 @@ import {
 export const MAX_ENDPOINTS = 20;
 export const DEFAULT_CONTEXT_WINDOW = 32_768;
 
+/** Explicit, per-endpoint wire compatibility. Empty objects restore defaults. */
+export interface EndpointModelProfile {
+  id?: string;
+  reasoningReplay?: "none" | "reasoning_content" | "thinking";
+  ollamaToolCalls?: "incremental" | "snapshot";
+  maxOutputField?: "max_tokens" | "max_completion_tokens";
+  streamUsage?: boolean;
+}
+export interface EndpointModelTimeouts {
+  firstByteMs?: number;
+  idleMs?: number;
+  absoluteMs?: number;
+}
+
 export interface ModelEndpoint {
   id: string;
   name: string;
@@ -17,6 +31,8 @@ export interface ModelEndpoint {
   maxTokens: number;
   reasoningEffort: ReasoningEffort;
   contextWindowTokens: number;
+  profile?: EndpointModelProfile;
+  timeouts?: EndpointModelTimeouts;
 }
 
 export interface EndpointStore {
@@ -107,6 +123,14 @@ function coerceEndpoint(entry: unknown): ModelEndpoint | null {
       Number.isInteger(window) && window >= 1000
         ? window
         : DEFAULT_CONTEXT_WINDOW,
+    ...(raw.profile !== undefined &&
+    compatibilityErrors({ profile: raw.profile }).length === 0
+      ? { profile: { ...(raw.profile as EndpointModelProfile) } }
+      : {}),
+    ...(raw.timeouts !== undefined &&
+    compatibilityErrors({ timeouts: raw.timeouts }).length === 0
+      ? { timeouts: { ...(raw.timeouts as EndpointModelTimeouts) } }
+      : {}),
   };
 }
 
@@ -171,6 +195,8 @@ export function resolveEndpointStore(
     const next = defaultEndpoint(legacy);
     next.id = active.id;
     next.name = active.name || next.name;
+    next.profile = active.profile;
+    next.timeouts = active.timeouts;
     endpoints = endpoints.map((entry) =>
       entry.id === active.id ? next : entry,
     );
@@ -227,6 +253,10 @@ function mergeEndpoint(
       next.contextWindowTokens = window;
     }
   }
+  if (patch.profile !== undefined)
+    next.profile = { ...(patch.profile as EndpointModelProfile) };
+  if (patch.timeouts !== undefined)
+    next.timeouts = { ...(patch.timeouts as EndpointModelTimeouts) };
   next.reasoningEffort = normalizeModelEffort(
     next.model,
     next.baseUrl,
@@ -300,6 +330,7 @@ export function applyEndpointPatch(
       errors.push("endpoint must be an object");
     } else {
       const raw = patch.endpoint as Record<string, unknown>;
+      errors.push(...compatibilityErrors(raw));
       const id = String(raw.id ?? "").trim();
       const existing = id
         ? endpoints.find((entry) => entry.id === id)
@@ -380,4 +411,51 @@ export function applyEndpointPatch(
     activeId = endpoints[0].id;
   }
   return { ok: true, store: { endpoints, activeEndpointId: activeId } };
+}
+
+/** Fail unsupported provider settings at config/set, before dispatching a model request. */
+function compatibilityErrors(raw: Record<string, unknown>): string[] {
+  const errors: string[] = [];
+  for (const field of ["profile", "timeouts"] as const) {
+    const value = raw[field];
+    if (value === undefined) continue;
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      errors.push(`${field} must be an object`);
+      continue;
+    }
+    for (const [key, entry] of Object.entries(value)) {
+      if (field === "timeouts") {
+        if (
+          !["firstByteMs", "idleMs", "absoluteMs"].includes(key) ||
+          !Number.isSafeInteger(entry) ||
+          Number(entry) < 1 ||
+          Number(entry) > 86_400_000
+        )
+          errors.push(
+            `timeouts.${key} must be a supported deadline in milliseconds from 1 to 86400000`,
+          );
+      } else if (key === "id") {
+        if (typeof entry !== "string" || !entry.trim() || entry.length > 200)
+          errors.push(
+            "profile.id must be a non-empty string of at most 200 characters",
+          );
+      } else if (key === "streamUsage") {
+        if (typeof entry !== "boolean")
+          errors.push("profile.streamUsage must be a boolean");
+      } else {
+        const choices: Record<string, readonly string[]> = {
+          reasoningReplay: ["none", "reasoning_content", "thinking"],
+          ollamaToolCalls: ["incremental", "snapshot"],
+          maxOutputField: ["max_tokens", "max_completion_tokens"],
+        };
+        if (
+          typeof entry !== "string" ||
+          !Object.prototype.hasOwnProperty.call(choices, key) ||
+          !choices[key].includes(entry)
+        )
+          errors.push(`Unsupported profile.${key}`);
+      }
+    }
+  }
+  return errors;
 }

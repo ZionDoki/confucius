@@ -15,6 +15,7 @@ import {
 } from "./ModelAdapter";
 import { PermissionGate } from "./PermissionGate";
 import { TurnLoop } from "./TurnLoop";
+import type { ToolProvider } from "./ToolProvider";
 
 export function session(id = "sess_1"): SessionRecord {
   return {
@@ -29,6 +30,11 @@ export function session(id = "sess_1"): SessionRecord {
 }
 
 export function createHarness(options: {
+  budget?: BudgetAccountant;
+  maxModelRecoveries?: number;
+  maxLengthContinuations?: number;
+  stallLimit?: number;
+  toolProvider?: ToolProvider;
   script?: ModelTurn[];
   model?: ModelAdapter;
   maxIterations?: number;
@@ -52,10 +58,12 @@ export function createHarness(options: {
   const checkpoints = new MemoryCheckpointStore();
   const tools = new MemoryToolProvider();
   const model = options.model ?? new ScriptedModel(options.script ?? []);
-  const budget = new BudgetAccountant({
-    maxIterations: options.maxIterations ?? 8,
-    maxToolCalls: options.maxToolCalls ?? 20,
-  });
+  const budget =
+    options.budget ??
+    new BudgetAccountant({
+      maxIterations: options.maxIterations ?? 8,
+      maxToolCalls: options.maxToolCalls ?? 20,
+    });
   const permissions = new PermissionGate({
     ids,
     now,
@@ -116,9 +124,12 @@ export function createHarness(options: {
   );
 
   const loop = new TurnLoop({
+    maxModelRecoveries: options.maxModelRecoveries,
+    maxLengthContinuations: options.maxLengthContinuations,
+    stallLimit: options.stallLimit,
     model,
     context: options.context,
-    tools,
+    tools: options.toolProvider ?? tools,
     describeCall: options.describeCall,
     permissions,
     budget,

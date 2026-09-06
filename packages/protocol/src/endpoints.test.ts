@@ -217,3 +217,60 @@ describe("defaultEndpoint", () => {
     assert.equal(ep.name, "gpt-4o-mini");
   });
 });
+
+describe("endpoint compatibility contract", () => {
+  const seed = resolveEndpointStore("[]", "", legacy).store;
+  const profile = {
+    id: "deepseek-v4-202609",
+    reasoningReplay: "reasoning_content" as const,
+    maxOutputField: "max_completion_tokens" as const,
+    streamUsage: false,
+  };
+  const timeouts = {
+    firstByteMs: 120_000,
+    idleMs: 120_000,
+    absoluteMs: 600_000,
+  };
+  it("persists and reads profile and deadlines without losing them on legacy edits", () => {
+    const result = applyEndpointPatch(seed, {
+      endpoint: { id: seed.activeEndpointId, profile, timeouts },
+    });
+    assert.ok(result.ok);
+    if (!result.ok) return;
+    const json = JSON.stringify(result.store.endpoints);
+    assert.deepEqual(parseEndpointsJson(json)[0].profile, profile);
+    const migrated = resolveEndpointStore(json, seed.activeEndpointId, {
+      ...legacy,
+      model: "new-model",
+    });
+    assert.deepEqual(migrated.store.endpoints[0].profile, profile);
+    assert.deepEqual(migrated.store.endpoints[0].timeouts, timeouts);
+    const cleared = applyEndpointPatch(migrated.store, {
+      endpoint: { id: seed.activeEndpointId, profile: {}, timeouts: {} },
+    });
+    assert.ok(cleared.ok);
+    if (cleared.ok) assert.deepEqual(cleared.store.endpoints[0].profile, {});
+  });
+  it("rejects invalid, coerced, or unknown fields before accepting a patch", () => {
+    for (const patch of [
+      { profile: null },
+      { profile: [] },
+      { profile: { reasoningReplay: "guess" } },
+      { profile: { streamUsage: "false" } },
+      { profile: { unknown: true } },
+      { timeouts: { idleMs: 0 } },
+      { timeouts: { idleMs: "100" } },
+      { timeouts: { absoluteMs: Infinity } },
+      { timeouts: { unexpected: 100 } },
+    ]) {
+      assert.equal(
+        applyEndpointPatch(seed, {
+          endpoint: { id: seed.activeEndpointId, ...patch },
+        }).ok,
+        false,
+        JSON.stringify(patch),
+      );
+    }
+    assert.equal(seed.endpoints[0].profile, undefined);
+  });
+});

@@ -1,5 +1,6 @@
 import type {
   JsonSchemaObject,
+  ToolExecutionContext,
   ToolDefinition,
   ToolResult,
   ToolRuntimeMeta,
@@ -30,12 +31,21 @@ export class ZoteroToolProvider implements ToolProvider {
     return TOOL_DEFINITIONS.find((tool) => tool.name === name)?.inputSchema;
   }
 
+  async prepare(
+    name: string,
+    args: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ) {
+    return this.host.prepare(name, args, context);
+  }
+
   async call(
     name: string,
     args: Record<string, unknown>,
-    _signal?: AbortSignal,
+    signal?: AbortSignal,
+    context?: ToolExecutionContext,
   ): Promise<ToolResult> {
-    return this.host.execute(name, args);
+    return this.host.execute(name, args, signal, context);
   }
 }
 

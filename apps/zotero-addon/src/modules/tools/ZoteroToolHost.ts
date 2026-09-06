@@ -1,3 +1,21 @@
+import { deadline, ToolProgress, ToolTimeout } from "./Deadline";
+import { literalMatches, regexMatches } from "./RegexWorker";
+import { validateArgs, validateValue } from "@confucius/harness";
+import {
+  TOOL_DEFINITIONS,
+  TOOL_META,
+  annotationSchema,
+} from "@confucius/zotero-tools";
+import {
+  ResourceLocks,
+  runtimeDigest,
+  runtimeJsonStorage,
+  type JsonStorage,
+} from "../host/RuntimeStorage";
+import { canonical, type OperationRecord } from "../host/ReliableToolProvider";
+import type { OperationRepository } from "../host/OperationStore";
+import { annotationExplanationIssue } from "./AnnotationQuality";
+import type { ToolExecutionContext, ToolFailure } from "@confucius/protocol";
 import type {
   AnnotationDraft,
   AnnotationType,
@@ -15,12 +33,9 @@ import type {
   LiveContextSelection,
 } from "@confucius/protocol";
 import {
-  collectMatches,
-  compileSafeRegex,
   findSection,
   parseSections,
   requireItemRef,
-  splitPages,
 } from "@confucius/zotero-tools";
 import {
   normalizePdfMatchPositions,
@@ -46,7 +61,7 @@ function fail(
   code: ToolErrorCode,
   message: string,
   details?: unknown,
-): ToolResult {
+): ToolFailure {
   return { ok: false, toolName, code, message, details };
 }
 
@@ -194,28 +209,45 @@ async function importDoiFromCsl(
   return item;
 }
 
-export async function findPdf(item: Zotero.Item): Promise<Zotero.Item | null> {
+export async function findPdf(
+  item: Zotero.Item,
+  attachmentKey?: string,
+): Promise<Zotero.Item | null> {
   if (
     item.isAttachment?.() &&
     item.attachmentContentType === "application/pdf"
   ) {
+    if (attachmentKey && attachmentKey !== item.key)
+      throw new Error(
+        "Explicit attachment does not belong to the selected PDF",
+      );
     return item;
   }
-  if (item.isNote?.()) {
-    return null;
+  if (item.isNote?.()) return null;
+  const pdfs = (item.getAttachments?.() || [])
+    .map((id) => asItem(Zotero.Items.get(id)))
+    .filter(
+      (entry): entry is Zotero.Item =>
+        entry?.attachmentContentType === "application/pdf",
+    );
+  if (attachmentKey) {
+    const selected = pdfs.find((pdf) => pdf.key === attachmentKey);
+    if (!selected)
+      throw new Error("Explicit PDF attachment not found under this item");
+    return selected;
   }
-  const ids = item.getAttachments?.() || [];
-  for (const id of ids) {
-    const attachment = asItem(Zotero.Items.get(id));
-    if (attachment?.attachmentContentType === "application/pdf") {
-      return attachment;
-    }
-  }
-  return null;
+  if (pdfs.length > 1)
+    throw new Error(
+      `Multiple PDF attachments; specify attachmentKey: ${pdfs.map((pdf) => pdf.key).join(", ")}`,
+    );
+  return pdfs[0] ?? null;
 }
 
-async function pdfText(item: Zotero.Item): Promise<string | null> {
-  const pdf = await findPdf(item);
+async function pdfText(
+  item: Zotero.Item,
+  attachmentKey?: string,
+): Promise<string | null> {
+  const pdf = await findPdf(item, attachmentKey);
   if (!pdf) {
     return null;
   }
@@ -245,6 +277,9 @@ interface PdfFindController {
 }
 
 interface PdfPageProxy {
+  getTextContent?(): Promise<{
+    items: Array<{ str?: string; hasEOL?: boolean }>;
+  }>;
   view?: number[];
   getViewport(input: { scale: number }): PdfViewportLike;
   render(input: {
@@ -529,7 +564,72 @@ interface LocatedImageAnnotation {
 
 type LocatedAnnotation = LocatedTextAnnotation | LocatedImageAnnotation;
 
-async function waitForPdfReader(pdf: Zotero.Item): Promise<{
+type ReaderReady = { reader: PdfReaderInstance; view: PdfPrimaryView };
+const initializingReaders = new Map<
+  number,
+  {
+    promise: Promise<ReaderReady>;
+    stage: string;
+    listeners: Set<ToolProgress>;
+    reader?: PdfReaderInstance;
+  }
+>();
+const readerFingerprints = new WeakMap<PdfReaderInstance, string>();
+async function waitForPdfReader(
+  pdf: Zotero.Item,
+  progress?: ToolProgress,
+): Promise<ReaderReady> {
+  const fingerprint = await pdfFingerprint(pdf);
+  let pending = initializingReaders.get(pdf.id);
+  if (pending?.reader?._isTabClosed) {
+    initializingReaders.delete(pdf.id);
+    pending = undefined;
+  }
+  if (!pending) {
+    const listeners = new Set<ToolProgress>();
+    const entry = {
+      promise: undefined as unknown as Promise<ReaderReady>,
+      stage: "opening_pdf",
+      listeners,
+      reader: undefined as PdfReaderInstance | undefined,
+    };
+    entry.promise = openPdfReader(pdf, (reader) => {
+      entry.reader = reader;
+      entry.stage = "initializing_pdf";
+      for (const listener of listeners) listener.setStage(entry.stage);
+    }).then((ready) => {
+      const previous = readerFingerprints.get(ready.reader);
+      if (previous && previous !== fingerprint)
+        throw new Error(
+          "PDF file changed while its reader was open; reopen that PDF to load the current file",
+        );
+      readerFingerprints.set(ready.reader, fingerprint);
+      return ready;
+    });
+    initializingReaders.set(pdf.id, entry);
+    pending = entry;
+    void entry.promise
+      .finally(() => {
+        if (initializingReaders.get(pdf.id) === entry)
+          initializingReaders.delete(pdf.id);
+      })
+      .catch(() => {});
+  }
+  if (progress) {
+    pending.listeners.add(progress);
+    progress.setStage(pending.stage);
+  }
+  try {
+    return await deadline(pending.promise, 30_000);
+  } finally {
+    if (progress) pending.listeners.delete(progress);
+  }
+}
+
+async function openPdfReader(
+  pdf: Zotero.Item,
+  onInitialize: (reader: PdfReaderInstance) => void,
+): Promise<{
   reader: PdfReaderInstance;
   view: PdfPrimaryView;
 }> {
@@ -549,6 +649,7 @@ async function waitForPdfReader(pdf: Zotero.Item): Promise<{
   if (!reader) {
     throw new Error("Zotero PDF reader did not open");
   }
+  onInitialize(reader);
   await reader._initPromise;
   await reader._waitForReader?.();
   const view = waiveReaderXrays(reader._internalReader?._primaryView);
@@ -556,13 +657,6 @@ async function waitForPdfReader(pdf: Zotero.Item): Promise<{
     throw new Error("Zotero PDF reader view is unavailable");
   }
   await view.initializedPromise;
-  const findDeadline = Date.now() + 15_000;
-  while (!view._findController?._pdfDocument && Date.now() < findDeadline) {
-    await Zotero.Promise.delay(25);
-  }
-  if (!view._findController?._pdfDocument) {
-    throw new Error("Zotero PDF text search did not finish initializing");
-  }
   return { reader, view };
 }
 
@@ -705,6 +799,13 @@ async function locateTextAnnotation(
   if (!controller || pageCount < 1) {
     throw new Error("Zotero PDF text search is unavailable");
   }
+  const findDeadline = Date.now() + 3000;
+  while (!controller._pdfDocument && Date.now() < findDeadline)
+    await Zotero.Promise.delay(25);
+  if (!controller._pdfDocument)
+    throw new Error(
+      "PDF text search is still initializing; retry after initialization completes",
+    );
   if (view.setFindState) {
     await view.setFindState({
       active: true,
@@ -752,6 +853,10 @@ async function locateTextAnnotation(
     }
     positions.push(...pagePositions);
   }
+  if (positions.length > 1)
+    throw new Error(
+      "Annotation quote is ambiguous; provide a longer unique quote on a specific physical page",
+    );
   const position = positions[occurrence];
   if (!position?.rects?.length) {
     const pageHint =
@@ -1144,27 +1249,826 @@ export function markdownToNoteHtml(markdown: string): string {
   return `<div>${out.join("")}</div>`;
 }
 
+class RolledBackWrite extends Error {}
+
+async function atomicItems(
+  items: Zotero.Item[],
+  work: () => Promise<void>,
+): Promise<void> {
+  try {
+    await Zotero.DB.executeTransaction(work);
+  } catch (error) {
+    for (const item of items)
+      await item
+        .reload?.(
+          [
+            "primaryData",
+            "itemData",
+            "note",
+            "tags",
+            "relations",
+            "collections",
+          ],
+          true,
+        )
+        .catch(() => undefined);
+    throw new RolledBackWrite(
+      `Zotero transaction rolled back: ${String(error)}`,
+    );
+  }
+}
+
+async function pdfFingerprint(pdf: Zotero.Item): Promise<string> {
+  const path = await pdf.getFilePathAsync?.();
+  if (
+    !path &&
+    typeof (pdf as Partial<Zotero.Item>).getFilePathAsync === "function"
+  )
+    throw new Error(
+      "PDF file is unavailable locally; download it before reading or annotating",
+    );
+  if (!path) return `${pdf.libraryID}:${pdf.key}`;
+  const info = await IOUtils.stat(path);
+  return canonical({
+    key: pdf.key,
+    path,
+    size: info.size,
+    modified: info.lastModified,
+  });
+}
+function readPdfAnnotations(pdf: Zotero.Item) {
+  return (pdf.getAnnotations?.(false) || [])
+    .map((entry) =>
+      typeof entry === "object" && entry
+        ? asItem(entry)
+        : asItem(Zotero.Items.get(entry as number)),
+    )
+    .filter((annotation): annotation is Zotero.Item =>
+      Boolean(annotation?.isAnnotation?.()),
+    )
+    .map((annotation) => ({
+      libraryID: pdf.libraryID,
+      key: annotation.key,
+      type: annotation.annotationType,
+      text: annotation.annotationText || "",
+      comment: annotation.annotationComment || "",
+      color: annotation.annotationColor || "",
+      pageLabel: annotation.annotationPageLabel || "",
+      sortIndex: annotation.annotationSortIndex || "",
+      position: annotationPosition(annotation),
+      zoteroUri: buildOpenPdfUri(pdf.key, {
+        groupID: groupIDForLibrary(pdf.libraryID),
+        annotationKey: annotation.key,
+      }),
+    }))
+    .sort((left, right) => left.key.localeCompare(right.key));
+}
+export function itemVersion(item: Zotero.Item): string {
+  return canonical({
+    modified: item.dateModified,
+    version: item.version,
+    note: item.isNote?.() ? item.getNote() : undefined,
+    data: item.toJSON?.(),
+    attachments:
+      !item.isAttachment?.() && !item.isNote?.() && !item.isAnnotation?.()
+        ? item.getAttachments?.()
+        : undefined,
+  });
+}
+
+interface AnnotationEntry {
+  id: string;
+  raw: Record<string, unknown>;
+  draft?: PendingAnnotation;
+  located?: LocatedAnnotation;
+  annotationKey?: string;
+  status:
+    | "pending"
+    | "committed"
+    | "alreadyPresent"
+    | "skipped"
+    | "failed"
+    | "unknown";
+  error?: string;
+  reviewIssue?: string;
+  resolved?: "denied" | "omitted";
+}
+interface AnnotationProposal {
+  id: string;
+  createdAt?: number;
+  runId?: string;
+  intentRevision?: number;
+  taskId: string;
+  fingerprint: string;
+  entries: AnnotationEntry[];
+}
+interface AnnotationRecord {
+  version: 2;
+  proposals: Record<string, AnnotationProposal>;
+  latest: Record<string, string>;
+}
+const freshAnnotationRecord = (): AnnotationRecord => ({
+  version: 2,
+  proposals: {},
+  latest: {},
+});
+
+function annotationProposalMatchesScope(
+  proposal: AnnotationProposal,
+  scope: Pick<ToolExecutionContext, "taskId" | "runId" | "intentRevision">,
+): boolean {
+  return (
+    proposal.taskId === (scope.taskId ?? "local") &&
+    (scope.runId === undefined || proposal.runId === scope.runId) &&
+    (scope.intentRevision === undefined ||
+      proposal.intentRevision === scope.intentRevision)
+  );
+}
+
+function selectAnnotationProposal(
+  record: AnnotationRecord,
+  taskId: string,
+  matches: (proposal: AnnotationProposal) => boolean,
+): AnnotationProposal | undefined {
+  const latest = record.proposals[record.latest[taskId]];
+  if (latest && matches(latest)) return latest;
+  return Object.values(record.proposals)
+    .filter(matches)
+    .reverse()
+    .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))[0];
+}
+
 export class ZoteroToolHost {
-  private readonly proposals = new Map<string, PendingAnnotation[]>();
+  private readonly renderingLocks = new ResourceLocks();
+  private readonly findingLocks = new ResourceLocks();
+  private readonly findingViews = new WeakMap<PdfPrimaryView, string>();
+  private nextFindingView = 0;
+  private readonly pageTextCache = new Map<string, string>();
+  private readonly annotationLocks = new ResourceLocks();
+  private operations?: OperationRepository;
+  private readonly pendingDownloads = new Set<string>();
+  constructor(
+    private readonly storage: JsonStorage = runtimeJsonStorage(
+      "annotation-records",
+    ),
+  ) {}
+
+  setOperationReader(operations: OperationRepository): void {
+    this.operations = operations;
+  }
+
+  /** Export saved candidates without reloading PDFs, reconciling receipts or changing proposals. */
+  async exportTaskProposals(taskId: string) {
+    const records: Array<{
+      resource: string;
+      proposals: AnnotationProposal[];
+    }> = [];
+    const issues: string[] = [];
+    for (const token of (await this.storage.keys?.()) ?? []) {
+      if (!/^\d+_[^_]+$/.test(token)) continue;
+      try {
+        const record = await this.storage.read<AnnotationRecord>(token);
+        if (!record?.proposals || typeof record.proposals !== "object")
+          throw new Error("Invalid proposal record");
+        const proposals = Object.values(record.proposals).filter(
+          (proposal) => proposal?.taskId === taskId,
+        );
+        if (proposals.length) records.push({ resource: token, proposals });
+      } catch (error) {
+        issues.push(`${token}: ${String(error)}`);
+      }
+    }
+    return { records, issues };
+  }
+
+  async prepare(
+    name: string,
+    args: Record<string, unknown>,
+    context: ToolExecutionContext = {},
+  ): Promise<ToolFailure | null> {
+    const invalid = validateArgs(
+      name,
+      TOOL_DEFINITIONS.find((tool) => tool.name === name)?.inputSchema,
+      args,
+    );
+    if (invalid) return invalid;
+    if (name === "batch_update_tags")
+      for (const field of ["add", "remove"]) {
+        if (Array.isArray(args[field]))
+          args[field] = [
+            ...new Set(
+              (args[field] as string[])
+                .map((tag) => tag.trim())
+                .filter(Boolean),
+            ),
+          ];
+      }
+    const reject = (message: string, code: ToolErrorCode = "invalid_args") => ({
+      ok: false as const,
+      toolName: name,
+      code,
+      effect: "none" as const,
+      message,
+    });
+    if (name === "propose_note" && args.parentKey === undefined) {
+      if (!context.source)
+        return reject(
+          "No fixed task source is available; provide an explicit parentKey",
+          "not_found",
+        );
+      args.parentKey = context.source.key;
+      args.libraryID = context.source.libraryID;
+    }
+    if (args.libraryID === undefined && (args.key || args.parentKey))
+      args.libraryID =
+        context.source?.libraryID ?? Zotero.Libraries.userLibraryID;
+    for (const field of ["key", "parentKey", "relatedKey"]) {
+      if (
+        !args[field] ||
+        (field === "key" &&
+          [
+            "rename_collection",
+            "get_collection_items",
+            "run_saved_search",
+          ].includes(name)) ||
+        (field === "parentKey" && name === "create_collection")
+      )
+        continue;
+      const item = getItem(defaultLibraryID(args), String(args[field]));
+      if (!item)
+        return reject(
+          `Explicit ${field} was not found in library ${defaultLibraryID(args)}`,
+          "not_found",
+        );
+      if (
+        ((field === "parentKey" &&
+          ["create_note", "propose_note"].includes(name)) ||
+          (field === "key" && name === "attach_file")) &&
+        (item.isAttachment?.() || item.isNote?.() || item.isAnnotation?.())
+      )
+        return reject("The explicit parent must be a regular Zotero item");
+      if (TOOL_META[name]?.mutatesState) {
+        if (item.isAnnotation?.() && item.parentItemID) {
+          const parent = asItem(Zotero.Items.get(item.parentItemID));
+          if (parent)
+            context.resources = [
+              ...(context.resources ?? []),
+              `zotero:${parent.libraryID}:${parent.key}`,
+            ];
+        }
+        const library = Zotero.Libraries.get?.(item.libraryID);
+        if (library && library.editable === false)
+          return reject("Zotero library is read-only", "permission_denied");
+        const token = `${item.libraryID}:${item.key}`;
+        context.expected ??= {};
+        context.expected[token] ??= this.mutationVersion(name, args, item);
+      }
+    }
+    const collectionKey =
+      args.collectionKey ??
+      (["rename_collection", "get_collection_items"].includes(name)
+        ? args.key
+        : name === "create_collection"
+          ? args.parentKey
+          : undefined);
+    if (collectionKey) {
+      const collection = Zotero.Collections.getByLibraryAndKey(
+        defaultLibraryID(args),
+        String(collectionKey),
+      );
+      if (!collection)
+        return reject(
+          "Explicit collection reference was not found",
+          "not_found",
+        );
+      if (TOOL_META[name]?.mutatesState) {
+        context.expected ??= {};
+        context.expected[
+          `collection:${collection.libraryID}:${collection.key}`
+        ] ??= this.collectionMutationVersion(name, collection);
+      }
+    }
+    if (
+      (TOOL_META[name]?.catalog === "paper.read" ||
+        [
+          "propose_annotations",
+          "propose_highlights",
+          "commit_annotations",
+        ].includes(name)) &&
+      args.key
+    ) {
+      const item = getItem(defaultLibraryID(args), String(args.key));
+      if (item) {
+        try {
+          const selected =
+            args.attachmentKey ??
+            (context.source?.key === item.key
+              ? context.source.attachmentKey
+              : undefined);
+          const pdf = await findPdf(item, selected as string | undefined);
+          if (pdf) {
+            args.attachmentKey = pdf.key;
+            if (
+              [
+                "propose_annotations",
+                "propose_highlights",
+                "commit_annotations",
+                "get_annotations",
+              ].includes(name)
+            )
+              args.key = pdf.key;
+          }
+        } catch (error) {
+          return reject(String(error), "not_found");
+        }
+      }
+    }
+    if (
+      TOOL_META[name]?.mutatesState &&
+      (args.libraryID !== undefined ||
+        [
+          "create_item",
+          "create_note",
+          "create_collection",
+          "create_saved_search",
+          "add_item",
+        ].includes(name))
+    ) {
+      args.libraryID ??=
+        context.source?.libraryID ?? Zotero.Libraries.userLibraryID;
+      const library = Zotero.Libraries.get?.(Number(args.libraryID));
+      if (library && library.editable === false)
+        return reject("Zotero library is read-only", "permission_denied");
+    }
+    if (["create_note", "propose_note", "create_item"].includes(name)) {
+      context.plannedKeys ??= {};
+      context.plannedKeys.item ??= (
+        Zotero as typeof Zotero & {
+          DataObjectUtilities: { generateKey(): string };
+        }
+      ).DataObjectUtilities.generateKey();
+    }
+    if (["create_collection", "create_saved_search"].includes(name)) {
+      const kind = name === "create_collection" ? "collection" : "search";
+      context.plannedKeys ??= {};
+      context.plannedKeys[kind] ??= (
+        Zotero as typeof Zotero & {
+          DataObjectUtilities: { generateKey(): string };
+        }
+      ).DataObjectUtilities.generateKey();
+    }
+    if (
+      ["create_note", "propose_note", "append_to_note", "update_note"].includes(
+        name,
+      )
+    ) {
+      const key = String(args.key ?? context.plannedKeys?.item);
+      const current = args.key
+        ? getItem(defaultLibraryID(args), String(args.key))
+        : null;
+      const html =
+        name === "propose_note"
+          ? markdownToNoteHtml(`# ${args.title}\n\n${args.markdown}`)
+          : name === "append_to_note"
+            ? `${current?.getNote?.() ?? ""}${noteHtml(String(args.content ?? ""))}`
+            : noteHtml(String(args.content ?? ""));
+      context.expectedAfter ??= {};
+      context.expectedAfter[key] ??= html;
+    }
+    if (name === "batch_update_tags") {
+      for (const field of ["add", "remove"])
+        if (Array.isArray(args[field]))
+          args[field] = [
+            ...new Set(
+              (args[field] as string[])
+                .map((tag) => tag.trim())
+                .filter(Boolean),
+            ),
+          ];
+      if (
+        (args.add as string[] | undefined)?.some((tag) =>
+          (args.remove as string[] | undefined)?.includes(tag),
+        )
+      )
+        return reject("A tag cannot be both added and removed in one call");
+    }
+    context.expectedAfter ??= {};
+    if (name === "update_item_metadata")
+      context.expectedAfter.fields = canonical(args.fields);
+    if (name === "update_annotation_comment")
+      context.expectedAfter.comment = String(args.comment ?? "");
+    if (name === "batch_update_tags") {
+      const current = getItem(defaultLibraryID(args), String(args.key));
+      const tags = new Set(current?.getTags().map((tag) => tag.tag));
+      for (const tag of (args.add ?? []) as string[]) tags.add(tag);
+      for (const tag of (args.remove ?? []) as string[]) tags.delete(tag);
+      context.expectedAfter.tags = canonical([...tags].sort());
+    }
+    if (name === "add_item") {
+      context.resources = [
+        `import:${defaultLibraryID(args)}:${String(args.identifier).trim().toLowerCase()}`,
+        `attachments:${defaultLibraryID(args)}`,
+      ];
+      context.expectedAfter.libraryItems ??= JSON.stringify(
+        await Zotero.Items.getAll(defaultLibraryID(args), false, false, true),
+      );
+    }
+    if (name === "attach_file")
+      context.resources = [
+        ...(context.resources ?? []),
+        `attachments:${defaultLibraryID(args)}`,
+      ];
+    if (name === "commit_annotations") {
+      const invalid = await this.prepareAnnotationCommit(args, context);
+      if (invalid) return invalid;
+    }
+    if (TOOL_META[name]?.mutatesState) {
+      const resources = [
+        ...new Set([
+          ...(context.resources ?? []),
+          ...Object.entries(context.plannedKeys ?? {}).map(([kind, key]) =>
+            kind === "item"
+              ? `zotero:${defaultLibraryID(args)}:${key}`
+              : `zotero-${kind}:${defaultLibraryID(args)}:${key}`,
+          ),
+          ...Object.keys(context.expected ?? {}).map((key) =>
+            key.startsWith("collection:") ? `zotero-${key}` : `zotero:${key}`,
+          ),
+        ]),
+      ];
+      context.resources = resources;
+      context.preparedOperation = {
+        schemaVersion: 1,
+        domain: "zotero",
+        name,
+        args: JSON.parse(JSON.stringify(args)),
+        resources,
+        recovery: JSON.parse(
+          JSON.stringify({
+            expected: context.expected,
+            expectedAfter: context.expectedAfter,
+            plannedKeys: context.plannedKeys,
+            taskId: context.taskId,
+          }),
+        ),
+      };
+    }
+    return null;
+  }
+
+  private locateCandidate(
+    view: PdfPrimaryView,
+    draft: PendingAnnotation,
+    progress: ToolProgress,
+  ): Promise<LocatedAnnotation> {
+    let token = this.findingViews.get(view);
+    if (!token) {
+      token = String(++this.nextFindingView);
+      this.findingViews.set(view, token);
+    }
+    // The underlying reader promise retains this lock after an outer deadline.
+    // A later request cannot mix its query or positions with a late result.
+    return this.findingLocks.run([token], async () => {
+      if (!progress.active)
+        throw new ToolTimeout(
+          "Annotation preflight was cancelled or timed out",
+        );
+      return draft.type === "image"
+        ? locateImageAnnotation(view, draft)
+        : locateTextAnnotation(view, draft, 0);
+    });
+  }
+
+  private collectionMutationVersion(
+    name: string,
+    collection: Zotero.Collection,
+  ): string {
+    return name === "rename_collection"
+      ? canonical({ name: collection.name })
+      : canonical({ libraryID: collection.libraryID, key: collection.key });
+  }
+
+  private mutationVersion(
+    name: string,
+    args: Record<string, unknown>,
+    item: Zotero.Item,
+  ): string {
+    if (name === "update_item_metadata")
+      return canonical(
+        Object.fromEntries(
+          Object.keys((args.fields ?? {}) as object).map((field) => [
+            field,
+            item.getField(field),
+          ]),
+        ),
+      );
+    if (["update_note", "append_to_note"].includes(name))
+      return canonical({ note: item.getNote() });
+    if (name === "batch_update_tags") {
+      const current = new Set(item.getTags().map((tag) => tag.tag));
+      return canonical(
+        Object.fromEntries(
+          [
+            ...((args.add ?? []) as string[]),
+            ...((args.remove ?? []) as string[]),
+          ].map((tag) => [tag, current.has(tag)]),
+        ),
+      );
+    }
+    if (name === "update_annotation_comment")
+      return canonical({ comment: item.annotationComment });
+    if (["add_to_collection", "remove_from_collection"].includes(name)) {
+      const collection = Zotero.Collections.getByLibraryAndKey(
+        defaultLibraryID(args),
+        String(args.collectionKey),
+      );
+      return canonical({
+        membership: collection
+          ? (
+              item.getCollections?.() ??
+              collection
+                .getChildItems(true)
+                .filter((id) => id === item.id)
+                .map(() => collection.id)
+            ).includes(collection.id)
+          : false,
+      });
+    }
+    if (name === "link_related_items") {
+      const other = item.key === args.key ? args.relatedKey : args.key;
+      return canonical({ related: item.relatedItems.includes(String(other)) });
+    }
+    if (
+      [
+        "commit_annotations",
+        "propose_annotations",
+        "propose_highlights",
+        "create_note",
+        "propose_note",
+      ].includes(name)
+    )
+      return canonical({
+        libraryID: item.libraryID,
+        key: item.key,
+        parent: item.parentItemID,
+      });
+    if (name === "attach_file")
+      return canonical({ attachments: item.getAttachments().slice().sort() });
+    return itemVersion(item);
+  }
+
+  private async prepareAnnotationCommit(
+    args: Record<string, unknown>,
+    context: ToolExecutionContext,
+  ): Promise<ToolFailure | null> {
+    const reject = (
+      message: string,
+      code: ToolErrorCode = "invalid_args",
+      details?: unknown,
+    ): ToolFailure => ({
+      ...fail("commit_annotations", code, message, details),
+      effect: "none",
+    });
+    if (context.expectedAfter?.annotationArgs)
+      return context.expectedAfter.annotationArgs === canonical(args)
+        ? null
+        : reject(
+            "The approved annotation batch changed; prepare the revised candidates again",
+          );
+    const item = getItem(defaultLibraryID(args), String(args.key));
+    const pdf = item
+      ? await findPdf(item, args.attachmentKey as string | undefined)
+      : null;
+    if (!pdf) return reject("PDF attachment not found", "not_found");
+    const token = `${pdf.libraryID}_${pdf.key}`,
+      taskId = context.taskId ?? "local";
+    context.resources = [
+      ...new Set([
+        ...(context.resources ?? []),
+        `zotero:${pdf.libraryID}:${pdf.key}`,
+      ]),
+    ];
+    return this.annotationLocks.run([token], async () => {
+      const record = await this.loadAnnotationRecord(token);
+      const fingerprint = await pdfFingerprint(pdf);
+      let proposal = args.proposalId
+        ? record.proposals[String(args.proposalId)]
+        : selectAnnotationProposal(record, taskId, (candidate) =>
+            annotationProposalMatchesScope(candidate, context),
+          );
+      if (args.proposalId && (!proposal || proposal.taskId !== taskId))
+        return reject("Proposal not found in this task", "not_found");
+      const explicit = args.annotations ?? args.highlights;
+      if (!args.proposalId && Array.isArray(explicit) && explicit.length)
+        proposal = this.makeProposal(
+          record,
+          explicit,
+          taskId,
+          fingerprint,
+          context,
+          args.annotations === undefined,
+        );
+      if (!proposal)
+        return reject(
+          "No annotations were proposed; provide a non-empty batch or proposalId",
+        );
+      if (proposal.fingerprint !== fingerprint)
+        return reject(
+          "PDF changed since the proposal; propose updated anchors",
+          "unavailable",
+        );
+      await pdf.reload?.(["childItems"], true);
+      const actual = readPdfAnnotations(pdf);
+      await this.projectAnnotationOutcomes(proposal, pdf, actual);
+      const progress = new ToolProgress(context, context.signal, 120_000);
+      try {
+        const pending = proposal.entries.filter(
+          (entry) => entry.draft && !entry.annotationKey,
+        );
+        const ready = pending.length
+          ? await progress.run("checking_annotation_anchors", 30_000, () =>
+              waitForPdfReader(pdf, progress),
+            )
+          : undefined;
+        for (const entry of pending) {
+          try {
+            entry.located = await progress.run(
+              `checking_${entry.id}`,
+              10_000,
+              () => this.locateCandidate(ready!.view, entry.draft!, progress),
+            );
+            entry.status = "pending";
+            entry.error = undefined;
+            const duplicate = actual.find((annotation) =>
+              this.sameAnnotation(annotation, entry.located!),
+            );
+            if (duplicate) {
+              entry.annotationKey = duplicate.key;
+              entry.status = "alreadyPresent";
+            }
+          } catch (error) {
+            if (error instanceof ToolTimeout) throw error;
+            entry.status = "skipped";
+            entry.error = String(error);
+          }
+        }
+        await this.projectAnnotationOutcomes(proposal, pdf, actual);
+        const eligible = proposal.entries.filter(
+          (entry) => entry.status === "pending" && entry.located,
+        );
+        if (
+          !eligible.length &&
+          !proposal.entries.some((entry) => entry.annotationKey)
+        )
+          return reject(
+            "No candidates have a reliable location; repair the per-entry issues",
+            "invalid_args",
+            { proposalId: proposal.id, entries: proposal.entries },
+          );
+        if (
+          args.proposalId &&
+          explicit !== undefined &&
+          canonical(
+            normalizeAnnotationList(explicit, args.annotations === undefined),
+          ) !== canonical(eligible.map((entry) => entry.draft))
+        )
+          return reject(
+            "proposalId and supplied annotations conflict; prepare the revised proposal",
+          );
+        for (const entry of eligible)
+          entry.annotationKey ??= (
+            Zotero as typeof Zotero & {
+              DataObjectUtilities: { generateKey(): string };
+            }
+          ).DataObjectUtilities.generateKey();
+        const request = canonical(args);
+        args.proposalId = proposal.id;
+        args.annotations = eligible.map((entry) => ({
+          ...entry.raw,
+          id: entry.id,
+          page: entry.located!.position.pageIndex + 1,
+        }));
+        delete args.highlights;
+        // An explicit reuse adopts this candidate for the current request;
+        // immutable operation receipts keep their original execution binding.
+        proposal.runId = context.runId;
+        proposal.intentRevision = context.intentRevision;
+        record.latest[taskId] = proposal.id;
+        context.expectedAfter ??= {};
+        Object.assign(context.expectedAfter, {
+          annotationRequest: request,
+          annotationArgs: canonical(args),
+          annotationProposal: proposal.id,
+          annotationFingerprint: fingerprint,
+          annotationEntries: canonical(proposal.entries),
+        });
+        await this.saveAnnotationRecord(token, record);
+        return null;
+      } finally {
+        progress.close();
+      }
+    });
+  }
 
   async execute(
     name: string,
     args: Record<string, unknown>,
+    signal?: AbortSignal,
+    context: ToolExecutionContext = {},
   ): Promise<ToolResult> {
+    let dispatched = false;
     try {
-      return await this.dispatch(name, args);
+      if (context.preparedOperation?.domain === "zotero") {
+        const intent = context.preparedOperation;
+        if (intent.name !== name || canonical(intent.args) !== canonical(args))
+          return {
+            ...fail(
+              name,
+              "invalid_args",
+              "The prepared operation does not match the requested write",
+            ),
+            effect: "none",
+          };
+        // Recovery fields come from the frozen intent, never mutable caller state.
+        const recovery = intent.recovery as Pick<
+          ToolExecutionContext,
+          "expected" | "expectedAfter" | "plannedKeys"
+        >;
+        context = { ...context, ...JSON.parse(JSON.stringify(recovery)) };
+      }
+      context.signal ??= signal;
+      const invalid = await this.prepare(name, args, context);
+      if (invalid) return invalid;
+      if (signal?.aborted)
+        return {
+          ...fail(name, "timeout", "Cancelled before execution"),
+          effect: "none",
+        };
+      if (TOOL_META[name]?.mutatesState) {
+        for (const [token, version] of Object.entries(context.expected ?? {})) {
+          if (token.startsWith("collection:")) {
+            const [, libraryID, key] = token.split(":");
+            const collection = Zotero.Collections.getByLibraryAndKey(
+              Number(libraryID),
+              key,
+            );
+            if (
+              !collection ||
+              this.collectionMutationVersion(name, collection) !== version
+            )
+              return {
+                ...fail(
+                  name,
+                  "unavailable",
+                  "Collection changed after preview; review it again",
+                ),
+                effect: "none",
+              };
+            continue;
+          }
+          const separator = token.indexOf(":");
+          const item = getItem(
+            Number(token.slice(0, separator)),
+            token.slice(separator + 1),
+          );
+          if (!item || this.mutationVersion(name, args, item) !== version)
+            return {
+              ...fail(
+                name,
+                "unavailable",
+                "Zotero item changed after preflight; read it again and review the updated change",
+              ),
+              effect: "none",
+            };
+        }
+      }
+      dispatched = true;
+      const result = await this.dispatch(name, args, signal, context);
+      return result;
     } catch (error) {
-      return fail(
-        name,
-        "internal",
-        error instanceof Error ? error.message : String(error),
-      );
+      if (error instanceof RolledBackWrite)
+        return {
+          ...fail(name, "unavailable", error.message),
+          effect: "none",
+          retryable: true,
+        };
+      return {
+        ...fail(
+          name,
+          error instanceof ToolTimeout ? "timeout" : "internal",
+          error instanceof Error ? error.message : String(error),
+        ),
+        effect:
+          dispatched && TOOL_META[name]?.mutatesState ? "unknown" : "none",
+      };
     }
   }
 
   private async dispatch(
     name: string,
     args: Record<string, unknown>,
+    signal?: AbortSignal,
+    context: ToolExecutionContext = {},
   ): Promise<ToolResult> {
     switch (name) {
       case "search_items":
@@ -1198,7 +2102,7 @@ export class ZoteroToolHost {
       case "get_related_items":
         return this.getRelated(args);
       case "create_collection":
-        return this.createCollection(args);
+        return this.createCollection(args, context);
       case "rename_collection":
         return this.renameCollection(args);
       case "add_to_collection":
@@ -1206,11 +2110,11 @@ export class ZoteroToolHost {
       case "remove_from_collection":
         return this.removeFromCollection(args);
       case "create_saved_search":
-        return this.createSavedSearch(args);
+        return this.createSavedSearch(args, context);
       case "add_item":
-        return this.addItem(args);
+        return this.addItem(args, context);
       case "create_item":
-        return this.createItem(args);
+        return this.createItem(args, context);
       case "update_item_metadata":
         return this.updateItemMetadata(args);
       case "batch_update_tags":
@@ -1218,41 +2122,41 @@ export class ZoteroToolHost {
       case "link_related_items":
         return this.linkRelated(args);
       case "create_note":
-        return this.createNote(args);
+        return this.createNote(args, context);
       case "propose_note":
-        return this.proposeNote(args);
+        return this.proposeNote(args, context);
       case "append_to_note":
-        return this.appendToNote(args);
+        return this.appendToNote(args, context);
       case "update_note":
-        return this.updateNote(args);
+        return this.updateNote(args, context);
       case "attach_file":
-        return this.attachFile(args);
+        return this.attachFile(args, context);
       case "get_outline":
       case "list_sections":
         return this.getOutline(name, args);
       case "get_paper_section":
         return this.getPaperSection(args);
       case "get_pages":
-        return this.getPages(args);
+        return this.getPages(args, signal, context);
       case "get_page_count":
-        return this.getPageCount(args);
+        return this.getPageCount(args, signal, context);
       case "search_paper_content":
       case "search_with_regex":
-        return this.searchPaper(name, args);
+        return this.searchPaper(name, args, signal, context);
       case "get_annotations":
-        return this.getAnnotations(args);
+        return this.getAnnotations(args, context);
       case "get_pdf_selection":
         return this.getPdfSelection(args);
       case "inspect_pdf_page":
-        return this.inspectPdfPage(args);
+        return this.inspectPdfPage(args, signal, context);
       case "open_item":
         return this.openItem(args);
       case "propose_highlights":
-        return this.proposeHighlights(args);
+        return this.proposeHighlights(args, context);
       case "propose_annotations":
-        return this.proposeAnnotations(args);
+        return this.proposeAnnotations(args, context);
       case "commit_annotations":
-        return this.commitAnnotations(args);
+        return this.commitAnnotations(args, context, signal);
       case "update_annotation_comment":
         return this.updateAnnotationComment(args);
       case "delete_annotation":
@@ -1600,6 +2504,7 @@ export class ZoteroToolHost {
 
   private async createCollection(
     args: Record<string, unknown>,
+    context: ToolExecutionContext = {},
   ): Promise<ToolResult> {
     const name = String(args.name ?? "").trim();
     if (!name) {
@@ -1608,6 +2513,13 @@ export class ZoteroToolHost {
     const libraryID = defaultLibraryID(args);
     const collection = new Zotero.Collection();
     (collection as unknown as { libraryID: number }).libraryID = libraryID;
+    if (context.plannedKeys?.collection) {
+      (collection as unknown as { key: string }).key =
+        context.plannedKeys.collection;
+      // Assigning a key identifies the object in Zotero, even before it exists.
+      // Its public loader must establish the missing-object state before edits.
+      await collection.loadPrimaryData(false);
+    }
     collection.name = name;
     const parentKey = args.parentKey ? String(args.parentKey) : "";
     if (parentKey) {
@@ -1642,8 +2554,17 @@ export class ZoteroToolHost {
     if (!collection) {
       return fail("rename_collection", "not_found", "Collection not found");
     }
-    collection.name = name;
-    await collection.saveTx();
+    try {
+      await Zotero.DB.executeTransaction(async () => {
+        collection.name = name;
+        await collection.save();
+      });
+    } catch (error) {
+      await collection.reload?.(["primaryData"], true).catch(() => undefined);
+      throw new RolledBackWrite(
+        `Collection transaction rolled back: ${String(error)}`,
+      );
+    }
     return ok("rename_collection", { libraryID, key, name });
   }
 
@@ -1663,8 +2584,10 @@ export class ZoteroToolHost {
         "Item or collection not found",
       );
     }
-    item.addToCollection(collection.id);
-    await item.saveTx();
+    await atomicItems([item], async () => {
+      item.addToCollection(collection.id);
+      await item.save();
+    });
     return ok("add_to_collection", {
       libraryID,
       key: item.key,
@@ -1688,8 +2611,10 @@ export class ZoteroToolHost {
         "Item or collection not found",
       );
     }
-    item.removeFromCollection(collection.id);
-    await item.saveTx();
+    await atomicItems([item], async () => {
+      item.removeFromCollection(collection.id);
+      await item.save();
+    });
     return ok("remove_from_collection", {
       libraryID,
       key: item.key,
@@ -1699,6 +2624,7 @@ export class ZoteroToolHost {
 
   private async createSavedSearch(
     args: Record<string, unknown>,
+    context: ToolExecutionContext = {},
   ): Promise<ToolResult> {
     const name = String(args.name ?? "").trim();
     const query = String(args.query ?? "").trim();
@@ -1710,7 +2636,12 @@ export class ZoteroToolHost {
       );
     }
     const libraryID = defaultLibraryID(args);
-    const search = new Zotero.Search({ libraryID, name });
+    const search = new Zotero.Search({ libraryID });
+    if (context.plannedKeys?.search) {
+      (search as unknown as { key: string }).key = context.plannedKeys.search;
+      await search.loadPrimaryData(false);
+    }
+    search.name = name;
     search.addCondition("title", "contains", query);
     await search.saveTx();
     return ok("create_saved_search", {
@@ -1721,7 +2652,10 @@ export class ZoteroToolHost {
     });
   }
 
-  private async addItem(args: Record<string, unknown>): Promise<ToolResult> {
+  private async addItem(
+    args: Record<string, unknown>,
+    context: ToolExecutionContext = {},
+  ): Promise<ToolResult> {
     const identifier = String(args.identifier ?? "").trim();
     if (!identifier) {
       return fail("add_item", "invalid_args", "identifier is required");
@@ -1766,6 +2700,9 @@ export class ZoteroToolHost {
       );
     }
     translate.setTranslator(translators);
+    const before = new Set(
+      await Zotero.Items.getAll(libraryID, false, false, true),
+    );
     let items: Zotero.Item[] = [];
     let translatorError: unknown;
     try {
@@ -1773,6 +2710,24 @@ export class ZoteroToolHost {
     } catch (error) {
       translatorError = error;
     }
+    const newIds = (
+      await Zotero.Items.getAll(libraryID, false, false, true)
+    ).filter((id) => !before.has(id));
+    if (translatorError || (!items?.length && newIds.length))
+      return {
+        ...fail(
+          "add_item",
+          "unavailable",
+          `Translator outcome requires verification; no fallback import was started: ${String(translatorError ?? "Items appeared in the library without a translator response")}`,
+          {
+            createdCandidates: newIds
+              .map((id) => asItem(Zotero.Items.get(id)))
+              .filter((item): item is Zotero.Item => Boolean(item))
+              .map(summarizeItem),
+          },
+        ),
+        effect: "unknown",
+      };
     if (!items?.length) {
       const doi = doiFromIdentifier(identifier);
       if (doi) {
@@ -1784,11 +2739,14 @@ export class ZoteroToolHost {
               ? translatorError.message
               : "translator returned no items";
           const second = error instanceof Error ? error.message : String(error);
-          return fail(
-            "add_item",
-            "unavailable",
-            `Identifier lookup failed (${first}); DOI fallback failed (${second})`,
-          );
+          return {
+            ...fail(
+              "add_item",
+              "unavailable",
+              `Identifier lookup failed (${first}); DOI fallback outcome requires verification (${second})`,
+            ),
+            effect: "unknown",
+          };
         }
       }
     }
@@ -1801,15 +2759,86 @@ export class ZoteroToolHost {
           : "Lookup returned no items",
       );
     }
+    const warnings: string[] = [];
+    const recordKey = `import_${await runtimeDigest(String(context.operationId ?? Date.now()))}`;
+    const imported = items.map(summarizeItem);
+    const record = {
+      version: 1,
+      items: imported,
+      itemCreation: "applied",
+      attachments: "pending",
+    };
     try {
-      await Zotero.Attachments.addAvailableFiles(items);
-    } catch {
-      // PDF attach is best-effort.
+      await this.storage.write(recordKey, record);
+    } catch (error) {
+      return {
+        ...ok("add_item", {
+          items: imported,
+          itemCreation: "applied",
+          attachmentsComplete: false,
+        }),
+        effect: "partial",
+        warnings: [
+          `Items were saved, but their receipt could not be persisted; attachment retrieval was deferred: ${String(error)}`,
+        ],
+      };
     }
-    return ok("add_item", { items: items.map(summarizeItem) });
+    // Keep this promise alive so a late download updates its own stage receipt.
+    this.pendingDownloads.add(recordKey);
+    const attachments = Zotero.Attachments.addAvailableFiles(items)
+      .then(
+        async () => {
+          record.attachments = "complete";
+          await this.storage.write(recordKey, record);
+        },
+        async (error) => {
+          record.attachments = "failed";
+          await this.storage.write(recordKey, record);
+          throw error;
+        },
+      )
+      .finally(() => this.pendingDownloads.delete(recordKey));
+    try {
+      await deadline(attachments, 60_000, context.signal);
+    } catch (error) {
+      if (this.pendingDownloads.has(recordKey)) record.attachments = "unknown";
+      warnings.push(
+        `Items were imported; automatic attachment retrieval did not finish: ${String(error)}. Verify attachments before adding them again.`,
+      );
+    }
+    try {
+      await this.storage.write(recordKey, record);
+    } catch (error) {
+      warnings.push(`Import stage receipt is not saved: ${String(error)}`);
+    }
+    const data = {
+      items: imported,
+      itemCreation: "applied",
+      attachmentsComplete: record.attachments === "complete",
+      attachmentOutcome: record.attachments,
+    };
+    if (record.attachments === "unknown")
+      return {
+        ...fail(
+          "add_item",
+          "timeout",
+          "Items were created, but attachment downloads are still unresolved; inspect their attachments before another write",
+          data,
+        ),
+        effect: "unknown",
+        warnings,
+      };
+    return {
+      ...ok("add_item", data),
+      effect: warnings.length ? "partial" : "applied",
+      warnings,
+    };
   }
 
-  private async createItem(args: Record<string, unknown>): Promise<ToolResult> {
+  private async createItem(
+    args: Record<string, unknown>,
+    context: ToolExecutionContext = {},
+  ): Promise<ToolResult> {
     const itemType = String(args.itemType ?? "journalArticle");
     const title = String(args.title ?? "").trim();
     if (!title) {
@@ -1818,6 +2847,10 @@ export class ZoteroToolHost {
     const item = new Zotero.Item(itemType as never);
     (item as unknown as { libraryID: number }).libraryID =
       defaultLibraryID(args);
+    if (context.plannedKeys?.item) {
+      item.key = context.plannedKeys.item;
+      await item.loadPrimaryData(false);
+    }
     item.setField("title", title);
     const extra = args.extra as Record<string, string> | undefined;
     if (extra) {
@@ -1838,13 +2871,25 @@ export class ZoteroToolHost {
     }
     const item = getItem(ref.libraryID, ref.key);
     const fields = args.fields as Record<string, string> | undefined;
-    if (!item || !fields) {
+    if (!item)
+      return fail("update_item_metadata", "not_found", "Item not found");
+    if (!fields || !Object.keys(fields).length)
       return fail("update_item_metadata", "invalid_args", "fields required");
+    try {
+      const probe = new Zotero.Item(item.itemType as never);
+      for (const [field, value] of Object.entries(fields)) {
+        if (typeof value !== "string" && typeof value !== "number")
+          throw new Error(`Invalid value for ${field}`);
+        probe.setField(field, value);
+      }
+    } catch (error) {
+      return fail("update_item_metadata", "invalid_args", String(error));
     }
-    for (const [field, value] of Object.entries(fields)) {
-      item.setField(field, value);
-    }
-    await item.saveTx();
+    await atomicItems([item], async () => {
+      for (const [field, value] of Object.entries(fields))
+        item.setField(field, value);
+      await item.save();
+    });
     return ok("update_item_metadata", summarizeItem(item));
   }
 
@@ -1859,13 +2904,11 @@ export class ZoteroToolHost {
     if (!item) {
       return fail("batch_update_tags", "not_found", "Item not found");
     }
-    for (const tag of (args.add as string[]) || []) {
-      item.addTag(tag);
-    }
-    for (const tag of (args.remove as string[]) || []) {
-      item.removeTag(tag);
-    }
-    await item.saveTx();
+    await atomicItems([item], async () => {
+      for (const tag of (args.add as string[]) || []) item.addTag(tag);
+      for (const tag of (args.remove as string[]) || []) item.removeTag(tag);
+      await item.save();
+    });
     return ok("batch_update_tags", {
       ...summarizeItem(item),
       tags: item.getTags?.() || [],
@@ -1881,29 +2924,42 @@ export class ZoteroToolHost {
     if (!item || !other) {
       return fail("link_related_items", "not_found", "Item not found");
     }
-    item.addRelatedItem(other);
-    other.addRelatedItem(item);
-    await item.saveTx();
-    await other.saveTx();
+    await atomicItems([item, other], async () => {
+      item.addRelatedItem(other);
+      other.addRelatedItem(item);
+      await item.save();
+      await other.save();
+    });
     return ok("link_related_items", {
       key: item.key,
       relatedKey: other.key,
     });
   }
 
-  private async createNote(args: Record<string, unknown>): Promise<ToolResult> {
+  private async createNote(
+    args: Record<string, unknown>,
+    context: ToolExecutionContext = {},
+  ): Promise<ToolResult> {
     const content = String(args.content ?? "").trim();
     if (!content) {
       return fail("create_note", "invalid_args", "content is required");
     }
     const note = new Zotero.Item("note");
     note.libraryID = defaultLibraryID(args);
+    if (context.plannedKeys?.item) {
+      note.key = context.plannedKeys.item;
+      await note.loadPrimaryData(false);
+    }
     note.setNote(noteHtml(content));
     if (args.parentKey) {
       const parent = getItem(note.libraryID, String(args.parentKey));
-      if (parent) {
-        note.parentID = parent.id;
-      }
+      if (!parent)
+        return fail(
+          "create_note",
+          "not_found",
+          "Explicit parent was not found",
+        );
+      note.parentID = parent.id;
     }
     await note.saveTx();
     return ok("create_note", { libraryID: note.libraryID, key: note.key });
@@ -1912,11 +2968,11 @@ export class ZoteroToolHost {
   /**
    * Approval-gated note write. The draft ({title, markdown}) is what the
    * approval card shows; when allowed, this runs and creates the note.
-   * Parent falls back from an explicit ref to the reader's item to the
-   * library-pane selection; otherwise the note stays standalone.
+   * Parent is resolved from the explicit reference or fixed task source before approval.
    */
   private async proposeNote(
     args: Record<string, unknown>,
+    context: ToolExecutionContext = {},
   ): Promise<ToolResult> {
     const title = String(args.title ?? "").trim();
     const markdown = String(args.markdown ?? "").trim();
@@ -1927,29 +2983,21 @@ export class ZoteroToolHost {
         "title and markdown are required",
       );
     }
-    let parent: Zotero.Item | null = null;
-    if (
-      typeof args.libraryID === "number" &&
-      typeof args.parentKey === "string" &&
-      args.parentKey.trim()
-    ) {
-      parent = getItem(args.libraryID, args.parentKey.trim());
-    }
-    if (!parent) {
-      const live = liveReaderContext();
-      if (live.reader?.parentKey) {
-        parent = getItem(live.reader.libraryID, live.reader.parentKey);
-      }
-    }
-    if (!parent) {
-      const pane = Zotero.getActiveZoteroPane?.();
-      const selected = (pane?.getSelectedItems?.() || []).filter(
-        (item) => item && !Array.isArray(item) && !item.isNote?.(),
+    const parent = args.parentKey
+      ? getItem(defaultLibraryID(args), String(args.parentKey))
+      : null;
+    if (!parent)
+      return fail(
+        "propose_note",
+        "not_found",
+        "Explicit or fixed task parent was not found",
       );
-      parent = selected[0] ?? null;
-    }
     const note = new Zotero.Item("note");
     note.libraryID = parent ? parent.libraryID : defaultLibraryID(args);
+    if (context.plannedKeys?.item) {
+      note.key = context.plannedKeys.item;
+      await note.loadPrimaryData(false);
+    }
     note.setNote(markdownToNoteHtml(`# ${title}\n\n${markdown}`));
     if (parent) {
       note.parentID = parent.id;
@@ -1965,6 +3013,7 @@ export class ZoteroToolHost {
 
   private async appendToNote(
     args: Record<string, unknown>,
+    _context: ToolExecutionContext = {},
   ): Promise<ToolResult> {
     const ref = requireItemRef(args);
     if (!ref.ok) {
@@ -1979,7 +3028,10 @@ export class ZoteroToolHost {
     return ok("append_to_note", { libraryID: note.libraryID, key: note.key });
   }
 
-  private async updateNote(args: Record<string, unknown>): Promise<ToolResult> {
+  private async updateNote(
+    args: Record<string, unknown>,
+    _context: ToolExecutionContext = {},
+  ): Promise<ToolResult> {
     const ref = requireItemRef(args);
     if (!ref.ok) {
       return fail("update_note", "invalid_args", ref.message);
@@ -1993,7 +3045,10 @@ export class ZoteroToolHost {
     return ok("update_note", { libraryID: note.libraryID, key: note.key });
   }
 
-  private async attachFile(args: Record<string, unknown>): Promise<ToolResult> {
+  private async attachFile(
+    args: Record<string, unknown>,
+    _context: ToolExecutionContext = {},
+  ): Promise<ToolResult> {
     const ref = requireItemRef(args);
     if (!ref.ok) {
       return fail("attach_file", "invalid_args", ref.message);
@@ -2080,7 +3135,7 @@ export class ZoteroToolHost {
     if (!item) {
       return fail(toolName, "not_found", "Item not found");
     }
-    const text = await pdfText(item);
+    const text = await pdfText(item, args.attachmentKey as string | undefined);
     if (!text) {
       return fail(toolName, "unavailable", "No indexed PDF text for this item");
     }
@@ -2107,7 +3162,7 @@ export class ZoteroToolHost {
     if (!item) {
       return fail("get_paper_section", "not_found", "Item not found");
     }
-    const text = await pdfText(item);
+    const text = await pdfText(item, args.attachmentKey as string | undefined);
     if (!text) {
       return fail("get_paper_section", "unavailable", "No indexed PDF text");
     }
@@ -2126,157 +3181,278 @@ export class ZoteroToolHost {
     });
   }
 
-  private async getPages(args: Record<string, unknown>): Promise<ToolResult> {
-    const ref = requireItemRef(args);
-    if (!ref.ok) {
-      return fail("get_pages", "invalid_args", ref.message);
-    }
-    const item = getItem(ref.libraryID, ref.key);
-    if (!item) {
-      return fail("get_pages", "not_found", "Item not found");
-    }
-    const text = await pdfText(item);
+  private async physicalPageText(
+    pdf: Zotero.Item,
+    view: PdfPrimaryView,
+    page: number,
+  ): Promise<string> {
+    const key = `${await pdfFingerprint(pdf)}:${page}`;
+    const cached = this.pageTextCache.get(key);
+    if (cached !== undefined) return cached;
+    const chars = await pageChars(view, page - 1);
+    let text = chars
+      .map(
+        (char) =>
+          `${char.u ?? char.char ?? ""}${char.paragraphBreakAfter ? "\n\n" : char.lineBreakAfter ? "\n" : char.spaceAfter ? " " : ""}`,
+      )
+      .join("");
     if (!text) {
-      return fail("get_pages", "unavailable", "No indexed PDF text");
+      const content = await (
+        await readerPdfPage(view, page)
+      ).getTextContent?.();
+      text =
+        content?.items
+          .map((item) => `${item.str ?? ""}${item.hasEOL ? "\n" : " "}`)
+          .join("") ?? "";
     }
-    const split = splitPages(text);
-    const start = Math.max(1, Number(args.start) || 1);
-    const end = Math.min(split.pageCount, Number(args.end) || start);
-    return ok("get_pages", {
-      libraryID: ref.libraryID,
-      key: ref.key,
-      pageCount: split.pageCount,
-      pages: split.pages.filter(
-        (page) => page.page >= start && page.page <= end,
-      ),
-    });
+    if (this.pageTextCache.size >= 128)
+      this.pageTextCache.delete(this.pageTextCache.keys().next().value!);
+    this.pageTextCache.set(key, text);
+    return text;
+  }
+
+  private async getPages(
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+    context: ToolExecutionContext = {},
+  ): Promise<ToolResult> {
+    const item = getItem(defaultLibraryID(args), String(args.key));
+    const pdf = item
+      ? await findPdf(item, args.attachmentKey as string | undefined)
+      : null;
+    if (!pdf) return fail("get_pages", "not_found", "PDF attachment not found");
+    const progress = new ToolProgress(context, signal);
+    try {
+      const { view } = await progress.run(
+        "opening_and_initializing_pdf",
+        30_000,
+        () => waitForPdfReader(pdf, progress),
+      );
+      const count = readerPdfDocument(view)?.numPages;
+      if (!count)
+        return fail(
+          "get_pages",
+          "unavailable",
+          "Physical PDF page count is unavailable",
+        );
+      const start = Number(args.start ?? 1),
+        end = Number(args.end ?? start);
+      if (
+        !Number.isInteger(start) ||
+        !Number.isInteger(end) ||
+        start < 1 ||
+        end < start ||
+        end > count ||
+        end - start >= 50
+      )
+        return fail(
+          "get_pages",
+          "invalid_args",
+          `Use physical pages 1-${count}, at most 50 pages per call`,
+        );
+      const pages = [];
+      for (let page = start; page <= end; page++) {
+        const text = await progress.run(`extracting_page_${page}`, 10_000, () =>
+          this.physicalPageText(pdf, view, page),
+        );
+        pages.push({
+          page,
+          text: text.slice(0, 50_000),
+          truncated: text.length > 50_000,
+        });
+      }
+      return ok("get_pages", {
+        libraryID: pdf.libraryID,
+        key: args.key,
+        attachmentKey: pdf.key,
+        pageCount: count,
+        pageSource: "pdf_physical",
+        pages,
+      });
+    } finally {
+      progress.close();
+    }
   }
 
   private async getPageCount(
     args: Record<string, unknown>,
+    signal?: AbortSignal,
+    context: ToolExecutionContext = {},
   ): Promise<ToolResult> {
-    const pages = await this.getPages({ ...args, start: 1, end: 1 });
-    if (!pages.ok) {
-      return pages;
+    const item = getItem(defaultLibraryID(args), String(args.key));
+    const pdf = item
+      ? await findPdf(item, args.attachmentKey as string | undefined)
+      : null;
+    if (!pdf)
+      return fail("get_page_count", "not_found", "PDF attachment not found");
+    const progress = new ToolProgress(context, signal);
+    try {
+      const { view } = await progress.run(
+        "opening_and_initializing_pdf",
+        30_000,
+        () => waitForPdfReader(pdf, progress),
+      );
+      const pageCount = readerPdfDocument(view)?.numPages;
+      if (!pageCount)
+        return fail(
+          "get_page_count",
+          "unavailable",
+          "Physical page count unavailable; indexed text cannot establish PDF pagination",
+        );
+      return ok("get_page_count", {
+        libraryID: pdf.libraryID,
+        key: args.key,
+        attachmentKey: pdf.key,
+        pageCount,
+        pageSource: "pdf_physical",
+      });
+    } finally {
+      progress.close();
     }
-    const data = pages.data as { pageCount: number };
-    return ok("get_page_count", {
-      libraryID: args.libraryID,
-      key: args.key,
-      pageCount: data.pageCount,
-    });
   }
 
   private async searchPaper(
     toolName: string,
     args: Record<string, unknown>,
+    signal?: AbortSignal,
+    context: ToolExecutionContext = {},
   ): Promise<ToolResult> {
-    const ref = requireItemRef(args);
-    if (!ref.ok) {
-      return fail(toolName, "invalid_args", ref.message);
-    }
-    const item = getItem(ref.libraryID, ref.key);
-    if (!item) {
-      return fail(toolName, "not_found", "Item not found");
-    }
-    const text = await pdfText(item);
-    if (!text) {
-      return fail(toolName, "unavailable", "No indexed PDF text");
-    }
+    const item = getItem(defaultLibraryID(args), String(args.key));
+    if (!item) return fail(toolName, "not_found", "Item not found");
+    const pdf = await findPdf(item, args.attachmentKey as string | undefined);
+    if (!pdf) return fail(toolName, "not_found", "PDF attachment not found");
     const query = String(args.query ?? args.pattern ?? "");
-    const compiled =
-      toolName === "search_with_regex"
-        ? compileSafeRegex(query, text)
-        : compileSafeRegex(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), text);
-    if (!compiled.ok) {
-      return fail(toolName, "invalid_args", compiled.reason);
+    const progress = new ToolProgress(context, signal);
+    let subject = "",
+      pages: Array<{ page: number; start: number }> = [],
+      nextPage: number | null = null;
+    let pageSource = "pdf_physical",
+      warning: string | undefined;
+    try {
+      try {
+        const { view } = await progress.run(
+          "opening_and_initializing_pdf",
+          30_000,
+          () => waitForPdfReader(pdf, progress),
+        );
+        const count = readerPdfDocument(view)?.numPages ?? 0;
+        const start = Number(args.start ?? 1);
+        if (!Number.isInteger(start) || start < 1 || start > count)
+          return fail(
+            toolName,
+            "invalid_args",
+            "Search start must be an existing physical page",
+          );
+        for (let page = start; page <= count; page++) {
+          const text = await progress.run(
+            `extracting_page_${page}`,
+            10_000,
+            () => this.physicalPageText(pdf, view, page),
+          );
+          pages.push({ page, start: subject.length });
+          subject += text + "\n\f\n";
+          if (subject.length >= 500_000 || page - start >= 49) {
+            nextPage = page < count ? page + 1 : null;
+            break;
+          }
+        }
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        subject =
+          (await deadline(
+            Promise.resolve(pdf.attachmentText),
+            10_000,
+            signal,
+          )) || "";
+        pageSource = "indexed_unpaged";
+        pages = [];
+        warning = `Physical PDF extraction unavailable: ${String(error)}. Hits have no reliable page number.`;
+      }
+      const truncated = subject.length > 500_000 || nextPage !== null;
+      subject = subject.slice(0, 500_000);
+      const hits =
+        toolName === "search_with_regex"
+          ? await regexMatches(query, subject, signal)
+          : literalMatches(query, subject);
+      return ok(toolName, {
+        libraryID: pdf.libraryID,
+        key: args.key,
+        attachmentKey: pdf.key,
+        query,
+        pageSource,
+        warning,
+        truncated: truncated || hits.length > 20,
+        hitsTruncated: hits.length > 20,
+        maxHits: 20,
+        nextPage,
+        hits: hits.slice(0, 20).map((hit) => ({
+          ...hit,
+          page:
+            pages.filter((page) => page.start <= hit.index).at(-1)?.page ??
+            null,
+        })),
+      });
+    } finally {
+      progress.close();
     }
-    const hits = collectMatches(compiled.regex, compiled.subject, 20);
-    return ok(toolName, {
-      libraryID: ref.libraryID,
-      key: ref.key,
-      query,
-      hits,
-    });
   }
 
   private async getAnnotations(
     args: Record<string, unknown>,
+    context: ToolExecutionContext = {},
   ): Promise<ToolResult> {
-    const ref = requireItemRef(args);
-    if (!ref.ok) {
-      return fail("get_annotations", "invalid_args", ref.message);
-    }
-    const item = getItem(ref.libraryID, ref.key);
-    if (!item) {
-      return fail("get_annotations", "not_found", "Item not found");
-    }
-    const pdf = await findPdf(item);
-    if (!pdf) {
-      return fail(
-        "get_annotations",
-        "unavailable",
-        "Item has no PDF attachment",
-      );
-    }
-    const raw = pdf.getAnnotations?.(false) || [];
-    const annotations = raw
-      .map((entry) =>
-        typeof entry === "object" && entry
-          ? asItem(entry)
-          : asItem(Zotero.Items.get(entry as number)),
-      )
-      .filter((ann): ann is Zotero.Item => Boolean(ann))
-      .filter((ann) => ann.isAnnotation?.())
-      .map((ann) => {
-        const position = annotationPosition(ann);
-        const pageIndex =
-          position && typeof position === "object"
-            ? Number((position as { pageIndex?: unknown }).pageIndex)
-            : Number.NaN;
-        const page = Number.isInteger(pageIndex) ? pageIndex + 1 : undefined;
+    const item = getItem(defaultLibraryID(args), String(args.key));
+    if (!item) return fail("get_annotations", "not_found", "Item not found");
+    const pdf = await findPdf(item, args.attachmentKey as string | undefined);
+    if (!pdf)
+      return fail("get_annotations", "not_found", "PDF attachment not found");
+    const token = `${pdf.libraryID}_${pdf.key}`;
+    return this.annotationLocks.run([token], async () => {
+      await pdf.reload?.(["childItems"], true);
+      const annotations = readPdfAnnotations(pdf);
+      const data = {
+        libraryID: pdf.libraryID,
+        key: item.key,
+        attachmentKey: pdf.key,
+        annotationKey: annotations[0]?.key,
+        annotations,
+      };
+      try {
+        const record = await this.loadAnnotationRecord(token);
+        const proposals = Object.values(record.proposals).filter(
+          (proposal) => proposal.taskId === (context.taskId ?? "local"),
+        );
+        for (const proposal of proposals)
+          await this.projectAnnotationOutcomes(
+            proposal,
+            pdf,
+            annotations,
+            true,
+          );
+        return ok("get_annotations", {
+          ...data,
+          proposals: proposals.map((proposal) => ({
+            proposalId: proposal.id,
+            entries: proposal.entries.map(
+              ({ id, status, annotationKey, error, raw, reviewIssue }) => ({
+                id,
+                status,
+                annotationKey,
+                error,
+                draft: raw,
+                reviewIssue,
+              }),
+            ),
+          })),
+        });
+      } catch (error) {
         return {
-          libraryID: ann.libraryID,
-          key: ann.key,
-          type: (ann as unknown as { annotationType?: string }).annotationType,
-          text:
-            (ann as unknown as { annotationText?: string }).annotationText ||
-            "",
-          comment:
-            (ann as unknown as { annotationComment?: string })
-              .annotationComment || "",
-          color:
-            (ann as unknown as { annotationColor?: string }).annotationColor ||
-            "",
-          pageLabel:
-            (ann as unknown as { annotationPageLabel?: string })
-              .annotationPageLabel || "",
-          sortIndex:
-            (ann as unknown as { annotationSortIndex?: string })
-              .annotationSortIndex || "",
-          position,
-          zoteroUri: buildOpenPdfUri(pdf.key, {
-            groupID: groupIDForLibrary(pdf.libraryID),
-            annotationKey: ann.key,
-            page,
-          }),
+          ...ok("get_annotations", data),
+          warnings: [
+            `Zotero contents were read, but the local proposal or receipt store is unavailable: ${String(error)}`,
+          ],
         };
-      });
-    const first = annotations[0];
-    const firstPosition =
-      first && typeof first.position === "object" && first.position !== null
-        ? (first.position as { pageIndex?: unknown })
-        : null;
-    return ok("get_annotations", {
-      libraryID: pdf.libraryID,
-      key: item.key,
-      attachmentKey: pdf.key,
-      annotationKey: first?.key,
-      pageIndex:
-        typeof firstPosition?.pageIndex === "number"
-          ? firstPosition.pageIndex
-          : undefined,
-      annotations,
+      }
     });
   }
 
@@ -2318,6 +3494,8 @@ export class ZoteroToolHost {
 
   private async inspectPdfPage(
     args: Record<string, unknown>,
+    signal?: AbortSignal,
+    context: ToolExecutionContext = {},
   ): Promise<ToolResult> {
     const ref = requireItemRef(args);
     if (!ref.ok) {
@@ -2335,7 +3513,7 @@ export class ZoteroToolHost {
     if (!item) {
       return fail("inspect_pdf_page", "not_found", "Item not found");
     }
-    const pdf = await findPdf(item);
+    const pdf = await findPdf(item, args.attachmentKey as string | undefined);
     if (!pdf) {
       return fail(
         "inspect_pdf_page",
@@ -2343,42 +3521,76 @@ export class ZoteroToolHost {
         "Item has no PDF attachment",
       );
     }
-    const { view } = await waitForPdfReader(pdf);
-    const document = readerPdfDocument(view);
-    const pageCount = document?.numPages ?? 0;
-    if (!document || pageNumber > pageCount) {
-      return fail(
-        "inspect_pdf_page",
-        "invalid_args",
-        `page must be between 1 and ${pageCount || "the PDF page count"}`,
+    const progress = new ToolProgress(context, signal);
+    try {
+      const { view } = await progress.run(
+        "opening_and_initializing_pdf",
+        30_000,
+        () => waitForPdfReader(pdf, progress),
       );
-    }
-    const page = await readerPdfPage(view, pageNumber);
-    const viewport = readerPageViewport(view, page, 1);
-    const chars = await pageChars(view, pageNumber - 1);
-    const anchors = pageLineAnchors(chars, viewport);
-    const image = await renderPageImage(view, page, pageNumber);
-    return ok(
-      "inspect_pdf_page",
-      {
-        libraryID: pdf.libraryID,
-        itemKey: item.key,
-        attachmentKey: pdf.key,
-        page: pageNumber,
-        pageCount,
-        coordinateSystem: {
-          origin: "top-left",
-          range: [0, 1000],
-          rect: "[x,y,width,height]",
+      const document = readerPdfDocument(view);
+      const pageCount = document?.numPages ?? 0;
+      if (!document || pageNumber > pageCount) {
+        return fail(
+          "inspect_pdf_page",
+          "invalid_args",
+          `page must be between 1 and ${pageCount || "the PDF page count"}`,
+        );
+      }
+      const { page, anchors } = await progress.run(
+        "extracting_page",
+        10_000,
+        async () => {
+          const page = await readerPdfPage(view, pageNumber);
+          const viewport = readerPageViewport(view, page, 1);
+          const chars = await pageChars(view, pageNumber - 1);
+          return { page, anchors: pageLineAnchors(chars, viewport) };
         },
-        lineAnchors: anchors,
-        visualAvailable: Boolean(image),
-        regionGuidance: image
-          ? "Ground image regions in the attached transient page image and line anchors."
-          : "Only text anchors are available. Do not guess image-region coordinates; omit image annotations.",
-      },
-      image ? [image] : undefined,
-    );
+      );
+      let image: ToolTransientMedia | undefined;
+      let renderingWarning: string | undefined;
+      let renderingAllowed = true;
+      try {
+        image = await progress.run("rendering_page", 20_000, () =>
+          this.renderingLocks.run([`${pdf.libraryID}:${pdf.key}`], async () => {
+            if (!renderingAllowed || signal?.aborted)
+              throw new ToolTimeout(
+                "Inspection cancelled or expired before rendering",
+              );
+            return renderPageImage(view, page, pageNumber);
+          }),
+        );
+      } catch (error) {
+        renderingAllowed = false;
+        if (signal?.aborted) throw error;
+        renderingWarning = String(error);
+      }
+      progress.setStage("returning_to_model");
+      return ok(
+        "inspect_pdf_page",
+        {
+          libraryID: pdf.libraryID,
+          itemKey: item.key,
+          attachmentKey: pdf.key,
+          page: pageNumber,
+          pageCount,
+          coordinateSystem: {
+            origin: "top-left",
+            range: [0, 1000],
+            rect: "[x,y,width,height]",
+          },
+          lineAnchors: anchors,
+          visualAvailable: Boolean(image),
+          renderingWarning,
+          regionGuidance: image
+            ? "Ground image regions in the attached transient page image and line anchors."
+            : "Only text anchors are available. Do not guess image-region coordinates; omit image annotations.",
+        },
+        image ? [image] : undefined,
+      );
+    } finally {
+      progress.close();
+    }
   }
 
   private async openItem(args: Record<string, unknown>): Promise<ToolResult> {
@@ -2392,7 +3604,7 @@ export class ZoteroToolHost {
     }
     const pane = Zotero.getActiveZoteroPane?.();
     pane?.selectItem?.(item.id);
-    const pdf = await findPdf(item);
+    const pdf = await findPdf(item, args.attachmentKey as string | undefined);
     if (pdf) {
       const location = readerLocation(args);
       await Zotero.Reader.open(pdf.id, location as never);
@@ -2400,261 +3612,1081 @@ export class ZoteroToolHost {
     return ok("open_item", summarizeItem(item));
   }
 
-  private async proposeHighlights(
-    args: Record<string, unknown>,
-  ): Promise<ToolResult> {
-    const ref = requireItemRef(args);
-    if (!ref.ok) {
-      return fail("propose_highlights", "invalid_args", ref.message);
-    }
-    let annotations: PendingAnnotation[];
-    try {
-      annotations = normalizeAnnotationList(args.highlights ?? [], true);
-    } catch (error) {
-      return fail(
-        "propose_highlights",
-        "invalid_args",
-        error instanceof Error ? error.message : String(error),
+  private async loadAnnotationRecord(token: string): Promise<AnnotationRecord> {
+    const value = await this.storage.read<
+      Omit<AnnotationRecord, "version"> & {
+        version: number;
+        operations?: Record<string, ToolResult>;
+        operationProposals?: Record<
+          string,
+          { proposalId: string; args: string; request?: string }
+        >;
+      }
+    >(token);
+    if (!value) return freshAnnotationRecord();
+    if (![1, 2].includes(value.version) || !value.proposals || !value.latest)
+      throw new Error(
+        "Annotation proposal record is damaged; it was not replaced",
       );
+    if (value.version === 1) {
+      if (!this.operations)
+        throw new Error(
+          "Legacy annotation receipts require the operation repository for migration",
+        );
+      const [library, attachmentKey] = token.split("_");
+      const resources = [`zotero:${library}:${attachmentKey}`];
+      for (const [id, result] of Object.entries(value.operations ?? {})) {
+        const binding = value.operationProposals?.[id];
+        const data = (result.ok ? result.data : result.details) as
+          { proposalId?: string } | undefined;
+        const proposal =
+          value.proposals[binding?.proposalId ?? data?.proposalId ?? ""];
+        const args = binding
+          ? JSON.parse(binding.args)
+          : {
+              libraryID: Number(library),
+              key: attachmentKey,
+              proposalId: proposal?.id,
+            };
+        await this.operations.importLegacyOperation({
+          id,
+          name: "commit_annotations",
+          request: binding?.request,
+          args,
+          context: {
+            taskId: proposal?.taskId,
+            expectedAfter: {
+              annotationEntries: canonical(proposal?.entries ?? []),
+              annotationProposal: proposal?.id ?? "",
+            },
+          },
+          resources,
+          startedAt: 0,
+          result,
+        });
+      }
+      // Older proposals can predate per-operation receipts. Preserve their known writes in the canonical journal before removing the duplicated outcome fields.
+      for (const proposal of Object.values(value.proposals)) {
+        const completed = proposal.entries.filter(
+          (entry) =>
+            entry.annotationKey &&
+            ["committed", "alreadyPresent"].includes(entry.status),
+        );
+        if (!completed.length) continue;
+        await this.operations.importLegacyOperation({
+          id: `legacy_annotation_${token}_${proposal.id}`,
+          name: "commit_annotations",
+          args: {
+            libraryID: Number(library),
+            key: attachmentKey,
+            proposalId: proposal.id,
+          },
+          context: {
+            taskId: proposal.taskId,
+            expectedAfter: {
+              annotationEntries: canonical(proposal.entries),
+              annotationProposal: proposal.id,
+            },
+          },
+          resources,
+          startedAt: 0,
+          result: {
+            ...ok("commit_annotations", {
+              proposalId: proposal.id,
+              committed: completed,
+            }),
+            effect: "applied",
+          },
+        });
+      }
+      value.version = 2;
+      await this.saveAnnotationRecord(token, {
+        version: 2,
+        proposals: value.proposals,
+        latest: value.latest,
+      });
     }
-    const id = `${ref.libraryID}:${ref.key}`;
-    this.proposals.set(id, annotations);
-    const item = getItem(ref.libraryID, ref.key);
-    const pdf = item ? await findPdf(item) : null;
-    const firstPage = annotations.find((annotation) =>
-      Number.isInteger(Number(annotation.page)),
-    )?.page;
-    return ok("propose_highlights", {
-      libraryID: ref.libraryID,
-      key: ref.key,
-      attachmentKey: pdf?.key,
-      pageIndex: firstPage === undefined ? undefined : Number(firstPage) - 1,
-      count: annotations.length,
-      highlights: annotations.map((annotation) => ({
-        text: annotation.type === "image" ? "" : annotation.quote,
-        page: annotation.page,
-        comment: annotation.comment,
-        color: annotation.color,
-      })),
-      persisted: false,
+    return { version: 2, proposals: value.proposals, latest: value.latest };
+  }
+
+  private async saveAnnotationRecord(
+    token: string,
+    record: AnnotationRecord,
+  ): Promise<void> {
+    const proposals = Object.fromEntries(
+      Object.entries(record.proposals).map(([id, proposal]) => [
+        id,
+        {
+          ...proposal,
+          entries: proposal.entries.map(
+            ({ id, raw, draft, located, reviewIssue, status, error }) => ({
+              id,
+              raw,
+              draft,
+              located,
+              reviewIssue,
+              status: status === "skipped" && !draft ? "skipped" : "pending",
+              error: status === "skipped" && !draft ? error : undefined,
+            }),
+          ),
+        },
+      ]),
+    );
+    await this.storage.write(token, {
+      version: 2,
+      proposals,
+      latest: record.latest,
     });
   }
 
+  private sameAnnotation(
+    annotation: ReturnType<typeof readPdfAnnotations>[number],
+    located: LocatedAnnotation,
+  ): boolean {
+    // An edited explanation or color is not permission to duplicate the same mark.
+    return (
+      annotation.type === located.type &&
+      annotation.text === located.text &&
+      canonical(annotation.position) === canonical(located.position)
+    );
+  }
+
+  private operationAnnotationEntries(
+    operation: OperationRecord,
+  ): AnnotationEntry[] {
+    const recovery = operation.intent?.recovery ?? operation.context;
+    const after =
+      recovery.expectedAfter as ToolExecutionContext["expectedAfter"];
+    try {
+      return JSON.parse(after?.annotationEntries ?? "[]") as AnnotationEntry[];
+    } catch {
+      return [];
+    }
+  }
+
+  private async projectAnnotationOutcomes(
+    proposal: AnnotationProposal,
+    pdf: Zotero.Item,
+    actual: ReturnType<typeof readPdfAnnotations>,
+    includeResolved = false,
+  ): Promise<void> {
+    // Resolution is a projection of receipts in the candidate's current scope.
+    // It must not survive a candidate being adopted by a later request.
+    for (const entry of proposal.entries) {
+      if (!entry.resolved) continue;
+      delete entry.resolved;
+      if (!entry.annotationKey) {
+        entry.status = entry.draft ? "pending" : "skipped";
+        if (entry.draft) entry.error = undefined;
+      }
+    }
+    const operations =
+      (await this.operations?.listOperations({
+        name: "commit_annotations",
+        resources: [`zotero:${pdf.libraryID}:${pdf.key}`],
+      })) ?? [];
+    for (const operation of operations) {
+      const data = (
+        operation.result?.ok
+          ? operation.result.data
+          : operation.result && !operation.result.ok
+            ? operation.result.details
+            : undefined
+      ) as Record<string, unknown> | undefined;
+      const rows: Array<Record<string, unknown> & { receiptStatus: string }> = [
+        "committed",
+        "alreadyPresent",
+        "skipped",
+        "failed",
+        "unknown",
+      ].flatMap((kind) =>
+        (Array.isArray(data?.[kind])
+          ? (data![kind] as Array<Record<string, unknown>>)
+          : []
+        ).map((row) => ({ ...row, receiptStatus: kind })),
+      );
+      for (const prior of this.operationAnnotationEntries(operation)) {
+        const entry = proposal.entries.find(
+          (candidate) =>
+            (operation.context.taskId === proposal.taskId &&
+              candidate.id === prior.id) ||
+            (candidate.draft &&
+              prior.draft &&
+              canonical(candidate.draft) === canonical(prior.draft)) ||
+            (candidate.located &&
+              prior.located &&
+              candidate.located.type === prior.located.type &&
+              candidate.located.text === prior.located.text &&
+              canonical(candidate.located.position) ===
+                canonical(prior.located.position)),
+        );
+        if (!entry) continue;
+        const receipt = rows.find(
+          (row) =>
+            row.id === prior.id ||
+            (prior.annotationKey && row.annotationKey === prior.annotationKey),
+        );
+        if (
+          includeResolved &&
+          operation.result &&
+          !operation.result.ok &&
+          operation.result.code === "permission_denied" &&
+          operation.context.taskId === proposal.taskId &&
+          operation.context.runId === proposal.runId &&
+          operation.context.intentRevision === proposal.intentRevision
+        ) {
+          entry.status = "skipped";
+          entry.resolved = "denied";
+          entry.error = "The user declined this prepared annotation write";
+          continue;
+        }
+        if (
+          includeResolved &&
+          receipt?.receiptStatus === "skipped" &&
+          receipt.status === "skipped" &&
+          operation.context.taskId === proposal.taskId &&
+          operation.context.runId === proposal.runId &&
+          operation.context.intentRevision === proposal.intentRevision
+        ) {
+          entry.status = "skipped";
+          entry.resolved = "omitted";
+          entry.error = String(
+            receipt.error ?? "Candidate was omitted from the submitted batch",
+          );
+        }
+        const annotationKey =
+          typeof receipt?.annotationKey === "string"
+            ? receipt.annotationKey
+            : prior.annotationKey;
+        if (!annotationKey) continue;
+        const known =
+          receipt &&
+          ["committed", "alreadyPresent"].includes(
+            String(receipt.receiptStatus),
+          );
+        const saved = actual.find(
+          (annotation) => annotation.key === annotationKey,
+        );
+        if (saved || known) {
+          entry.annotationKey = annotationKey;
+          entry.located = prior.located;
+          entry.status = saved ? "alreadyPresent" : "skipped";
+          entry.error = saved
+            ? undefined
+            : "Previously saved annotation was removed from Zotero; it will not be recreated automatically";
+          if (candidateChanged(entry, prior)) {
+            entry.status = "skipped";
+            entry.error = `Entry was already saved as ${annotationKey}; update its comment explicitly instead of creating another mark`;
+          }
+        }
+      }
+    }
+    function candidateChanged(
+      entry: AnnotationEntry,
+      previous: AnnotationEntry,
+    ) {
+      return (
+        entry.id === previous.id &&
+        canonical(entry.draft) !== canonical(previous.draft)
+      );
+    }
+  }
+
+  async workForTask(
+    taskId: string,
+    since: number,
+    _sourceFingerprint?: string,
+    options: {
+      runId?: string;
+      intentRevision?: number;
+      includeLegacy?: boolean;
+      sourceRefs?: readonly string[];
+    } = {},
+  ): Promise<{
+    completed: Array<{ id: string; revision?: number; description: string }>;
+    missing: Array<{ id: string; description: string; kind: "proposal" }>;
+  }> {
+    const completed: Array<{
+        id: string;
+        revision?: number;
+        description: string;
+      }> = [],
+      missing: Array<{ id: string; description: string; kind: "proposal" }> =
+        [];
+    for (const token of (await this.storage.keys?.()) ?? []) {
+      if (!/^\d+_[^_]+$/.test(token)) continue;
+      const record = await this.loadAnnotationRecord(token);
+      const matches = (candidate: AnnotationProposal) =>
+        candidate.taskId === taskId &&
+        ((options.includeLegacy &&
+          !candidate.runId &&
+          !candidate.createdAt &&
+          candidate.intentRevision === undefined) ||
+          (annotationProposalMatchesScope(candidate, { taskId, ...options }) &&
+            (options.runId !== undefined ||
+              (candidate.createdAt ?? 0) >= since)));
+      // A newly revised batch replaces the previous batch for this PDF. Its
+      // pointer also preserves explicit adoption of an older candidate ID.
+      const proposal = selectAnnotationProposal(record, taskId, matches);
+      if (!proposal) continue;
+      const [libraryID, key] = token.split("_");
+      const pdf = getItem(Number(libraryID), key);
+      if (!pdf) continue;
+      if (options.sourceRefs) {
+        const parent = pdf.parentItemID
+          ? asItem(Zotero.Items.get(pdf.parentItemID))
+          : null;
+        if (
+          !options.sourceRefs.includes(`${pdf.libraryID}:${pdf.key}`) &&
+          !(
+            parent &&
+            options.sourceRefs.includes(`${parent.libraryID}:${parent.key}`)
+          )
+        )
+          continue;
+      }
+      await pdf.reload?.(["childItems"], true);
+      await this.projectAnnotationOutcomes(
+        proposal,
+        pdf,
+        readPdfAnnotations(pdf),
+        true,
+      );
+      const pending = proposal.entries.filter(
+        (entry) =>
+          !entry.annotationKey && !entry.resolved && entry.status !== "skipped",
+      );
+      const invalid = proposal.entries.filter(
+        (entry) =>
+          !entry.annotationKey && !entry.resolved && entry.status === "skipped",
+      );
+      if (pending.length || invalid.length)
+        missing.push({
+          id: proposal.id,
+          kind: "proposal",
+          description: `Candidate batch ${proposal.id}: ${pending.length} candidates remain to submit and ${invalid.length} need correction or explicit omission. Use its existing IDs; preserve annotations already saved.`,
+        });
+      else
+        completed.push({
+          id: proposal.id,
+          revision: proposal.intentRevision,
+          description: `Candidate batch ${proposal.id} resolved; ${proposal.entries.filter((entry) => entry.status === "alreadyPresent").length} annotations currently exist. Removed marks were not recreated.`,
+        });
+    }
+    return { completed, missing };
+  }
+
+  private makeProposal(
+    record: AnnotationRecord,
+    raw: unknown,
+    taskId: string,
+    fingerprint: string,
+    context: ToolExecutionContext,
+    legacy = false,
+  ): AnnotationProposal {
+    if (!Array.isArray(raw) || !raw.length)
+      throw new Error(
+        "Provide a non-empty annotations array or an existing proposalId",
+      );
+    if (raw.length > 100)
+      throw new Error("At most 100 annotations may be proposed in one batch");
+    const seenIds = new Set<string>();
+    const proposalId = `proposal_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const entries = raw.map((value, index): AnnotationEntry => {
+      const object =
+        value && typeof value === "object" && !Array.isArray(value)
+          ? { ...(value as Record<string, unknown>) }
+          : {};
+      if (legacy) {
+        object.type = "highlight";
+        object.quote ??= object.text;
+      }
+      const aliasConflict =
+        (object.comment !== undefined &&
+          object.rationale !== undefined &&
+          object.comment !== object.rationale) ||
+        (object.quote !== undefined &&
+          object.text !== undefined &&
+          object.quote !== object.text);
+      if (object.comment === undefined && object.rationale !== undefined)
+        object.comment = object.rationale;
+      delete object.rationale;
+      const id =
+        typeof object.id === "string"
+          ? object.id
+          : `${proposalId}_${index + 1}`;
+      const entry: AnnotationEntry = { id, raw: object, status: "pending" };
+      try {
+        if (aliasConflict)
+          throw new Error(
+            "Conflicting quote/text or comment/rationale aliases",
+          );
+        if (seenIds.has(id)) throw new Error("Duplicate annotation entry id");
+        seenIds.add(id);
+        const schema = legacy
+          ? { ...annotationSchema, required: ["type"] }
+          : annotationSchema;
+        const normalized = validateValue(schema, object);
+        if (normalized.issues.length)
+          throw new Error(
+            normalized.issues
+              .map((issue) => `${issue.path}: ${issue.message}`)
+              .join("; "),
+          );
+        const qualityIssue = annotationExplanationIssue(
+          object,
+          context.annotationPolicy,
+        );
+        if (qualityIssue) entry.reviewIssue = qualityIssue;
+        entry.draft = normalizeAnnotationList([object], legacy)[0];
+      } catch (error) {
+        entry.status = "skipped";
+        entry.error = String(error);
+      }
+      return entry;
+    });
+    const proposal: AnnotationProposal = {
+      id: proposalId,
+      createdAt: Date.now(),
+      runId: context.runId,
+      intentRevision: context.intentRevision,
+      taskId,
+      fingerprint,
+      entries,
+    };
+    record.proposals[proposalId] = proposal;
+    record.latest[taskId] = proposalId;
+    return proposal;
+  }
+
+  private async proposeHighlights(
+    args: Record<string, unknown>,
+    context: ToolExecutionContext = {},
+  ): Promise<ToolResult> {
+    return this.proposeAnnotationBatch(
+      "propose_highlights",
+      args,
+      context,
+      true,
+    );
+  }
   private async proposeAnnotations(
     args: Record<string, unknown>,
+    context: ToolExecutionContext = {},
   ): Promise<ToolResult> {
-    const ref = requireItemRef(args);
-    if (!ref.ok) {
-      return fail("propose_annotations", "invalid_args", ref.message);
-    }
-    let annotations: PendingAnnotation[];
-    try {
-      annotations = normalizeAnnotationList(args.annotations ?? []);
-    } catch (error) {
-      return fail(
-        "propose_annotations",
-        "invalid_args",
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-    const item = getItem(ref.libraryID, ref.key);
-    if (!item) {
-      return fail("propose_annotations", "not_found", "Item not found");
-    }
-    const pdf = await findPdf(item);
-    if (!pdf) {
-      return fail(
-        "propose_annotations",
-        "unavailable",
-        "Item has no PDF attachment",
-      );
-    }
-    this.proposals.set(`${ref.libraryID}:${ref.key}`, annotations);
-    return ok("propose_annotations", {
-      libraryID: ref.libraryID,
-      itemKey: item.key,
-      attachmentKey: pdf.key,
-      pageIndex:
-        annotations[0]?.page === undefined
-          ? undefined
-          : annotations[0].page - 1,
-      count: annotations.length,
-      annotations,
-      persisted: false,
+    return this.proposeAnnotationBatch(
+      "propose_annotations",
+      args,
+      context,
+      false,
+    );
+  }
+  private async proposeAnnotationBatch(
+    name: string,
+    args: Record<string, unknown>,
+    context: ToolExecutionContext,
+    legacy: boolean,
+  ): Promise<ToolResult> {
+    const item = getItem(defaultLibraryID(args), String(args.key));
+    if (!item) return fail(name, "not_found", "Item not found");
+    const pdf = await findPdf(item, args.attachmentKey as string | undefined);
+    if (!pdf) return fail(name, "not_found", "PDF attachment not found");
+    const token = `${pdf.libraryID}_${pdf.key}`;
+    return this.annotationLocks.run([token], async () => {
+      const record = await this.loadAnnotationRecord(token);
+      let proposal: AnnotationProposal;
+      try {
+        proposal = this.makeProposal(
+          record,
+          legacy ? args.highlights : args.annotations,
+          context.taskId ?? "local",
+          await pdfFingerprint(pdf),
+          context,
+          legacy,
+        );
+      } catch (error) {
+        return { ...fail(name, "invalid_args", String(error)), effect: "none" };
+      }
+      await this.saveAnnotationRecord(token, record);
+      const issues = proposal.entries
+        .filter((entry) => entry.error)
+        .map((entry) => ({
+          path: entry.id,
+          reason: "annotation_preflight",
+          message: entry.error!,
+          nextAction:
+            "Repair this entry's arguments or explanation and propose it again",
+        }));
+      return {
+        ...ok(name, {
+          libraryID: pdf.libraryID,
+          itemKey: item.key,
+          key: item.key,
+          attachmentKey: pdf.key,
+          proposalId: proposal.id,
+          count: proposal.entries.filter((entry) => entry.draft).length,
+          annotations: proposal.entries.map((entry) => ({
+            ...entry.raw,
+            id: entry.id,
+            status: entry.status,
+            error: entry.error,
+            reviewIssue: entry.reviewIssue,
+          })),
+          highlights: legacy
+            ? proposal.entries.map((entry) => ({ ...entry.raw, id: entry.id }))
+            : undefined,
+          persisted: true,
+          issues,
+          reviewIssues: proposal.entries
+            .filter((entry) => entry.reviewIssue)
+            .map((entry) => ({ id: entry.id, message: entry.reviewIssue })),
+          nextAction:
+            "Review the full candidate batch, reread context where needed, remove low-value marks, and add explanations for key passages before committing",
+        }),
+        issues,
+        effect: issues.length ? "partial" : "applied",
+      };
     });
+  }
+
+  private annotationResult(
+    pdf: Zotero.Item,
+    proposalId: string,
+    entries: AnnotationEntry[],
+    operationId?: string,
+    warnings: string[] = [],
+  ): ToolResult {
+    const rows = entries.map((entry) => ({
+      id: entry.id,
+      status: entry.status,
+      type: entry.draft?.type,
+      annotationKey: entry.annotationKey,
+      page: entry.located
+        ? entry.located.position.pageIndex + 1
+        : entry.draft?.page,
+      error: entry.error,
+      zoteroUri:
+        entry.annotationKey &&
+        ["committed", "alreadyPresent"].includes(entry.status)
+          ? buildOpenPdfUri(pdf.key, {
+              groupID: groupIDForLibrary(pdf.libraryID),
+              annotationKey: entry.annotationKey,
+              page: entry.located
+                ? entry.located.position.pageIndex + 1
+                : entry.draft?.page,
+            })
+          : undefined,
+    }));
+    const committed = rows.filter((entry) => entry.status === "committed"),
+      alreadyPresent = rows.filter(
+        (entry) => entry.status === "alreadyPresent",
+      ),
+      skipped = rows.filter((entry) =>
+        ["skipped", "pending"].includes(entry.status),
+      ),
+      failed = rows.filter((entry) => entry.status === "failed"),
+      unknown = rows.filter((entry) => entry.status === "unknown");
+    const complete = [...committed, ...alreadyPresent];
+    const data = {
+      libraryID: pdf.libraryID,
+      itemKey:
+        (pdf.parentItemID
+          ? asItem(Zotero.Items.get(pdf.parentItemID))?.key
+          : undefined) ?? pdf.key,
+      attachmentKey: pdf.key,
+      proposalId,
+      committed,
+      alreadyPresent,
+      skipped,
+      failed,
+      unknown,
+      key: complete[0]?.annotationKey ?? "",
+      keys: complete.map((entry) => entry.annotationKey),
+      annotationKey: complete[0]?.annotationKey ?? "",
+      annotationKeys: complete.map((entry) => entry.annotationKey),
+      annotations: complete,
+      pageIndex: complete[0]?.page ? complete[0].page - 1 : undefined,
+      zoteroUri: complete[0]?.zoteroUri,
+      count: complete.length,
+      mode: "annotations",
+    };
+    if (unknown.length)
+      return {
+        ...fail(
+          "commit_annotations",
+          "unavailable",
+          "Some annotation outcomes are unknown; the host will reconcile them before another write",
+          data,
+        ),
+        effect: "unknown",
+        operationId,
+        warnings,
+      };
+    if (complete.length)
+      return {
+        ...ok("commit_annotations", data),
+        effect:
+          skipped.length || failed.length
+            ? "partial"
+            : committed.length
+              ? "applied"
+              : "none",
+        operationId,
+        warnings,
+      };
+    return {
+      ...fail(
+        "commit_annotations",
+        "unavailable",
+        "No new annotations were saved; repair the reported candidate issues",
+        data,
+      ),
+      effect: "none",
+      operationId,
+      warnings,
+      retryable: failed.length > 0,
+    };
   }
 
   private async commitAnnotations(
     args: Record<string, unknown>,
+    context: ToolExecutionContext = {},
+    signal?: AbortSignal,
   ): Promise<ToolResult> {
-    const ref = requireItemRef(args);
-    if (!ref.ok) {
-      return fail("commit_annotations", "invalid_args", ref.message);
-    }
-    const item = getItem(ref.libraryID, ref.key);
-    if (!item) {
-      return fail("commit_annotations", "not_found", "Item not found");
-    }
-    const id = `${ref.libraryID}:${ref.key}`;
-    let annotations: PendingAnnotation[];
-    try {
-      annotations =
-        args.annotations !== undefined
-          ? normalizeAnnotationList(args.annotations)
-          : args.highlights !== undefined
-            ? normalizeAnnotationList(args.highlights, true)
-            : (this.proposals.get(id) ?? []);
-    } catch (error) {
+    const item = getItem(defaultLibraryID(args), String(args.key));
+    const pdf = item
+      ? await findPdf(item, args.attachmentKey as string | undefined)
+      : null;
+    if (!pdf)
       return fail(
         "commit_annotations",
-        "invalid_args",
-        error instanceof Error ? error.message : String(error),
+        "not_found",
+        "PDF attachment not found",
       );
-    }
-    if (!annotations.length) {
-      return fail(
-        "commit_annotations",
-        "invalid_args",
-        "No annotations were proposed or provided",
-      );
-    }
-    const pdf = await findPdf(item);
-    if (!pdf) {
-      return fail(
-        "commit_annotations",
-        "unavailable",
-        "Item has no PDF attachment",
-      );
-    }
-    const { reader, view } = await waitForPdfReader(pdf);
-    const occurrenceCounts = new Map<string, number>();
-    const located: LocatedAnnotation[] = [];
-    try {
-      for (const annotation of annotations) {
-        if (annotation.type === "image") {
-          located.push(await locateImageAnnotation(view, annotation));
-          continue;
-        }
-        const occurrenceKey = `${annotation.quote.trim()}\u0000${
-          Number.isInteger(Number(annotation.page))
-            ? Number(annotation.page)
-            : ""
-        }`;
-        const occurrence = occurrenceCounts.get(occurrenceKey) ?? 0;
-        located.push(await locateTextAnnotation(view, annotation, occurrence));
-        occurrenceCounts.set(occurrenceKey, occurrence + 1);
-      }
-    } catch (error) {
-      return fail(
-        "commit_annotations",
-        "invalid_args",
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-
-    const created: Zotero.Item[] = [];
-    try {
-      for (const pending of located) {
-        let annotation: Zotero.Item;
+    const proposalId = String(
+      context.expectedAfter?.annotationProposal ?? args.proposalId ?? "",
+    );
+    const entries = JSON.parse(
+      context.expectedAfter?.annotationEntries ?? "[]",
+    ) as AnnotationEntry[];
+    if (!entries.length)
+      return {
+        ...fail(
+          "commit_annotations",
+          "invalid_args",
+          "Prepared annotation candidates are missing",
+        ),
+        effect: "none",
+      };
+    return this.annotationLocks.run(
+      [`${pdf.libraryID}_${pdf.key}`],
+      async () => {
+        const warnings: string[] = [];
+        const progress = new ToolProgress(context, signal, 120_000);
         try {
-          annotation = await Zotero.Annotations.saveFromJSON(
+          if (
+            (await pdfFingerprint(pdf)) !==
+            context.expectedAfter?.annotationFingerprint
+          )
+            return {
+              ...fail(
+                "commit_annotations",
+                "unavailable",
+                "PDF changed after the candidate preview; prepare updated anchors",
+              ),
+              effect: "none",
+            };
+          await pdf.reload?.(["childItems"], true);
+          const actual = readPdfAnnotations(pdf);
+          for (const entry of entries) {
+            const saved = actual.find(
+              (annotation) => annotation.key === entry.annotationKey,
+            );
+            if (saved) {
+              entry.status = "alreadyPresent";
+              entry.error = undefined;
+            } else if (entry.status === "alreadyPresent") {
+              entry.status = "skipped";
+              entry.error =
+                "Previously saved annotation was removed; it will not be recreated automatically";
+            } else if (entry.status === "pending" && entry.located) {
+              const duplicate = actual.find((annotation) =>
+                this.sameAnnotation(annotation, entry.located!),
+              );
+              if (duplicate) {
+                entry.annotationKey = duplicate.key;
+                entry.status = "alreadyPresent";
+              }
+            }
+          }
+          const pending = entries.filter(
+            (entry) => entry.status === "pending" && entry.located,
+          );
+          const ready = pending.length
+            ? await progress.run("opening_and_initializing_pdf", 30_000, () =>
+                waitForPdfReader(pdf, progress),
+              )
+            : undefined;
+          const created: Zotero.Item[] = [];
+          for (const entry of pending) {
+            if (!progress.active) {
+              warnings.push(
+                "Submission stopped; completed annotations were retained",
+              );
+              break;
+            }
+            entry.status = "unknown";
+            try {
+              progress.setStage(`saving_${entry.id}`);
+              // Keep the actual write promise alive: the shared executor owns timeout reporting and retains its resource lock until this non-cancellable write settles.
+              const annotation = await Zotero.Annotations.saveFromJSON(
+                pdf,
+                {
+                  key: entry.annotationKey,
+                  ...entry.located!,
+                  readOnly: false,
+                } as unknown as _ZoteroTypes.Annotations.AnnotationJson,
+                { notifierData: { instanceID: ready!.reader._instanceID } },
+              );
+              created.push(annotation);
+              entry.status = "committed";
+            } catch (error) {
+              await pdf.reload?.(["childItems"], true);
+              const saved = getItem(pdf.libraryID, entry.annotationKey!);
+              if (saved?.isAnnotation?.()) {
+                entry.status = "committed";
+                warnings.push(
+                  `Annotation saved but its response failed: ${String(error)}`,
+                );
+              } else {
+                entry.status =
+                  error instanceof ToolTimeout ? "unknown" : "failed";
+                entry.error = String(error);
+              }
+              break;
+            }
+          }
+          if (created.length) {
+            try {
+              await ready!.reader.setAnnotations(created);
+            } catch (error) {
+              warnings.push(
+                `Annotations are saved in Zotero; reader refresh failed: ${String(error)}`,
+              );
+            }
+            try {
+              await ready!.reader.navigate?.({ annotationID: created[0].key });
+            } catch {
+              /* cosmetic */
+            }
+          }
+          return this.annotationResult(
             pdf,
-            {
-              key: (
-                Zotero as typeof Zotero & {
-                  DataObjectUtilities: { generateKey: () => string };
-                }
-              ).DataObjectUtilities.generateKey(),
-              type: pending.type,
-              text: pending.text,
-              comment: pending.comment,
-              color: pending.color,
-              pageLabel: pending.pageLabel,
-              sortIndex: pending.sortIndex,
-              position: pending.position,
-              readOnly: false,
-            } as unknown as _ZoteroTypes.Annotations.AnnotationJson,
-            {
-              // The current reader is updated explicitly after the whole batch.
-              // Other readers still receive the normal item notification.
-              notifierData: { instanceID: reader._instanceID },
-            },
+            proposalId,
+            entries,
+            context.operationId,
+            warnings,
           );
         } catch (error) {
-          throw new Error(
-            `Unable to save PDF annotation: ${error instanceof Error ? error.message : String(error)}`,
-            { cause: error },
+          warnings.push(String(error));
+          return this.annotationResult(
+            pdf,
+            proposalId,
+            entries,
+            context.operationId,
+            warnings,
           );
+        } finally {
+          progress.close();
         }
-        created.push(annotation);
-      }
-      // Waiting for the item notifier alone can leave the already-open PDF on
-      // a stale annotation snapshot. Match Zotero's own reader save path by
-      // synchronizing this instance before reporting a successful commit.
-      try {
-        await reader.setAnnotations(created);
-      } catch (error) {
-        throw new Error(
-          `Unable to refresh PDF annotations in the reader: ${error instanceof Error ? error.message : String(error)}`,
-          { cause: error },
-        );
-      }
-    } catch (error) {
-      const rollbackKeys = created.map((annotation) => annotation.key);
-      for (const annotation of created.reverse()) {
-        try {
-          await annotation.eraseTx();
-        } catch {
-          // Preserve the original write error; notifier cleanup is best effort.
-        }
-      }
-      try {
-        await reader.unsetAnnotations?.(rollbackKeys);
-      } catch {
-        // The database rollback remains authoritative if the reader is gone.
-      }
-      throw error;
-    }
-    this.proposals.delete(id);
-    const first = located[0];
-    const firstAnnotationKey = created[0]?.key;
-    if (firstAnnotationKey) {
-      try {
-        // Commit landed while the reader is open: jump to the first new
-        // annotation so the write-back is visible right away (one-shot).
-        await reader.navigate?.({ annotationID: firstAnnotationKey });
-      } catch {
-        // Navigation is cosmetic; the committed annotations are the result.
-      }
-    }
-    const groupID = groupIDForLibrary(pdf.libraryID);
-    const committed = created.map((annotation, index) => {
-      const page = located[index].position.pageIndex + 1;
+      },
+    );
+  }
+
+  async reconcile(operation: OperationRecord): Promise<ToolResult | null> {
+    const recovery = operation.intent?.recovery ?? operation.context;
+    const context = {
+      ...operation.context,
+      ...recovery,
+    } as ToolExecutionContext;
+    const libraryID = defaultLibraryID(operation.args);
+    const key = String(operation.args.key ?? context.plannedKeys?.item ?? "");
+    const token = `${libraryID}:${key}`;
+    const item = key ? getItem(libraryID, key) : null;
+    if (item)
+      await item.reload?.(
+        [
+          "primaryData",
+          "itemData",
+          "note",
+          "tags",
+          "relations",
+          "collections",
+          "childItems",
+        ],
+        true,
+      );
+    const applied = (
+      data: unknown = { libraryID, key, reconciled: true },
+    ): ToolResult => ({ ...ok(operation.name, data), effect: "applied" });
+    if (
+      operation.name === "create_collection" &&
+      context.plannedKeys?.collection
+    ) {
+      const collection = Zotero.Collections.getByLibraryAndKey(
+        libraryID,
+        context.plannedKeys.collection,
+      );
+      if (collection)
+        return applied({
+          libraryID,
+          key: collection.key,
+          name: collection.name,
+          reconciled: true,
+        });
       return {
-        type: located[index].type,
-        annotationKey: annotation.key,
-        page,
-        zoteroUri: buildOpenPdfUri(pdf.key, {
-          groupID,
-          annotationKey: annotation.key,
-          page,
-        }),
+        ...fail(
+          operation.name,
+          "unavailable",
+          "Verified that the planned collection was not created",
+        ),
+        effect: "none",
+        retryable: true,
       };
-    });
-    return ok("commit_annotations", {
-      libraryID: pdf.libraryID,
-      itemKey: item.key,
-      key: created[0]?.key || "",
-      keys: created.map((annotation) => annotation.key),
-      attachmentKey: pdf.key,
-      annotationKey: created[0]?.key || "",
-      annotationKeys: created.map((annotation) => annotation.key),
-      pageIndex: first?.position?.pageIndex,
-      annotations: committed,
-      zoteroUri: committed[0]?.zoteroUri,
-      mode: "annotations",
-      count: created.length,
-    });
+    }
+    if (
+      operation.name === "create_saved_search" &&
+      context.plannedKeys?.search
+    ) {
+      const search = Zotero.Searches.getByLibraryAndKey(
+        libraryID,
+        context.plannedKeys.search,
+      );
+      if (search)
+        return applied({
+          libraryID,
+          key: search.key,
+          name: search.name,
+          reconciled: true,
+        });
+      return {
+        ...fail(
+          operation.name,
+          "unavailable",
+          "Verified that the planned search was not created",
+        ),
+        effect: "none",
+        retryable: true,
+      };
+    }
+    if (operation.name === "rename_collection") {
+      const collection = Zotero.Collections.getByLibraryAndKey(libraryID, key);
+      if (collection) await collection.reload?.(["primaryData"], true);
+      if (collection && collection.name === operation.args.name)
+        return applied({
+          libraryID,
+          key,
+          name: collection.name,
+          reconciled: true,
+        });
+      if (
+        collection &&
+        context.expected?.[`collection:${libraryID}:${key}`] ===
+          this.collectionMutationVersion(operation.name, collection)
+      )
+        return {
+          ...fail(
+            operation.name,
+            "unavailable",
+            "Verified that the collection name was not changed",
+          ),
+          effect: "none",
+          retryable: true,
+        };
+      return null;
+    }
+    if (
+      ["add_to_collection", "remove_from_collection"].includes(
+        operation.name,
+      ) &&
+      item
+    ) {
+      const collection = Zotero.Collections.getByLibraryAndKey(
+        libraryID,
+        String(operation.args.collectionKey),
+      );
+      if (
+        collection &&
+        item.getCollections().includes(collection.id) ===
+          (operation.name === "add_to_collection")
+      )
+        return applied({
+          libraryID,
+          key,
+          collectionKey: collection.key,
+          reconciled: true,
+        });
+    }
+    if (
+      ["create_note", "propose_note", "append_to_note", "update_note"].includes(
+        operation.name,
+      )
+    ) {
+      const after = context.expectedAfter?.[key];
+      if (item?.isNote?.() && after && item.getNote() === after)
+        return applied();
+    }
+    if (
+      operation.name === "create_item" &&
+      item &&
+      context.plannedKeys?.item === key
+    )
+      return applied(summarizeItem(item));
+    if (
+      operation.name === "update_item_metadata" &&
+      item &&
+      Object.entries(operation.args.fields as Record<string, string>).every(
+        ([field, value]) => item.getField(field) === value,
+      )
+    )
+      return applied();
+    if (operation.name === "batch_update_tags" && item) {
+      const tags = new Set(item.getTags().map((tag) => tag.tag));
+      if (
+        ((operation.args.add ?? []) as string[]).every((tag) =>
+          tags.has(tag),
+        ) &&
+        ((operation.args.remove ?? []) as string[]).every(
+          (tag) => !tags.has(tag),
+        )
+      )
+        return applied();
+    }
+    if (
+      operation.name === "update_annotation_comment" &&
+      item?.annotationComment === operation.args.comment
+    )
+      return applied();
+    if (operation.name === "delete_annotation" && !item) return applied();
+    if (operation.name === "link_related_items" && item) {
+      const other = getItem(libraryID, String(operation.args.relatedKey));
+      await other?.reload?.(["relations"], true);
+      if (
+        other &&
+        item.relatedItems.includes(other.key) &&
+        other.relatedItems.includes(item.key)
+      )
+        return applied({
+          libraryID,
+          key,
+          relatedKey: other.key,
+          reconciled: true,
+        });
+    }
+    if (
+      operation.name !== "commit_annotations" &&
+      (context.expected?.[token] ===
+        (item
+          ? this.mutationVersion(operation.name, operation.args, item)
+          : "missing") ||
+        (!item && context.plannedKeys?.item === key))
+    )
+      return {
+        ...fail(
+          operation.name,
+          "unavailable",
+          "Verified that the interrupted operation did not change its target fields",
+        ),
+        effect: "none",
+        retryable: true,
+      };
+    if (operation.name === "add_item") {
+      const recordKey = `import_${await runtimeDigest(operation.id)}`;
+      if (this.pendingDownloads.has(recordKey)) return null;
+      const record = await this.storage.read<{
+        items: Array<{ libraryID: number; key: string }>;
+        attachments: string;
+      }>(recordKey);
+      if (
+        record &&
+        ["complete", "failed"].includes(record.attachments) &&
+        record.items.every((ref) => getItem(ref.libraryID, ref.key))
+      )
+        return {
+          ...ok("add_item", {
+            items: record.items,
+            itemCreation: "applied",
+            attachmentsComplete: record.attachments === "complete",
+            attachmentOutcome: record.attachments,
+            reconciled: true,
+          }),
+          effect: record.attachments === "complete" ? "applied" : "partial",
+        };
+      const before = JSON.parse(
+        context.expectedAfter?.libraryItems ?? "null",
+      ) as number[] | null;
+      if (before) {
+        const current = await Zotero.Items.getAll(
+          libraryID,
+          false,
+          false,
+          true,
+        );
+        if (current.every((id) => before.includes(id)))
+          return {
+            ...fail(
+              operation.name,
+              "unavailable",
+              "Verified that no new library item was created",
+            ),
+            effect: "none",
+            retryable: true,
+          };
+      }
+    }
+    if (operation.name !== "commit_annotations") return null;
+    const pdf = item
+      ? await findPdf(item, operation.args.attachmentKey as string | undefined)
+      : null;
+    if (!pdf) return null;
+    return this.annotationLocks.run(
+      [`${pdf.libraryID}_${pdf.key}`],
+      async () => {
+        await pdf.reload?.(["childItems"], true);
+        const actual = readPdfAnnotations(pdf);
+        const entries = this.operationAnnotationEntries(operation);
+        if (!entries.length) return null;
+        for (const entry of entries) {
+          const saved = entry.annotationKey
+            ? actual.find(
+                (annotation) => annotation.key === entry.annotationKey,
+              )
+            : undefined;
+          if (saved) {
+            entry.status = "committed";
+            entry.error = undefined;
+          } else if (entry.status === "pending" || entry.status === "unknown") {
+            entry.status = "failed";
+            entry.error =
+              "Authoritative Zotero read confirmed that this planned annotation was not saved";
+          } else if (entry.status === "alreadyPresent") {
+            entry.status = "skipped";
+            entry.error =
+              "Previously present annotation was removed; it will not be recreated automatically";
+          }
+        }
+        return this.annotationResult(
+          pdf,
+          String(
+            context.expectedAfter?.annotationProposal ??
+              operation.args.proposalId ??
+              "",
+          ),
+          entries,
+          operation.id,
+        );
+      },
+    );
   }
 
   private async updateAnnotationComment(

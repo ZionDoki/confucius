@@ -233,11 +233,16 @@ function xhrStreamFetch(
     let finished = false;
     let failed: Error | null = null;
     let offset = 0;
+    let abortRequest: (() => void) | undefined;
     const waiters: ChunkWaiter[] = [];
     const loadWaiters: Array<{
       resolve: () => void;
       reject: (error: Error) => void;
     }> = [];
+    const cleanup = () => {
+      if (abortRequest)
+        init?.signal?.removeEventListener("abort", abortRequest);
+    };
 
     const notifyLoad = () => {
       const pending = loadWaiters.splice(0);
@@ -256,6 +261,7 @@ function xhrStreamFetch(
       }
       failed = error;
       finished = true;
+      cleanup();
       const pending = waiters.splice(0);
       for (const waiter of pending) {
         waiter.reject(error);
@@ -269,11 +275,16 @@ function xhrStreamFetch(
 
     const takeChunk = (): Uint8Array | null => {
       const text = xhr.responseText ?? "";
-      if (text.length <= offset) {
+      let end = text.length;
+      // XHR progress boundaries may split a UTF-16 surrogate pair. Wait for its
+      // second half instead of encoding two replacement characters.
+      if (!finished && end && /[\uD800-\uDBFF]/.test(text.charAt(end - 1)))
+        end--;
+      if (end <= offset) {
         return null;
       }
-      const slice = text.slice(offset);
-      offset = text.length;
+      const slice = text.slice(offset, end);
+      offset = end;
       return utf8Bytes(slice);
     };
 
@@ -313,6 +324,8 @@ function xhrStreamFetch(
         });
       },
       async cancel(): Promise<void> {
+        if (finished) return;
+        fail(sandboxAbortError());
         try {
           xhr.abort();
         } catch {
@@ -412,11 +425,8 @@ function xhrStreamFetch(
 
     xhr.onreadystatechange = () => {
       trySettle();
-      if (xhr.readyState === 4) {
-        finished = true;
-        flush();
-        notifyLoad();
-      }
+      // DONE also precedes error/abort events. Only onload proves a successful
+      // EOF after headers have already been delivered to the stream consumer.
     };
     xhr.onprogress = () => {
       trySettle();
@@ -424,6 +434,7 @@ function xhrStreamFetch(
     };
     xhr.onload = () => {
       finished = true;
+      cleanup();
       trySettle();
       flush();
       notifyLoad();
@@ -439,20 +450,21 @@ function xhrStreamFetch(
     };
 
     if (init?.signal) {
-      init.signal.addEventListener(
-        "abort",
-        () => {
-          try {
-            xhr.abort();
-          } catch {
-            // Ignore.
-          }
-        },
-        { once: true },
-      );
+      abortRequest = () => {
+        if (finished) return;
+        fail(sandboxAbortError());
+        try {
+          xhr.abort();
+        } catch {
+          /* The reader is already rejected. */
+        }
+      };
+      init.signal.addEventListener("abort", abortRequest, { once: true });
+      if (init.signal.aborted) abortRequest();
     }
 
     const body = init?.body;
+    if (failed) return;
     try {
       xhr.send(
         body == null || typeof body === "string"
@@ -491,17 +503,11 @@ async function zoteroBufferedFetch(
     errorDelayMax: 0,
     cancellerReceiver: (fn: () => void) => {
       cancel = fn;
+      if (init?.signal?.aborted) cancel();
     },
   });
-  if (init?.signal) {
-    init.signal.addEventListener(
-      "abort",
-      () => {
-        cancel?.();
-      },
-      { once: true },
-    );
-  }
+  const abort = () => cancel?.();
+  init?.signal?.addEventListener("abort", abort, { once: true });
   try {
     return xhrToResponse(await pending);
   } catch (error) {
@@ -509,6 +515,8 @@ async function zoteroBufferedFetch(
       throw sandboxAbortError();
     }
     throw new Error(unknownErrorMessage(error), { cause: error });
+  } finally {
+    init?.signal?.removeEventListener("abort", abort);
   }
 }
 

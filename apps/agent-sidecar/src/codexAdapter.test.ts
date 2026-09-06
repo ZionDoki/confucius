@@ -66,6 +66,62 @@ async function waitFor(
 }
 
 describe("Codex App Server contract", () => {
+  it("does not interpret a missing or unknown terminal status as success", async () => {
+    for (const prompt of ["missing-status", "terminal=in_progress"]) {
+      const adapter = new CodexAdapter(fixture);
+      const test = harness();
+      try {
+        await adapter.startTurn(input(prompt), test.sink, test.approvals);
+        await waitFor(() =>
+          test.events.some((event) => event.type === "turn_aborted"),
+        );
+        assert.equal(
+          test.events.some((event) => event.type === "turn_completed"),
+          false,
+        );
+        const stopped = test.events.find(
+          (event) => event.type === "turn_aborted",
+        );
+        assert.equal(
+          stopped?.type === "turn_aborted" && stopped.payload.stopReason,
+          "incomplete",
+        );
+      } finally {
+        await adapter.dispose("task_a");
+      }
+    }
+  });
+
+  it("reports real provider usage once while keeping context occupancy separate", async () => {
+    const adapter = new CodexAdapter(fixture);
+    const test = harness();
+    try {
+      await adapter.startTurn(input("usage"), test.sink, test.approvals);
+      await waitFor(() =>
+        test.events.some((event) => event.type === "turn_completed"),
+      );
+      const usage = test.events.filter(
+        (event) => event.type === "model_usage_updated",
+      );
+      assert.equal(usage.length, 1);
+      assert.deepEqual(usage[0].payload, {
+        inputTokens: 100,
+        outputTokens: 20,
+        totalTokens: 120,
+      });
+      assert.equal(
+        test.events.some(
+          (event) =>
+            event.type === "context_usage_updated" &&
+            event.payload.inputTokens === 80,
+        ),
+        true,
+      );
+    } finally {
+      await adapter.dispose("task_a");
+    }
+  });
+
   it("removes shell and unrelated integrations in Zotero-only mode", () => {
     const args = codexAppServerArgs("codex.js", "zotero_only");
     assert.deepEqual(args.slice(0, 2), ["codex.js", "app-server"]);
@@ -121,8 +177,7 @@ describe("Codex App Server contract", () => {
       false,
     );
     assert.deepEqual(
-      (workspaceConfig.mcp_servers as Record<string, unknown>)
-        .personal_server,
+      (workspaceConfig.mcp_servers as Record<string, unknown>).personal_server,
       { enabled: false },
     );
   });

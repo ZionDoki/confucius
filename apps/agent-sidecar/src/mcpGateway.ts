@@ -97,6 +97,7 @@ export async function handleMcp(
       case "tools/list": {
         const result = await host.rpc<unknown>("task/toolList", {
           taskId: capability.taskId,
+          runtimeGateway: "sidecar",
         });
         send(response, 200, { jsonrpc: "2.0", id, result });
         return;
@@ -104,6 +105,7 @@ export async function handleMcp(
       case "tools/call": {
         const result = await host.rpc<unknown>("task/toolCall", {
           taskId: capability.taskId,
+          runtimeGateway: "sidecar",
           name: String(message.params?.name ?? ""),
           arguments: asRecord(message.params?.arguments),
           callId: String(

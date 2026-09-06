@@ -3,12 +3,19 @@
 //
 //   node --import tsx scripts/live-e2e.mjs                       # default: both styles
 //   node --import tsx scripts/live-e2e.mjs --base http://host:11434/api/chat
-//   node --import tsx scripts/live-e2e.mjs --only tools-read
+//   node --import tsx scripts/live-e2e.mjs --only "read path" --json --output /tmp/live.json
+//   node --import tsx scripts/live-e2e.mjs --dry-run --model model:revision --profile-json '{"reasoningReplay":"thinking"}'
+// Pinned controls: --model-revision (declared metadata), --context-window,
+// --max-output-tokens, --max-iterations, --max-tool-calls, --max-run-tokens,
+// --max-run-ms, --timeouts-json, --api-key-env. Never included in offline npm test.
 //
 // The Zotero tool layer is simulated faithfully: paper text really goes
 // through @confucius/zotero-tools (page splitting, section detection,
 // safe regex) and memory goes through a real MemoryEngine. Only the Zotero
 // item store is in-process fake data.
+import { writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { applyEndpointPatch, blankEndpoint } from "@confucius/protocol";
 import {
   BudgetAccountant,
   MemoryCheckpointStore,
@@ -21,6 +28,9 @@ import {
   createClock,
   createIdFactory,
   estimateChars,
+  estimateRequestTokens,
+  resolveModelProfile,
+  detectApiStyle,
 } from "@confucius/harness";
 import {
   READ_ONLY_TOOL_NAMES,
@@ -44,15 +54,224 @@ const flag = (name) => {
   const i = args.indexOf(`--${name}`);
   return i >= 0 ? args[i + 1] : undefined;
 };
+const JSON_MODE = args.includes("--json");
+if (JSON_MODE) console.log = (...values) => console.error(...values);
+const integerFlag = (name, fallback, minimum = 1) => {
+  const raw = flag(name);
+  if (raw === undefined) return fallback;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < minimum)
+    throw new Error(`--${name} must be an integer >= ${minimum}`);
+  return value;
+};
 const HOST = flag("host") ?? "http://172.30.111.252:54321";
 const MODEL = flag("model") ?? "qwen3.8-27b:latest";
+const MODEL_REVISION = flag("model-revision") ?? null;
 const ONLY = flag("only");
+const PROFILE = JSON.parse(flag("profile-json") ?? "{}");
+const TIMEOUTS = JSON.parse(flag("timeouts-json") ?? "{}");
+const CONTEXT_WINDOW = integerFlag("context-window", 32_768);
+const MAX_OUTPUT = integerFlag("max-output-tokens", 4096);
+const MAX_ITERATIONS = integerFlag("max-iterations", 10);
+const MAX_TOOL_CALLS = integerFlag("max-tool-calls", 14, 0);
+const MAX_RUN_TOKENS = integerFlag("max-run-tokens", undefined);
+const MAX_RUN_MS = integerFlag("max-run-ms", undefined);
+const API_KEY_ENV = flag("api-key-env");
+if (API_KEY_ENV && !process.env[API_KEY_ENV])
+  throw new Error(`Missing API key environment variable: ${API_KEY_ENV}`);
 const BASES = flag("base")
   ? [{ name: flag("style") ?? "custom", url: flag("base") }]
   : [
       { name: "openai", url: `${HOST}/v1` },
       { name: "ollama-native", url: `${HOST}/api/chat` },
     ];
+for (const base of BASES) {
+  const seed = blankEndpoint("live");
+  const checked = applyEndpointPatch(
+    { endpoints: [seed], activeEndpointId: seed.id },
+    {
+      endpoint: {
+        id: seed.id,
+        baseUrl: base.url,
+        model: MODEL,
+        profile: PROFILE,
+        timeouts: TIMEOUTS,
+        contextWindowTokens: CONTEXT_WINDOW,
+        maxTokens: MAX_OUTPUT,
+      },
+    },
+  );
+  if (!checked.ok) throw new Error(checked.errors.join("; "));
+}
+if (MAX_OUTPUT >= CONTEXT_WINDOW)
+  throw new Error(
+    "Output token allowance must be smaller than the context window",
+  );
+const redactedBase = (base) => {
+  const url = new URL(base);
+  url.username = "";
+  url.password = "";
+  url.search = "";
+  return url.toString();
+};
+const newMetrics = () => ({
+  modelCalls: 0,
+  modelRequests: 0,
+  usageRequests: 0,
+  promptTokens: 0,
+  completionTokens: 0,
+  totalTokens: 0,
+  toolProposals: 0,
+  invalidToolCalls: 0,
+  deniedToolCalls: 0,
+  unknownEffects: 0,
+  confirmedWrites: 0,
+  duplicateWriteResults: 0,
+  stopReasons: {},
+  modelEnds: {},
+  errors: {},
+  httpStatuses: {},
+  modelLatencyMs: [],
+  maxEstimatedInputTokens: 0,
+  budgets: [],
+});
+let currentMetrics;
+const count = (object, key) => {
+  object[key] = (object[key] ?? 0) + 1;
+};
+function makeBudget() {
+  return new BudgetAccountant({
+    maxIterations: MAX_ITERATIONS,
+    maxToolCalls: MAX_TOOL_CALLS,
+    maxTokens: MAX_RUN_TOKENS,
+    maxElapsedMs: MAX_RUN_MS,
+  });
+}
+const canonical = (value) =>
+  JSON.stringify(value, (_key, entry) =>
+    entry && typeof entry === "object" && !Array.isArray(entry)
+      ? Object.fromEntries(
+          Object.entries(entry).sort(([a], [b]) => a.localeCompare(b)),
+        )
+      : entry,
+  );
+class LiveTurnLoop extends TurnLoop {
+  constructor(deps) {
+    const metrics = currentMetrics;
+    const requests = new Map();
+    const writes = new Set();
+    const original = deps.events.append.bind(deps.events);
+    deps.events.append = (event) => {
+      if (metrics && event.type === "tool_requested") {
+        metrics.toolProposals++;
+        requests.set(event.payload.callId, event.payload);
+      }
+      if (metrics && event.type === "tool_result") {
+        const result = event.payload.result;
+        if (!result.ok && ["invalid_args", "not_found"].includes(result.code))
+          metrics.invalidToolCalls++;
+        if (!result.ok && result.code === "permission_denied")
+          metrics.deniedToolCalls++;
+        if (result.effect === "unknown") metrics.unknownEffects++;
+        const proposal = requests.get(event.payload.callId);
+        if (
+          proposal &&
+          WRITE_TOOLS.has(proposal.toolName) &&
+          result.ok &&
+          result.effect !== "none" &&
+          result.effect !== "unknown"
+        ) {
+          metrics.confirmedWrites++;
+          const key = canonical({
+            name: proposal.toolName,
+            args: proposal.args,
+          });
+          if (writes.has(key)) metrics.duplicateWriteResults++;
+          writes.add(key);
+        }
+      }
+      original(event);
+    };
+    super(deps);
+    this.liveMetrics = metrics;
+    this.liveBudget = deps.budget;
+  }
+  async run(input) {
+    const result = await super.run(input);
+    if (this.liveMetrics) {
+      count(this.liveMetrics.stopReasons, result.stopReason);
+      this.liveMetrics.budgets.push(this.liveBudget.snapshot());
+    }
+    return result;
+  }
+}
+function finishMetrics(metrics) {
+  const latency = [...metrics.modelLatencyMs].sort((a, b) => a - b);
+  return {
+    ...metrics,
+    transportRetries: Math.max(0, metrics.modelRequests - metrics.modelCalls),
+    validToolCallRate: metrics.toolProposals
+      ? (metrics.toolProposals - metrics.invalidToolCalls) /
+        metrics.toolProposals
+      : null,
+    usageCoverage: metrics.modelCalls
+      ? metrics.usageRequests / metrics.modelCalls
+      : null,
+    promptTokens: metrics.usageRequests ? metrics.promptTokens : null,
+    completionTokens: metrics.usageRequests ? metrics.completionTokens : null,
+    totalTokens: metrics.usageRequests ? metrics.totalTokens : null,
+    modelLatencyP50Ms: latency.length
+      ? latency[Math.floor((latency.length - 1) * 0.5)]
+      : null,
+    modelLatencyP95Ms: latency.length
+      ? latency[Math.ceil((latency.length - 1) * 0.95)]
+      : null,
+  };
+}
+function manifest() {
+  let harnessCommit = null;
+  try {
+    harnessCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {}
+  return {
+    schemaVersion: 1,
+    kind: "confucius-live-e2e",
+    createdAt: new Date().toISOString(),
+    harnessCommit,
+    model: MODEL,
+    declaredModelRevision: MODEL_REVISION,
+    revisionVerified: false,
+    endpoints: BASES.map((base) => ({
+      name: base.name,
+      url: redactedBase(base.url),
+      profile: resolveModelProfile(detectApiStyle(base.url), MODEL, PROFILE),
+    })),
+    timeouts: {
+      firstByteMs: 120000,
+      idleMs: 120000,
+      absoluteMs: 600000,
+      ...TIMEOUTS,
+    },
+    contextWindowTokens: CONTEXT_WINDOW,
+    contextAdmission: "estimated-input-plus-output",
+    maxOutputTokens: MAX_OUTPUT,
+    budget: {
+      maxIterations: MAX_ITERATIONS,
+      maxToolCalls: MAX_TOOL_CALLS,
+      maxTokens: MAX_RUN_TOKENS ?? null,
+      maxElapsedMs: MAX_RUN_MS ?? null,
+    },
+    only: ONLY ?? null,
+  };
+}
+async function writeReport(report) {
+  const json = JSON.stringify(report, null, 2) + "\n";
+  if (flag("output")) await writeFile(flag("output"), json, "utf8");
+  if (JSON_MODE || args.includes("--dry-run")) process.stdout.write(json);
+}
 
 // ---------------------------------------------------------------------------
 // Fake Zotero library: three papers; the first has real multi-page text.
@@ -327,12 +546,63 @@ const SYSTEM_PROMPT = [
 ].join("\n");
 
 function makeAdapter(baseUrl, extra = {}) {
-  return new OpenAICompatibleAdapter({
-    apiKey: "ollama",
+  const metrics = currentMetrics;
+  const adapter = new OpenAICompatibleAdapter({
+    apiKey: API_KEY_ENV ? process.env[API_KEY_ENV] : "ollama",
     baseUrl,
     model: MODEL,
+    profile: PROFILE,
+    timeouts: TIMEOUTS,
+    maxTokens: MAX_OUTPUT,
+    contextWindowTokens: CONTEXT_WINDOW,
     ...extra,
+    fetchImpl: async (...values) => {
+      if (metrics) metrics.modelRequests++;
+      const response = await fetch(...values);
+      if (metrics) count(metrics.httpStatuses, String(response.status));
+      return response;
+    },
   });
+  const complete = adapter.complete.bind(adapter);
+  adapter.complete = async (request, signal) => {
+    const started = Date.now();
+    const estimated = estimateRequestTokens(request);
+    if (metrics) {
+      metrics.modelCalls++;
+      metrics.maxEstimatedInputTokens = Math.max(
+        metrics.maxEstimatedInputTokens,
+        estimated,
+      );
+    }
+    const usage = (value) => {
+      if (metrics && value) {
+        metrics.usageRequests++;
+        metrics.promptTokens += value.promptTokens ?? 0;
+        metrics.completionTokens += value.completionTokens ?? 0;
+        metrics.totalTokens +=
+          value.totalTokens ??
+          (value.promptTokens ?? 0) + (value.completionTokens ?? 0);
+      }
+    };
+    try {
+      if (estimated + MAX_OUTPUT > CONTEXT_WINDOW)
+        throw new Error(
+          `Estimated request ${estimated} plus output ${MAX_OUTPUT} exceeds pinned context window ${CONTEXT_WINDOW}`,
+        );
+      const turn = await complete(request, signal);
+      usage(turn.usage);
+      if (metrics) count(metrics.modelEnds, turn.end ?? "unknown");
+      return turn;
+    } catch (error) {
+      usage(error?.options?.partial?.usage);
+      if (metrics)
+        count(metrics.errors, error?.code ?? error?.name ?? "unknown");
+      throw error;
+    } finally {
+      if (metrics) metrics.modelLatencyMs.push(Date.now() - started);
+    }
+  };
+  return adapter;
 }
 
 /** Run one live turn through the real TurnLoop. */
@@ -353,7 +623,7 @@ async function runTurn({
     onReasoningDelta: (piece) => deltas.reasoning.push(piece),
   });
   const approvals = [];
-  const loop = new TurnLoop({
+  const loop = new LiveTurnLoop({
     model: adapter,
     tools,
     permissions: new PermissionGate({
@@ -370,7 +640,7 @@ async function runTurn({
         };
       },
     }),
-    budget: new BudgetAccountant({ maxIterations: 10, maxToolCalls: 14 }),
+    budget: makeBudget(),
     events,
     checkpoints: new MemoryCheckpointStore(),
     ids,
@@ -407,14 +677,23 @@ const results = [];
 async function test(name, fn) {
   if (ONLY && !name.includes(ONLY)) return;
   const started = Date.now();
+  const metrics = newMetrics();
+  currentMetrics = metrics;
   try {
     await fn();
-    results.push({ name, ok: true, ms: Date.now() - started });
+    results.push({
+      name,
+      ok: true,
+      ms: Date.now() - started,
+      metrics: finishMetrics(metrics),
+    });
     console.log(`  ✓ ${name} (${Date.now() - started}ms)`);
   } catch (error) {
     results.push({
       name,
       ok: false,
+      ms: Date.now() - started,
+      metrics: finishMetrics(metrics),
       error: error instanceof Error ? error.message : String(error),
     });
     console.log(`  ✗ ${name} (${Date.now() - started}ms)`);
@@ -448,6 +727,10 @@ function withToolCapture() {
 }
 
 async function main() {
+  if (args.includes("--dry-run")) {
+    await writeReport({ ...manifest(), dryRun: true, tests: [] });
+    return;
+  }
   console.log(`\nConfucius live E2E — model ${MODEL} @ ${HOST}\n`);
   for (const base of BASES) {
     console.log(`━ style: ${base.name} (${base.url})`);
@@ -520,7 +803,7 @@ async function main() {
       const events = new MemoryEventLog();
       capture.wrap(events);
       const adapter = makeAdapter(base.url, { stream: true });
-      const loop = new TurnLoop({
+      const loop = new LiveTurnLoop({
         model: adapter,
         tools,
         permissions: new PermissionGate({
@@ -529,7 +812,7 @@ async function main() {
           modeFor: (name) => (WRITE_TOOLS.has(name) ? "ask" : "auto_allow"),
           riskFor: () => "read",
         }),
-        budget: new BudgetAccountant({ maxIterations: 10, maxToolCalls: 14 }),
+        budget: makeBudget(),
         events,
         checkpoints: new MemoryCheckpointStore(),
         ids: createIdFactory("id"),
@@ -571,7 +854,7 @@ async function main() {
       const events = new MemoryEventLog();
       capture.wrap(events);
       const adapter = makeAdapter(base.url, { stream: true });
-      const loop = new TurnLoop({
+      const loop = new LiveTurnLoop({
         model: adapter,
         tools,
         permissions: new PermissionGate({
@@ -580,7 +863,7 @@ async function main() {
           modeFor: (name) => (WRITE_TOOLS.has(name) ? "ask" : "auto_allow"),
           riskFor: () => "read",
         }),
-        budget: new BudgetAccountant({ maxIterations: 10, maxToolCalls: 14 }),
+        budget: makeBudget(),
         events,
         checkpoints: new MemoryCheckpointStore(),
         ids: createIdFactory("id"),
@@ -614,7 +897,7 @@ async function main() {
       capture.wrap(events);
       const approvals = [];
       const adapter = makeAdapter(base.url, { stream: true });
-      const loop = new TurnLoop({
+      const loop = new LiveTurnLoop({
         model: adapter,
         tools,
         permissions: new PermissionGate({
@@ -627,7 +910,7 @@ async function main() {
             return { id: request.id, verdict: "allow", scope: "once" };
           },
         }),
-        budget: new BudgetAccountant({ maxIterations: 10, maxToolCalls: 14 }),
+        budget: makeBudget(),
         events,
         checkpoints: new MemoryCheckpointStore(),
         ids: createIdFactory("id"),
@@ -668,7 +951,7 @@ async function main() {
       const events2 = new MemoryEventLog();
       const capture2 = withToolCapture();
       capture2.wrap(events2);
-      const loop2 = new TurnLoop({
+      const loop2 = new LiveTurnLoop({
         model: makeAdapter(base.url, { stream: true }),
         tools,
         permissions: new PermissionGate({
@@ -682,7 +965,7 @@ async function main() {
             scope: "once",
           }),
         }),
-        budget: new BudgetAccountant({ maxIterations: 8, maxToolCalls: 10 }),
+        budget: makeBudget(),
         events: events2,
         checkpoints: new MemoryCheckpointStore(),
         ids: createIdFactory("id"),
@@ -743,7 +1026,7 @@ async function main() {
       const events = new MemoryEventLog();
       const capture = withToolCapture();
       capture.wrap(events);
-      const loop = new TurnLoop({
+      const loop = new LiveTurnLoop({
         model: makeAdapter(base.url, { stream: true }),
         tools,
         permissions: new PermissionGate({
@@ -757,7 +1040,7 @@ async function main() {
             scope: "once",
           }),
         }),
-        budget: new BudgetAccountant({ maxIterations: 8, maxToolCalls: 10 }),
+        budget: makeBudget(),
         events,
         checkpoints: new MemoryCheckpointStore(),
         ids: createIdFactory("id"),
@@ -791,7 +1074,7 @@ async function main() {
 
     await test(`[${base.name}] write denied without approval`, async () => {
       const events = new MemoryEventLog();
-      const loop = new TurnLoop({
+      const loop = new LiveTurnLoop({
         model: makeAdapter(base.url, { stream: true }),
         tools,
         permissions: new PermissionGate({
@@ -805,7 +1088,7 @@ async function main() {
             scope: "once",
           }),
         }),
-        budget: new BudgetAccountant({ maxIterations: 8, maxToolCalls: 10 }),
+        budget: makeBudget(),
         events,
         checkpoints: new MemoryCheckpointStore(),
         ids: createIdFactory("id"),
@@ -946,7 +1229,18 @@ async function main() {
   console.log(
     `\n${failed.length === 0 ? "ALL PASS" : "FAILURES"} — ${results.length - failed.length}/${results.length} passed\n`,
   );
-  process.exit(failed.length === 0 ? 0 : 1);
+  const report = {
+    ...manifest(),
+    tests: results,
+    summary: {
+      total: results.length,
+      passed: results.length - failed.length,
+      failed: failed.length,
+      elapsedMs: results.reduce((sum, entry) => sum + entry.ms, 0),
+    },
+  };
+  await writeReport(report);
+  process.exitCode = failed.length === 0 && results.length > 0 ? 0 : 1;
 }
 
 main().catch((error) => {

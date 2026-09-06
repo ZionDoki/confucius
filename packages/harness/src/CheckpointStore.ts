@@ -1,10 +1,13 @@
 import type { ContextWindowState } from "@confucius/protocol";
+import type { BudgetSnapshot } from "./BudgetAccountant";
 export interface TurnCheckpoint {
+  budget?: BudgetSnapshot;
   window?: ContextWindowState;
   turnId: string;
   iteration: number;
   toolCallsUsed?: number;
-  workflowPhase?: "research" | "delivery";
+  /** Legacy recovery clue; current executors do not write or drive phases. */
+  workflowPhase?: "research" | "review" | "delivery";
   savedAt: number;
   messages: unknown[];
   toolExecutions: ToolExecutionCheckpoint[];

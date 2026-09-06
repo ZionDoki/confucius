@@ -108,6 +108,75 @@ export interface ToolRuntimeMeta {
   catalog: ToolCatalog;
   concurrency: ToolConcurrency;
   mutatesState: boolean;
+  effectClass?: "read" | "write" | "unknown";
+}
+
+/** Absolute host deadline shared by preparation, resource waits and execution. */
+export interface ToolExecutionScope {
+  readonly deadlineAt: number;
+  readonly signal: AbortSignal;
+  /** Only the host approval boundary excludes user waiting from active time. */
+  pause?(): void;
+  resume?(): void;
+}
+
+/**
+ * A domain-owned, serializable description of one concrete operation.
+ * The executor persists this value as the operation intent; it never infers
+ * native targets or recovery rules from a public tool name or its arguments.
+ */
+export interface PreparedOperation {
+  readonly schemaVersion: 1;
+  readonly domain: string;
+  readonly name: string;
+  readonly args: Readonly<Record<string, unknown>>;
+  readonly resources: readonly string[];
+  readonly recovery: Readonly<Record<string, unknown>>;
+}
+
+export interface ToolExecutionContext {
+  taskId?: string;
+  runId?: string;
+  intentRevision?: number;
+  signal?: AbortSignal;
+  turnId?: string;
+  operationId?: string;
+  /** Host-only immutable intent returned by the owning domain. */
+  preparedOperation?: PreparedOperation;
+  /** Ephemeral cancellation/deadline state; never persisted in an intent. */
+  executionScope?: ToolExecutionScope;
+  /** Host-only replay receipt; never supplied by a model. */
+  replayResult?: ToolResult;
+  source?: { libraryID: number; key: string; attachmentKey?: string };
+  resources?: string[];
+  expected?: Record<string, string>;
+  expectedAfter?: Record<string, string>;
+  plannedKeys?: Record<string, string>;
+  annotationPolicy?: "key_explanations" | "all_explanations" | "advisory";
+  onProgress?: (progress: {
+    stage: string;
+    elapsedMs: number;
+    message?: string;
+  }) => void;
+}
+
+export interface ToolExecutionOutcome {
+  operationId?: string;
+  effect?: "none" | "applied" | "partial" | "unknown";
+  retryable?: boolean;
+  issues?: Array<{
+    path: string;
+    reason: string;
+    message: string;
+    nextAction?: string;
+  }>;
+  warnings?: string[];
+  diagnostics?: {
+    stage: string;
+    elapsedMs: number;
+    retryCount: number;
+    persistence: "saved" | "pending" | "not_required";
+  };
 }
 
 export interface JsonSchemaObject {
@@ -132,7 +201,7 @@ export type ToolErrorCode =
   | "unavailable"
   | "internal";
 
-export interface ToolSuccess<T = unknown> {
+export interface ToolSuccess<T = unknown> extends ToolExecutionOutcome {
   ok: true;
   toolName: string;
   data: T;
@@ -148,7 +217,7 @@ export interface ToolTransientMedia {
   description?: string;
 }
 
-export interface ToolFailure {
+export interface ToolFailure extends ToolExecutionOutcome {
   ok: false;
   toolName: string;
   code: ToolErrorCode;

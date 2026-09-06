@@ -5,6 +5,8 @@ import {
 } from "./RuntimeModels";
 import {
   CONFUCIUS_VERSION,
+  runtimeOutcome,
+  RuntimeUsageCounter,
   type ApprovalRequest,
   type ApprovalResolution,
   type CapabilityProfile,
@@ -34,6 +36,11 @@ interface CodexSession {
   sink: PluginRuntimeEventSink;
   approvals: PluginApprovalBrokerLike;
   policyViolationTurnId?: string;
+  usage?: RuntimeUsageCounter;
+  mcpToken?: string;
+  starting?: boolean;
+  terminalTurnIds?: Set<string>;
+  pendingNotifications?: RuntimeJsonRpcMessage[];
 }
 
 const ALWAYS_DISABLED_FEATURES = [
@@ -198,6 +205,13 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
     approvals: PluginApprovalBrokerLike,
   ): Promise<PluginRuntimeTurnHandle> {
     let session = this.sessions.get(input.taskId);
+    const usage = session?.usage;
+    if (session?.mcpToken && session.mcpToken !== input.mcp.token) {
+      const externalSessionId = session.threadId;
+      await this.dispose(input.taskId);
+      input = { ...input, externalSessionId };
+      session = undefined;
+    }
     if (session && session.profile !== input.capabilityProfile) {
       if (session.turnId) {
         throw new Error(
@@ -265,8 +279,11 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
       session.sink = sink;
       session.approvals = approvals;
       session.profile = input.capabilityProfile;
-      session.hostTurnId = input.turnId;
     }
+    session.usage ??=
+      usage ?? new RuntimeUsageCounter(!input.externalSessionId);
+    session.mcpToken = input.mcp.token;
+    session.hostTurnId = input.turnId;
 
     if (input.runtimeModel) {
       const models = await withTimeout(
@@ -276,31 +293,46 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
       );
       validateRuntimeModel(models, input.runtimeModel);
     }
-    const response = await session.rpc.request<Record<string, unknown>>(
-      "turn/start",
-      {
-        threadId: session.threadId,
-        ...codexModelParams(input.runtimeModel),
-        input: [{ type: "text", text: input.prompt, text_elements: [] }],
-        cwd: input.cwd,
-        approvalPolicy: "on-request",
-        sandboxPolicy:
-          input.capabilityProfile === "workspace"
-            ? {
-                type: "workspaceWrite",
-                writableRoots: [input.cwd],
-                networkAccess: false,
-                excludeTmpdirEnvVar: false,
-                excludeSlashTmp: false,
-              }
-            : { type: "readOnly", networkAccess: false },
-      },
-    );
-    session.turnId = String(asRecord(response.turn).id ?? "") || undefined;
-    return {
-      externalSessionId: session.threadId,
-      externalTurnId: session.turnId,
-    };
+    session.starting = true;
+    session.pendingNotifications = [];
+    let started = false;
+    try {
+      const response = await session.rpc.request<Record<string, unknown>>(
+        "turn/start",
+        {
+          threadId: session.threadId,
+          ...codexModelParams(input.runtimeModel),
+          input: [{ type: "text", text: input.prompt, text_elements: [] }],
+          cwd: input.cwd,
+          approvalPolicy: "on-request",
+          sandboxPolicy:
+            input.capabilityProfile === "workspace"
+              ? {
+                  type: "workspaceWrite",
+                  writableRoots: [input.cwd],
+                  networkAccess: false,
+                  excludeTmpdirEnvVar: false,
+                  excludeSlashTmp: false,
+                }
+              : { type: "readOnly", networkAccess: false },
+        },
+      );
+      session.turnId = String(asRecord(response.turn).id ?? "") || undefined;
+      if (!session.turnId)
+        throw new Error("Codex did not return a provider turn id");
+      started = true;
+      return {
+        externalSessionId: session.threadId,
+        externalTurnId: session.turnId,
+      };
+    } finally {
+      session.starting = false;
+      const pending = session.pendingNotifications;
+      session.pendingNotifications = undefined;
+      if (started)
+        for (const message of pending ?? [])
+          this.onNotification(session, message);
+    }
   }
 
   async interrupt(taskId: string): Promise<void> {
@@ -437,16 +469,25 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
     session: CodexSession,
     message: RuntimeJsonRpcMessage,
   ): void {
+    if (session.starting) {
+      (session.pendingNotifications ??= []).push(message);
+      return;
+    }
     const params = asRecord(message.params);
-    const providerTurnId = String(params.turnId ?? session.turnId ?? "");
+    const providerTurnId = String(
+      params.turnId ?? asRecord(params.turn).id ?? session.turnId ?? "",
+    );
     if (session.turnId && providerTurnId && providerTurnId !== session.turnId) {
       return;
     }
+    if (providerTurnId && session.terminalTurnIds?.has(providerTurnId)) return;
     const turnId = session.hostTurnId;
     if (params.threadId && params.threadId !== session.threadId) return;
     switch (message.method) {
       case "thread/tokenUsage/updated": {
         const usage = asRecord(params.tokenUsage);
+        const delta = session.usage?.observe(usage.total);
+        if (delta) session.sink.emit("model_usage_updated", delta, turnId);
         const inputTokens = asRecord(usage.last).inputTokens;
         if (
           typeof inputTokens === "number" &&
@@ -508,8 +549,15 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
         );
         return;
       case "turn/completed": {
+        if (providerTurnId) {
+          (session.terminalTurnIds ??= new Set()).add(providerTurnId);
+          if (session.terminalTurnIds.size > 32)
+            session.terminalTurnIds.delete(
+              session.terminalTurnIds.values().next().value!,
+            );
+        }
         const turn = asRecord(params.turn);
-        const status = String(turn.status ?? "completed");
+        const outcome = runtimeOutcome("codex", turn.status);
         if (session.policyViolationTurnId === turnId) {
           session.sink.emit(
             "task_status_changed",
@@ -523,39 +571,32 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
           session.turnId = undefined;
           return;
         }
-        const phase =
-          status === "failed"
-            ? "failed"
-            : status === "interrupted"
-              ? "aborted"
-              : "done";
         session.sink.emit(
           "task_status_changed",
-          {
-            status:
-              phase === "done"
-                ? "completed"
-                : phase === "failed"
-                  ? "failed"
-                  : "interrupted",
-          },
+          { status: outcome.status },
           turnId,
         );
-        if (phase === "failed") {
+        if (outcome.phase === "failed")
           session.sink.emit(
             "turn_failed",
-            { message: errorFromTurn(turn) },
+            { message: errorFromTurn(turn), stopReason: outcome.stopReason },
             turnId,
           );
-        } else if (phase === "aborted") {
+        else if (outcome.phase === "aborted")
           session.sink.emit(
             "turn_aborted",
-            { reason: "runtime interrupted" },
+            {
+              reason: `Codex stopped: ${String(turn.status ?? "missing terminal status")}`,
+              stopReason: outcome.stopReason,
+            },
             turnId,
           );
-        } else {
-          session.sink.emit("turn_completed", { phase }, turnId);
-        }
+        else
+          session.sink.emit(
+            "turn_completed",
+            { phase: "done", stopReason: outcome.stopReason },
+            turnId,
+          );
         session.turnId = undefined;
         return;
       }

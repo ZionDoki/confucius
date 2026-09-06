@@ -13,3 +13,5 @@ export {
 export type { PaperPages, PaperSection } from "./paperText";
 export { collectMatches, compileSafeRegex } from "./safeRegex";
 export type { SafeRegexResult } from "./safeRegex";
+
+export { annotationSchema } from "./catalog";

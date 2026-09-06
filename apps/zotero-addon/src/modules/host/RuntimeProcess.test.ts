@@ -84,6 +84,7 @@ function setPlatform(platform: string, architecture = "aarch64-gcc3"): void {
         ? "/Users/Test"
         : "/home/test";
   globals.PathUtils = {
+    localProfileDir: `${home}/.zotero-local`,
     isAbsolute: paths.isAbsolute,
     normalize: canonical,
     parent: paths.dirname,

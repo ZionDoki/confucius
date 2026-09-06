@@ -27,6 +27,8 @@ export interface HistoryItemRef {
 export interface HistoryItem extends HistoryItemRef {
   turnId?: string;
   role: "user" | "assistant" | "tool" | "event";
+  /** Diagnostic batches are exported, but do not participate in model retrieval. */
+  purpose?: "diagnostic";
   toolName?: string;
   createdAt: number;
   characters: number;

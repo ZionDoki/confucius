@@ -12,6 +12,10 @@ import type { LaunchIntent, TaskTemplateId } from "@confucius/protocol";
 
 const DEEP_READ_ID = `${config.addonRef}-item-deep-read`;
 const TRIAGE_ID = `${config.addonRef}-item-triage`;
+const menuBindings = new WeakMap<
+  Window,
+  { menu: Element; showing: EventListener }
+>();
 
 const SINGLE_ENTRIES: ReadonlyArray<{
   id: string;
@@ -203,7 +207,11 @@ export function registerItemMenu(win?: Window): void {
     );
     if (nodes.every((node) => node !== null)) {
       for (const node of nodes) menu.appendChild(node as HTMLElement);
-      menu.addEventListener("popupshowing", () => onItemMenuShowing(main, doc));
+      const previous = menuBindings.get(main);
+      previous?.menu.removeEventListener("popupshowing", previous.showing);
+      const showing = () => onItemMenuShowing(main, doc);
+      menu.addEventListener("popupshowing", showing);
+      menuBindings.set(main, { menu, showing });
     }
   } catch (error) {
     ztoolkit.log("[Confucius] item menu registration failed", error);
@@ -213,6 +221,9 @@ export function registerItemMenu(win?: Window): void {
 export function unregisterItemMenu(win?: Window): void {
   const main = win ?? Zotero.getMainWindow();
   const doc = main.document;
+  const binding = menuBindings.get(main);
+  binding?.menu.removeEventListener("popupshowing", binding.showing);
+  menuBindings.delete(main);
   for (const id of [...SINGLE_ENTRIES, ...MULTI_ENTRIES].map(
     (entry) => entry.id,
   )) {

@@ -1,4 +1,8 @@
-import type { JsonSchemaObject, ToolDefinition, ToolResult } from "@confucius/protocol";
+import type {
+  JsonSchemaObject,
+  ToolDefinition,
+  ToolResult,
+} from "@confucius/protocol";
 import { mcpToolName } from "@confucius/protocol";
 
 export interface McpServerConfig {
@@ -54,11 +58,21 @@ export class McpHttpClient {
     }
     const rawName = prefixedName.slice(prefix.length);
     try {
-      const result = await this.rpc<{ content?: unknown }>(
+      const result = await this.rpc<{ content?: unknown; isError?: boolean }>(
         "tools/call",
         { name: rawName, arguments: args },
         signal,
       );
+      if (result.isError)
+        return {
+          ok: false,
+          toolName: prefixedName,
+          code: "unavailable",
+          message: "MCP tool reported an execution error",
+          details: result,
+          effect: "unknown",
+          retryable: false,
+        };
       return {
         ok: true,
         toolName: prefixedName,
@@ -69,6 +83,8 @@ export class McpHttpClient {
         ok: false,
         toolName: prefixedName,
         code: "unavailable",
+        effect: "unknown",
+        retryable: false,
         message: error instanceof Error ? error.message : String(error),
       };
     }

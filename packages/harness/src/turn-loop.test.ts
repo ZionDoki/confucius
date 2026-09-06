@@ -431,13 +431,14 @@ describe("TurnLoop", () => {
       userText: "Keep searching",
     });
 
-    assert.equal(result.phase, "done");
+    assert.equal(result.phase, "failed");
+    assert.equal(result.stopReason, "iteration_budget");
     assert.equal(budget.iterationsUsed, 2);
     const requested = events
       .types()
       .filter((type) => type === "tool_requested");
     assert.equal(requested.length, 2);
-    assert.equal(events.types().at(-1), "turn_completed");
+    assert.equal(events.types().at(-1), "turn_failed");
   });
 
   it("rejects invalid tool arguments without calling the tool", async () => {
@@ -836,7 +837,8 @@ describe("TurnLoop", () => {
       userText: "Deep read this paper",
     });
 
-    assert.equal(result.phase, "done");
+    assert.equal(result.phase, "failed");
+    assert.equal(result.stopReason, "guard_rejected");
     assert.equal(call, 2);
     assert.equal(
       events.events.some(
@@ -931,7 +933,7 @@ describe("TurnLoop", () => {
           }
           assert.match(
             request.messages.at(-1)?.content ?? "",
-            /not available in the active workflow stage/i,
+            /not available to this task/i,
           );
           return { text: "Returning to the annotation stage." };
         },
@@ -953,10 +955,7 @@ describe("TurnLoop", () => {
       toolResult?.type === "tool_result" && !toolResult.payload.result.ok
         ? toolResult.payload.result
         : undefined;
-    assert.equal(
-      rejectedResult?.code ?? "missing",
-      "not_found",
-    );
+    assert.equal(rejectedResult?.code ?? "missing", "not_found");
   });
 
   it("tells the model once to stop exploring after the tool budget is spent", async () => {
@@ -1012,7 +1011,8 @@ describe("TurnLoop", () => {
       turnId: "turn_budget_handoff",
       userText: "Research",
     });
-    assert.equal(result.phase, "done");
+    assert.equal(result.phase, "failed");
+    assert.equal(result.stopReason, "tool_budget");
   });
 });
 

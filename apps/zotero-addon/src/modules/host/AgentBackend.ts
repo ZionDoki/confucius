@@ -1,3 +1,5 @@
+import type { ExecutorResult } from "./RunCoordinator";
+import type { TurnCheckpoint } from "@confucius/harness";
 import type {
   AgentBackendKind,
   ApprovalResolution,
@@ -34,13 +36,14 @@ export interface BackendTurnInput {
   prompt: string;
   /** Prompt enriched by the host with extracted, path-free attachment text. */
   modelPrompt?: string;
+  resumeCheckpoint?: TurnCheckpoint;
   mode: SessionMode;
   capabilityProfile: CapabilityProfile;
   workingDirectory?: string;
   promptContext?: PromptContextOptions;
-  /** Strong phase contract installed as provider developer instructions. */
+  /** Host source and outcome requirements installed as developer instructions. */
   workflowInstruction?: string;
-  /** Research phases suppress generic durable-product guidance. */
+  /** Compatibility switch for callers supplying their own artifact guidance. */
   includeArtifactGuidance?: boolean;
 }
 
@@ -52,6 +55,7 @@ export interface BackendTurnHandle {
 }
 
 export interface BackendCallbacks {
+  stopped?(result: ExecutorResult): void;
   event(event: ConfuciusEvent): void;
   handle(handle: BackendTurnHandle): void;
   disconnected(error: Error): void;
@@ -141,6 +145,11 @@ export class ExternalBackend implements AgentBackend {
     // Establish a cursor before starting so retained events from an earlier
     // turn are not appended a second time after resume.
     const before = await this.runtime.events(input.task.id, undefined, 0);
+    if (
+      controller.signal.aborted ||
+      this.polls.get(input.task.id) !== controller
+    )
+      return { superseded: true };
     const cursor = before.events.at(-1)?.id;
     let handle: BackendTurnHandle;
     try {
@@ -148,6 +157,8 @@ export class ExternalBackend implements AgentBackend {
         backend: this.kind,
         taskId: input.task.id,
         turnId: input.turnId,
+        runId: input.task.run?.id,
+        generation: input.task.run?.generation,
         prompt: input.prompt,
         mode: input.mode,
         capabilityProfile: input.capabilityProfile,
@@ -158,17 +169,32 @@ export class ExternalBackend implements AgentBackend {
         includeArtifactGuidance: input.includeArtifactGuidance,
       });
     } catch (error) {
+      if (
+        controller.signal.aborted ||
+        this.polls.get(input.task.id) !== controller
+      )
+        return { superseded: true };
       // Runtime startup failures are buffered by the host before the RPC
       // error is returned. Deliver them so the host can distinguish an auth
       // or provider failure from a disconnected companion.
       const failed = await this.runtime
         .events(input.task.id, cursor, 0)
         .catch(() => null);
+      if (
+        controller.signal.aborted ||
+        this.polls.get(input.task.id) !== controller
+      )
+        return { superseded: true };
       for (const event of failed?.events ?? []) {
         callbacks.event(event);
       }
       throw error;
     }
+    if (
+      controller.signal.aborted ||
+      this.polls.get(input.task.id) !== controller
+    )
+      return { superseded: true };
     callbacks.handle(handle);
     void this.poll(input.task.id, input.turnId, cursor, controller, callbacks);
     return handle;
@@ -220,6 +246,8 @@ export class ExternalBackend implements AgentBackend {
           25_000,
           controller.signal,
         );
+        if (controller.signal.aborted || this.polls.get(taskId) !== controller)
+          return;
         for (const event of page.events) {
           cursor = event.id;
           callbacks.event(event);
@@ -229,14 +257,15 @@ export class ExternalBackend implements AgentBackend {
               event.type === "turn_failed" ||
               event.type === "turn_aborted")
           ) {
-            this.polls.delete(taskId);
+            if (this.polls.get(taskId) === controller)
+              this.polls.delete(taskId);
             return;
           }
         }
       }
     } catch (error) {
       if (!controller.signal.aborted) {
-        this.polls.delete(taskId);
+        if (this.polls.get(taskId) === controller) this.polls.delete(taskId);
         callbacks.disconnected(
           error instanceof Error ? error : new Error(String(error)),
         );

@@ -1,3 +1,4 @@
+import type { ExecutionBinding } from "./run";
 import type { RuntimeModelOption } from "./modelReasoning";
 import type { CollectionRef, ItemRef } from "./item";
 import type { SessionContext } from "./session";
@@ -189,6 +190,8 @@ export const DEFAULT_ANNOTATION_COLORS: Readonly<
 };
 
 export interface TextAnnotationDraft {
+  id?: string;
+  importance?: "key" | "supporting";
   type: "highlight" | "underline";
   page: number;
   quote: string;
@@ -199,9 +202,11 @@ export interface TextAnnotationDraft {
 /**
  * A page region expressed as [x, y, width, height] in a top-left-origin,
  * 0-1000 coordinate space. The host converts it to PDF coordinates only
- * after the complete annotation batch has passed validation.
+ * for each eligible entry during batch preflight.
  */
 export interface ImageAnnotationDraft {
+  id?: string;
+  importance?: "key" | "supporting";
   type: "image";
   page: number;
   rect: [number, number, number, number];
@@ -266,7 +271,16 @@ export type ArtifactBody =
 export type ArtifactStatus = "draft" | "ready" | "committed";
 
 export interface ArtifactWriteback {
-  state: "none" | "pending" | "committed" | "failed";
+  state: "none" | "pending" | "committed" | "partial" | "unknown" | "failed";
+  operationId?: string;
+  entries?: unknown[];
+  operationIds?: string[];
+  /** Legacy read compatibility; new projections retain only operation ids. */
+  receipts?: Array<{
+    revision?: number;
+    operationId?: string;
+    entries?: unknown[];
+  }>;
   target:
     | "zotero_note"
     | "zotero_annotations"
@@ -289,6 +303,7 @@ export interface ArtifactRevision {
 }
 
 export interface ArtifactRecord {
+  execution?: ExecutionBinding;
   id: string;
   /** Session and task are one-to-one in schema v2. */
   sessionId: string;
@@ -813,6 +828,9 @@ function isAnnotationDraft(value: unknown): value is AnnotationDraft {
   const annotation = recordOf(value);
   if (
     !annotation ||
+    !optionalString(annotation.id) ||
+    (annotation.importance !== undefined &&
+      !["key", "supporting"].includes(String(annotation.importance))) ||
     !isAnnotationType(annotation.type) ||
     !isAnnotationPage(annotation.page) ||
     !optionalHexColor(annotation.color)
@@ -1001,7 +1019,7 @@ function isArtifactWriteback(value: unknown): boolean {
   const writeback = recordOf(value);
   return Boolean(
     writeback &&
-    ["none", "pending", "committed", "failed"].includes(
+    ["none", "pending", "committed", "partial", "unknown", "failed"].includes(
       String(writeback.state),
     ) &&
     [

@@ -9,6 +9,8 @@ export function createTaskList(
     status: (task: ResearchTaskRecord) => string;
     open: (id: string) => void;
     remove: (id: string) => void;
+    exportTrace: (id: string) => void;
+    isExporting?: (id: string) => boolean;
   },
 ): (tasks: ResearchTaskRecord[], active: string | null) => void {
   const search = doc.createElementNS(NS, "input") as HTMLInputElement;
@@ -57,6 +59,15 @@ export function createTaskList(
       trigger.setAttribute("aria-expanded", "false");
       trigger.addEventListener("click", () =>
         openActionMenu(trigger, [
+          {
+            label: options.text(
+              options.isExporting?.(task.id)
+                ? "workspace-export-trace-running"
+                : "workspace-export-trace",
+            ),
+            disabled: options.isExporting?.(task.id),
+            run: () => options.exportTrace(task.id),
+          },
           {
             label: options.text("workspace-delete-task"),
             danger: true,

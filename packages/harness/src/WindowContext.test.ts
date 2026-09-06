@@ -289,7 +289,7 @@ test("resume preserves the spent budget and reuses a completed write after a res
       {
         toolCalls: [
           {
-            id: "reconstructed",
+            id: "committed",
             name: "create_collection",
             args: { name: "Only once" },
           },

@@ -1264,7 +1264,7 @@ export const TUI_CSS = `
 .confucius-task-open small { display: block; margin-top: 6px; color: var(--confucius-muted); font-size: .82em; }
 .confucius-task-row[data-task-status=running] .confucius-task-open small,
 .confucius-task-row[data-task-status=awaiting_approval] .confucius-task-open small { color: var(--confucius-accent-text); }
-.confucius-task-empty { padding: 8px; color: var(--confucius-muted); font-size: .9em; }
+.confucius-session-pane .confucius-task-empty { padding: 8px; color: var(--confucius-muted); font-size: .9em; }
 .confucius-activity-shell { max-width: 880px; margin: 0 auto; padding-bottom: 16px; }
 .confucius-activity-head { display: none; }
 .confucius-task-overview { border: 0; padding: 8px 0 20px; }

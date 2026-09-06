@@ -1,3 +1,4 @@
+import { validateArgs } from "@confucius/harness";
 import type {
   AgentBackendKind,
   ArtifactRecord,
@@ -6,6 +7,7 @@ import type {
   ToolDefinition,
   ToolResult,
   ToolRuntimeMeta,
+  ToolExecutionContext,
 } from "@confucius/protocol";
 import { artifactBodyMatchesKind, isArtifactKind } from "@confucius/protocol";
 import type { ToolProvider } from "@confucius/harness";
@@ -39,6 +41,8 @@ const markdownBodySchema = {
 const annotationBodySchema = {
   type: "object",
   properties: {
+    id: { type: "string" },
+    importance: { type: "string", enum: ["key", "supporting"] },
     type: { type: "string", enum: ["highlight", "underline", "image"] },
     page: { type: "integer", minimum: 1 },
     quote: { type: "string" },
@@ -437,6 +441,8 @@ export class ArtifactToolProvider implements ToolProvider {
     private readonly backend: AgentBackendKind,
     private readonly sourceContextIds: string[],
     private readonly onUpsert: (artifact: ArtifactRecord) => void,
+    private readonly execution?: () =>
+      import("@confucius/protocol").ExecutionBinding | undefined,
   ) {}
 
   listTools(): ToolDefinition[] {
@@ -458,7 +464,62 @@ export class ArtifactToolProvider implements ToolProvider {
     return name === ARTIFACT_UPSERT_TOOL ? schema : undefined;
   }
 
-  async call(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+  async prepare(
+    name: string,
+    args: Record<string, unknown>,
+    context: ToolExecutionContext = {},
+  ) {
+    args.body = normalizeArtifactBodyArgument(args.body);
+    const invalid = validateArgs(name, this.getSchema(name), args);
+    if (
+      invalid &&
+      isArtifactKind(args.kind) &&
+      !artifactBodyMatchesKind(args.kind, args.body)
+    ) {
+      return {
+        ...invalid,
+        message: `${invalid.message}. Expected ${artifactBodyShapeHint(args.kind)}. ${artifactBodyDiagnostic(args.body)}`,
+      };
+    }
+    if (invalid) return invalid;
+    args.id ??= this.store.allocateId();
+    const existing = await this.store.get(String(args.id));
+    if (existing && existing.taskId !== this.taskId)
+      return {
+        ok: false as const,
+        toolName: name,
+        code: "permission_denied" as const,
+        effect: "none" as const,
+        message: "Artifact belongs to another task",
+      };
+    context.expected ??= {};
+    context.expected[`artifact:${args.id}`] ??= String(existing?.revision ?? 0);
+    context.expectedAfter ??= {};
+    context.expectedAfter.artifactRevision ??= String(
+      Number(context.expected[`artifact:${args.id}`]) + 1,
+    );
+    context.resources = [`artifact:${args.id}`];
+    context.preparedOperation = {
+      schemaVersion: 1,
+      domain: "artifact",
+      name,
+      args: { ...args },
+      resources: context.resources,
+      recovery: {
+        taskId: this.taskId,
+        expectedRevision: Number(context.expected[`artifact:${args.id}`]),
+        artifactRevision: Number(context.expectedAfter.artifactRevision),
+      },
+    };
+    return null;
+  }
+
+  async call(
+    name: string,
+    args: Record<string, unknown>,
+    _signal?: AbortSignal,
+    context: ToolExecutionContext = {},
+  ): Promise<ToolResult> {
     if (name !== ARTIFACT_UPSERT_TOOL) {
       return {
         ok: false,
@@ -467,6 +528,8 @@ export class ArtifactToolProvider implements ToolProvider {
         message: "Unknown artifact tool",
       };
     }
+    const invalid = await this.prepare(name, args, context);
+    if (invalid) return invalid;
     const normalizedArgs: Record<string, unknown> = {
       ...args,
       body: normalizeArtifactBodyArgument(args.body),
@@ -490,14 +553,36 @@ export class ArtifactToolProvider implements ToolProvider {
         },
         this.backend,
         this.sourceContextIds,
+        Number(context.expected?.[`artifact:${args.id}`]),
+        this.execution?.(),
       );
-      this.onUpsert(artifact);
-      return { ok: true, toolName: name, data: { artifact } };
+      const warnings: string[] = [];
+      try {
+        this.onUpsert(artifact);
+      } catch (error) {
+        warnings.push(
+          `Artifact was saved; updating the task view failed: ${String(error)}`,
+        );
+      }
+      return {
+        ok: true,
+        toolName: name,
+        effect: "applied",
+        data: { artifact },
+        warnings,
+      };
     } catch (error) {
       return {
         ok: false,
         toolName: name,
-        code: "invalid_args",
+        code: "unavailable",
+        effect:
+          /changed after preflight|belongs to another task|cannot change|Invalid artifact/.test(
+            String(error),
+          )
+            ? "none"
+            : "unknown",
+        retryable: false,
         message: error instanceof Error ? error.message : String(error),
       };
     }

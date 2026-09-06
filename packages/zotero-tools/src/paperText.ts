@@ -1,12 +1,24 @@
 const SECTION_PATTERNS: Array<{ name: string; pattern: RegExp }> = [
   { name: "abstract", pattern: /^abstract\b/i },
-  { name: "introduction", pattern: /^(?:\d+\.?\s*)?(introduction|background)\b/i },
-  { name: "related_work", pattern: /^(?:\d+\.?\s*)?(related\s+work|literature\s+review)\b/i },
-  { name: "methodology", pattern: /^(?:\d+\.?\s*)?(method|methodology|approach)\b/i },
+  {
+    name: "introduction",
+    pattern: /^(?:\d+\.?\s*)?(introduction|background)\b/i,
+  },
+  {
+    name: "related_work",
+    pattern: /^(?:\d+\.?\s*)?(related\s+work|literature\s+review)\b/i,
+  },
+  {
+    name: "methodology",
+    pattern: /^(?:\d+\.?\s*)?(method|methodology|approach)\b/i,
+  },
   { name: "experiments", pattern: /^(?:\d+\.?\s*)?(experiment|evaluation)\b/i },
   { name: "results", pattern: /^(?:\d+\.?\s*)?(result|finding)\b/i },
   { name: "discussion", pattern: /^(?:\d+\.?\s*)?(discussion|analysis)\b/i },
-  { name: "conclusion", pattern: /^(?:\d+\.?\s*)?(conclusion|summary|future\s+work)\b/i },
+  {
+    name: "conclusion",
+    pattern: /^(?:\d+\.?\s*)?(conclusion|summary|future\s+work)\b/i,
+  },
   { name: "references", pattern: /^(references|bibliography)\b/i },
 ];
 
@@ -17,29 +29,29 @@ export interface PaperSection {
 }
 
 export interface PaperPages {
-  pageCount: number;
-  pages: Array<{ page: number; text: string }>;
+  pageCount: number | null;
+  pagination: "form_feed" | "unpaged";
+  pages: Array<{ page: number | null; text: string }>;
 }
 
-export function splitPages(text: string, charsPerPage = 3000): PaperPages {
-  const byFormFeed = text.split("\f").filter((part) => part.trim());
-  if (byFormFeed.length > 1) {
+/** Only explicit page separators can establish page numbers in indexed text. */
+export function splitPages(text: string): PaperPages {
+  if (!text.includes("\f")) {
     return {
-      pageCount: byFormFeed.length,
-      pages: byFormFeed.map((pageText, index) => ({
-        page: index + 1,
-        text: pageText.trim(),
-      })),
+      pageCount: null,
+      pagination: "unpaged",
+      pages: [{ page: null, text }],
     };
   }
-  const pages: Array<{ page: number; text: string }> = [];
-  for (let i = 0; i < text.length; i += charsPerPage) {
-    pages.push({
-      page: pages.length + 1,
-      text: text.slice(i, i + charsPerPage),
-    });
-  }
-  return { pageCount: Math.max(pages.length, 1), pages };
+  const pages = text.split("\f");
+  return {
+    pageCount: pages.length,
+    pagination: "form_feed",
+    pages: pages.map((pageText, index) => ({
+      page: index + 1,
+      text: pageText.trim(),
+    })),
+  };
 }
 
 export function parseSections(text: string): PaperSection[] {
@@ -74,7 +86,10 @@ export function parseSections(text: string): PaperSection[] {
   return sections;
 }
 
-export function findSection(sections: PaperSection[], requested: string): PaperSection | null {
+export function findSection(
+  sections: PaperSection[],
+  requested: string,
+): PaperSection | null {
   const needle = requested.toLowerCase().replace(/\s+/g, "_");
   return (
     sections.find((section) => section.normalizedName === needle) ||
@@ -85,11 +100,13 @@ export function findSection(sections: PaperSection[], requested: string): PaperS
   );
 }
 
-export function requireItemRef(args: Record<string, unknown>): {
-  ok: true;
-  libraryID: number;
-  key: string;
-} | { ok: false; message: string } {
+export function requireItemRef(args: Record<string, unknown>):
+  | {
+      ok: true;
+      libraryID: number;
+      key: string;
+    }
+  | { ok: false; message: string } {
   const libraryID = Number(args.libraryID);
   const key = String(args.key ?? args.itemKey ?? "");
   if (!Number.isInteger(libraryID) || libraryID < 0 || !key) {

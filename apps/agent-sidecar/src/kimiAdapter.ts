@@ -19,6 +19,8 @@ import {
 } from "@agentclientprotocol/sdk";
 import {
   CONFUCIUS_VERSION,
+  runtimeOutcome,
+  RuntimeUsageCounter,
   type ApprovalRequest,
   type ApprovalResolution,
   type PlanStep,
@@ -49,6 +51,9 @@ interface KimiSession {
     { kind: string; name: string; command?: string; path?: string }
   >;
   policyViolationTurnId?: string;
+  usage?: RuntimeUsageCounter;
+  mcpToken?: string;
+  promptCompletion?: Promise<void>;
 }
 
 export class KimiAdapter implements RuntimeAdapter {
@@ -147,6 +152,29 @@ export class KimiAdapter implements RuntimeAdapter {
   ): Promise<RuntimeTurnHandle> {
     let session = this.sessions.get(input.taskId);
     let externalSessionId = input.externalSessionId;
+    let usage = session?.usage;
+    if (session?.mcpToken && session.mcpToken !== input.mcp.token) {
+      externalSessionId = session.sessionId;
+      await this.dispose(input.taskId);
+      session = undefined;
+    }
+    // ACP updates identify a session, not a turn. Drain cancellation before
+    // assigning the next host turn so late output cannot be relabeled.
+    if (session?.turnId && session.promptCompletion) {
+      await this.interrupt(input.taskId);
+      try {
+        await withTimeout(
+          session.promptCompletion,
+          5_000,
+          () => "The previous Kimi request did not stop",
+        );
+      } catch {
+        await this.dispose(input.taskId);
+        session = undefined;
+        externalSessionId = undefined;
+        usage = undefined;
+      }
+    }
     if (
       session &&
       (session.profile !== input.capabilityProfile || session.cwd !== input.cwd)
@@ -212,9 +240,11 @@ export class KimiAdapter implements RuntimeAdapter {
       session.sink = sink;
       session.approvals = approvals;
     }
+    session.usage ??= usage ?? new RuntimeUsageCounter(!externalSessionId);
+    session.mcpToken = input.mcp.token;
     session.turnId = input.turnId;
     const active = session;
-    void active.connection
+    active.promptCompletion = active.connection
       .prompt({
         sessionId: active.sessionId,
         prompt: [
@@ -225,44 +255,50 @@ export class KimiAdapter implements RuntimeAdapter {
         ],
       })
       .then((response) => {
+        if (active.turnId !== input.turnId) return;
         if (active.policyViolationTurnId === input.turnId) {
           active.policyViolationTurnId = undefined;
           active.turnId = undefined;
           return;
         }
-        if (response.stopReason === "cancelled") {
+        const usage = active.usage?.observe(
+          (response as unknown as Record<string, unknown>).usage,
+        );
+        if (usage) active.sink.emit("model_usage_updated", usage, input.turnId);
+        const outcome = runtimeOutcome("kimi", response.stopReason);
+        active.sink.emit(
+          "task_status_changed",
+          { status: outcome.status },
+          input.turnId,
+        );
+        if (outcome.phase === "done")
           active.sink.emit(
-            "task_status_changed",
-            { status: "interrupted" },
+            "turn_completed",
+            { phase: "done", stopReason: outcome.stopReason },
             input.turnId,
           );
-          active.sink.emit(
-            "turn_aborted",
-            { reason: "runtime interrupted" },
-            input.turnId,
-          );
-        } else if (response.stopReason === "refusal") {
-          active.sink.emit(
-            "task_status_changed",
-            { status: "failed" },
-            input.turnId,
-          );
+        else if (outcome.phase === "failed")
           active.sink.emit(
             "turn_failed",
-            { message: "Kimi refused the task" },
+            {
+              message: "Kimi refused or failed to complete the request",
+              stopReason: outcome.stopReason,
+            },
             input.turnId,
           );
-        } else {
+        else
           active.sink.emit(
-            "task_status_changed",
-            { status: "completed" },
+            "turn_aborted",
+            {
+              reason: `Kimi stopped: ${String(response.stopReason ?? "missing terminal status")}`,
+              stopReason: outcome.stopReason,
+            },
             input.turnId,
           );
-          active.sink.emit("turn_completed", { phase: "done" }, input.turnId);
-        }
         active.turnId = undefined;
       })
       .catch((error) => {
+        if (active.turnId !== input.turnId) return;
         if (active.policyViolationTurnId === input.turnId) {
           active.policyViolationTurnId = undefined;
           active.turnId = undefined;
@@ -459,8 +495,26 @@ export class KimiAdapter implements RuntimeAdapter {
     session: KimiSession,
     notification: SessionNotification,
   ): void {
+    if (notification.sessionId !== session.sessionId) return;
     const update = notification.update;
     const turnId = session.turnId ?? "";
+    if (update.sessionUpdate === "usage_update") {
+      const used = update.used,
+        size = update.size;
+      if (typeof used === "number" && Number.isFinite(used) && used >= 0)
+        session.sink.emit(
+          "context_usage_updated",
+          {
+            inputTokens: used,
+            capacityTokens:
+              typeof size === "number" && Number.isFinite(size) && size >= 0
+                ? size
+                : undefined,
+          },
+          turnId,
+        );
+      return;
+    }
     if (update.sessionUpdate === "agent_message_chunk") {
       const text = contentText(update.content);
       if (text) session.sink.emit("text_delta", { text }, turnId);

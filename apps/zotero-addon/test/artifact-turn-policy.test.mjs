@@ -37,36 +37,4 @@ describe("artifact turn policy", () => {
     assert.match(zh, /还没有文件/);
     assert.equal(zh.includes("成功完成的任务会在这里留下可修订产物"), false);
   });
-
-  it("keeps write-tool consent inside the deep-reading research phase", () => {
-    const prompt = source("../../packages/protocol/src/artifactPrompt.ts");
-    const skill = source("../../skills/paper-deep-reading/SKILL.md");
-    const host = source("src/modules/host/AgentHost.ts");
-    const workflow = source("src/modules/host/PresetWorkflow.ts");
-    assert.doesNotMatch(prompt, /commit_annotations/);
-    assert.match(workflow, /approval dialog handles consent/);
-    assert.match(workflow, /do not create the report/);
-    assert.match(workflow, /Do not repeat the reading/);
-    assert.match(skill, /then call `commit_annotations`/);
-    assert.match(skill, /Do not ask for approval in chat/);
-    assert.match(host, /toolWasRequested\(messages, "commit_annotations"\)/);
-    assert.match(host, /new PresetResearchToolProvider/);
-    assert.match(host, /presetResearchToolNames\(workflow\)/);
-    assert.match(host, /presetResearchToolCallInScope/);
-    assert.match(host, /ARTIFACT_UPSERT_TOOL, \.\.\.HISTORY_TOOL_NAMES/);
-    assert.match(host, /startExternalPresetWorkflow/);
-    assert.match(host, /buildWorkflowHandoffFromEvents/);
-    assert.match(host, /externalToolNames/);
-  });
-
-  it("keeps user memory outside preset phases while permitting scoped history", () => {
-    const host = source("src/modules/host/AgentHost.ts");
-    const workflow = source("src/modules/host/PresetWorkflow.ts");
-    assert.match(host, /includeRecallContext: !workflow/);
-    assert.match(host, /includeRecallContext: false/);
-    assert.match(host, /This workflow cannot access memory/);
-    assert.match(workflow, /Preset research is deliberately narrower/);
-    assert.doesNotMatch(workflow, /"memory_search"/);
-    assert.match(workflow, /presetResearchToolNames/);
-  });
 });

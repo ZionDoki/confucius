@@ -14,7 +14,7 @@ function task(): ResearchTaskRecord {
     mode: "agent",
     permissionMode: "ask",
     context: {},
-    schemaVersion: 3,
+    schemaVersion: 4,
     backend: "codex",
     status: "ready",
     capabilityProfile: "zotero_only",
@@ -70,6 +70,44 @@ function callbacks(seen: ConfuciusEvent[]) {
 }
 
 describe("ExternalBackend", () => {
+  it("does not dispatch a superseded start after its cursor read returns late", async () => {
+    let resolveFirst!: (value: SidecarEventPage) => void;
+    const first = new Promise<SidecarEventPage>((resolve) => {
+      resolveFirst = resolve;
+    });
+    let reads = 0;
+    const dispatches: string[] = [];
+    const sidecar = {
+      events: async () =>
+        ++reads === 1
+          ? first
+          : {
+              events: [failedEvent("new-event", "new-turn")],
+              cursorFound: true,
+            },
+      rpc: async (_method: string, params: Record<string, unknown>) => {
+        dispatches.push(String(params.turnId));
+        return { externalSessionId: "provider" };
+      },
+    } as unknown as SidecarClient;
+    const backend = new ExternalBackend("codex", sidecar);
+    const input = {
+      task: task(),
+      turnId: "old-turn",
+      prompt: "test",
+      mode: "agent" as const,
+      capabilityProfile: "zotero_only" as const,
+    };
+    const old = backend.startTurn(input, callbacks([]).value);
+    await backend.startTurn(
+      { ...input, turnId: "new-turn" },
+      callbacks([]).value,
+    );
+    resolveFirst({ events: [], cursorFound: true });
+    assert.deepEqual(await old, { superseded: true });
+    assert.deepEqual(dispatches, ["new-turn"]);
+  });
+
   it("owns runtime probing and quiet analysis behind the backend boundary", async () => {
     const sidecar = {
       listRuntimes: async () => ({

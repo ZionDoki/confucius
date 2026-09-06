@@ -1,4 +1,8 @@
-import type { ModelAdapter, ModelMessage } from "./ModelAdapter";
+import {
+  ModelError,
+  type ModelAdapter,
+  type ModelMessage,
+} from "./ModelAdapter";
 
 export interface CompactionResult {
   /** Compacted history without the system message. */
@@ -10,6 +14,8 @@ export function estimateChars(messages: ModelMessage[]): number {
   let total = 0;
   for (const message of messages) {
     total += message.content.length;
+    if (message.replayState)
+      total += JSON.stringify(message.replayState).length;
     for (const call of message.toolCalls ?? []) {
       total += JSON.stringify(call.args ?? {}).length;
     }
@@ -93,7 +99,13 @@ function tailLengthWithinBudget(
       break;
     }
   }
-  return Math.max(count, Math.min(messages.length, 1));
+  count = Math.max(count, Math.min(messages.length, 1));
+  while (
+    count < messages.length &&
+    messages[messages.length - count]?.role === "tool"
+  )
+    count++;
+  return count;
 }
 
 async function summarize(
@@ -114,5 +126,14 @@ async function summarize(
     },
     signal,
   );
-  return (turn.text ?? "").trim();
+  if (
+    (turn.end !== undefined && turn.end !== "stop") ||
+    !turn.text?.trim() ||
+    turn.toolCalls?.length
+  )
+    throw new ModelError(
+      "Conversation summary did not complete; retain the original history",
+      "protocol",
+    );
+  return turn.text.trim();
 }

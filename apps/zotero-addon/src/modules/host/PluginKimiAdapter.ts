@@ -1,6 +1,9 @@
+import { runtimePath } from "./RuntimeStorage";
 import { kimiModels, selectKimiModel } from "./RuntimeModels";
 import {
   CONFUCIUS_VERSION,
+  runtimeOutcome,
+  RuntimeUsageCounter,
   type ApprovalRequest,
   type ApprovalResolution,
   type PlanStep,
@@ -34,6 +37,9 @@ interface KimiSession {
     { kind: string; name: string; command?: string; path?: string }
   >;
   policyViolationTurnId?: string;
+  usage?: RuntimeUsageCounter;
+  mcpToken?: string;
+  promptCompletion?: Promise<void>;
 }
 
 /** ACP v1 client hosted inside Zotero without a Node transport process. */
@@ -144,6 +150,29 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
   ): Promise<PluginRuntimeTurnHandle> {
     let session = this.sessions.get(input.taskId);
     let externalSessionId = input.externalSessionId;
+    let usage = session?.usage;
+    if (session?.mcpToken && session.mcpToken !== input.mcp.token) {
+      externalSessionId = session.sessionId;
+      await this.dispose(input.taskId);
+      session = undefined;
+    }
+    // ACP updates identify a session, not a turn. Drain cancellation before
+    // assigning the next host turn so late output cannot be relabeled.
+    if (session?.turnId && session.promptCompletion) {
+      await this.interrupt(input.taskId);
+      try {
+        await withTimeout(
+          session.promptCompletion,
+          5_000,
+          "The previous Kimi request did not stop",
+        );
+      } catch {
+        await this.dispose(input.taskId);
+        session = undefined;
+        externalSessionId = undefined;
+        usage = undefined;
+      }
+    }
     if (
       session &&
       (session.profile !== input.capabilityProfile || session.cwd !== input.cwd)
@@ -240,9 +269,11 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
         "Kimi model selection timed out",
       );
     }
+    session.usage ??= usage ?? new RuntimeUsageCounter(!externalSessionId);
+    session.mcpToken = input.mcp.token;
     session.turnId = input.turnId;
     const active = session;
-    void active.rpc
+    active.promptCompletion = active.rpc
       .request<Record<string, unknown>>("session/prompt", {
         sessionId: active.sessionId,
         prompt: [
@@ -259,37 +290,40 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
           active.turnId = undefined;
           return;
         }
-        const stopReason = String(response.stopReason ?? "end_turn");
-        if (stopReason === "cancelled") {
+        const usage = active.usage?.observe(
+          (response as unknown as Record<string, unknown>).usage,
+        );
+        if (usage) active.sink.emit("model_usage_updated", usage, input.turnId);
+        const outcome = runtimeOutcome("kimi", response.stopReason);
+        active.sink.emit(
+          "task_status_changed",
+          { status: outcome.status },
+          input.turnId,
+        );
+        if (outcome.phase === "done")
           active.sink.emit(
-            "task_status_changed",
-            { status: "interrupted" },
+            "turn_completed",
+            { phase: "done", stopReason: outcome.stopReason },
             input.turnId,
           );
-          active.sink.emit(
-            "turn_aborted",
-            { reason: "runtime interrupted" },
-            input.turnId,
-          );
-        } else if (stopReason === "refusal") {
-          active.sink.emit(
-            "task_status_changed",
-            { status: "failed" },
-            input.turnId,
-          );
+        else if (outcome.phase === "failed")
           active.sink.emit(
             "turn_failed",
-            { message: "Kimi refused the task" },
+            {
+              message: "Kimi refused or failed to complete the request",
+              stopReason: outcome.stopReason,
+            },
             input.turnId,
           );
-        } else {
+        else
           active.sink.emit(
-            "task_status_changed",
-            { status: "completed" },
+            "turn_aborted",
+            {
+              reason: `Kimi stopped: ${String(response.stopReason ?? "missing terminal status")}`,
+              stopReason: outcome.stopReason,
+            },
             input.turnId,
           );
-          active.sink.emit("turn_completed", { phase: "done" }, input.turnId);
-        }
         active.turnId = undefined;
       })
       .catch((error) => {
@@ -547,6 +581,23 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
     update: Record<string, unknown>,
   ): void {
     const turnId = session.turnId ?? "";
+    if (update.sessionUpdate === "usage_update") {
+      const used = update.used,
+        size = update.size;
+      if (typeof used === "number" && Number.isFinite(used) && used >= 0)
+        session.sink.emit(
+          "context_usage_updated",
+          {
+            inputTokens: used,
+            capacityTokens:
+              typeof size === "number" && Number.isFinite(size) && size >= 0
+                ? size
+                : undefined,
+          },
+          turnId,
+        );
+      return;
+    }
     if (update.sessionUpdate === "agent_message_chunk") {
       const text = contentText(update.content);
       if (text) session.sink.emit("text_delta", { text }, turnId);
@@ -761,7 +812,7 @@ async function isolatedKimiProbeEnvironment(
 }
 
 async function makeTemporaryDirectory(label: string): Promise<string> {
-  const root = PathUtils.join(Zotero.DataDirectory.dir, "confucius", "tmp");
+  const root = runtimePath("tmp");
   await IOUtils.makeDirectory(root, {
     ignoreExisting: true,
     permissions: 0o700,

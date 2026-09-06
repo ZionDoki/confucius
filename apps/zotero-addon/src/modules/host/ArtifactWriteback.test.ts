@@ -44,7 +44,7 @@ describe("artifact writeback planning", () => {
     ) {
       assert.deepEqual(
         tags.operations.map((operation) => operation.op),
-        ["tag_add", "tag_remove", "tag_add"],
+        ["tag_remove", "tag_add"],
       );
       assert.deepEqual(
         collection.operations.map((operation) => operation.op),
@@ -52,4 +52,51 @@ describe("artifact writeback planning", () => {
       );
     }
   });
+});
+
+it("restores receipts after interruption without pretending a partial batch is complete", async () => {
+  const { recoverPendingWriteback } = await import("./ArtifactWriteback");
+  const previous = {
+    state: "pending" as const,
+    target: "zotero_annotations" as const,
+    revision: 2,
+    operationId: "new",
+    receipts: [{ revision: 1, operationId: "old" }],
+  };
+  const operation = {
+    id: "new",
+    name: "commit_annotations",
+    args: {},
+    context: {},
+    resources: [],
+    startedAt: 1,
+    result: {
+      ok: true as const,
+      toolName: "commit_annotations",
+      effect: "partial" as const,
+      data: {
+        libraryID: 1,
+        attachmentKey: "PDF",
+        committed: [{ annotationKey: "ANN" }],
+        failed: [{ id: "missing" }],
+      },
+    },
+  };
+  const recovered = recoverPendingWriteback(previous, operation);
+  assert.equal(recovered.state, "partial");
+  assert.equal(recovered.targetRef, "1:PDF");
+  assert.deepEqual(recovered.operationIds, ["old", "new"]);
+  assert.equal("receipts" in recovered, false);
+  assert.equal(recovered.entries, undefined);
+  assert.equal(recoverPendingWriteback(previous, null).state, "none");
+  assert.equal(
+    recoverPendingWriteback({ ...previous, operationId: undefined }, null)
+      .state,
+    "unknown",
+  );
+  assert.equal(
+    recoverPendingWriteback(previous, { ...operation, result: undefined })
+      .state,
+    "unknown",
+  );
 });

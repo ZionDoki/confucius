@@ -1,3 +1,4 @@
+import { runtimeDigest } from "../host/RuntimeStorage";
 import {
   CONFUCIUS_EVENTS_PATH,
   CONFUCIUS_HEALTH_PATH,
@@ -5,6 +6,7 @@ import {
   CONFUCIUS_RPC_PATH,
   MCP_TASK_GATEWAY_INSTRUCTIONS,
   negotiateMcpProtocolVersion,
+  type RuntimeTurnLease,
 } from "@confucius/protocol";
 import {
   READ_ONLY_TOOL_NAMES,
@@ -95,7 +97,12 @@ function bearerToken(options?: EndpointOptions): string {
   return match?.[1]?.trim() ?? "";
 }
 
-type McpAuthorization = { kind: "pairing" } | { kind: "task"; taskId: string };
+type McpAuthorization =
+  { kind: "pairing" } | { kind: "task"; lease: RuntimeTurnLease };
+const pendingToolRequests = new Map<
+  string,
+  { request: string; result: Promise<unknown> }
+>();
 
 function authorizeMcp(
   host: AgentHost,
@@ -108,7 +115,12 @@ function authorizeMcp(
     return { kind: "pairing" };
   }
   const capability = host.resolveRuntimeCapability(token);
-  return capability ? { kind: "task", taskId: capability.taskId } : null;
+  return capability
+    ? {
+        kind: "task",
+        lease: capability,
+      }
+    : null;
 }
 
 function parseData(options?: EndpointOptions): Record<string, unknown> {
@@ -301,7 +313,8 @@ export function registerHttpBridge(host: AgentHost): void {
         if (authorization.kind === "task") {
           try {
             const result = await host.rpc("task/toolList", {
-              taskId: authorization.taskId,
+              taskId: authorization.lease.taskId,
+              lease: authorization.lease,
             });
             return json(200, { jsonrpc: "2.0", id, result });
           } catch (error) {
@@ -332,14 +345,51 @@ export function registerHttpBridge(host: AgentHost): void {
         const name = String(params.name ?? "");
         if (authorization.kind === "task") {
           try {
-            const result = await host.rpc("task/toolCall", {
-              taskId: authorization.taskId,
-              name,
-              arguments: params.arguments ?? {},
-              callId: `mcp_${Date.now().toString(36)}_${Math.random()
-                .toString(36)
-                .slice(2, 10)}`,
-            });
+            if (
+              (typeof id !== "string" && typeof id !== "number") ||
+              String(id).length > 200
+            )
+              return json(200, {
+                jsonrpc: "2.0",
+                id,
+                error: {
+                  code: -32600,
+                  message: "Tool calls require a bounded JSON-RPC request id",
+                },
+              });
+            const encodedId = await runtimeDigest(JSON.stringify(id));
+            const callId = `mcp_${authorization.lease.namespace}_${encodedId}`;
+            const request = JSON.stringify(params);
+            const pending = pendingToolRequests.get(callId);
+            if (pending && pending.request !== request)
+              return json(200, {
+                jsonrpc: "2.0",
+                id,
+                error: {
+                  code: -32602,
+                  message:
+                    "Request id already belongs to different tool arguments",
+                },
+              });
+            const promise =
+              pending?.result ??
+              host.rpc("task/toolCall", {
+                taskId: authorization.lease.taskId,
+                lease: authorization.lease,
+                name,
+                arguments: params.arguments ?? {},
+                callId,
+                operationId: callId,
+              });
+            if (!pending)
+              pendingToolRequests.set(callId, { request, result: promise });
+            let result: unknown;
+            try {
+              result = await promise;
+            } finally {
+              if (pendingToolRequests.get(callId)?.result === promise)
+                pendingToolRequests.delete(callId);
+            }
             return json(200, { jsonrpc: "2.0", id, result });
           } catch (error) {
             return json(200, {

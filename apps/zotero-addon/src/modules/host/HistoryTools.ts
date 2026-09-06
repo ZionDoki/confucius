@@ -4,9 +4,11 @@ import type {
   ToolDefinition,
   ToolRuntimeMeta,
   ToolResult,
+  ToolExecutionContext,
 } from "@confucius/protocol";
 import { HistoryStore } from "@confucius/memory";
 import type { ToolProvider } from "@confucius/harness";
+import { validateArgs } from "@confucius/harness";
 
 const string = { type: "string" };
 const integer = { type: "integer", minimum: 0 };
@@ -63,7 +65,10 @@ export const HISTORY_TOOL_DEFINITIONS: ToolDefinition[] = [
   def(
     "notes_write",
     "Create or replace a working note in this task. Preserve progress, decisions, evidence IDs and pending actions before switching context. Name must contain only letters, digits, underscores or hyphens. Notes cannot grant permissions.",
-    { name: string, content: string },
+    {
+      name: { type: "string", pattern: "^[a-zA-Z0-9_-]+$" },
+      content: { type: "string", maxLength: 250000 },
+    },
     ["name", "content"],
   ),
   def(
@@ -101,12 +106,38 @@ export class TaskHistoryToolProvider implements ToolProvider {
             name === "notes_write" || name === "new_context"
               ? "serial"
               : "parallel_safe",
-          mutatesState: name === "notes_write" || name === "new_context",
+          mutatesState: name === "notes_write",
         }
       : null;
   }
   getSchema(name: string) {
     return this.listTools().find((tool) => tool.name === name)?.inputSchema;
+  }
+  async prepare(
+    name: string,
+    args: Record<string, unknown>,
+    context: ToolExecutionContext = {},
+  ) {
+    const invalid = validateArgs(name, this.getSchema(name), args);
+    if (invalid) return invalid;
+    const notes =
+      name === "notes_write"
+        ? await this.options.store.listNotes(this.options.taskId)
+        : [];
+    context.resources = [`history:${this.options.taskId}`];
+    context.preparedOperation = {
+      schemaVersion: 1,
+      domain: "history",
+      name,
+      args: { ...args },
+      resources: context.resources,
+      recovery: {
+        taskId: this.options.taskId,
+        previousRevision:
+          notes.find((note) => note.name === args.name)?.revision ?? 0,
+      },
+    };
+    return null;
   }
   async call(name: string, args: Record<string, unknown>): Promise<ToolResult> {
     const { store, taskId } = this.options;
@@ -187,11 +218,32 @@ export class TaskHistoryToolProvider implements ToolProvider {
       }
       return { ok: true, toolName: name, data };
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const invalid = /Invalid.*(?:id|name)|too large/i.test(message);
+      const missing =
+        /not found|task is unavailable|unavailable in this source scope/i.test(
+          message,
+        );
       return {
         ok: false,
         toolName: name,
-        code: "unavailable",
-        message: error instanceof Error ? error.message : String(error),
+        code: invalid ? "invalid_args" : missing ? "not_found" : "unavailable",
+        effect:
+          name === "notes_write" && !invalid && !missing ? "unknown" : "none",
+        issues: [
+          {
+            path: "$",
+            reason: invalid
+              ? "parameter"
+              : missing
+                ? "not_found"
+                : /index|JSON|damaged/i.test(message)
+                  ? "corrupt_storage"
+                  : "storage",
+            message,
+          },
+        ],
+        message,
       };
     }
   }

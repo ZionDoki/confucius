@@ -69,6 +69,7 @@ describe("task MCP gateway", () => {
     });
     assert.equal(response.status, 200);
     assert.equal(calls.at(-1)?.params.taskId, "task_a");
+    assert.equal(calls.at(-1)?.params.runtimeGateway, "sidecar");
     capabilities.revoke("task_a");
     const revoked = await fetch(origin, {
       method: "POST",

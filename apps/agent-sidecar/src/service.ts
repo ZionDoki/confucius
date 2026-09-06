@@ -172,7 +172,9 @@ export class SidecarService {
 
   private async startTurn(params: Record<string, unknown>): Promise<unknown> {
     if (!this.host.connected) throw new Error("Zotero host is not registered");
-    if (!this.mcpUrl) throw new Error("Sidecar MCP gateway is not ready");
+    const hostMcp = runtimeHostMcp(params.mcp);
+    if (!hostMcp && !this.mcpUrl)
+      throw new Error("Sidecar MCP gateway is not ready");
     const backend = params.backend as AgentBackendKind;
     const adapter = this.adapter(backend);
     const taskId = safeTaskId(String(params.taskId ?? ""));
@@ -194,7 +196,9 @@ export class SidecarService {
         ? params.workingDirectory
         : undefined,
     );
-    const capability = this.capabilities.issue(taskId);
+    // New hosts issue their own execution lease. The legacy proxy remains
+    // explicitly marked and cannot silently adopt a newer host execution.
+    const capability = hostMcp ? undefined : this.capabilities.issue(taskId);
     const input: RuntimeTurnInput = {
       taskId,
       turnId: String(params.turnId ?? `turn_${Date.now().toString(36)}`),
@@ -206,7 +210,7 @@ export class SidecarService {
         typeof params.externalSessionId === "string"
           ? params.externalSessionId
           : undefined,
-      mcp: { url: this.mcpUrl, token: capability.token },
+      mcp: hostMcp ?? { url: this.mcpUrl, token: capability!.token },
       developerInstructions: externalInstructions(capabilityProfile, {
         includeArtifactGuidance: params.includeArtifactGuidance !== false,
         workflowInstruction:
@@ -220,7 +224,11 @@ export class SidecarService {
     try {
       const handle = await adapter.startTurn(input, sink, this.approvals);
       this.activeTasks.set(taskId, adapter.kind);
-      return { ...handle, cwd };
+      return {
+        ...handle,
+        cwd,
+        gatewayBinding: hostMcp ? "host_lease" : "legacy_proxy",
+      };
     } catch (error) {
       sink.emit("task_status_changed", { status: "failed" }, input.turnId);
       sink.emit("turn_failed", { message: errorMessage(error) }, input.turnId);
@@ -264,6 +272,31 @@ export class SidecarService {
 function safeTaskId(value: string): string {
   if (!/^[a-zA-Z0-9_-]+$/.test(value)) throw new Error("Invalid task id");
   return value;
+}
+
+function runtimeHostMcp(
+  value: unknown,
+): { url: string; token: string } | undefined {
+  if (value === undefined) return undefined;
+  const config = value as { url?: unknown; token?: unknown };
+  if (
+    !config ||
+    typeof config.url !== "string" ||
+    typeof config.token !== "string" ||
+    !config.token.trim()
+  )
+    throw new Error(
+      "Host MCP execution binding requires a URL and lease token",
+    );
+  const url = new URL(config.url);
+  if (
+    url.protocol !== "http:" ||
+    !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+  )
+    throw new Error(
+      "Host MCP execution binding must use a loopback HTTP address",
+    );
+  return { url: config.url, token: config.token };
 }
 
 function externalInstructions(

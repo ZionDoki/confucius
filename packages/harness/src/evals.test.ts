@@ -24,13 +24,15 @@ interface EvalCase {
   expectedEventTypes?: string[];
   expectedToolRequests?: number;
   expectedLastEvent?: string;
+  expectedStopReason?: string;
 }
 
 function loadCases(): EvalCase[] {
   return readdirSync(evalsDir)
     .filter((name) => name.endsWith(".json"))
-    .map((name) =>
-      JSON.parse(readFileSync(join(evalsDir, name), "utf8")) as EvalCase,
+    .map(
+      (name) =>
+        JSON.parse(readFileSync(join(evalsDir, name), "utf8")) as EvalCase,
     );
 }
 
@@ -71,6 +73,8 @@ describe("evals/* golden traces", () => {
       if (testCase.expectedLastEvent) {
         assert.equal(types[types.length - 1], testCase.expectedLastEvent);
       }
+      if (testCase.expectedStopReason)
+        assert.equal(result.stopReason, testCase.expectedStopReason);
       assert.ok(result.messages.length > 0);
     });
   }

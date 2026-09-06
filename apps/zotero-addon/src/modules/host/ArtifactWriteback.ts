@@ -61,9 +61,19 @@ export function writebackBodyForTarget(
   if (target === "zotero_tags") {
     return {
       ...body,
-      operations: body.operations.filter(
-        (operation) =>
-          operation.op === "tag_add" || operation.op === "tag_remove",
+      operations: collectTagChanges(body).flatMap(
+        ({ libraryID, key, add, remove }) => [
+          ...add.map((value) => ({
+            op: "tag_add" as const,
+            item: { libraryID, key },
+            value,
+          })),
+          ...remove.map((value) => ({
+            op: "tag_remove" as const,
+            item: { libraryID, key },
+            value,
+          })),
+        ],
       ),
     };
   }
@@ -79,4 +89,69 @@ export function writebackBodyForTarget(
     };
   }
   return body;
+}
+
+/** Recover a UI approval interrupted before its writeback status was saved. */
+export function recoverPendingWriteback(
+  previous: ArtifactWriteback,
+  operation: import("./ReliableToolProvider").OperationRecord | null,
+): ArtifactWriteback {
+  const result = operation?.result;
+  const data = (result?.ok ? result.data : result?.details) as
+    Record<string, unknown> | undefined;
+  const state: ArtifactWriteback["state"] =
+    result?.effect === "partial"
+      ? "partial"
+      : result?.effect === "unknown" ||
+          (operation && !result) ||
+          !previous.operationId
+        ? "unknown"
+        : result?.ok
+          ? "committed"
+          : result
+            ? "failed"
+            : "none";
+  const key =
+    data?.attachmentKey ?? data?.key ?? operation?.context.plannedKeys?.item;
+  const libraryID = data?.libraryID ?? operation?.args.libraryID;
+  const targetRef =
+    typeof data?.targetRef === "string"
+      ? data.targetRef
+      : key && libraryID
+        ? `${libraryID}:${key}`
+        : previous.targetRef;
+  const legacyReceipts = (
+    previous as ArtifactWriteback & {
+      receipts?: Array<{ operationId?: string }>;
+    }
+  ).receipts;
+  const operationIds = [
+    ...new Set(
+      [
+        ...(previous.operationIds ?? []),
+        ...(legacyReceipts ?? []).map((receipt) => receipt.operationId),
+        previous.operationId,
+        operation?.id,
+      ].filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  const recovered: ArtifactWriteback = {
+    ...previous,
+    state,
+    targetRef,
+    operationIds,
+    error:
+      state === "unknown"
+        ? "Write outcome requires verification in Zotero; the old approval was not replayed"
+        : state === "none"
+          ? "Approval was interrupted before execution; review the preview again"
+          : result && !result.ok
+            ? result.message
+            : undefined,
+  };
+  // Native outcomes live in OperationStore. The artifact keeps references,
+  // while callers can project the current receipt when rendering details.
+  delete (recovered as unknown as Record<string, unknown>).receipts;
+  delete recovered.entries;
+  return recovered;
 }

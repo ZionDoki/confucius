@@ -97,6 +97,7 @@ export const RPC_METHODS = {
   taskDelete: "task/delete",
   taskContinue: "task/continue",
   taskEvents: "task/events",
+  taskTrace: "task/trace",
   taskSetMode: "task/setMode",
   taskSetPermissions: "task/setPermissions",
   taskContext: "task/context",
@@ -603,6 +604,8 @@ export function clampUiFontSize(value: unknown): number {
 }
 
 export interface ModelConfigView {
+  runtimeStoragePath?: string;
+  storageStatus?: "ready" | "unsaved";
   baseUrl: string;
   apiKey: string;
   model: string;

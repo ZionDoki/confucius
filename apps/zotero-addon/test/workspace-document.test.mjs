@@ -289,24 +289,6 @@ test("permission changes are committed before prompts and gate auto memory", () 
   );
 });
 
-test("failed native turns keep the last committed conversation recoverable", () => {
-  const host = readFileSync(
-    join(root, "src/modules/host/AgentHost.ts"),
-    "utf8",
-  );
-  assert.equal(
-    host.includes("state.messages = checkpointMessages(checkpoint)"),
-    false,
-  );
-  assert.equal(
-    host.includes("state.messages = context.committedBeforeTurn"),
-    true,
-  );
-  assert.equal(host.includes('call.status === "started"'), true);
-  assert.match(host, /state\.record\.recoverableTurn = \{\s+turnId:/);
-  assert.equal(host.includes("await compactHistory("), false);
-});
-
 test("task switches restore per-task drafts and timeline viewports", () => {
   const view = workspaceSource();
   assert.equal(
@@ -459,9 +441,14 @@ test("long model rounds expose their real stage after tool results", () => {
   assert.equal(view.includes('event.type === "tool_result"'), true);
   assert.equal(view.includes('"workspace-working-pdf-vision"'), true);
   assert.equal(view.includes('className = "tui-waiting-text"'), true);
-  assert.equal(host.includes("suppressParallelVisual"), true);
-  assert.equal(host.includes("omitParallelPageVisual"), true);
-  assert.equal(host.includes("visualOmitted: true"), true);
+  const tools = readFileSync(
+    join(root, "src/modules/tools/ZoteroToolHost.ts"),
+    "utf8",
+  );
+  assert.match(tools, /renderingLocks/);
+  assert.match(tools, /renderingAllowed/);
+  assert.match(view, /tool_progress/);
+  assert.match(host, /onProgress/);
 });
 
 test("timeline is TUI-style: foldable thinking/tools, unfolded answers", () => {
@@ -730,7 +717,6 @@ test("reading loop: selection menu, locate links and write-back navigation", () 
   assert.equal(entry.includes("openWorkspace"), true);
   assert.equal(entry.includes("confucius-prompt"), true);
   assert.equal(hooks.includes("registerReaderContextMenu()"), true);
-  assert.equal(hooks.includes("unregisterReaderContextMenu()"), true);
   assert.equal(enFtl.includes("confucius-reader-entry-tooltip"), false);
   assert.equal(zhFtl.includes("confucius-reader-entry-tooltip"), false);
 
@@ -743,25 +729,7 @@ test("reading loop: selection menu, locate links and write-back navigation", () 
   );
   assert.equal(tools.includes("export async function findPdf"), true);
 
-  // Commit write-back synchronizes the active reader and navigates to the
-  // actual annotation, instead of relying on a delayed item notification.
-  assert.equal(tools.includes("await reader.setAnnotations(created)"), true);
-  assert.equal(
-    tools.includes("notifierData: { instanceID: reader._instanceID }"),
-    true,
-  );
-  assert.equal(
-    tools.includes("Components.utils.cloneInto(\n      position"),
-    true,
-  );
-  assert.equal(
-    tools.includes("reader.navigate?.({ annotationID: firstAnnotationKey })"),
-    true,
-  );
-  assert.equal(tools.includes("pageIndex: first?.position?.pageIndex"), true);
-  assert.equal(tools.includes("attachmentKey: pdf?.key"), true);
-  assert.equal(tools.includes("annotationKey: first?.key"), true);
-
+  // Native reader effects and partial recovery are covered by ZoteroToolHost behavior tests.
   // reader/open resolves parent items to their PDF attachment.
   assert.equal(host.includes("annotationID: annotationKey"), true);
   assert.equal(host.includes("const pdf = await findPdf(item)"), true);
@@ -892,9 +860,9 @@ test("triage entry and knowledge output: item menu, launch queue, propose_note",
   assert.equal(rpc.includes('taskBranch: "task/branch"'), true);
   const directReplyNote = host.slice(
     host.indexOf("private async noteProposeFromReply"),
-    host.indexOf("private queueReplyNote"),
+    host.indexOf("private async queueReplyNote"),
   );
-  assert.equal(directReplyNote.includes('executeTool("propose_note"'), true);
+  assert.equal(/executeTool\(\s*"propose_note"/.test(directReplyNote), true);
   assert.equal(directReplyNote.includes("queueReplyNote"), false);
   assert.equal(directReplyNote.includes("approval_required"), false);
   assert.equal(view.includes('rpc("note/propose-from-session"'), false);

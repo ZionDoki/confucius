@@ -7,6 +7,7 @@ import type {
 import { assertParallelSafeInvariant } from "./ConcurrencyScheduler";
 import { isAbortError } from "./abort";
 import { normalizeResult, normalizeThrown } from "./ResultNormalizer";
+import { assertSupportedSchema } from "./SchemaValidate";
 
 export type ToolHandler = (
   args: Record<string, unknown>,
@@ -33,6 +34,7 @@ export class MemoryToolProvider {
       );
     }
     assertParallelSafeInvariant(meta);
+    assertSupportedSchema(definition.inputSchema);
     this.tools.set(definition.name, { definition, meta, handler });
   }
 

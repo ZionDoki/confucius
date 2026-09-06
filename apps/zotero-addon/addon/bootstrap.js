@@ -21,7 +21,9 @@ function formatBootstrapError(error) {
 }
 
 function logBootstrapError(label, error) {
-  Zotero.debug(`[Confucius] ${label}: ${formatBootstrapError(error)}`);
+  const message = `[Confucius] ${label}: ${formatBootstrapError(error)}`;
+  Zotero.debug(message);
+  Zotero.logError(new Error(message));
 }
 
 async function startup({ id, version, resourceURI, rootURI }, reason) {
@@ -36,11 +38,11 @@ async function startup({ id, version, resourceURI, rootURI }, reason) {
   const ctx = { rootURI };
   ctx._globalThis = ctx;
 
-  Services.scriptloader.loadSubScript(
-    `${rootURI}/content/scripts/__addonRef__.js`,
-    ctx,
-  );
   try {
+    Services.scriptloader.loadSubScript(
+      `${rootURI}/content/scripts/__addonRef__.js`,
+      ctx,
+    );
     const instance = Zotero.__addonInstance__;
     if (!instance?.hooks?.onStartup) {
       throw new Error("Confucius plugin instance missing hooks.onStartup");

@@ -37,6 +37,20 @@ export interface HistoryQuery {
   sourceIds?: string[];
 }
 
+export interface HistoryExport {
+  windows: ContextWindowState[];
+  items: Array<HistoryItem & { content?: string; error?: string }>;
+  notes: Array<{
+    name: string;
+    revision: number;
+    current: boolean;
+    content?: string;
+    error?: string;
+  }>;
+  unindexed: Array<{ path: string; content?: string; error?: string }>;
+  issues: string[];
+}
+
 const safeId = (id: string) => {
   if (!/^[\w-]+$/.test(id)) throw new Error("Invalid history identifier");
   return id;
@@ -199,6 +213,7 @@ export class HistoryStore {
       const index = await this.load(task.id);
       if (index.deleted) continue;
       for (const item of index.items) {
+        if (item.purpose === "diagnostic") continue;
         if (query.windowId && query.windowId !== item.windowId) continue;
         // A scoped evidence workflow may only see records wholly inside its sources.
         if (
@@ -275,6 +290,7 @@ export class HistoryStore {
       );
     if (
       !item ||
+      item.purpose === "diagnostic" ||
       (sourceIds &&
         (!item.sourceIds.length ||
           item.sourceIds.some((id) => !sourceIds.includes(id))))
@@ -346,5 +362,123 @@ export class HistoryStore {
   }
   async flush(): Promise<void> {
     await this.queue;
+  }
+
+  /** Diagnostic read: full bodies and note revisions, never retrieval excerpts. */
+  async exportTask(taskId: string): Promise<HistoryExport> {
+    await this.queue;
+    safeId(taskId);
+    if (!this.tasks.has(taskId)) throw new Error("History task is unavailable");
+    const result: HistoryExport = {
+      windows: [],
+      items: [],
+      notes: [],
+      unindexed: [],
+      issues: [],
+    };
+    let manifest: Manifest | undefined;
+    try {
+      manifest = JSON.parse(
+        JSON.stringify(await this.load(taskId)),
+      ) as Manifest;
+    } catch (error) {
+      result.issues.push(`History index: ${String(error)}`);
+    }
+    if (manifest?.deleted) throw new Error("History task was deleted");
+    result.windows = manifest?.windows ?? [];
+    const read = async (path: string) => {
+      try {
+        return { content: await this.fs.readFile(path) };
+      } catch (error) {
+        const message = String(error);
+        result.issues.push(
+          `${path.slice(this.path(taskId, "").length)}: ${message}`,
+        );
+        return { error: message };
+      }
+    };
+    const list = async (path: string) => {
+      try {
+        return await this.fs.listFiles(path);
+      } catch (error) {
+        result.issues.push(`${path}: ${String(error)}`);
+        return [];
+      }
+    };
+    const indexed = new Set<string>();
+    for (const item of manifest?.items ?? []) {
+      try {
+        if (!item || item.taskId !== taskId)
+          throw new Error("History item belongs to another task or is invalid");
+        const path = this.path(
+          taskId,
+          `windows/${safeId(item.windowId)}/${safeId(item.itemId)}.txt`,
+        );
+        indexed.add(path);
+        result.items.push({ ...item, ...(await read(path)) });
+      } catch (error) {
+        const message = `History item ${item?.itemId ?? "unknown"}: ${String(error)}`;
+        result.issues.push(message);
+        result.items.push({ ...item, error: message });
+      }
+    }
+    const windowsDir = this.path(taskId, "windows/");
+    const windowIds = new Set<string>();
+    for (const window of result.windows) {
+      if (window && typeof window.id === "string" && /^[\w-]+$/.test(window.id))
+        windowIds.add(window.id);
+      else result.issues.push("Invalid context window in history index");
+    }
+    for (const path of await list(windowsDir)) {
+      if (!path.startsWith(windowsDir)) continue;
+      const id = path.slice(windowsDir.length).split("/")[0];
+      if (/^[\w-]+$/.test(id)) windowIds.add(id);
+    }
+    for (const id of windowIds) {
+      for (const path of await list(`${windowsDir}${id}`)) {
+        if (
+          indexed.has(path) ||
+          !path.startsWith(`${windowsDir}${id}/`) ||
+          !/^[\w-]+\.txt$/.test(path.slice(`${windowsDir}${id}/`.length))
+        )
+          continue;
+        result.unindexed.push({
+          path: path.slice(this.path(taskId, "").length),
+          ...(await read(path)),
+        });
+      }
+    }
+    const notesDir = this.path(taskId, "notes/");
+    const noteFiles = new Set(await list(notesDir));
+    for (const note of manifest?.notes ?? []) {
+      if (
+        note &&
+        typeof note.name === "string" &&
+        /^[\w-]+$/.test(note.name) &&
+        Number.isSafeInteger(note.revision) &&
+        note.revision > 0
+      )
+        noteFiles.add(`${notesDir}${note.name}_${note.revision}.txt`);
+      else result.issues.push("Invalid working note in history index");
+    }
+    for (const path of [...noteFiles].sort()) {
+      if (!path.startsWith(notesDir)) continue;
+      const match = /^([\w-]+)_(\d+)\.txt$/.exec(path.slice(notesDir.length));
+      if (!match) continue;
+      const [, name, revision] = match;
+      result.notes.push({
+        name,
+        revision: Number(revision),
+        current: !!manifest?.notes.some(
+          (n) => n?.name === name && n.revision === Number(revision),
+        ),
+        ...(await read(path)),
+      });
+    }
+    if (result.unindexed.length)
+      result.issues.push(
+        `${result.unindexed.length} history files were not in the index; their original contents are included.`,
+      );
+    return result;
   }
 }

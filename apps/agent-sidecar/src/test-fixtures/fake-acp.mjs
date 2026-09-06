@@ -8,6 +8,8 @@ if (process.argv.includes("--version")) {
 const lines = createInterface({ input: process.stdin });
 let pendingPrompt = null;
 let pendingPermission = null;
+let lastSetup;
+let mcpAuthorization;
 function send(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
@@ -38,6 +40,10 @@ for await (const line of lines) {
     continue;
   }
   if (message.method === "session/new") {
+    lastSetup = message.method;
+    mcpAuthorization = message.params?.mcpServers?.[0]?.headers?.find(
+      (header) => header.name === "Authorization",
+    )?.value;
     if (process.argv.includes("--auth-on-session-new")) {
       send({
         jsonrpc: "2.0",
@@ -57,6 +63,10 @@ for await (const line of lines) {
     message.method === "session/load" ||
     message.method === "session/resume"
   ) {
+    lastSetup = message.method;
+    mcpAuthorization = message.params?.mcpServers?.[0]?.headers?.find(
+      (header) => header.name === "Authorization",
+    )?.value;
     send({ jsonrpc: "2.0", id: message.id, result: {} });
     continue;
   }
@@ -76,6 +86,22 @@ for await (const line of lines) {
   if (message.method === "session/prompt") {
     const sessionId = message.params.sessionId;
     const prompt = JSON.stringify(message.params.prompt || []);
+    const expectedLease = prompt.match(/verify-lease:([a-z]+)/)?.[1];
+    if (
+      expectedLease &&
+      (!["session/resume", "session/load"].includes(lastSetup) ||
+        mcpAuthorization !== `Bearer ${expectedLease}`)
+    ) {
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: {
+          code: -32000,
+          message: "MCP lease was not reconfigured on resume",
+        },
+      });
+      continue;
+    }
     if (prompt.includes("crash-runtime")) {
       setTimeout(() => process.exit(7), 5);
       continue;
@@ -195,7 +221,23 @@ for await (const line of lines) {
         send({
           jsonrpc: "2.0",
           id: message.id,
-          result: { stopReason: "end_turn" },
+          result: {
+            ...(prompt.includes("missing-status")
+              ? {}
+              : {
+                  stopReason:
+                    prompt.match(/terminal=([a-z_]+)/)?.[1] ?? "end_turn",
+                }),
+            ...(prompt.includes("usage")
+              ? {
+                  usage: {
+                    inputTokens: 100,
+                    outputTokens: 20,
+                    totalTokens: 120,
+                  },
+                }
+              : {}),
+          },
         }),
       10,
     );

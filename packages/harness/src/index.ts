@@ -1,5 +1,5 @@
 export { BudgetAccountant } from "./BudgetAccountant";
-export type { BudgetLimits } from "./BudgetAccountant";
+export type { BudgetLimits, BudgetSnapshot } from "./BudgetAccountant";
 export {
   compactHistory,
   estimateChars,
@@ -38,10 +38,12 @@ export {
   describeNonJsonModelBody,
   detectApiStyle,
   normalizeOpenAICompatibleBaseUrl,
+  resolveModelProfile,
 } from "./OpenAICompatibleAdapter";
 export type {
   ApiStyle,
   OpenAICompatibleConfig,
+  ModelProfile,
 } from "./OpenAICompatibleAdapter";
 export {
   listEndpointModels,
@@ -51,7 +53,7 @@ export {
 } from "./modelsList";
 export type { ListModelsInput, ListModelsResult } from "./modelsList";
 export { truncateToolResult, MAX_TOOL_RESULT_CHARS } from "./truncate";
-export { ScriptedModel } from "./ModelAdapter";
+export { ScriptedModel, ModelError } from "./ModelAdapter";
 export type {
   ModelAdapter,
   ModelMessage,
@@ -59,12 +61,27 @@ export type {
   ModelToolCall,
   ModelTurn,
   ModelUsage,
+  ModelEnd,
+  ModelReplayState,
+  ModelErrorCode,
 } from "./ModelAdapter";
+export { DEFAULT_MODEL_TIMEOUTS } from "./ModelDeadline";
+export type { ModelTimers, ModelTimeouts } from "./ModelDeadline";
 export { PermissionGate } from "./PermissionGate";
 export { normalizeResult, normalizeThrown } from "./ResultNormalizer";
-export { validateArgs } from "./SchemaValidate";
+export {
+  validateArgs,
+  validateValue,
+  validateArgumentShape,
+  assertSupportedSchema,
+} from "./SchemaValidate";
 export { TurnLoop } from "./TurnLoop";
-export type { TurnLoopDeps, TurnLoopInput, TurnLoopResult } from "./TurnLoop";
+export type {
+  TurnLoopDeps,
+  TurnLoopInput,
+  TurnLoopResult,
+  TurnStopReason,
+} from "./TurnLoop";
 export { abortError, errorMessage, isAbortError } from "./abort";
 
 export { WindowContext, estimateRequestTokens } from "./WindowContext";

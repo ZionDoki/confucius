@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { ArtifactStore, type ArtifactFileSystem } from "./ArtifactStore";
+import type { ToolExecutionContext } from "@confucius/protocol";
 import {
   ARTIFACT_UPSERT_DEFINITION,
   ArtifactToolProvider,
@@ -222,7 +223,7 @@ describe("ArtifactStore", () => {
     fs.files.set(path, JSON.stringify(corrupted));
 
     const reader = new ArtifactStore("artifacts", fs);
-    assert.equal(await reader.get("art_corrupt"), null);
+    await assert.rejects(reader.get("art_corrupt"), /damaged/);
   });
 
   it("keeps the target but clears stale commit metadata on a new revision", async () => {
@@ -323,6 +324,72 @@ describe("ArtifactStore", () => {
 });
 
 describe("artifact_upsert contract", () => {
+  it("preserves a saved artifact when its UI callback fails and detects an intervening revision", async () => {
+    const fs = new MemoryFileSystem();
+    const store = new ArtifactStore(
+      "artifacts",
+      fs,
+      () => 1,
+      () => "stable_artifact",
+    );
+    const provider = new ArtifactToolProvider(
+      store,
+      "task",
+      "native",
+      [],
+      () => {
+        throw new Error("View unavailable");
+      },
+    );
+    const context: ToolExecutionContext = {};
+    const args = {
+      kind: "report",
+      title: "Report",
+      body: { type: "markdown", markdown: "Original evidence" },
+    };
+    assert.equal(
+      await provider.prepare("artifact_upsert", args, context),
+      null,
+    );
+    const first = await provider.call(
+      "artifact_upsert",
+      args,
+      undefined,
+      context,
+    );
+    assert.equal(first.ok, true);
+    assert.equal(first.effect, "applied");
+    assert.match(first.warnings?.join(" ") ?? "", /saved.*view/i);
+    assert.equal((await store.get("stable_artifact"))?.revision, 1);
+    const update = {
+      ...args,
+      body: { type: "markdown", markdown: "Agent revision" },
+    };
+    const planned: ToolExecutionContext = {};
+    await provider.prepare("artifact_upsert", update, planned);
+    await store.upsert(
+      {
+        id: "stable_artifact",
+        taskId: "task",
+        kind: "report",
+        title: "Report",
+        body: { type: "markdown", markdown: "Human revision" },
+      },
+      "native",
+    );
+    const stale = await provider.call(
+      "artifact_upsert",
+      update,
+      undefined,
+      planned,
+    );
+    assert.equal(stale.ok, false);
+    assert.equal(stale.effect, "none");
+    assert.deepEqual((await store.get("stable_artifact"))?.body, {
+      type: "markdown",
+      markdown: "Human revision",
+    });
+  });
   it("advertises every typed body and the non-obvious markdown mapping", () => {
     const body = ARTIFACT_UPSERT_DEFINITION.inputSchema.properties.body as {
       oneOf?: Array<Record<string, unknown>>;

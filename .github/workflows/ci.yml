@@ -56,8 +56,10 @@ jobs:
         with:
           name: Confucius ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
           body_path: ${{ runner.temp }}/release-notes.md
           fail_on_unmatched_files: true
           files: |
             apps/zotero-addon/.scaffold/build/confucius.xpi
-            apps/zotero-addon/.scaffold/build/update.json
+            apps/zotero-addon/.scaffold/build/update*.json

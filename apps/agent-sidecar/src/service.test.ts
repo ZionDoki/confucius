@@ -174,12 +174,17 @@ test("workspace turns require an absolute real path and shutdown releases them",
       workingDirectory: selected,
       includeArtifactGuidance: false,
       workflowInstruction: "RESEARCH PHASE ONLY",
+      mcp: {
+        url: "http://127.0.0.1:23119/confucius/v1/mcp",
+        token: "host-issued-execution-lease",
+      },
     });
     assert.equal(inputs[0]?.cwd, await realpath(selected));
-    assert.match(
-      inputs[0]?.developerInstructions ?? "",
-      /RESEARCH PHASE ONLY/,
-    );
+    assert.deepEqual(inputs[0]?.mcp, {
+      url: "http://127.0.0.1:23119/confucius/v1/mcp",
+      token: "host-issued-execution-lease",
+    });
+    assert.match(inputs[0]?.developerInstructions ?? "", /RESEARCH PHASE ONLY/);
     assert.doesNotMatch(
       inputs[0]?.developerInstructions ?? "",
       /artifact_upsert/,
