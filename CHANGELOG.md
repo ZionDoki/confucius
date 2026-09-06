@@ -4,6 +4,14 @@
 
 ### Changed
 
+- Artifacts open in independent, resizable windows with native window controls.
+  Reopening a report focuses its existing window; switching tasks or closing the
+  Confucius workspace keeps reports open. Reports share the configured language
+  and typography. Latest revisions preserve the reading position, while selected
+  historical revisions remain pinned.
+- Writeback previews and final confirmation stay inside the report window.
+  Closing or cancelling an unconfirmed preview withdraws its pending approval,
+  including requests that finish preparing after the window closes.
 - Research reports keep a one-minute overview inside the document, followed by
   the method, cited evidence and limitations. Reviews update the same report
   and keep the overview consistent with corrected findings.
@@ -26,12 +34,16 @@
 
 ### Validation and known limits
 
-- The development changes pass 774 automated tests, type checking, lint, build,
+- The development changes pass 781 automated tests, type checking, lint, build,
   skill synchronization and version consistency checks on Windows with Node.js 24.
 - Deterministic report-editing tests cover atomic overview/evidence corrections,
   concurrent edits, citation preservation, bounded reads, source-review
   prerequisites and interrupted writes. See the
   [report revision contract and checks](.github/maintainers/research-reports.md).
+- A temporary preview loaded into normally launched Zotero 10.0.1 on Windows
+  verifies independent windows, narrow layouts, revision following, selection
+  and scroll preservation, and PDF source navigation. It uses an in-memory
+  report copy and simulated writeback receipts; no installed package is replaced.
 - The new report workflow has not yet been tested with a real model in an
   installed Zotero build. Smaller edit payloads are measured as UTF-8 bytes,
   not billed tokens or an end-to-end success-rate improvement.

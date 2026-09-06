@@ -801,154 +801,6 @@ export const TUI_CSS = `
 .confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-file-open {
   display: none;
 }
-.confucius-artifact-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 1000;
-  display: block;
-  padding: 0;
-  box-sizing: border-box;
-  background:
-    var(--confucius-paper);
-  backdrop-filter: none;
-  animation: confucius-artifact-overlay-in 150ms ease-out;
-}
-.confucius-artifact-overlay[data-refresh="true"] { animation: none; }
-.confucius-artifact-overlay[data-mount="window"] { position: fixed; }
-.confucius-artifact-overlay a {
-  color: var(--confucius-accent);
-  text-decoration: underline;
-  text-decoration-color: var(--confucius-line-strong);
-  text-underline-offset: 2px;
-  cursor: pointer;
-}
-.confucius-artifact-dialog {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-.confucius-artifact-action-rail {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  right: 12px;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  width: 40px;
-  min-width: 0;
-  min-height: 0;
-  padding: 14px 0;
-  border: 0;
-  background: transparent;
-  box-sizing: border-box;
-  pointer-events: none;
-}
-.confucius-artifact-rail-spacer { flex: 1 1 auto; }
-.confucius-artifact-rail-divider {
-  width: 16px;
-  height: 1px;
-  flex: 0 0 1px;
-  margin: 1px 0 3px;
-  background: transparent;
-}
-.confucius-artifact-rail-button,
-.confucius-artifact-menu-trigger {
-  appearance: none;
-  position: relative;
-  width: 40px;
-  height: 40px;
-  min-width: 40px;
-  min-height: 40px;
-  flex: 0 0 40px;
-  display: inline-grid;
-  place-items: center;
-  padding: 0;
-  overflow: hidden;
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
-  backdrop-filter: none;
-  color: var(--confucius-secondary);
-  box-sizing: border-box;
-  box-shadow: none;
-  font: inherit;
-  cursor: pointer;
-  pointer-events: auto;
-  transition: background 110ms ease, border-color 110ms ease, color 110ms ease, transform 110ms ease, box-shadow 110ms ease;
-}
-.confucius-artifact-rail-button:hover,
-.confucius-artifact-menu-trigger:hover {
-  border-color: var(--confucius-line-strong);
-  background: var(--confucius-hover);
-  color: var(--confucius-ink);
-  transform: none;
-  box-shadow: none;
-}
-.confucius-artifact-menu-trigger[aria-expanded="true"] {
-  border-color: var(--confucius-line-strong);
-  background: var(--confucius-elevated);
-  color: var(--confucius-accent);
-}
-.confucius-artifact-rail-button:focus-visible,
-.confucius-artifact-menu-trigger:focus-visible {
-  outline: 2px solid var(--confucius-accent);
-  outline-offset: 1px;
-}
-.confucius-artifact-rail-button svg,
-.confucius-artifact-menu-trigger svg { width: 18px; height: 18px; display: block; }
-.confucius-artifact-menu-trigger-value {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: -.02em;
-  white-space: nowrap;
-}
-.confucius-artifact-menu-trigger-chevron {
-  position: absolute;
-  right: 4px;
-  bottom: 2px;
-  color: var(--confucius-muted);
-  font-size: 11px;
-  line-height: 1;
-  transition: transform 100ms ease;
-}
-.confucius-artifact-revision-badge {
-  width: 40px;
-  height: 40px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  backdrop-filter: blur(10px);
-  color: var(--confucius-muted);
-  box-sizing: border-box;
-  font-size: 11px;
-  font-weight: 700;
-  pointer-events: auto;
-}
-#confucius-artifact-writeback {
-  color: var(--confucius-accent);
-}
-#confucius-artifact-writeback:hover {
-  border-color: var(--confucius-line-strong);
-  background: var(--confucius-elevated);
-}
-.confucius-artifact-rail-button:disabled {
-  opacity: .38;
-  cursor: default;
-  transform: none;
-}
 .confucius-artifact-choice-menu {
   animation: confucius-artifact-menu-in 110ms ease-out;
 }
@@ -1053,20 +905,6 @@ export const TUI_CSS = `
   font-weight: 700;
   text-align: center;
 }
-.confucius-artifact-choice-copy { min-width: 0; }
-.confucius-artifact-choice-title {
-  display: block;
-  overflow: hidden;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.confucius-artifact-choice-meta {
-  display: block;
-  margin-top: 1px;
-  color: var(--confucius-muted);
-  font-size: 10px;
-}
 .confucius-artifact-choice-check {
   color: var(--confucius-accent);
   font-weight: 700;
@@ -1100,28 +938,6 @@ export const TUI_CSS = `
   border-radius: 0;
   background: transparent;
   box-shadow: none;
-}
-.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-action-rail {
-  right: 6px;
-  width: 36px;
-  padding: 10px 0;
-}
-.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-rail-button,
-.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-menu-trigger,
-.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-revision-badge {
-  width: 36px;
-  height: 36px;
-  min-width: 36px;
-  min-height: 36px;
-  flex-basis: 36px;
-}
-.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-dialog-body {
-  padding: 18px 48px 40px 10px;
-}
-.confucius-workspace-root[data-confucius-layout="sidebar"] .confucius-artifact-paper {
-  margin: 10px 0 18px;
-  padding: 18px 16px 34px;
-  border-radius: 8px;
 }
 .confucius-artifact-paper .tui-answer {
   font-size: 1.02em;
@@ -1206,24 +1022,10 @@ export const TUI_CSS = `
   .confucius-before-after { grid-template-columns: minmax(0, 1fr); }
   .confucius-template-grid { grid-auto-rows: minmax(70px, auto); }
   .confucius-template-button { min-height: 70px; }
-  .confucius-artifact-action-rail { right: 6px; width: 36px; padding: 10px 0; }
-  .confucius-artifact-rail-button,
-  .confucius-artifact-menu-trigger,
-  .confucius-artifact-revision-badge {
-    width: 36px;
-    height: 36px;
-    min-width: 36px;
-    min-height: 36px;
-    flex-basis: 36px;
-  }
   .confucius-artifact-dialog-body { padding: 18px 48px 40px 10px; }
   .confucius-artifact-file { grid-template-columns: 38px minmax(0, 1fr); gap: 9px; padding: 11px; }
   .confucius-artifact-file-open { display: none; }
   .confucius-artifact-paper { margin: 8px 0 14px; padding: 16px 12px 30px; border-radius: 8px; }
-}
-@keyframes confucius-artifact-overlay-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
 }
 @keyframes confucius-artifact-menu-in {
   from { opacity: 0; transform: translateX(4px); }
@@ -1234,10 +1036,8 @@ export const TUI_CSS = `
   to { opacity: 1; transform: scale(1); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .confucius-artifact-overlay,
   .confucius-artifact-choice-menu,
   .confucius-settings-choice-menu { animation: none; }
-  .confucius-artifact-menu-trigger-chevron,
   .confucius-settings-select-chevron,
   .confucius-drop-hint { transition: none; }
 }
@@ -1246,7 +1046,7 @@ export const TUI_CSS = `
 .confucius-workspace-root :is(button, input, textarea, select, summary):focus-visible,
 #confucius-settings-overlay :is(button, input, textarea, select, summary):focus-visible,
 #confucius-knowledge-overlay :is(button, input, textarea, select, summary):focus-visible,
-#confucius-artifact-overlay :is(button, a, summary):focus-visible {
+#confucius-artifact-window :is(button, a, summary):focus-visible {
   outline: 2px solid var(--confucius-accent); outline-offset: 3px;
 }
 .confucius-workspace-root :is(input, textarea, select) { color: var(--confucius-ink); accent-color: var(--confucius-accent); }

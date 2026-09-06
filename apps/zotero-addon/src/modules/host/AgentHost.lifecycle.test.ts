@@ -184,6 +184,7 @@ interface TestState {
 // Expose private entry points only for exercising their real implementation.
 // Storage, backend, and domain collaborators below do not require Zotero startup.
 interface LifecycleHost {
+  rpc(method: string, params?: Record<string, unknown>): Promise<unknown>;
   shutdown(): Promise<void>;
   sessionPrompt(
     id: string,
@@ -476,6 +477,18 @@ describe("AgentHost lifecycle ownership", () => {
       markdown: "Reviewed evidence",
     });
     assert.equal((await artifacts.get(id))?.revision, 3);
+    const windowRecord = (await host.rpc("artifact/get", { id })) as {
+      artifact: { revision: number };
+      taskStatus: string | null;
+    };
+    assert.equal(windowRecord.artifact.revision, 3);
+    assert.equal(windowRecord.taskStatus, state.record.status);
+    const orphanWindow = (await host.rpc("artifact/get", {
+      id: foreign.id,
+    })) as {
+      taskStatus: string | null;
+    };
+    assert.equal(orphanWindow.taskStatus, null);
     assert.deepEqual(await artifacts.get(foreign.id), foreign);
     assert.equal(files.size, 2);
     assert(!state.events.some((event) => event.type === "approval_required"));

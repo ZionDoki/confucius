@@ -1,3 +1,4 @@
+import { artifactWindows } from "./artifactWindow";
 import { UI_FONT_STACKS } from "./workspaceTypography";
 import { getPref } from "../../utils/prefs";
 import { WorkspaceFormDrafts } from "./workspaceDrafts";
@@ -416,7 +417,7 @@ function hydrateAnswerLinks(node: HTMLElement): void {
   }
 }
 
-function fillAnswerHtml(node: HTMLElement, text: string): void {
+export function fillAnswerHtml(node: HTMLElement, text: string): void {
   node.innerHTML = renderMarkdownHtml(text);
   try {
     hydrateAnswerLinks(node);
@@ -721,32 +722,6 @@ function workspaceKnowledgeIcon(doc: Document): Element {
   return svg;
 }
 
-function artifactActionIcon(
-  doc: Document,
-  kind: "close" | "artifacts" | "writeback",
-): Element {
-  const svg = doc.createElementNS(SVG_NS, "svg");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("fill", "none");
-  svg.setAttribute("stroke", "currentColor");
-  svg.setAttribute("stroke-width", "1.7");
-  svg.setAttribute("stroke-linecap", "round");
-  svg.setAttribute("stroke-linejoin", "round");
-  svg.setAttribute("aria-hidden", "true");
-  const paths =
-    kind === "close"
-      ? ["M6.5 6.5l11 11", "M17.5 6.5l-11 11"]
-      : kind === "artifacts"
-        ? ["M7 4.5h7.5L18 8v11.5H7z", "M14.5 4.5V8H18", "M4 7.5v13h11"]
-        : ["M12 3.5v12", "m-4-4 4 4 4-4", "M5 19.5h14"];
-  for (const data of paths) {
-    const path = doc.createElementNS(SVG_NS, "path");
-    path.setAttribute("d", data);
-    svg.appendChild(path);
-  }
-  return svg;
-}
-
 function replyActionIcon(
   doc: Document,
   kind: "copy" | "branch" | "note" | "check",
@@ -1041,8 +1016,6 @@ export function unmountWorkspace(root?: HTMLElement | null): void {
   for (const id of [
     "confucius-settings-overlay",
     "confucius-knowledge-overlay",
-    "confucius-artifact-overlay",
-    "confucius-artifact-choice-menu",
     "confucius-security-profile-menu",
     "confucius-writeback-overlay",
     "confucius-slash-menu",
@@ -1178,8 +1151,6 @@ function bindWorkspace(
     contextStats: null as SessionContextStats | null,
     live: null as LiveContextResult | null,
     artifacts: [] as ArtifactRecord[],
-    selectedArtifactId: null as string | null,
-    selectedArtifactRevision: null as number | null,
     memoryProposals: [] as MemoryProposal[],
     runtimes: [] as RuntimeStatus[],
     runtimeHostEnabled: true,
@@ -1225,20 +1196,6 @@ function bindWorkspace(
   const reasoningFold = new Map<string, ReasoningFold>();
   const toolsOpen = new Set<string>();
   const toolOpen = new Set<string>();
-  let artifactViewerOpen = false;
-  const artifactScrolls = new Map<string, number>();
-  let renderedArtifactKey = "";
-  function rememberArtifactScroll(): void {
-    const body = doc.getElementById("confucius-artifact-dialog-body");
-    if (body && renderedArtifactKey)
-      artifactScrolls.set(renderedArtifactKey, body.scrollTop);
-  }
-  let artifactViewerReturnFocus: HTMLElement | null = null;
-  let lastArtifactViewerSignature = "";
-  let artifactChoiceMenu: {
-    kind: "artifact" | "revision";
-    anchor: HTMLElement;
-  } | null = null;
   let endpointMenuOpen = false;
   type ComposerModelChoice = {
     backend: AgentBackendKind;
@@ -1826,13 +1783,11 @@ function bindWorkspace(
 
   const onWindowResize = () => {
     applyResponsiveLayout();
-    closeArtifactChoiceMenu(false);
   };
   const ResizeObserverCtor = win?.ResizeObserver;
   const resizeObserver = ResizeObserverCtor
     ? new ResizeObserverCtor(() => {
         applyResponsiveLayout();
-        closeArtifactChoiceMenu(false);
       })
     : null;
   resizeObserver?.observe(root);
@@ -2055,13 +2010,12 @@ function bindWorkspace(
     if (!prompt.isConnected || !composer.isConnected || prompt.disabled) {
       return false;
     }
-    if (artifactViewerOpen || knowledgeUi.open) {
+    if (knowledgeUi.open) {
       return false;
     }
     for (const id of [
       "confucius-settings-overlay",
       "confucius-knowledge-overlay",
-      "confucius-artifact-overlay",
       "confucius-writeback-overlay",
     ]) {
       if (doc.getElementById(id)) return false;
@@ -3798,8 +3752,6 @@ function bindWorkspace(
   async function refreshArtifacts(taskId = state.sessionId): Promise<void> {
     if (!taskId) {
       state.artifacts = [];
-      state.selectedArtifactId = null;
-      state.selectedArtifactRevision = null;
       return;
     }
     try {
@@ -3808,19 +3760,6 @@ function bindWorkspace(
       };
       if (state.sessionId !== taskId) return;
       state.artifacts = listed.artifacts ?? [];
-      const selected = state.artifacts.find(
-        (artifact) => artifact.id === state.selectedArtifactId,
-      );
-      if (!selected) {
-        state.selectedArtifactId = state.artifacts[0]?.id ?? null;
-        state.selectedArtifactRevision = state.artifacts[0]?.revision ?? null;
-      } else if (
-        !selected.revisions.some(
-          (revision) => revision.revision === state.selectedArtifactRevision,
-        )
-      ) {
-        state.selectedArtifactRevision = selected.revision;
-      }
     } catch {
       if (state.sessionId === taskId) state.artifacts = [];
     }
@@ -3903,7 +3842,6 @@ function bindWorkspace(
       doc.getElementById("confucius-source-menu")?.remove();
       rememberComposerDraft(previousTaskId);
       rememberTimelineViewport();
-      closeArtifactViewer();
       clearPendingAttachments();
     }
     const [loaded, bundle] = (await Promise.all([
@@ -3928,8 +3866,6 @@ function bindWorkspace(
     state.running = false;
     state.pendingUserText = "";
     state.sendError = "";
-    state.selectedArtifactId = null;
-    state.selectedArtifactRevision = null;
     if (switching || loadedComposerTaskId !== taskId) {
       loadedComposerTaskId = taskId;
       prompt.value = composerDrafts.get(taskId) ?? "";
@@ -4407,220 +4343,6 @@ function bindWorkspace(
     target.appendChild(grid);
   }
 
-  function writebackTargets(
-    artifact: ArtifactRecord,
-  ): Array<{ value: string; label: string }> {
-    const targets = [
-      {
-        value: "zotero_note",
-        label: getString("workspace-writeback-note"),
-      },
-      {
-        value: "knowledge_base",
-        label: getString("workspace-writeback-knowledge"),
-      },
-    ];
-    if (artifact.kind === "annotation_set") {
-      targets.unshift({
-        value: "zotero_annotations",
-        label: getString("workspace-writeback-annotations"),
-      });
-    }
-    if (artifact.kind === "collection_diff") {
-      targets.unshift({
-        value: "zotero_tags",
-        label: getString("workspace-writeback-tags"),
-      });
-      targets.unshift({
-        value: "zotero_collection",
-        label: getString("workspace-writeback-collection"),
-      });
-    }
-    return targets;
-  }
-
-  function openWritebackPreview(
-    artifact: ArtifactRecord,
-    revision: number,
-  ): void {
-    const task = state.sessions.find((row) => row.id === artifact.taskId);
-    if (task?.status === "running" || task?.status === "awaiting_approval") {
-      state.sendError = getString("workspace-writeback-disabled-running");
-      renderLists();
-      return;
-    }
-    if (artifact.writeback?.state === "pending") {
-      state.sendError = getString("workspace-writeback-disabled-pending");
-      renderLists();
-      return;
-    }
-    doc.getElementById("confucius-writeback-overlay")?.remove();
-    const returnFocus = doc.activeElement as HTMLElement | null;
-    const overlay = el(
-      doc,
-      "div",
-      { zIndex: "1300" },
-      {
-        id: "confucius-writeback-overlay",
-        "aria-label": getString("workspace-writeback-preview"),
-      },
-    );
-    overlay.className = "confucius-dialog";
-    const closeWriteback = () => {
-      overlay.remove();
-      if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
-    };
-    bindDialogNavigation(overlay, closeWriteback);
-    const panel = el(doc, "div");
-    panel.className = "confucius-dialog-panel";
-    const heading = el(doc, "div", {
-      marginBottom: "10px",
-      fontSize: "16px",
-      fontWeight: "700",
-    });
-    heading.textContent = getString("workspace-writeback-preview");
-    const targetSelect = el(
-      doc,
-      "select",
-      {
-        width: "100%",
-        height: "34px",
-        marginBottom: "10px",
-        border: "1px solid var(--confucius-line)",
-        borderRadius: "7px",
-        background: "var(--confucius-elevated)",
-      },
-      { id: "confucius-writeback-target" },
-    ) as HTMLSelectElement;
-    for (const target of writebackTargets(artifact)) {
-      const option = el(doc, "option", undefined, { value: target.value });
-      option.textContent = target.label;
-      targetSelect.appendChild(option);
-    }
-    const knowledgeInput = el(
-      doc,
-      "input",
-      {
-        display: "none",
-        width: "100%",
-        height: "34px",
-        marginBottom: "10px",
-        padding: "0 8px",
-        boxSizing: "border-box",
-        border: "1px solid var(--confucius-line)",
-        borderRadius: "7px",
-      },
-      {
-        type: "text",
-        placeholder: getString("workspace-writeback-knowledge-id"),
-      },
-    ) as HTMLInputElement;
-    const preview = el(doc, "div");
-    preview.className = "confucius-before-after";
-    const errorLine = el(doc, "div", {
-      minHeight: "18px",
-      marginTop: "8px",
-      color: "var(--confucius-danger)",
-    });
-    const actions = el(doc, "div", {
-      display: "flex",
-      justifyContent: "flex-end",
-      gap: "8px",
-      marginTop: "10px",
-    });
-    const cancel = button(doc, "", getString("workspace-settings-cancel"));
-    const requestApproval = button(
-      doc,
-      "confucius-writeback-request",
-      getString("workspace-writeback-request"),
-      "primary",
-    );
-    requestApproval.setAttribute("disabled", "true");
-    const loadPreview = async (): Promise<void> => {
-      requestApproval.setAttribute("disabled", "true");
-      errorLine.textContent = "";
-      preview.textContent = "";
-      try {
-        const result = (await rpc("artifact/writebackPreview", {
-          id: artifact.id,
-          revision,
-          target: targetSelect.value,
-        })) as { before: string; after: string };
-        for (const [label, value] of [
-          [getString("workspace-writeback-before"), result.before],
-          [getString("workspace-writeback-after"), result.after],
-        ]) {
-          const column = el(doc, "div");
-          const title = el(doc, "div", {
-            color: "var(--confucius-muted)",
-            fontSize: "11px",
-            fontWeight: "700",
-          });
-          title.textContent = label;
-          const content = el(doc, "pre");
-          content.textContent = value;
-          column.appendChild(title);
-          column.appendChild(content);
-          preview.appendChild(column);
-        }
-        requestApproval.removeAttribute("disabled");
-      } catch (error) {
-        errorLine.textContent =
-          error instanceof Error ? error.message : String(error);
-      }
-    };
-    targetSelect.addEventListener("change", () => {
-      knowledgeInput.style.display =
-        targetSelect.value === "knowledge_base" ? "block" : "none";
-      void loadPreview();
-    });
-    cancel.addEventListener("click", closeWriteback);
-    requestApproval.addEventListener("click", () => {
-      requestApproval.setAttribute("disabled", "true");
-      void (async () => {
-        try {
-          await rpc("artifact/writebackCommit", {
-            id: artifact.id,
-            revision,
-            target: targetSelect.value,
-            knowledgeBaseId: knowledgeInput.value.trim() || undefined,
-          });
-          closeWriteback();
-          const keepViewerOpen = artifactViewerOpen;
-          await loadTask(artifact.taskId);
-          if (
-            keepViewerOpen &&
-            state.artifacts.some((item) => item.id === artifact.id)
-          ) {
-            state.selectedArtifactId = artifact.id;
-            state.selectedArtifactRevision = revision;
-          }
-          renderLists();
-        } catch (error) {
-          errorLine.textContent =
-            error instanceof Error ? error.message : String(error);
-          requestApproval.removeAttribute("disabled");
-        }
-      })();
-    });
-    overlay.addEventListener("click", (event) => {
-      if (event.target === overlay) overlay.remove();
-    });
-    actions.appendChild(cancel);
-    actions.appendChild(requestApproval);
-    panel.appendChild(heading);
-    panel.appendChild(targetSelect);
-    panel.appendChild(knowledgeInput);
-    panel.appendChild(preview);
-    panel.appendChild(errorLine);
-    panel.appendChild(actions);
-    overlay.appendChild(panel);
-    const viewer = doc.getElementById("confucius-artifact-overlay");
-    (viewer?.parentElement ?? root).appendChild(overlay);
-    targetSelect.focus({ preventScroll: true });
-    void loadPreview();
-  }
-
   function renderActivityOverview(): HTMLElement {
     const task = currentTask();
     const overview = el(doc, "section");
@@ -4827,499 +4549,19 @@ function bindWorkspace(
     return overview;
   }
 
-  function closeArtifactChoiceMenu(restoreFocus = false): void {
-    const current = artifactChoiceMenu;
-    artifactChoiceMenu = null;
-    doc.getElementById("confucius-artifact-choice-menu")?.remove();
-    doc
-      .getElementById("confucius-artifact-switcher-trigger")
-      ?.setAttribute("aria-expanded", "false");
-    doc
-      .getElementById("confucius-artifact-revision-trigger")
-      ?.setAttribute("aria-expanded", "false");
-    if (restoreFocus && current?.anchor.isConnected) current.anchor.focus();
-  }
-
-  function selectArtifactChoice(kind: "artifact" | "revision", value: string) {
-    if (kind === "artifact") {
-      const selected = state.artifacts.find((item) => item.id === value);
-      if (!selected) return;
-      state.selectedArtifactId = selected.id;
-      state.selectedArtifactRevision = selected.revision;
-    } else {
-      const revision = Number(value);
-      const selected = state.artifacts.find(
-        (item) => item.id === state.selectedArtifactId,
-      );
-      if (
-        !selected ||
-        !selected.revisions.some((item) => item.revision === revision)
-      ) {
-        return;
-      }
-      state.selectedArtifactRevision = revision;
-    }
-    closeArtifactChoiceMenu(false);
-    renderArtifactViewer(true, true);
-  }
-
-  function renderArtifactChoiceMenu(
-    kind: "artifact" | "revision",
-    anchor: HTMLElement,
-  ): void {
-    const artifact =
-      state.artifacts.find((item) => item.id === state.selectedArtifactId) ??
-      state.artifacts[0];
-    if (!artifact) {
-      closeArtifactChoiceMenu(false);
-      return;
-    }
-    const menu = createMenuSurface(doc, {
-      id: "confucius-artifact-choice-menu",
-      role: "listbox",
-      "data-placement": "left",
-      "aria-label": getString(
-        kind === "artifact"
-          ? "workspace-artifact-switch"
-          : "workspace-artifact-revision",
-      ),
-    });
-    menu.style.zIndex = "1300";
-    menu.classList.add("confucius-artifact-choice-menu");
-    const choices =
-      kind === "artifact"
-        ? state.artifacts.map((item) => ({
-            value: item.id,
-            title: item.title,
-            meta: `${artifactKindLabel(item.kind)} · r${item.revision}`,
-            selected: item.id === artifact.id,
-          }))
-        : [...artifact.revisions].reverse().map((item) => ({
-            value: String(item.revision),
-            title: `r${item.revision}`,
-            meta: runtimeLabel(item.backend),
-            selected: item.revision === state.selectedArtifactRevision,
-          }));
-
-    for (const choice of choices) {
-      const row = el(doc, "button", undefined, {
-        type: "button",
-        role: "option",
-        "data-value": choice.value,
-        "data-selected": choice.selected ? "true" : "false",
-        "aria-selected": choice.selected ? "true" : "false",
-      });
-      row.className = "confucius-artifact-choice";
-      const copy = el(doc, "span");
-      copy.className = "confucius-artifact-choice-copy";
-      const title = el(doc, "span");
-      title.className = "confucius-artifact-choice-title";
-      title.textContent = choice.title;
-      const meta = el(doc, "span");
-      meta.className = "confucius-artifact-choice-meta";
-      meta.textContent = choice.meta;
-      const check = el(doc, "span", undefined, { "aria-hidden": "true" });
-      check.className = "confucius-artifact-choice-check";
-      check.textContent = choice.selected ? "✓" : "";
-      copy.appendChild(title);
-      copy.appendChild(meta);
-      row.appendChild(copy);
-      row.appendChild(check);
-      row.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        selectArtifactChoice(kind, choice.value);
-      });
-      menu.appendChild(row);
-    }
-
-    menu.addEventListener("keydown", (event) => {
-      const key = (event as KeyboardEvent).key;
-      if (key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        closeArtifactChoiceMenu(true);
-        return;
-      }
-      if (key === "Tab") {
-        closeArtifactChoiceMenu(false);
-        return;
-      }
-      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(key)) return;
-      event.preventDefault();
-      const rows = Array.from(
-        menu.querySelectorAll(".confucius-artifact-choice"),
-      ) as HTMLElement[];
-      if (!rows.length) return;
-      const current = rows.indexOf(doc.activeElement as HTMLElement);
-      const index =
-        key === "Home"
-          ? 0
-          : key === "End"
-            ? rows.length - 1
-            : key === "ArrowUp"
-              ? (current - 1 + rows.length) % rows.length
-              : (current + 1) % rows.length;
-      rows[index]?.focus();
-    });
-
-    placeMenu(anchor, menu, kind === "artifact" ? 320 : 176, "left");
-    const selected = menu.querySelector(
-      '[data-selected="true"]',
-    ) as HTMLElement | null;
-    (selected ?? (menu.firstElementChild as HTMLElement | null))?.focus();
-  }
-
-  function artifactMenuTrigger(
-    kind: "artifact" | "revision",
-    value: string,
-  ): HTMLElement {
-    const controlLabel = getString(
-      kind === "artifact"
-        ? "workspace-artifact-switch"
-        : "workspace-artifact-revision",
-    );
-    const trigger = el(doc, "button", undefined, {
-      id:
-        kind === "artifact"
-          ? "confucius-artifact-switcher-trigger"
-          : "confucius-artifact-revision-trigger",
-      type: "button",
-      "data-kind": kind,
-      title: `${controlLabel}: ${value}`,
-      "aria-haspopup": "listbox",
-      "aria-controls": "confucius-artifact-choice-menu",
-      "aria-expanded": artifactChoiceMenu?.kind === kind ? "true" : "false",
-      "aria-label": `${controlLabel}: ${value}`,
-    });
-    trigger.className = "confucius-artifact-menu-trigger";
-    if (kind === "artifact") {
-      trigger.appendChild(artifactActionIcon(doc, "artifacts"));
-    } else {
-      const label = el(doc, "span");
-      label.className = "confucius-artifact-menu-trigger-value";
-      label.textContent = value;
-      trigger.appendChild(label);
-    }
-    const chevron = el(doc, "span", undefined, { "aria-hidden": "true" });
-    chevron.className = "confucius-artifact-menu-trigger-chevron";
-    chevron.textContent = "‹";
-    trigger.appendChild(chevron);
-    trigger.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (
-        artifactChoiceMenu?.kind === kind &&
-        doc.getElementById("confucius-artifact-choice-menu")
-      ) {
-        closeArtifactChoiceMenu(true);
-        return;
-      }
-      closeArtifactChoiceMenu(false);
-      artifactChoiceMenu = { kind, anchor: trigger };
-      trigger.setAttribute("aria-expanded", "true");
-      renderArtifactChoiceMenu(kind, trigger);
-    });
-    return trigger;
-  }
-
-  function closeArtifactViewer(restoreFocus = true): void {
-    rememberArtifactScroll();
-    closeArtifactChoiceMenu(false);
-    artifactViewerOpen = false;
-    lastArtifactViewerSignature = "";
-    doc.getElementById("confucius-artifact-overlay")?.remove();
-    const returnFocus = artifactViewerReturnFocus;
-    artifactViewerReturnFocus = null;
-    if (restoreFocus && returnFocus?.isConnected) {
-      returnFocus.focus();
-    }
-  }
-
   function openArtifactViewer(
     artifactId: string,
     revision?: number,
-    returnFocus?: HTMLElement,
+    _returnFocus?: HTMLElement,
   ): void {
     const artifact = state.artifacts.find((item) => item.id === artifactId);
-    if (!artifact) return;
-    artifactViewerReturnFocus =
-      returnFocus ?? (doc.activeElement as HTMLElement | null);
-    artifactViewerOpen = true;
-    state.selectedArtifactId = artifact.id;
-    state.selectedArtifactRevision = artifact.revisions.some(
-      (item) => item.revision === revision,
-    )
-      ? (revision ?? artifact.revision)
-      : artifact.revision;
-    renderArtifactViewer(true, true);
-  }
-
-  function artifactViewerSignature(): string {
-    return [
-      state.selectedArtifactId ?? "",
-      String(state.selectedArtifactRevision ?? ""),
-      ...state.artifacts.map(
-        (artifact) =>
-          `${artifact.id}:${artifact.revision}:${artifact.status}:${
-            artifact.writeback?.state ?? "none"
-          }`,
-      ),
-    ].join("|");
-  }
-
-  function renderArtifactViewer(force = false, resetScroll = false): void {
-    const existing = doc.getElementById(
-      "confucius-artifact-overlay",
-    ) as HTMLElement | null;
-    if (!artifactViewerOpen) {
-      existing?.remove();
-      return;
+    if (!artifact || !host) return;
+    try {
+      artifactWindows.open(host, artifact, revision, fillAnswerHtml);
+    } catch (error) {
+      state.sendError = String(error);
+      renderLists();
     }
-
-    const artifact =
-      state.artifacts.find((item) => item.id === state.selectedArtifactId) ??
-      state.artifacts[0];
-    const task = artifact
-      ? state.sessions.find((item) => item.id === artifact.taskId)
-      : undefined;
-    if (!artifact || !task) {
-      closeArtifactViewer(false);
-      return;
-    }
-    const requestedRevision =
-      state.selectedArtifactRevision ?? artifact.revision;
-    const revision =
-      artifact.revisions.find((item) => item.revision === requestedRevision) ??
-      artifact.revisions.at(-1);
-    if (!revision) {
-      closeArtifactViewer(false);
-      return;
-    }
-    state.selectedArtifactId = artifact.id;
-    state.selectedArtifactRevision = revision.revision;
-    const signature = artifactViewerSignature();
-    if (!force && existing && signature === lastArtifactViewerSignature) {
-      return;
-    }
-
-    const previousBody = doc.getElementById(
-      "confucius-artifact-dialog-body",
-    ) as HTMLElement | null;
-    rememberArtifactScroll();
-    const artifactKey = `${artifact.id}:${revision.revision}`;
-    const previousScroll =
-      artifactKey !== renderedArtifactKey || resetScroll
-        ? (artifactScrolls.get(artifactKey) ?? 0)
-        : (previousBody?.scrollTop ?? 0);
-    renderedArtifactKey = artifactKey;
-    const wasOpen = Boolean(existing);
-    closeArtifactChoiceMenu(false);
-    existing?.remove();
-
-    // Sidebar layout: the pane is too narrow for the mask to show, so the
-    // viewer mounts on the main document root and covers the whole window.
-    // The Zotero main window is a XUL document: doc.body may not exist.
-    const mountToWindow = compact;
-
-    const overlay = el(doc, "div", undefined, {
-      id: "confucius-artifact-overlay",
-      role: "dialog",
-      "aria-modal": "true",
-      "aria-labelledby": "confucius-artifact-dialog-title",
-    });
-    overlay.className = "confucius-artifact-overlay";
-    overlay.style.fontFamily = root.style.fontFamily;
-    overlay.style.fontSize = root.style.fontSize;
-    for (const property of [
-      "--confucius-markdown-font-size",
-      "--confucius-reading-line-height",
-    ]) {
-      overlay.style.setProperty(
-        property,
-        root.style.getPropertyValue(property),
-      );
-    }
-    if (wasOpen) overlay.setAttribute("data-refresh", "true");
-    overlay.addEventListener("click", (event) => {
-      if (event.target === overlay) closeArtifactViewer();
-    });
-    bindDialogNavigation(overlay, () => closeArtifactViewer());
-
-    const dialog = el(doc, "section");
-    dialog.className = "confucius-artifact-dialog";
-    const rail = el(doc, "aside", undefined, {
-      role: "toolbar",
-      "aria-orientation": "vertical",
-      "aria-label": getString("workspace-artifact-actions"),
-    });
-    rail.className = "confucius-artifact-action-rail";
-    const closeButton = el(doc, "button", undefined, {
-      type: "button",
-      title: getString("workspace-artifact-close"),
-      "aria-label": getString("workspace-artifact-close"),
-    });
-    closeButton.className = "confucius-artifact-rail-button";
-    closeButton.appendChild(artifactActionIcon(doc, "close"));
-    closeButton.addEventListener("click", () => closeArtifactViewer());
-    rail.appendChild(closeButton);
-    const divider = el(doc, "span", undefined, { "aria-hidden": "true" });
-    divider.className = "confucius-artifact-rail-divider";
-    rail.appendChild(divider);
-    if (state.artifacts.length > 1) {
-      rail.appendChild(artifactMenuTrigger("artifact", artifact.title));
-    }
-    if (artifact.revisions.length > 1) {
-      rail.appendChild(
-        artifactMenuTrigger("revision", `r${revision.revision}`),
-      );
-    } else {
-      const revisionLabel = `${getString("workspace-artifact-revision")}: r${revision.revision}`;
-      const revisionBadge = el(doc, "span", undefined, {
-        title: revisionLabel,
-        "aria-label": revisionLabel,
-      });
-      revisionBadge.className = "confucius-artifact-revision-badge";
-      revisionBadge.textContent = `r${revision.revision}`;
-      rail.appendChild(revisionBadge);
-    }
-    const spacer = el(doc, "span", undefined, { "aria-hidden": "true" });
-    spacer.className = "confucius-artifact-rail-spacer";
-    rail.appendChild(spacer);
-
-    const writeback = el(doc, "button", undefined, {
-      id: "confucius-artifact-writeback",
-      type: "button",
-      title: getString("workspace-writeback"),
-      "aria-label": getString("workspace-writeback"),
-    });
-    writeback.className = "confucius-artifact-rail-button";
-    writeback.appendChild(artifactActionIcon(doc, "writeback"));
-    const writebackBlocked =
-      task.status === "running" ||
-      task.status === "awaiting_approval" ||
-      artifact.writeback?.state === "pending";
-    if (writebackBlocked) {
-      writeback.setAttribute("disabled", "true");
-      writeback.title =
-        artifact.writeback?.state === "pending"
-          ? getString("workspace-writeback-disabled-pending")
-          : getString("workspace-writeback-disabled-running");
-    }
-    writeback.addEventListener("click", () =>
-      openWritebackPreview(artifact, revision.revision),
-    );
-    rail.appendChild(writeback);
-    dialog.appendChild(rail);
-
-    const dialogBody = el(doc, "div", undefined, {
-      id: "confucius-artifact-dialog-body",
-    });
-    dialogBody.className = "confucius-artifact-dialog-body";
-    const shell = el(doc, "div");
-    shell.className = "confucius-artifact-shell";
-    const paper = el(doc, "article");
-    paper.className = "confucius-artifact-paper";
-    const paperMeta = el(doc, "div", {
-      display: "flex",
-      alignItems: "center",
-      flexWrap: "wrap",
-      gap: "7px",
-      color: "var(--confucius-muted)",
-      fontSize: "11px",
-      fontWeight: "700",
-      letterSpacing: ".07em",
-      textTransform: "uppercase",
-    });
-    const kind = el(doc, "span");
-    kind.textContent = `${artifactKindLabel(artifact.kind)} · ${runtimeLabel(
-      revision.backend,
-    )} · r${revision.revision}`;
-    paperMeta.appendChild(kind);
-    if (
-      artifact.writeback?.state === "committed" &&
-      artifact.writeback.revision === revision.revision
-    ) {
-      const committed = el(doc, "span", { color: "var(--confucius-success)" });
-      committed.textContent = getString("workspace-writeback-committed");
-      paperMeta.appendChild(committed);
-    }
-    if (
-      ["partial", "unknown"].includes(artifact.writeback?.state ?? "") &&
-      artifact.writeback?.revision === revision.revision
-    ) {
-      const status = el(doc, "span", { color: "var(--confucius-muted)" });
-      status.textContent =
-        artifact.writeback.state === "partial"
-          ? getString("workspace-writeback-partial")
-          : getString("workspace-writeback-unknown");
-      paperMeta.appendChild(status);
-    }
-    const artifactTitle = el(
-      doc,
-      "h2",
-      {
-        margin: "10px 0 20px",
-        fontSize: compact && !mountToWindow ? "23px" : "30px",
-        lineHeight: "1.16",
-        letterSpacing: "-.025em",
-      },
-      { id: "confucius-artifact-dialog-title" },
-    );
-    artifactTitle.textContent = artifact.title;
-    paper.appendChild(paperMeta);
-    paper.appendChild(artifactTitle);
-    paper.appendChild(
-      renderReadingSurface(doc, revision.body, { fillAnswerHtml, locateLink }),
-    );
-    if (revision.citations.length) {
-      const citationHeading = el(doc, "h3", {
-        margin: "28px 0 8px",
-        paddingTop: "14px",
-        borderTop: "1px solid var(--confucius-line)",
-        fontSize: "13px",
-      });
-      citationHeading.textContent = getString("workspace-artifact-citations");
-      paper.appendChild(citationHeading);
-      const list = el(doc, "ol", { paddingLeft: "22px" });
-      for (const citation of revision.citations) {
-        const item = el(doc, "li", { marginBottom: "8px" });
-        const label = el(doc, "div");
-        label.textContent =
-          citation.quote ||
-          citation.section ||
-          `${citation.itemLibraryID}:${citation.itemKey}`;
-        item.appendChild(label);
-        item.appendChild(
-          locateLink(doc, {
-            libraryID: citation.itemLibraryID,
-            key: citation.itemKey,
-            pageIndex:
-              typeof citation.page === "number"
-                ? Math.max(0, citation.page - 1)
-                : undefined,
-          }),
-        );
-        list.appendChild(item);
-      }
-      paper.appendChild(list);
-    }
-    shell.appendChild(paper);
-    dialogBody.appendChild(shell);
-    dialog.appendChild(dialogBody);
-    overlay.appendChild(dialog);
-    const windowHost = mountToWindow
-      ? ((doc.body ?? doc.documentElement) as HTMLElement | null)
-      : null;
-    if (windowHost) {
-      overlay.setAttribute("data-mount", "window");
-      windowHost.appendChild(overlay);
-    } else {
-      root.appendChild(overlay);
-    }
-    dialogBody.scrollTop = previousScroll;
-    lastArtifactViewerSignature = signature;
-    if (!wasOpen) closeButton.focus();
   }
 
   function syncTraceExportButton(): void {
@@ -5371,6 +4613,7 @@ function bindWorkspace(
     remove: (taskId) => {
       void (async () => {
         await rpc("task/delete", { taskId: taskId });
+        artifactWindows.closeTask(taskId);
         composerDrafts.delete(taskId);
         timelineViewports.delete(taskId);
         if (state.sessionId === taskId) {
@@ -5381,11 +4624,8 @@ function bindWorkspace(
           state.running = false;
           state.pendingUserText = "";
           state.artifacts = [];
-          state.selectedArtifactId = null;
-          state.selectedArtifactRevision = null;
           prompt.value = "";
           renderedTimelineTaskId = null;
-          closeArtifactViewer();
         }
         await refreshSessions();
         renderLists();
@@ -5555,7 +4795,6 @@ function bindWorkspace(
         : savedTimelineScroll;
     rememberTimelineViewport();
     syncLatest();
-    renderArtifactViewer();
     // Focused overview controls retain their DOM during reconciliation.
     syncTraceExportButton();
   }
@@ -9274,7 +8513,7 @@ function bindWorkspace(
           await refreshMemoryProposals();
         }
         if (
-          !state.selectedArtifactId ||
+          !state.artifacts.length ||
           incoming.some((event) => event.type === "artifact_upserted")
         ) {
           await refreshArtifacts(polledSessionId);
@@ -9471,16 +8710,6 @@ function bindWorkspace(
           !contextDetails.contains(target)))
     )
       contextDetails.remove();
-    if (artifactChoiceMenu) {
-      const artifactMenu = doc.getElementById("confucius-artifact-choice-menu");
-      if (
-        !target ||
-        (!artifactChoiceMenu.anchor.contains(target) &&
-          !artifactMenu?.contains(target))
-      ) {
-        closeArtifactChoiceMenu(false);
-      }
-    }
     const plusMenu = doc.getElementById("confucius-plus-menu");
     if (
       plusMenu &&

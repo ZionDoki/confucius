@@ -20,6 +20,7 @@ import {
 } from "./modules/ui/workspaceWindow";
 import { AgentHost } from "./modules/host/AgentHost";
 import { disposeAppearanceBindings } from "./modules/ui/workspaceAppearance";
+import { artifactWindows } from "./modules/ui/artifactWindow";
 import {
   bindPrefsWindow,
   registerPreferencePane,
@@ -93,6 +94,7 @@ async function onShutdown(): Promise<void> {
   cleanup(unregisterHttpBridge, "HTTP bridge");
   for (const win of Zotero.getMainWindows()) await onMainWindowUnload(win);
   cleanup(closeWorkspaceWindow, "workspace window");
+  cleanup(() => artifactWindows.closeAll(), "artifact windows");
   cleanup(disposeAppearanceBindings, "appearance bindings");
   cleanup(unregisterReaderContextMenu, "reader context menu");
   try {

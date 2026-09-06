@@ -19,6 +19,8 @@ const workspaceSource = () =>
     "workspaceSurface",
     "workspaceDrafts",
     "workspaceTypography",
+    "artifactWindowView",
+    "artifactWriteback",
   ]
     .map((name) =>
       readFileSync(join(root, `src/modules/ui/${name}.ts`), "utf8"),
@@ -486,41 +488,36 @@ test("activity stream is the primary workspace and artifacts open as files", () 
   assert.equal(view.includes("renderArtifactCanvas"), false);
 });
 
-test("artifact viewer uses unclipped custom menus instead of native selects", () => {
-  const view = workspaceSource();
-  const viewer = view.slice(
-    view.indexOf("function renderArtifactViewer"),
-    view.indexOf(
-      "const dialogBody",
-      view.indexOf("function renderArtifactViewer"),
-    ),
+test("artifact revisions use the shared keyboard-accessible menu in their own document", () => {
+  const viewer = readFileSync(
+    join(root, "src/modules/ui/artifactWindowView.ts"),
+    "utf8",
   );
-  assert.equal(view.includes("confucius-artifact-choice-menu"), true);
-  assert.equal(view.includes("artifactMenuTrigger"), true);
-  assert.equal(view.includes('"aria-haspopup": "listbox"'), true);
-  assert.equal(view.includes('role: "option"'), true);
-  assert.equal(view.includes('key === "ArrowDown"'), true);
-  assert.equal(view.includes("placeMenu(anchor, menu"), true);
-  assert.equal(view.includes('kind === "artifact" ? 320 : 176, "left"'), true);
-  assert.equal(/,\s*"select"/.test(viewer), false);
-  assert.equal(view.includes('id: "confucius-artifact-switcher",'), false);
-  assert.equal(view.includes('id: "confucius-artifact-revision",'), false);
+  assert.match(viewer, /createMenuSurface/);
+  assert.match(viewer, /bindMenuNavigation/);
+  assert.match(viewer, /menuitemradio/);
+  assert.match(viewer, /aria-checked/);
+  assert.match(viewer, /root.append\(menu\)/);
+  assert.doesNotMatch(viewer, /artifact-switcher/);
 });
 
-test("artifact viewer is a full-bleed reading surface with a right action rail", () => {
-  const view = workspaceSource();
-  const viewer = view.slice(
-    view.indexOf("function renderArtifactViewer"),
-    view.indexOf("let lastListSignature"),
+test("artifact document has native window chrome and no embedded close button or modal mask", () => {
+  const viewer = readFileSync(
+    join(root, "src/modules/ui/artifactWindowView.ts"),
+    "utf8",
   );
-  assert.equal(viewer.includes("bindDialogNavigation(overlay"), true);
-  assert.equal(view.includes("right: 12px;"), true);
-  assert.equal(viewer.includes("confucius-artifact-action-rail"), true);
-  assert.equal(viewer.includes('"aria-orientation": "vertical"'), true);
-  assert.equal(viewer.includes('artifactActionIcon(doc, "close")'), true);
-  assert.equal(viewer.includes('artifactActionIcon(doc, "writeback")'), true);
-  assert.equal(viewer.includes("confucius-artifact-dialog-header"), false);
-  assert.equal(view.includes("box-shadow: none;"), true);
+  const document = readFileSync(
+    join(root, "addon/content/artifact.xhtml"),
+    "utf8",
+  );
+  assert.match(document, /data-confucius-window="artifact"/);
+  assert.match(document, /id="confucius-artifact-window"/);
+  assert.match(viewer, /confucius-artifact-toolbar/);
+  assert.match(viewer, /showArtifactWriteback/);
+  assert.doesNotMatch(
+    viewer,
+    /closeButton|aria-modal|bindDialogNavigation|artifact-overlay/,
+  );
 });
 
 test("sidebar artifact files use a compact two-line layout", () => {

@@ -53,16 +53,16 @@ export function ensurePaletteStyles(doc: Document): void {
 export const SURFACE_CSS = `
 /* Zotero's native button height limits are intended for single-line controls.
    Let text controls grow with their content; explicit icon/composer sizes win. */
-:where(.confucius-workspace-root, .confucius-menu-surface, .confucius-dialog, #confucius-artifact-overlay, #confucius-knowledge-overlay, #confucius-preferences) button {
+:where(.confucius-workspace-root, .confucius-menu-surface, .confucius-dialog, #confucius-artifact-window, #confucius-knowledge-overlay, #confucius-preferences) button {
   height: auto; max-height: none; margin: 0; box-sizing: border-box;
 }
-:is(.confucius-workspace-root, .confucius-menu-surface, .confucius-dialog, #confucius-artifact-overlay, #confucius-knowledge-overlay, #confucius-preferences) {
+:is(.confucius-workspace-root, .confucius-menu-surface, .confucius-dialog, #confucius-artifact-window, #confucius-knowledge-overlay, #confucius-preferences) {
   --confucius-space: 4px;
   --confucius-radius: 8px;
   --confucius-control-height: 32px;
   accent-color: var(--confucius-accent);
 }
-:is(.confucius-workspace-root, .confucius-menu-surface, .confucius-dialog, #confucius-artifact-overlay, #confucius-knowledge-overlay, #confucius-preferences) ::selection {
+:is(.confucius-workspace-root, .confucius-menu-surface, .confucius-dialog, #confucius-artifact-window, #confucius-knowledge-overlay, #confucius-preferences) ::selection {
   background: var(--confucius-selection); color: var(--confucius-selection-ink);
 }
 :is(.confucius-workspace-root, .confucius-dialog, #confucius-knowledge-overlay, #confucius-preferences) :is(input, textarea)::placeholder {
@@ -145,11 +145,11 @@ export const SURFACE_CSS = `
 #confucius-preferences button { appearance: none; min-height: 32px; padding: 6px 10px; margin: 0 0 8px; border: 0; border-radius: 8px; background: var(--confucius-surface); color: var(--confucius-ink); font: inherit; cursor: pointer; }
 #confucius-preferences button:hover { background: var(--confucius-hover); }
 #confucius-preferences :is(button, summary):focus-visible { outline: 2px solid var(--confucius-focus); outline-offset: 2px; }
-:is(.confucius-workspace-root, .confucius-menu-surface, .confucius-dialog, #confucius-artifact-overlay, #confucius-knowledge-overlay, #confucius-preferences) :is(button, summary, a):focus-visible,
-[data-confucius-input=keyboard] :is(.confucius-workspace-root, .confucius-menu-surface, .confucius-dialog, #confucius-artifact-overlay, #confucius-knowledge-overlay, #confucius-preferences) :is(button, summary, a):focus {
+:is(.confucius-workspace-root, .confucius-menu-surface, .confucius-dialog, #confucius-artifact-window, #confucius-knowledge-overlay, #confucius-preferences) :is(button, summary, a):focus-visible,
+[data-confucius-input=keyboard] :is(.confucius-workspace-root, .confucius-menu-surface, .confucius-dialog, #confucius-artifact-window, #confucius-knowledge-overlay, #confucius-preferences) :is(button, summary, a):focus {
   outline: 2px solid var(--confucius-focus); outline-offset: -2px;
 }
-[data-confucius-input=pointer] :where(.confucius-workspace-root, .confucius-menu-surface, .confucius-dialog, #confucius-artifact-overlay, #confucius-knowledge-overlay, #confucius-preferences) :is(button, summary, a):focus {
+[data-confucius-input=pointer] :where(.confucius-workspace-root, .confucius-menu-surface, .confucius-dialog, #confucius-artifact-window, #confucius-knowledge-overlay, #confucius-preferences) :is(button, summary, a):focus {
   outline: none !important; box-shadow: none !important;
 }
 .confucius-workspace-root:is([data-confucius-density=compact], [data-confucius-density=narrow]) .confucius-dialog { padding: 8px; }
@@ -168,5 +168,5 @@ export const SURFACE_CSS = `
 .confucius-workspace-root[data-confucius-compact-panels=true] .confucius-kb-topic-list { display: block; }
 .confucius-workspace-root[data-confucius-compact-panels=true] .confucius-kb-back { display: inline-flex; padding: 4px; background: transparent; }
 .confucius-knowledge-shell[data-stage=topics] .confucius-kb-back { display: none !important; }
-@media (prefers-reduced-motion: reduce) { .confucius-dialog *, #confucius-knowledge-overlay *, #confucius-artifact-overlay * { animation: none !important; transition: none !important; } }
+@media (prefers-reduced-motion: reduce) { .confucius-dialog *, #confucius-knowledge-overlay *, #confucius-artifact-window * { animation: none !important; transition: none !important; } }
 `;

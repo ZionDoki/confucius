@@ -2824,7 +2824,10 @@ export class AgentHost {
   private async artifactGet(id: string) {
     const artifact = await this.artifacts.get(id);
     if (!artifact) throw new Error("Unknown artifact");
-    return { artifact };
+    return {
+      artifact,
+      taskStatus: this.sessions.get(artifact.taskId)?.record.status ?? null,
+    };
   }
 
   private async artifactUpsert(input: ArtifactUpsertInput) {
