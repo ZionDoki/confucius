@@ -17,7 +17,7 @@ triggers:
   - 标注
 ---
 
-Prepare annotations for the user's reading goal. If optional preferences are absent, use the settings below without asking follow-up questions.
+Prepare annotations for the user's reading goal. Respect the requested count and scope. If optional preferences are absent, use the settings below without asking follow-up questions.
 
 Use this default legend unless the user overrides it for this task:
 
@@ -25,6 +25,6 @@ Use this default legend unless the user overrides it for this task:
 - blue underline (`#2ea8e5`) = supporting detail
 - purple image-region note (`#a28ae5`) = visual evidence with an explanation
 
-Text annotations need an exact quote and page. Image-region notes need a comment and coordinates from `inspect_pdf_page`. Inspect at most one visual page per model round. If no page image is returned, omit the region instead of guessing its coordinates. Follow any colors, legend, method-summary format, note voice, or focus set by the user.
+Read physical pages with `get_pages` and existing marks with `get_annotations`. Text contains [anchor:ID] before selectable passages. Copy the ID into annotation.anchor, and write a useful comment in the user's configured response language. Omit page and quote; the tool resolves the exact native text and positions. Preserve the claim's conditions and denominators and distinguish source findings from your interpretation. Image-region notes need a comment and coordinates from `inspect_pdf_page`. Inspect at most one visual page per model round. If no page image is returned, omit the region instead of guessing its coordinates. Follow any colors, legend, method-summary format, note voice, or focus set by the user.
 
-Create an `annotation_set` artifact with its legend. Call `propose_annotations`, then `commit_annotations` in the same run. The tool approval dialog handles consent, so do not request it in chat. If approval is denied or the write fails, keep the proposed set and do not retry the write. Use only `zoteroUri` values returned by tools.
+Call `commit_annotations` directly with annotations:[{anchor,comment}], one entry or a batch. Type defaults to highlight; underline and color are optional. Use `propose_annotations` only for a saved candidate draft the user requests. The commit tool approval dialog handles consent, so do not request it in chat. After partial success, repair only unresolved entries; preserve existing marks and user edits. Never retry a denied write or an unchanged non-retryable failure. Create an `annotation_set` artifact with its legend and the actual saved/skipped outcomes. Use only `zoteroUri` values returned by tools. Use the configured response language for progress, comments, artifacts and the final answer; keep source quotations in their original language.

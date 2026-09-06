@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { ArtifactStore, type ArtifactFileSystem } from "./ArtifactStore";
-import type { ToolExecutionContext } from "@confucius/protocol";
+import type { ToolExecutionContext, ConfuciusEvent } from "@confucius/protocol";
+import {
+  deepReadReviewNextAction,
+  deepReadReviewState,
+} from "./DeepReadReview";
 import {
   ARTIFACT_UPSERT_DEFINITION,
   ArtifactToolProvider,
@@ -324,6 +328,153 @@ describe("ArtifactStore", () => {
 });
 
 describe("artifact_upsert contract", () => {
+  it("saves a deep read draft and requires fresh same-source evidence and comments before ready, including after recreation", async () => {
+    const store = new ArtifactStore(
+      "artifacts",
+      new MemoryFileSystem(),
+      () => 100,
+      () => "review",
+    );
+    const execution = {
+      runId: "run",
+      intentRevision: 1,
+      sourceFingerprint: "source",
+    };
+    const events: ConfuciusEvent[] = [];
+    const provider = () =>
+      new ArtifactToolProvider(
+        store,
+        "task",
+        "native",
+        ["item:1:PAPER"],
+        (artifact) =>
+          events.push({
+            id: `saved-${artifact.revision}`,
+            sessionId: "task",
+            turnId: "turn",
+            ts: 1000,
+            type: "artifact_upserted",
+            payload: { artifact },
+          }),
+        () => execution,
+        (artifact) => deepReadReviewState(artifact, execution, events),
+        (artifact) => deepReadReviewNextAction(artifact, execution, events),
+      );
+    const save = () => ({
+      id: "review",
+      kind: "deep_read",
+      title: "报告",
+      status: "ready",
+      body: { type: "markdown", markdown: "A result to check" },
+    });
+    const initial = await provider().call("artifact_upsert", save());
+    assert.equal(initial.ok, true);
+    assert.equal((await store.get("review"))?.status, "draft");
+    const read = (
+      toolName: string,
+      ts: number,
+      key = "PAPER",
+      ok = true,
+    ): ConfuciusEvent => ({
+      id: `${toolName}-${ts}-${key}`,
+      sessionId: "task",
+      turnId: "turn",
+      ts,
+      type: "tool_result",
+      payload: {
+        callId: "call",
+        result: ok
+          ? {
+              ok: true,
+              toolName,
+              data: {
+                libraryID: 1,
+                key: toolName === "get_annotations" ? "PDF" : key,
+                attachmentKey: key === "PAPER" ? "PDF" : "OTHERPDF",
+                pages: [{ page: 2, text: "Source evidence" }],
+                annotations: [],
+              },
+            }
+          : {
+              ok: false,
+              toolName,
+              code: "unavailable",
+              message: "No evidence",
+            },
+      },
+    });
+    events.unshift(read("get_pages", 90), read("get_annotations", 90));
+    events.push(
+      read("get_pages", 110, "OTHER"),
+      read("get_pages", 120, "PAPER", false),
+    );
+    assert.equal((await provider().call("artifact_upsert", save())).ok, false);
+    assert.equal((await store.get("review"))?.revision, 1);
+    events.push(read("get_pages", 130));
+    const missingComments = await provider().call("artifact_upsert", save());
+    assert.equal(missingComments.ok, false);
+    if (!missingComments.ok) {
+      assert.match(missingComments.message, /draft revision 1/);
+      assert.match(
+        missingComments.message,
+        /missing successful get_annotations/,
+      );
+      assert.match(
+        missingComments.message,
+        /source-page read is already satisfied/,
+      );
+    }
+    events.push(read("get_annotations", 140));
+    // Saving a corrected draft is a new revision; the error must identify the
+    // missing step for that revision instead of sending the model into a loop
+    // of page reads or comment writes that cannot satisfy get_annotations.
+    assert.equal(
+      (
+        await provider().call("artifact_upsert", {
+          ...save(),
+          status: "draft",
+          body: { type: "markdown", markdown: "Corrected draft" },
+        })
+      ).ok,
+      true,
+    );
+    const missingBoth = await provider().call("artifact_upsert", save());
+    assert.equal(missingBoth.ok, false);
+    if (!missingBoth.ok)
+      assert.match(
+        missingBoth.message,
+        /draft revision 2: missing successful get_pages and get_annotations/,
+      );
+    events.push(read("get_pages", 150));
+    const missingLatestComments = await provider().call(
+      "artifact_upsert",
+      save(),
+    );
+    assert.equal(missingLatestComments.ok, false);
+    if (!missingLatestComments.ok) {
+      assert.match(missingLatestComments.message, /draft revision 2/);
+      assert.match(
+        missingLatestComments.message,
+        /missing successful get_annotations/,
+      );
+      assert.match(
+        missingLatestComments.message,
+        /Updating a comment does not replace/,
+      );
+    }
+    events.push(read("get_annotations", 160));
+    assert.equal((await provider().call("artifact_upsert", save())).ok, true);
+    assert.equal((await store.get("review"))?.status, "ready");
+    assert.equal(
+      deepReadReviewState(
+        await store.get("review"),
+        { ...execution, runId: "next" },
+        events,
+      ),
+      "draft_required",
+    );
+  });
+
   it("preserves a saved artifact when its UI callback fails and detects an intervening revision", async () => {
     const fs = new MemoryFileSystem();
     const store = new ArtifactStore(

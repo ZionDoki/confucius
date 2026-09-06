@@ -2,6 +2,16 @@ import { memoryJsonStorage, type JsonStorage } from "../host/RuntimeStorage";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { ZoteroToolHost } from "./ZoteroToolHost";
+import { layoutQuoteVariants } from "./PdfQuote";
+import { spatialPageText } from "./PdfLayout";
+import {
+  anchorPage,
+  pdfPassages,
+  renderPdfPassages,
+  resolvePassage,
+  type PdfPageChar,
+} from "./PdfAnchors";
+import { runtimeDigest } from "../host/RuntimeStorage";
 import { ToolExecutionService } from "../host/ReliableToolProvider";
 import { ZoteroToolProvider } from "../host/ZoteroToolProvider";
 import { AgentHost } from "../host/AgentHost";
@@ -12,6 +22,326 @@ import {
   verifyWritebackSnapshot,
   type WritebackSnapshot,
 } from "../host/WritebackSnapshot";
+
+function positionedChars(lines: string[]): PdfPageChar[] {
+  return lines.flatMap((line, row) =>
+    [...line].map((u, col) => ({
+      u,
+      rect: [10 + col * 5, 800 - row * 12, 15 + col * 5, 810 - row * 12],
+      lineBreakAfter: col === line.length - 1,
+    })),
+  );
+}
+
+describe("native passage annotation contract", () => {
+  it("keeps page-boundary fragments readable without presenting them as complete selectable evidence", async () => {
+    const passages = await pdfPassages(
+      positionedChars([
+        "executed successfully. Unfortunately, subsequent tasks failed. The remaining",
+      ]),
+      12,
+      "source",
+      runtimeDigest,
+    );
+    assert.equal(passages.length, 3);
+    assert.equal(passages[0].anchor, undefined);
+    assert.ok(passages[1].anchor);
+    assert.equal(passages[2].anchor, undefined);
+    assert.match(
+      renderPdfPassages(passages, 5000).text,
+      /\[unanchored\] executed successfully\./,
+    );
+  });
+
+  it("keeps font/paragraph breaks inside a sentence and never exposes an anchor for a clipped passage", async () => {
+    const chars = positionedChars([
+      "The claim is",
+      "conditional. Another claim.",
+    ]);
+    chars[11].paragraphBreakAfter = true;
+    const passages = await pdfPassages(chars, 1, "source", runtimeDigest);
+    assert.equal(passages.length, 2);
+    assert.match(passages[0].text, /claim is\n\nconditional\./);
+    const rendered = renderPdfPassages(passages, 15);
+    assert.equal(rendered.truncated, true);
+    assert.doesNotMatch(rendered.text, /\[anchor:/);
+  });
+  async function readAnchors(installed: InstalledHost) {
+    const result = await installed.execute("get_pages", {
+      libraryID: 1,
+      key: "ITEMKEY1",
+      start: 1,
+      end: 1,
+    });
+    assert.equal(result.ok, true);
+    const text =
+      (result.ok &&
+        (result.data as { pages: { text: string }[] }).pages[0].text) ||
+      "";
+    return {
+      text,
+      anchors: [...text.matchAll(/\[anchor:([^\]]+)\]/g)].map((m) => m[1]),
+    };
+  }
+
+  it("commits a single read anchor without propose, copied quotation, page or native search", async () => {
+    const installed = installHost({
+      nativeChars: [
+        positionedChars(["The ﬂow is task-", "driven. The result is partial."]),
+      ],
+      failMatchPositions: true,
+    });
+    const { text, anchors } = await readAnchors(installed);
+    assert.match(anchors[0], /^a001[0-9a-f]{12}$/);
+    assert.equal(anchorPage(anchors[0]), 1);
+    assert.match(text, /ﬂow is task-\ndriven\./);
+    assert.equal(anchors.length, 2);
+    const args = {
+      libraryID: 1,
+      key: "ITEMKEY1",
+      annotations: [
+        { anchor: anchors[0], comment: "流程受任务引导；这不等于完整覆盖。" },
+      ],
+    };
+    const result = await installed.execute("commit_annotations", args);
+    assert.equal(result.ok, true);
+    assert.equal(installed.saved.length, 1);
+    assert.equal(installed.saved[0].text, "The ﬂow is task-\ndriven.");
+    assert.deepEqual(installed.saved[0].position, {
+      pageIndex: 0,
+      rects: [
+        [10, 800, 90, 810],
+        [10, 788, 45, 798],
+      ],
+    });
+    assert.equal(installed.saved[0].comment, args.annotations[0].comment);
+    const operation = (
+      await installed.service.listOperations({ name: "commit_annotations" })
+    )[0];
+    const preview = operation.args.annotations as {
+      quote: string;
+      page: number;
+      anchor?: string;
+    }[];
+    assert.equal(preview[0].quote, installed.saved[0].text);
+    assert.equal(preview[0].page, 1);
+    assert.equal(preview[0].anchor, undefined);
+  });
+
+  it("distinguishes repeated text by position and retains good entries alongside a bad anchor", async () => {
+    const installed = installHost({
+      nativeChars: [
+        positionedChars(["Repeated evidence.", "Repeated evidence."]),
+      ],
+      normalizedMatchCount: 2,
+    });
+    const { anchors } = await readAnchors(installed);
+    const result = await installed.execute("commit_annotations", {
+      libraryID: 1,
+      key: "ITEMKEY1",
+      annotations: [
+        { anchor: anchors[0], comment: "第一处证据。" },
+        { anchor: anchors[1], type: "underline", comment: "第二处证据。" },
+        { anchor: "p1:0-1:0000000000000000", comment: "错误引用。" },
+      ],
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.effect, "partial");
+    assert.equal(installed.native.size, 2);
+    assert.notDeepEqual(
+      installed.saved[0].position,
+      installed.saved[1].position,
+    );
+    assert.equal(installed.saved[0].text, installed.saved[1].text);
+    assert.equal(
+      result.ok && (result.data as { skipped: unknown[] }).skipped.length,
+      1,
+    );
+  });
+
+  it("rejects edited, stale, out-of-bounds and wrong-PDF references without guessing", async () => {
+    const chars = positionedChars(["Evidence remains conditional."]);
+    const passages = await pdfPassages(chars, 1, "original", runtimeDigest);
+    assert.notEqual(
+      passages[0].anchor,
+      (await pdfPassages(chars, 1, "replacement", runtimeDigest))[0].anchor,
+    );
+    const installed = installHost({ nativeChars: [chars] });
+    const { anchors } = await readAnchors(installed);
+    chars[0].rect![0] += 1;
+    for (const candidate of [
+      { anchor: anchors[0] },
+      { anchor: anchors[0].replace(/^a001/, "a002") },
+      { anchor: "invented" },
+      { anchor: anchors[0], page: 2 },
+      { anchor: anchors[0], quote: "Evidence" },
+    ]) {
+      const result = await installed.execute("commit_annotations", {
+        libraryID: 1,
+        key: "ITEMKEY1",
+        annotations: [candidate],
+      });
+      assert.equal(result.ok, false);
+    }
+    assert.equal(installed.native.size, 0);
+  });
+
+  it("resolves previously issued complete references but never guesses a missing checksum", async () => {
+    const passages = await pdfPassages(
+      positionedChars(["The evidence is conditional."]),
+      9,
+      "source",
+      runtimeDigest,
+    );
+    assert.equal(
+      resolvePassage(passages, passages[0].legacyAnchor!),
+      passages[0],
+    );
+    assert.equal(anchorPage(passages[0].legacyAnchor!), 9);
+    assert.equal(
+      resolvePassage(
+        passages,
+        ` [anchor:${passages[0].anchor!.toUpperCase()}] `,
+      ),
+      passages[0],
+    );
+    assert.throws(
+      () =>
+        resolvePassage(
+          passages,
+          passages[0].legacyAnchor!.split(":").slice(0, 2).join(":"),
+        ),
+      /does not match/,
+    );
+  });
+
+  it("retries direct anchors without duplicating or restoring a manually removed mark", async () => {
+    const installed = installHost({
+      nativeChars: [positionedChars(["Stable evidence."])],
+    });
+    const { anchors } = await readAnchors(installed);
+    const request = () => ({
+      libraryID: 1,
+      key: "ITEMKEY1",
+      annotations: [{ anchor: anchors[0], comment: "保留边界。" }],
+    });
+    assert.equal(
+      (await installed.execute("commit_annotations", request())).ok,
+      true,
+    );
+    assert.equal(
+      (await installed.execute("commit_annotations", request())).ok,
+      true,
+    );
+    assert.equal(installed.saved.length, 1);
+    installed.native.clear();
+    await installed.execute("commit_annotations", request());
+    assert.equal(installed.native.size, 0);
+    assert.equal(installed.saved.length, 1);
+  });
+
+  it("does not discard an anchored success when a compatibility search times out", async () => {
+    const installed = installHost({
+      nativeChars: [positionedChars(["Located evidence."])],
+    });
+    const { anchors } = await readAnchors(installed);
+    (
+      installed.host as unknown as { locateCandidate: () => Promise<never> }
+    ).locateCandidate = async () => {
+      throw new ToolTimeout("slow search");
+    };
+    const result = await installed.execute("commit_annotations", {
+      libraryID: 1,
+      key: "ITEMKEY1",
+      annotations: [
+        { type: "highlight", page: 1, quote: "Slow quote" },
+        { anchor: anchors[0], comment: "已定位证据。" },
+      ],
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.effect, "partial");
+    assert.equal(installed.saved.length, 1);
+  });
+
+  it("does not expose a selectable anchor for text without native coordinates", async () => {
+    const passages = await pdfPassages(
+      [{ u: "Scanned/OCR text without positions." }],
+      1,
+      "source",
+      runtimeDigest,
+    );
+    assert.equal(passages[0].anchor, undefined);
+    assert.match(passages[0].text, /Scanned/);
+  });
+});
+
+describe("PDF quote layout equivalence", () => {
+  it("keeps table headers and numeric cells in physical column order despite scrambled extraction", () => {
+    const layout = spatialPageText([
+      { text: "4", rect: [600, 31, 10, 10] },
+      { text: "baseline", rect: [600, 10, 70, 10] },
+      { text: "9", rect: [300, 30, 10, 10] },
+      { text: "method", rect: [300, 10, 65, 10] },
+      { text: "forms", rect: [50, 30, 40, 10] },
+    ]).split("\n");
+    assert.equal(layout.length, 2);
+    assert.equal(layout[0].indexOf("method"), layout[1].indexOf("9"));
+    assert.equal(layout[0].indexOf("baseline"), layout[1].indexOf("4"));
+    assert.match(layout[1], /forms\s+9\s+4/);
+  });
+  const chars = (text: string) =>
+    [...text].map((u) => ({ u, lineBreakAfter: false }));
+  it("repairs proven line-break hyphens, ligatures and quotation typography without changing the source query", () => {
+    const source = [
+      ...chars("The “workﬂow” responsi"),
+      { u: "-", lineBreakAfter: true },
+      ...chars("bilities are split."),
+    ];
+    assert.deepEqual(
+      layoutQuoteVariants(source, 'The "workflow" responsibilities are split.'),
+      ["The “workﬂow” responsi- bilities are split."],
+    );
+    const compound = [
+      ...chars("task"),
+      { u: "-", lineBreakAfter: true },
+      ...chars("driven"),
+    ];
+    assert.deepEqual(layoutQuoteVariants(compound, "task-driven"), [
+      "task- driven",
+    ]);
+  });
+  it("does not remove lexical hyphens, splice passages or accept paraphrases", () => {
+    assert.deepEqual(
+      layoutQuoteVariants(
+        chars("Please re-sign the contract."),
+        "Please resign the contract.",
+      ),
+      [],
+    );
+    assert.deepEqual(
+      layoutQuoteVariants(
+        chars("Evidence with a material condition."),
+        "Evidence ... condition.",
+      ),
+      [],
+    );
+    assert.deepEqual(
+      layoutQuoteVariants(chars("Some tasks failed."), "All tasks failed."),
+      [],
+    );
+  });
+  it("retains multiple equivalent queries so native search must check their combined ambiguity", () => {
+    const source = [
+      ...chars("responsibilities and responsi"),
+      { u: "-", lineBreakAfter: true },
+      ...chars("bilities"),
+    ];
+    assert.deepEqual(layoutQuoteVariants(source, "responsibilities").sort(), [
+      "responsi- bilities",
+      "responsibilities",
+    ]);
+  });
+});
 
 function installLibrary() {
   let sequence = 0,
@@ -605,6 +935,11 @@ function installHost(
     useReaderPageView?: boolean;
     pageTexts?: string[];
     missingQuotes?: string[];
+    delayedFind?: boolean;
+    normalizedMatchCount?: number;
+    nativeMatchPages?: number[];
+    failMatchPositions?: boolean;
+    nativeChars?: PdfPageChar[][];
   } = {},
 ): InstalledHost {
   const libraryID = options.libraryID ?? 1;
@@ -615,6 +950,8 @@ function installHost(
   const navigated: Array<Record<string, unknown>> = [];
   let keyIndex = 0;
   let query = "";
+  let searchPolls = 0;
+  const readerClones = new WeakSet<object>();
   const native = new Map<string, Record<string, unknown>>();
   const storage = memoryJsonStorage();
 
@@ -654,7 +991,7 @@ function installHost(
     render: () => ({ promise: Promise.resolve() }),
   };
   const pdfDocument = {
-    numPages: options.pageTexts?.length ?? 4,
+    numPages: options.nativeChars?.length ?? options.pageTexts?.length ?? 4,
     getPage: async (page: number) =>
       options.useReaderPageView
         ? {}
@@ -665,15 +1002,40 @@ function installHost(
             }),
           },
   };
+  const completedMatches = () =>
+    Array.from({ length: pdfDocument.numPages }, (_, page) =>
+      options.nativeMatchPages && !options.nativeMatchPages.includes(page + 1)
+        ? []
+        : Array.from(
+            { length: options.normalizedMatchCount ?? 1 },
+            (_, index) => index,
+          ),
+    );
   const controller = {
     _pdfDocument: {},
+    state: { query: "previous query" },
+    _dirtyMatch: false,
     _pendingFindMatches: new Set<number>(),
     pageMatches: [[0], [0], [0], [0]],
     find: async () => undefined,
-    getMatchPositionsAsync: async () =>
-      options.missingQuotes?.includes(query)
+    getMatchPositionsAsync: async (page: number) => {
+      if (options.failMatchPositions)
+        throw new Error("Native position unavailable");
+      return options.missingQuotes?.includes(query) ||
+        (options.nativeMatchPages &&
+          !options.nativeMatchPages.includes(page + 1))
         ? []
-        : [{ rects: [[10, 20, 40, 35]] }],
+        : Array.from(
+            {
+              length: controller._dirtyMatch
+                ? 1
+                : (options.normalizedMatchCount ?? 1),
+            },
+            (_, index) => ({
+              rects: [[10 + index * 100, 20, 40 + index * 100, 35]],
+            }),
+          );
+    },
   };
   const view = {
     initializedPromise: Promise.resolve(),
@@ -687,8 +1049,15 @@ function installHost(
       },
     },
     _ensureBasicPageData: async () => undefined,
+    _pdfPages: options.nativeChars?.map((chars) => ({ chars })),
     setFindState: async (state: { query: string }) => {
+      // Reader ignores an un-cloned chrome object across its window boundary.
+      if (!readerClones.has(state)) return;
       query = state.query;
+      controller.state = { query };
+      controller._dirtyMatch = Boolean(options.delayedFind);
+      if (!options.delayedFind) controller.pageMatches = completedMatches();
+      searchPolls = 0;
     },
     getAnnotationMeta: (position: { pageIndex: number }) => ({
       pageLabel: String(position.pageIndex + 1),
@@ -715,7 +1084,13 @@ function installHost(
   };
 
   (globalThis as unknown as { Components: unknown }).Components = {
-    utils: { cloneInto: (value: unknown) => value },
+    utils: {
+      cloneInto: (value: object) => {
+        const cloned = structuredClone(value);
+        readerClones.add(cloned);
+        return cloned;
+      },
+    },
   };
   (globalThis as unknown as { Zotero: unknown }).Zotero = {
     Libraries: { userLibraryID: 1 },
@@ -738,7 +1113,14 @@ function installHost(
       _readers: [reader],
       open: async () => reader,
     },
-    Promise: { delay: async () => undefined },
+    Promise: {
+      delay: async () => {
+        if (controller._dirtyMatch && ++searchPolls >= 3) {
+          controller._dirtyMatch = false;
+          controller.pageMatches = completedMatches();
+        }
+      },
+    },
     DataObjectUtilities: {
       generateKey: () => `ANNKEY0${++keyIndex}`,
     },
@@ -966,6 +1348,69 @@ describe("annotation recovery and review pipeline", () => {
     page,
     quote,
   });
+  it("normalizes an unambiguous text explanation alias but rejects conflicting prose", async () => {
+    const installed = installHost();
+    const result = await installed.execute("propose_annotations", {
+      ...ref,
+      annotations: [
+        { ...draft("Evidence"), content: "中文说明" },
+        {
+          ...draft("Other evidence"),
+          content: "冲突说明",
+          comment: "既有说明",
+        },
+      ],
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    const data = result.data as {
+      annotations: Array<{ comment?: string; status: string; error?: string }>;
+    };
+    assert.equal(data.annotations[0].comment, "中文说明");
+    assert.equal(data.annotations[0].status, "pending");
+    assert.equal(data.annotations[1].status, "skipped");
+    assert.equal(installed.saved.length, 0);
+  });
+  it("passes a Reader-owned search state and waits for the new normalized results", async () => {
+    const installed = installHost({ delayedFind: true });
+    const result = await installed.execute("commit_annotations", {
+      ...ref,
+      annotations: [draft("A uniquely located claim")],
+    });
+    assert.equal(result.ok, true);
+    assert.equal(installed.saved.length, 1);
+    assert.equal(installed.saved[0].text, "A uniquely located claim");
+  });
+
+  it("rejects normalized ambiguity after the asynchronous search completes", async () => {
+    const installed = installHost({
+      delayedFind: true,
+      normalizedMatchCount: 2,
+      failMatchPositions: true,
+    });
+    const result = await installed.execute("commit_annotations", {
+      ...ref,
+      annotations: [draft("A claim with a normalized duplicate")],
+    });
+    assert.equal(result.ok, false);
+    assert.match(JSON.stringify(result), /ambiguous/);
+    assert.equal(installed.saved.length, 0);
+  });
+
+  it("reports native matches on another physical page without silently relocating the mark", async () => {
+    const installed = installHost({ nativeMatchPages: [2] });
+    const result = await installed.execute("commit_annotations", {
+      ...ref,
+      annotations: [draft("A correctly quoted claim", 3)],
+    });
+    assert.equal(result.ok, false);
+    assert.match(
+      JSON.stringify(result),
+      /Native matches exist on physical pages 2/,
+    );
+    assert.equal(installed.saved.length, 0);
+  });
+
   it("commits valid entries and reconciles subsequent batches without inspection tokens", async () => {
     const installed = installHost({
       missingQuotes: ["missing A", "missing B"],
@@ -1152,6 +1597,12 @@ describe("annotation recovery and review pipeline", () => {
       end: 3,
     });
     assert.equal(pages.ok, true);
+    if (pages.ok)
+      assert.match(
+        (pages.data as { pages: Array<{ zoteroUri: string }> }).pages[2]
+          .zoteroUri,
+        /open-pdf\/library\/items\/.*\?page=3$/,
+      );
     if (pages.ok)
       assert.deepEqual(
         (

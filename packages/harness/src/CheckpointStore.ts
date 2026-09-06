@@ -18,6 +18,8 @@ export interface ToolExecutionCheckpoint {
   modelCallId?: string;
   toolName: string;
   args: Record<string, unknown>;
+  /** Model request before preparation expands or normalizes execution args. */
+  requestedArgs?: Record<string, unknown>;
   status: "started" | "completed" | "failed";
   result?: unknown;
 }

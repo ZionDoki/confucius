@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
-import { describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import type { ModelMessage } from "@confucius/harness";
 import {
   coalesceTimeline,
@@ -21,6 +21,125 @@ import { ToolExecutionService } from "./ReliableToolProvider";
 import type { ExecutorResult, RunOutcome } from "./RunCoordinator";
 import { memoryJsonStorage } from "./RuntimeStorage";
 import { TaskTraceBuffer } from "./TaskTrace";
+import { responseLanguageInstruction } from "./ResponseLanguage";
+import { deepReadReviewMessages } from "./DeepReadReviewContext";
+
+it("isolates a source-grounded review while preserving the durable history and later tool groups", () => {
+  const tool = (toolName: string, data: unknown, id: string): ModelMessage => ({
+    role: "tool",
+    toolCallId: id,
+    content: JSON.stringify({ ok: true, toolName, data }),
+  });
+  const original: ModelMessage[] = [
+    { role: "system", content: "Use configured Chinese" },
+    { role: "user", content: "Read this paper" },
+    {
+      role: "assistant",
+      content: "PREMATURE CONCLUSION",
+      replayState: {
+        provider: "test",
+        version: 1,
+        data: { reasoning: "BIASED REASONING" },
+      },
+    },
+    tool(
+      "get_pages",
+      {
+        libraryID: 1,
+        key: "P",
+        pages: [{ page: 2, text: "Primary evidence" }],
+      },
+      "p",
+    ),
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        {
+          id: "draft",
+          name: "artifact_upsert",
+          args: {
+            id: "r",
+            kind: "deep_read",
+            body: { type: "markdown", markdown: "Fallible draft" },
+          },
+        },
+      ],
+    },
+    tool(
+      "artifact_upsert",
+      { artifact: { id: "r", kind: "deep_read", status: "draft" } },
+      "draft",
+    ),
+  ];
+  assert.equal(deepReadReviewMessages(original), original);
+  original.push(
+    tool(
+      "get_annotations",
+      {
+        libraryID: 1,
+        key: "P",
+        annotations: [{ key: "MARK", comment: "Saved explanation" }],
+      },
+      "annotations",
+    ),
+  );
+  original.push(
+    tool(
+      "get_pages",
+      {
+        libraryID: 1,
+        key: "P",
+        pages: [{ page: 3, text: "Parallel source read" }],
+      },
+      "parallel",
+    ),
+  );
+  const tail: ModelMessage[] = [
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        {
+          id: "fix",
+          name: "update_annotation_comment",
+          args: { key: "MARK", comment: "Corrected explanation" },
+        },
+      ],
+    },
+    tool("update_annotation_comment", { key: "MARK" }, "fix"),
+  ];
+  original.push(...tail);
+  const snapshot = JSON.stringify(original);
+  const projected = deepReadReviewMessages(original);
+  const text = JSON.stringify(projected);
+  assert.doesNotMatch(text, /PREMATURE CONCLUSION|BIASED REASONING/);
+  for (const evidence of [
+    "Primary evidence",
+    "Parallel source read",
+    "Fallible draft",
+    "Saved explanation",
+    "Use configured Chinese",
+  ])
+    assert(text.includes(evidence));
+  assert.deepEqual(projected.slice(-2), tail);
+  assert.equal(JSON.stringify(original), snapshot);
+  const recovered = deepReadReviewMessages(
+    [original[0], original[1], original[2], original[6], original[7], ...tail],
+    {
+      id: "r",
+      title: "Recovered draft",
+      body: { type: "markdown", markdown: "Durable report" },
+      citations: [],
+    },
+  );
+  assert.match(
+    JSON.stringify(recovered),
+    /Durable report|Parallel source read/,
+  );
+  assert.doesNotMatch(JSON.stringify(recovered), /PREMATURE CONCLUSION/);
+  assert.deepEqual(recovered.slice(-2), tail);
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -198,7 +317,67 @@ function toolResult(response: McpToolCallResult): ToolResult {
   return JSON.parse(content.text) as ToolResult;
 }
 
+describe("configured research response language", () => {
+  for (const language of ["zh-CN", "en-US"] as const) {
+    it(`injects ${language} into native and continued external prompts`, async () => {
+      const previous = Reflect.get(globalThis, "Zotero");
+      Reflect.set(globalThis, "Zotero", {
+        locale: language === "zh-CN" ? "en-US" : "zh-CN",
+        Prefs: { get: () => language },
+      });
+      try {
+        const { host, state } = fixture();
+        const prompts = host as unknown as {
+          buildSystemPrompt(
+            text: string,
+            options: Record<string, unknown>,
+          ): Promise<string>;
+          externalPrompt(
+            task: ResearchTaskRecord,
+            text: string,
+            history: ModelMessage[],
+          ): string;
+        };
+        const native = await prompts.buildSystemPrompt(
+          "Read an English paper",
+          {
+            planMode: false,
+            skills: [],
+            loadedSkills: [],
+            lockedContext: state.record.lockedContext,
+            includeRecallContext: false,
+          },
+        );
+        state.record.externalSessionId = "continued-session";
+        const external = prompts.externalPrompt(
+          state.record,
+          "Repair remaining annotations",
+          [{ role: "assistant", content: "Earlier English output" }],
+        );
+        const instruction = responseLanguageInstruction(language);
+        assert.ok(native.includes(instruction));
+        assert.ok(external.includes(instruction));
+        assert.match(instruction, /quote/);
+      } finally {
+        Reflect.set(globalThis, "Zotero", previous);
+      }
+    });
+  }
+});
+
 describe("AgentHost lifecycle ownership", () => {
+  let previousZotero: unknown;
+  beforeEach(() => {
+    previousZotero = Reflect.get(globalThis, "Zotero");
+    Reflect.set(globalThis, "Zotero", {
+      locale: "en-US",
+      Prefs: { get: () => "en-US" },
+    });
+  });
+  afterEach(() => {
+    Reflect.set(globalThis, "Zotero", previousZotero);
+  });
+
   for (const ending of [
     "completed",
     "aborted",

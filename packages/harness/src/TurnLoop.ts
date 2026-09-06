@@ -609,7 +609,10 @@ export class TurnLoop {
     // so keep exactly one visual page and preserve text anchors for the rest.
     let transientImageAttached = false;
 
-    for (const call of toolCalls) {
+    for (const requestedCall of toolCalls) {
+      // Preparation may expand a proposal ID into an approved concrete batch.
+      // Keep that execution payload out of the model's original conversation.
+      const call = cloneValue(requestedCall);
       if (input.signal?.aborted) return "aborted";
       this.checkEffectBudget();
       // Model backends such as Ollama restart tool-call ids every round
@@ -620,7 +623,7 @@ export class TurnLoop {
       this.emit(input, "tool_requested", {
         callId: eventId,
         toolName: call.name,
-        args: call.args,
+        args: cloneValue(requestedCall.args),
       });
 
       if (!availableToolNames.has(call.name)) {
@@ -673,7 +676,8 @@ export class TurnLoop {
               entry.result &&
               entry.modelCallId === call.id &&
               (entry.result as ToolResult).effect !== "unknown" &&
-              canonicalArguments(entry.args) === canonicalArguments(call.args),
+              canonicalArguments(entry.requestedArgs ?? entry.args) ===
+                canonicalArguments(call.args),
           )
         : undefined;
       if (priorWrite) {
@@ -822,6 +826,7 @@ export class TurnLoop {
         modelCallId: call.id,
         toolName: call.name,
         args: approvedArgs,
+        requestedArgs: cloneValue(requestedCall.args),
       });
     }
 
@@ -839,6 +844,7 @@ export class TurnLoop {
           modelCallId: call.modelCallId,
           toolName: call.toolName,
           args: cloneValue(call.args),
+          requestedArgs: cloneValue(call.requestedArgs),
           status: "started",
         });
       }
@@ -1159,7 +1165,8 @@ function closeToolGroups(
           (entry) =>
             entry.modelCallId === call.id &&
             entry.toolName === call.name &&
-            canonicalArguments(entry.args) === canonicalArguments(call.args),
+            canonicalArguments(entry.requestedArgs ?? entry.args) ===
+              canonicalArguments(call.args),
         );
       repaired.push({
         role: "tool",

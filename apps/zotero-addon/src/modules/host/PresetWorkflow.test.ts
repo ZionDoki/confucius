@@ -12,7 +12,7 @@ import {
   PresetToolProvider,
   isContinueRequest,
 } from "./PresetWorkflow";
-import { MemoryToolProvider } from "@confucius/harness";
+import { MemoryToolProvider, type ToolProvider } from "@confucius/harness";
 describe("task preset selection", () => {
   function task(backend: ResearchTaskRecord["backend"] = "native") {
     const record: ResearchTaskRecord = {
@@ -179,4 +179,55 @@ it("button and supported continue text route to the same run", () => {
   assert(isContinueRequest("继续吧！"));
   assert(isContinueRequest("resume"));
   assert(!isContinueRequest("继续分析另一个问题"));
+});
+
+it("resolves an annotation's native source again for execution and rejects another PDF even with stale context", async () => {
+  const writes: string[] = [];
+  const inner: ToolProvider = {
+    listTools: () => [],
+    getMeta: () => null,
+    getSchema: () => undefined,
+    prepare: async (_name, args, context = {}) => {
+      context.resources = [`zotero:1:${args.key === "MARK" ? "PDF" : "OTHER"}`];
+      return null;
+    },
+    call: async (name, args, _signal, context) => {
+      assert.deepEqual(context?.resources, ["zotero:1:PDF"]);
+      writes.push(String(args.key));
+      return {
+        ok: true,
+        toolName: name,
+        effect: "applied",
+        data: { key: args.key },
+      };
+    },
+  };
+  const provider = new PresetToolProvider(inner, presetWorkflow("deep-read")!, {
+    itemRefs: new Set(["1:PDF"]),
+    collectionRefs: new Set(),
+    savedSearchRefs: new Set(),
+  });
+  assert.equal(
+    (
+      await provider.call(
+        "update_annotation_comment",
+        { libraryID: 1, key: "MARK", comment: "Corrected evidence" },
+        undefined,
+        { taskId: "task" },
+      )
+    ).ok,
+    true,
+  );
+  assert.equal(
+    (
+      await provider.call(
+        "update_annotation_comment",
+        { libraryID: 1, key: "OUTSIDE", comment: "Wrong source" },
+        undefined,
+        { resources: ["zotero:1:PDF"] },
+      )
+    ).ok,
+    false,
+  );
+  assert.deepEqual(writes, ["MARK"]);
 });

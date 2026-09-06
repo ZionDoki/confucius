@@ -178,6 +178,14 @@ export class PresetToolProvider implements ToolProvider {
         message: "Tool is not available in the preset task",
       };
     }
+    if (name === "update_annotation_comment") {
+      // The execution dispatch gets a fresh context after approval. Resolve the
+      // annotation's current native parent again before checking source scope;
+      // do not mistake missing preflight metadata for an out-of-scope item.
+      context = { ...context, resources: undefined };
+      const invalid = await this.inner.prepare?.(name, args, context);
+      if (invalid) return invalid;
+    }
     if (!presetToolCallInScope(this.scope, name, args, context)) {
       return {
         ok: false,
@@ -194,7 +202,7 @@ export class PresetToolProvider implements ToolProvider {
 const common = [
   "Follow the current user request, source scope, language and format. Use task source identifiers and actual tool results.",
   "Read evidence, prepare candidates and drafts, revise concrete issues, and save the required artifacts in the current context.",
-  "Reuse existing evidence and completed writes. Do not split the work into mandatory stages or ask about optional preferences.",
+  "Reuse existing evidence and completed writes. Review a saved draft against the source before finalizing it; do not restart completed research or ask about optional preferences.",
 ].join("\n");
 const presets: Record<PresetWorkflowId, PresetWorkflow> = {
   "deep-read": {
@@ -203,7 +211,7 @@ const presets: Record<PresetWorkflowId, PresetWorkflow> = {
     source: "single",
     annotationFirst: true,
     requiredArtifactKinds: ["deep_read", "annotation_set"],
-    instruction: `${common}\nRead the paper and prepare grounded annotations with propose_annotations. Review the candidate batch and its per-entry feedback, improve key explanations, and commit the current proposal revision using commit_annotations. Exact quotes anchor highlights and underlines; inspect_pdf_page supports image-region evidence. The host reconciles retries; correct only unresolved entries. Never recreate a deleted or completed mark. Save a deep_read report and an annotation_set artifact that accurately distinguish saved, skipped, denied and unresolved results. Use actual returned Zotero identifiers. Default colors are yellow #ffd400 for key points, blue #2ea8e5 for supporting detail and purple #a28ae5 for visual evidence.`,
+    instruction: `${common}\nRead the paper with get_pages and submit annotations directly through commit_annotations using annotations:[{anchor,comment}]. Copy IDs from [anchor:ID] passages; omit quote and page. One entry or a batch is supported; propose_annotations is optional for a saved draft requested by the user. Review the evidence and key explanations before submission. The tool resolves native positions and previews actual passages; inspect_pdf_page supports image-region evidence. The host reconciles retries; correct only unresolved entries. Never recreate a deleted or completed mark. Save a deep_read report and an annotation_set artifact that accurately distinguish saved, skipped, denied and unresolved results. Use actual returned Zotero identifiers. Default colors are yellow #ffd400 for key points, blue #2ea8e5 for supporting detail and purple #a28ae5 for visual evidence.`,
   },
   "evidence-audit": {
     id: "evidence-audit",

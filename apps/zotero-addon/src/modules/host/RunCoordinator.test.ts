@@ -66,6 +66,38 @@ function fixtureStore() {
   );
 }
 
+for (const language of ["zh-CN", "en-US"] as const) {
+  it(`uses ${language} for host continuation progress`, async () => {
+    let calls = 0;
+    const messages: string[] = [];
+    const coordinator = new RunCoordinator({
+      run: run(),
+      language,
+      current: () => true,
+      persist: async () => {},
+      progress: (text) => messages.push(text),
+      snapshot: async () => (calls < 2 ? gap() : empty()),
+      executor: {
+        run: async () => {
+          calls++;
+          return { stopReason: "completed", text: "done" };
+        },
+      },
+    });
+    assert.equal(
+      (await coordinator.execute("read", new AbortController().signal))
+        .stopReason,
+      "completed",
+    );
+    assert.match(
+      messages[0],
+      language === "zh-CN"
+        ? /继续完成剩余工作/
+        : /Continuing the remaining work/,
+    );
+  });
+}
+
 for (const backend of ["native", "kimi", "codex"] as const) {
   it(`${backend}: ordinary task continues a known draft without mandatory stages`, async () => {
     const state = run();

@@ -2,6 +2,7 @@ import type {
   ArtifactRecord,
   RunState,
   WorkSnapshot,
+  UiLanguage,
 } from "@confucius/protocol";
 import type { ModelMessage, TurnCheckpoint } from "@confucius/harness";
 
@@ -30,6 +31,7 @@ export function projectWork(
   artifacts: readonly ArtifactRecord[],
   domain: Pick<WorkSnapshot, "completed" | "missing">,
   unknownOperationIds: string[],
+  language: UiLanguage = "zh-CN",
 ): WorkSnapshot {
   const bound = artifacts.filter(
     (artifact) =>
@@ -53,14 +55,20 @@ export function projectWork(
         .map((kind) => ({
           id: `artifact:${kind}`,
           kind: "artifact" as const,
-          description: `保存 ${kind} 成果，关联当前请求和来源`,
+          description:
+            language === "en-US"
+              ? `Save ${kind} for the current request and sources`
+              : `保存 ${kind} 成果，关联当前请求和来源`,
         })),
       ...bound
         .filter((artifact) => artifact.status === "draft")
         .map((artifact) => ({
           id: `draft:${artifact.id}`,
           kind: "artifact" as const,
-          description: `完成草稿 ${artifact.title}`,
+          description:
+            language === "en-US"
+              ? `Finish draft: ${artifact.title}`
+              : `完成草稿 ${artifact.title}`,
           progress: contentFingerprint(artifact.body),
         })),
       ...domain.missing,
@@ -113,6 +121,7 @@ export class RunCoordinator {
       persist(): Promise<void>;
       current(): boolean;
       progress(message: string): void;
+      language?: UiLanguage;
     },
   ) {}
 
@@ -199,9 +208,11 @@ export class RunCoordinator {
       previousGap = gap;
       if (repeatedGap >= 2) return finish("stalled");
       this.options.progress(
-        repeatedGap
-          ? `剩余工作未变化，请根据具体问题修复：${work.missing.map((x) => x.description).join("；")}`
-          : `继续完成剩余工作：${work.missing.map((x) => x.description).join("；")}`,
+        this.options.language === "en-US"
+          ? `${repeatedGap ? "Remaining work is unchanged; address the specific issues" : "Continuing the remaining work"}: ${work.missing.map((x) => x.description).join("; ")}`
+          : repeatedGap
+            ? `剩余工作未变化，请根据具体问题修复：${work.missing.map((x) => x.description).join("；")}`
+            : `继续完成剩余工作：${work.missing.map((x) => x.description).join("；")}`,
       );
       continuation = true;
     }
