@@ -1,8 +1,8 @@
 # 0.4.1 发布验收
 
 2026-09-06 UTC，Windows 11 build 26200、Zotero 10.0.1、Node.js 24。
-本记录随 v0.4.1 发布，以下均为打 tag 前完成的验收。公开资产的安装与重启结果
-在发布后另行记录，不能把本地包摘要当作 CI 包摘要。
+本记录随 v0.4.1 发布，“发布后实测”之前各节均为打 tag 前完成的验收。公开资产的
+安装与重启结果在文末补记，不能把本地包摘要当作 CI 包摘要。
 
 ## 整合范围
 
@@ -83,3 +83,35 @@ profile/data 中通过普通 AddonManager 安装。本机程序仍为已安装�
 版本与 Beta 比较、渠道关闭不降级、网络/限流/缺失资产/校验错误及重试由本次
 自动化测试覆盖。本地候选验收不代替公开包的下载、校验、安装和重启；发布后还需
 核对 GitHub Latest、Release 正文、资产摘要，并完成正常安装的更新闭环。
+
+## 发布后实测
+
+2026-09-06 16:50 UTC 完成公开包验收。发布提交为
+`29417bdc275bbb84b435cfa4d23c927c771cf6e0`，tag 为 `v0.4.1`；
+[GitHub Release](https://github.com/ZionDoki/confucius/releases/tag/v0.4.1)
+于 16:40:47 UTC 公开，非 draft、非 prerelease，且为 Latest 稳定版。
+
+- [tag CI](https://github.com/ZionDoki/confucius/actions/runs/34046119766) 的
+  Node.js 22、24 检查和发布任务全部成功；
+  [master CI](https://github.com/ZionDoki/confucius/actions/runs/34046120019) 亦成功。
+- Release 正文与 CHANGELOG 提取结果逐字一致。三个公开资产均已上传，下载包的
+  大小与 SHA-256 和 GitHub 元数据一致；manifest、两个更新 JSON 的版本、插件 ID、
+  兼容范围、下载链接及 SHA-512 均通过核对。
+- 公开 XPI 为 524,115 bytes，SHA-256 为
+  `07f6b19eb2b58a129bece9c3e621e4de2cb825f9a352ebf6b973c1d8194c2792`。
+  这是 CI 发布包摘要，与上文本地候选包摘要不同；没有替换已发布资产或移动 tag。
+- 正常启动的本机 Zotero 先安装摘要已核验的公开 0.4.0，随后经 Confucius 自身的
+  `update/check` 发现 0.4.1，`update/install` 下载、校验并安装公开包，返回
+  `ready` 和需要重启。没有用本地候选包代替公开更新流程。
+- 正常重启后进程 ID 已变化，AddonManager 和插件健康检查均报告 0.4.1；插件处于
+  active 状态且 `temporarilyInstalled=false`。已安装文件的 SHA-256 与公开包完全
+  一致；再次手动检查返回 `up-to-date`，不可重复安装。
+- 原始 PDF 内容摘要不变，20 条原有批注逐条不变；24 个既有任务的 ID、状态、窗口、
+  run 与预算不变。两个候选冒烟任务作为新增测试记录保留，没有替换原任务。
+  模型配置指纹一致，MiniMax-M3、zh-CN、流式回复设置保留；用户已选择的 beta
+  渠道、Confucius 自动检查和 Zotero 全局自动更新设置亦保持不变。
+- 实测结束时没有运行中的任务；临时原生验收连接已停止，控制台已关闭。
+
+发布后验收只确认公开更新与重启，不扩大上述批注样本、报告质量或兼容范围的结论。
+原始结果保存在已忽略的 `output/release-0.4.1/`，包括公开资产核验、更新回执、
+重启前后快照和连接停止记录；不提交个人文库、机器路径或凭据。
