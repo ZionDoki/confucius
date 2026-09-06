@@ -633,15 +633,51 @@ async function openPdfReader(
   reader: PdfReaderInstance;
   view: PdfPrimaryView;
 }> {
-  let reader = waiveReaderXrays(
-    (await Zotero.Reader.open(pdf.id)) as PdfReaderInstance | undefined,
-  );
+  const findReader = () =>
+    waiveReaderXrays(
+      (Zotero.Reader._readers as unknown as PdfReaderInstance[]).find(
+        (candidate) =>
+          candidate.itemID === pdf.id && candidate._isTabClosed !== true,
+      ),
+    );
+  // Reader.open selects an existing tab even with openInBackground. Reuse the
+  // instance directly so background tools do not activate the user's window.
+  let reader = findReader();
+  const tabs = Zotero.getMainWindow?.()?.Zotero_Tabs as
+    | (_ZoteroTypes.Zotero_Tabs & { markAsLoaded: (id: string) => void })
+    | undefined;
+  let restoredTab: _ZoteroTypes.TabInstance | undefined;
+  if (!reader) {
+    const tabID = tabs?.getTabIDByItemID(pdf.id);
+    const tab = tabID ? tabs?._getTab(tabID).tab : undefined;
+    // Let an existing load finish. For an unloaded tab, initialize its existing
+    // container directly; Reader.open's default restore path selects the tab.
+    if (tab?.type !== "reader-loading") {
+      if (tab?.type === "reader-unloaded") {
+        restoredTab = tab;
+        tab.type = "reader-loading";
+      }
+      const openOptions = {
+        openInBackground: true,
+        allowDuplicate: Boolean(restoredTab),
+        tabID: restoredTab?.id,
+        secondViewState: restoredTab?.data?.secondViewState,
+      };
+      try {
+        reader = waiveReaderXrays(
+          (await Zotero.Reader.open(pdf.id, undefined, openOptions)) as
+            PdfReaderInstance | undefined,
+        );
+      } catch (error) {
+        if (restoredTab?.type === "reader-loading")
+          restoredTab.type = "reader-unloaded";
+        throw error;
+      }
+    }
+  }
   const deadline = Date.now() + 15_000;
   while (!reader && Date.now() < deadline) {
-    reader = (Zotero.Reader._readers as unknown as PdfReaderInstance[]).find(
-      (candidate) =>
-        candidate.itemID === pdf.id && candidate._isTabClosed !== true,
-    );
+    reader = findReader();
     if (!reader) {
       await Zotero.Promise.delay(25);
     }
@@ -651,6 +687,8 @@ async function openPdfReader(
   }
   onInitialize(reader);
   await reader._initPromise;
+  if (restoredTab?.type === "reader-loading")
+    tabs!.markAsLoaded(restoredTab.id);
   await reader._waitForReader?.();
   const view = waiveReaderXrays(reader._internalReader?._primaryView);
   if (!view) {

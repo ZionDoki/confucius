@@ -24,12 +24,21 @@ export function compactTaskEvents(
       previous &&
       event.turnId === previous.turnId &&
       (event.type === "text_delta" || event.type === "reasoning_delta") &&
-      event.type === previous.type
+      event.type === previous.type &&
+      (event.type !== "text_delta" ||
+        previous.type !== "text_delta" ||
+        event.payload.phase === previous.payload.phase)
     ) {
       compacted[compacted.length - 1] = {
         ...event,
         payload: {
-          text: previous.payload.text + event.payload.text,
+          ...event.payload,
+          text:
+            previous.payload.text +
+            (event.type === "text_delta" && event.payload.phase === "commentary"
+              ? "\n\n"
+              : "") +
+            event.payload.text,
         },
       } as ConfuciusEvent;
       continue;

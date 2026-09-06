@@ -20,6 +20,36 @@ function event(
 }
 
 describe("compactTaskEvents", () => {
+  it("preserves commentary boundaries and never merges progress into the answer", () => {
+    const events = [
+      event("delta-1", "text_delta", {
+        text: "Reading the PDF.",
+        phase: "commentary",
+      }),
+      event("delta-2", "text_delta", {
+        text: "Checking the annotations.",
+        phase: "commentary",
+      }),
+      event("delta-3", "text_delta", { text: "Saved ", phase: "final_answer" }),
+      event("delta-4", "text_delta", {
+        text: "the report.",
+        phase: "final_answer",
+      }),
+    ];
+    const compacted = compactTaskEvents(events, 400);
+    assert.deepEqual(
+      compacted.map((event) => event.payload),
+      [
+        {
+          text: "Reading the PDF.\n\nChecking the annotations.",
+          phase: "commentary",
+        },
+        { text: "Saved the report.", phase: "final_answer" },
+      ],
+    );
+    assert.deepEqual(compactTaskEvents(compacted, 400), compacted);
+  });
+
   it("keeps long streamed replies as one durable event with the latest cursor", () => {
     const chunks = Array.from({ length: 600 }, (_, index) =>
       event(`delta-${index}`, "text_delta", { text: "x" }),

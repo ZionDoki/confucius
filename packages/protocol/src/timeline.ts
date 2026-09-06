@@ -15,6 +15,7 @@ export interface TimelineToolCall {
 export type TimelineBlock =
   | { kind: "user"; text: string }
   | { kind: "reasoning"; text: string }
+  | { kind: "commentary"; text: string }
   | { kind: "text"; text: string; turnId?: string }
   | { kind: "tools"; calls: TimelineToolCall[] }
   | { kind: "plan"; steps: PlanStep[] }
@@ -64,17 +65,22 @@ function flushText(
 }
 
 /**
- * Between formal answers there is at most one thinking group and one
- * tools group: later deltas append instead of opening a new fold.
+ * Between formal answers, thinking, commentary and tools each share a group.
+ * Later updates append instead of opening a new fold.
  */
 function flushPending(
   blocks: TimelineBlock[],
   reasoning: { text: string },
   tools: { calls: TimelineToolCall[] },
+  commentary: { text: string },
 ): void {
   if (reasoning.text) {
     blocks.push({ kind: "reasoning", text: reasoning.text });
     reasoning.text = "";
+  }
+  if (commentary.text) {
+    blocks.push({ kind: "commentary", text: commentary.text });
+    commentary.text = "";
   }
   if (tools.calls.length) {
     blocks.push({ kind: "tools", calls: tools.calls });
@@ -97,17 +103,23 @@ function attachCall(
 export function coalesceTimeline(events: ConfuciusEvent[]): TimelineBlock[] {
   const blocks: TimelineBlock[] = [];
   const reasoning = { text: "" };
+  const commentary = { text: "" };
   const text: { value: string; turnId?: string } = { value: "" };
   const tools: { calls: TimelineToolCall[] } = { calls: [] };
 
   const flushAnswer = () => {
-    flushPending(blocks, reasoning, tools);
+    flushPending(blocks, reasoning, tools, commentary);
     flushText(blocks, text);
   };
 
   for (const event of events) {
     if (event.type === "text_delta") {
-      flushPending(blocks, reasoning, tools);
+      if (event.payload.phase === "commentary") {
+        flushText(blocks, text);
+        commentary.text += (commentary.text ? "\n\n" : "") + event.payload.text;
+        continue;
+      }
+      flushPending(blocks, reasoning, tools, commentary);
       if (text.value && text.turnId !== event.turnId) {
         flushText(blocks, text);
       }

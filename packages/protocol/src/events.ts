@@ -59,7 +59,11 @@ export interface PlanStep {
 
 type EventPayloads = {
   context_usage_updated: { inputTokens: number; capacityTokens?: number };
-  model_usage_updated: { inputTokens: number; outputTokens: number; totalTokens: number };
+  model_usage_updated: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  };
   context_window_changed: { window: ContextWindowState };
   history_recalled: { ref: HistoryItemRef; title: string; sourceIds: string[] };
   session_created: { title: string; mode: SessionMode };
@@ -79,7 +83,7 @@ type EventPayloads = {
   approval_required: { request: ApprovalRequest };
   approval_resolved: { resolution: ApprovalResolution };
   artifact_upserted: { artifact: ArtifactSummary };
-  text_delta: { text: string };
+  text_delta: { text: string; phase?: "commentary" | "final_answer" };
   reasoning_delta: {
     text: string;
     /** Host-authored workflow phase shown while a long turn is running. */

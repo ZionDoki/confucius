@@ -3,6 +3,7 @@ import { setImmediate } from "node:timers/promises";
 import { describe, it } from "node:test";
 import type { ModelMessage } from "@confucius/harness";
 import {
+  coalesceTimeline,
   initialContextWindow,
   type ApprovalResolution,
   type ConfuciusEvent,
@@ -17,7 +18,7 @@ import type { BackendCallbacks, BackendTurnInput } from "./AgentBackend";
 import type { McpToolCallResult } from "./McpToolResult";
 import { PluginRuntimeCapabilityStore } from "./PluginRuntimeSupport";
 import { ToolExecutionService } from "./ReliableToolProvider";
-import type { RunOutcome } from "./RunCoordinator";
+import type { ExecutorResult, RunOutcome } from "./RunCoordinator";
 import { memoryJsonStorage } from "./RuntimeStorage";
 import { TaskTraceBuffer } from "./TaskTrace";
 
@@ -53,6 +54,11 @@ interface LifecycleHost {
   taskContinue(id: string): Promise<{ turnId?: string }>;
   taskToolCall(args: Record<string, unknown>): Promise<McpToolCallResult>;
   workSnapshot(state: TestState): Promise<WorkSnapshot>;
+  executeBackend(
+    state: TestState,
+    input: BackendTurnInput,
+    signal: AbortSignal,
+  ): Promise<ExecutorResult>;
   finalizeRun(
     state: TestState,
     run: RunState,
@@ -139,6 +145,7 @@ function fixture() {
   Object.assign(host, {
     updates: { dispose() {} },
     taskTraceBuffer: new TaskTraceBuffer(),
+    listeners: new Set(),
     sessions: new Map([[record.id, state]]),
     ids: () => `test-${++sequence}`,
     attachments: { resolve: () => [], consume: () => undefined },
@@ -192,6 +199,118 @@ function toolResult(response: McpToolCallResult): ToolResult {
 }
 
 describe("AgentHost lifecycle ownership", () => {
+  for (const ending of [
+    "completed",
+    "aborted",
+    "error",
+    "signal",
+    "incomplete",
+  ] as const) {
+    it(`keeps tool commentary out of the final reply when execution ends with ${ending}`, async () => {
+      const { host, state, backend } = fixture();
+      state.record.backend = "native";
+      state.record.run = run(state.record);
+      state.abort = new AbortController();
+      state.activeTurnId = "turn-output";
+      const controller = state.abort;
+      const preambles = [
+        "I will read the paper.",
+        "Now I will save annotations.",
+      ];
+      const answer =
+        ending === "completed"
+          ? "The report is ready."
+          : ending === "incomplete"
+            ? "The report is partially written."
+            : "";
+      Object.assign(host, {
+        memoryConsent: () => "off",
+        finalizeTaskTitle: async () => undefined,
+      });
+      backend.startTurn = async (input, callbacks) => {
+        let sequence = 0;
+        const emit = (
+          type: ConfuciusEvent["type"],
+          payload: ConfuciusEvent["payload"],
+        ) =>
+          callbacks.event({
+            id: `output-${++sequence}`,
+            sessionId: state.record.id,
+            turnId: input.turnId,
+            ts: sequence,
+            type,
+            payload,
+          } as ConfuciusEvent);
+        for (const [index, text] of preambles.entries()) {
+          emit("text_delta", { text: text.slice(0, 5) });
+          emit("text_delta", { text: text.slice(5) });
+          emit("tool_requested", {
+            callId: `tool-${index}`,
+            toolName: index ? "commit_annotations" : "get_pages",
+            args: {},
+          });
+        }
+        if (answer) {
+          emit("text_delta", { text: "The report " });
+          if (ending === "completed") emit("text_delta", { text: "is ready." });
+        }
+        if (ending === "signal") controller.abort();
+        else
+          callbacks.stopped?.({
+            stopReason: ending,
+            // Native TurnLoop and older runtime adapters return all model rounds.
+            text: preambles.join("") + answer,
+          });
+        return {};
+      };
+      const result = await host.executeBackend(
+        state,
+        {
+          task: state.record,
+          turnId: state.activeTurnId,
+          prompt: "Read and annotate",
+          mode: "agent",
+          capabilityProfile: "zotero_only",
+        },
+        controller.signal,
+      );
+      assert.equal(result.text, answer);
+      await host.finalizeRun(
+        state,
+        state.record.run,
+        "turn-output",
+        {
+          ...result,
+          work: { completed: [], missing: [], unknownOperationIds: [] },
+        },
+        () => true,
+      );
+      const textEvents = state.events.filter(
+        (event) => event.type === "text_delta",
+      );
+      assert.deepEqual(
+        textEvents.map((event) => event.payload),
+        [
+          ...preambles.map((text) => ({ text, phase: "commentary" })),
+          ...(answer ? [{ text: answer, phase: "final_answer" }] : []),
+        ],
+      );
+      const blocks = coalesceTimeline(state.events);
+      assert.deepEqual(
+        blocks
+          .filter((block) => block.kind === "text")
+          .map((block) => block.text),
+        answer ? [answer] : [],
+      );
+      assert.deepEqual(
+        blocks
+          .filter((block) => block.kind === "commentary")
+          .map((block) => block.text),
+        [preambles.join("\n\n")],
+      );
+    });
+  }
+
   it("finishes a revised read-only request without reviving the prior annotation obligation", async () => {
     const { host, state, backend, starts } = fixture();
     Reflect.deleteProperty(host, "workSnapshot");

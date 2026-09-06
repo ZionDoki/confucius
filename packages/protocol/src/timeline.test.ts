@@ -34,6 +34,48 @@ describe("nextReasoningFold", () => {
 });
 
 describe("coalesceTimeline", () => {
+  it("folds tool commentary separately and preserves the actual reply", () => {
+    const blocks = coalesceTimeline([
+      event("turn_started", { userText: "Read the paper" }),
+      event("text_delta", { text: "First I will read.", phase: "commentary" }),
+      event("tool_requested", {
+        callId: "read",
+        toolName: "get_pages",
+        args: {},
+      }),
+      event("tool_result", {
+        callId: "read",
+        result: { ok: true, toolName: "get_pages", data: {} },
+      }),
+      event("text_delta", {
+        text: "Now I will annotate.",
+        phase: "commentary",
+      }),
+      event("tool_requested", {
+        callId: "commit",
+        toolName: "commit_annotations",
+        args: {},
+      }),
+      event("text_delta", {
+        text: "Here is the report.",
+        phase: "final_answer",
+      }),
+    ]);
+    assert.deepEqual(
+      blocks.map((block) => block.kind),
+      ["user", "commentary", "tools", "text"],
+    );
+    assert.equal(
+      blocks[1].kind === "commentary" && blocks[1].text,
+      "First I will read.\n\nNow I will annotate.",
+    );
+    assert.equal(blocks[2].kind === "tools" && blocks[2].calls.length, 2);
+    assert.equal(
+      blocks[3].kind === "text" && blocks[3].text,
+      "Here is the report.",
+    );
+  });
+
   it("groups consecutive tool calls and keeps text prominent and unfolded", () => {
     const blocks = coalesceTimeline([
       event("turn_started", { userText: "read this" }),

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Fixed
+
+- Tool calls such as `commit_annotations` keep the loading indicator and status
+  text below the conversation visible during approval and execution, alongside
+  the progress and elapsed time shown inside the tool.
+- PDF reading and annotation tools reuse open readers and initialize new or
+  unloaded PDF tabs in the background, preventing repeated window activation
+  during agent work.
+- Tool-call commentary appears in a collapsible progress section. Interrupted
+  runs no longer concatenate those messages into a final answer, and completed
+  replies exclude earlier tool-call preambles.
+
 ## 0.4.0 - 2026-09-06
 
 Confucius 0.4.0 brings resumable research tasks, diagnostic exports and an

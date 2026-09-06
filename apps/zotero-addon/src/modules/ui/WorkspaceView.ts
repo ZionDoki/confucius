@@ -3275,6 +3275,7 @@ function bindWorkspace(
     targetDoc: Document,
     text: string,
     key: string,
+    label = getString("workspace-tui-thinking"),
   ): HTMLElement {
     const fold = reasoningFold.get(key) ?? "preview";
     const row = tuiBlock(targetDoc, {
@@ -3291,7 +3292,7 @@ function bindWorkspace(
       color: "var(--confucius-muted)",
       marginBottom: "2px",
     });
-    head.textContent = `${fold === "open" ? "▾" : "▸"} ${getString("workspace-tui-thinking")}`;
+    head.textContent = `${fold === "open" ? "▾" : "▸"} ${label}`;
     const clamp =
       fold === "preview" ? "4.4em" : fold === "compact" ? "1.45em" : "";
     const body = el(targetDoc, "div", {
@@ -3552,6 +3553,14 @@ function bindWorkspace(
     }
     if (block.kind === "reasoning") {
       return renderReasoning(targetDoc, block.text, `reasoning:${index}`);
+    }
+    if (block.kind === "commentary") {
+      return renderReasoning(
+        targetDoc,
+        block.text,
+        `commentary:${index}`,
+        getString("workspace-tui-progress"),
+      );
     }
     if (block.kind === "tools") {
       const key = `tools:${block.calls[0]?.callId || index}`;
@@ -9013,15 +9022,20 @@ function bindWorkspace(
         latestTurnId = event.turnId;
         awaiting = true;
       } else if (event.turnId === latestTurnId) {
-        if (event.type === "tool_result") {
-          // The provider is done and the next model round has started. This
-          // was the invisible gap after inspect_pdf_page in long deep reads.
+        if (
+          event.type === "tool_requested" ||
+          event.type === "tool_progress" ||
+          event.type === "approval_required" ||
+          event.type === "approval_resolved" ||
+          event.type === "tool_result" ||
+          (event.type === "text_delta" && event.payload.phase === "commentary")
+        ) {
+          // Keep the activity indicator alongside tool progress, through
+          // approval and execution, and while waiting for the next model round.
           awaiting = true;
         } else if (
           event.type === "text_delta" ||
           event.type === "reasoning_delta" ||
-          event.type === "tool_requested" ||
-          event.type === "approval_required" ||
           event.type === "turn_completed" ||
           event.type === "turn_failed" ||
           event.type === "turn_aborted"

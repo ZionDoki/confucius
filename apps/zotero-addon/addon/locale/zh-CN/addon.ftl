@@ -167,6 +167,7 @@ confucius-workspace-skill-none = 无技能
 confucius-workspace-model = 模型
 confucius-workspace-thinking = 思考强度
 confucius-workspace-tui-thinking = 思考
+confucius-workspace-tui-progress = 过程说明
 confucius-workspace-tui-tools = 个工具
 confucius-workspace-model-loading = 正在加载模型…
 confucius-workspace-model-empty = 没有可用模型

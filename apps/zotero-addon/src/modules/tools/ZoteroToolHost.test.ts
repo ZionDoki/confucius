@@ -1928,9 +1928,108 @@ it("writeback snapshots ignore unrelated tags and check only edited tag membersh
   );
 });
 
-it("isolates cancellation of a reader wait and reuses in-flight initialization", async () => {
+it("PDF reads and annotation writes reuse the reader without opening or selecting it", async () => {
+  const installed = installHost({ pageTexts: ["Core claim"] });
+  Zotero.Reader.open = async () => {
+    throw new Error("Reader.open would activate the existing reader");
+  };
+  const ref = { libraryID: 1, key: "ITEMKEY1" };
+  for (const [name, args] of [
+    ["get_page_count", ref],
+    ["get_pages", { ...ref, start: 1, end: 1 }],
+    ["inspect_pdf_page", { ...ref, page: 1 }],
+    [
+      "commit_annotations",
+      {
+        ...ref,
+        annotations: [{ type: "highlight", text: "Core claim", page: 1 }],
+      },
+    ],
+  ] as const) {
+    const result = await installed.execute(name, args);
+    assert.equal(result.ok, true, JSON.stringify(result));
+  }
+  assert.equal(installed.saved.length, 1);
+});
+
+it("restores an unloaded PDF in its existing tab without selecting or duplicating it", async () => {
   const installed = installHost();
-  const reader = Zotero.Reader._readers[0] as unknown as {
+  const reader = Zotero.Reader._readers.pop()!;
+  const tab = {
+    id: "unloaded-pdf",
+    type: "reader-unloaded",
+    data: { itemID: 200, secondViewState: { pageIndex: 2 } },
+  };
+  let opens = 0;
+  Object.assign(Zotero, {
+    getMainWindow: () => ({
+      setTimeout,
+      clearTimeout,
+      Zotero_Tabs: {
+        getTabIDByItemID: () => tab.id,
+        _getTab: () => ({ tab }),
+        markAsLoaded: (id: string) => {
+          assert.equal(id, tab.id);
+          assert.equal(tab.type, "reader-loading");
+          tab.type = "reader";
+        },
+        select: () => assert.fail("Background loading must not select a tab"),
+      },
+    }),
+  });
+  Zotero.Reader.open = async (id, location, options) => {
+    opens++;
+    assert.equal(id, 200);
+    assert.equal(location, undefined);
+    assert.equal(options?.openInBackground, true);
+    assert.equal(options?.allowDuplicate, true);
+    assert.equal(options?.tabID, tab.id);
+    assert.equal(tab.type, "reader-loading");
+    Zotero.Reader._readers.push(reader);
+    return reader;
+  };
+  for (let i = 0; i < 2; i++) {
+    const result = await installed.execute("get_page_count", {
+      libraryID: 1,
+      key: "ITEMKEY1",
+    });
+    assert.equal(result.ok, true, JSON.stringify(result));
+  }
+  assert.equal(opens, 1);
+  assert.equal(tab.type, "reader");
+  assert.equal(Zotero.Reader._readers.length, 1);
+});
+
+it("a failed background open leaves an unloaded tab available to retry", async () => {
+  const installed = installHost();
+  Zotero.Reader._readers.length = 0;
+  const tab = { id: "unloaded-pdf", type: "reader-unloaded" };
+  Object.assign(Zotero, {
+    getMainWindow: () => ({
+      setTimeout,
+      clearTimeout,
+      Zotero_Tabs: {
+        getTabIDByItemID: () => tab.id,
+        _getTab: () => ({ tab }),
+      },
+    }),
+  });
+  Zotero.Reader.open = async () => {
+    assert.equal(tab.type, "reader-loading");
+    throw new Error("Unable to open PDF");
+  };
+  const result = await installed.execute("get_page_count", {
+    libraryID: 1,
+    key: "ITEMKEY1",
+  });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.match(result.message, /Unable to open PDF/);
+  assert.equal(tab.type, "reader-unloaded");
+});
+
+it("isolates cancellation of a background reader open and reuses in-flight initialization", async () => {
+  const installed = installHost();
+  const reader = Zotero.Reader._readers.pop() as unknown as {
     _initPromise: Promise<void>;
   };
   let release!: () => void;
@@ -1941,6 +2040,8 @@ it("isolates cancellation of a reader wait and reuses in-flight initialization",
   const original = Zotero.Reader.open;
   Zotero.Reader.open = (async (...args: Parameters<typeof original>) => {
     opens++;
+    assert.equal(args[2]?.openInBackground, true);
+    assert.equal(args[2]?.tabID, undefined);
     return original(...args);
   }) as typeof original;
   const controller = new AbortController();

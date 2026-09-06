@@ -167,6 +167,7 @@ confucius-workspace-skill-none = No skill
 confucius-workspace-model = Model
 confucius-workspace-thinking = Thinking
 confucius-workspace-tui-thinking = Thinking
+confucius-workspace-tui-progress = Progress
 confucius-workspace-tui-tools = tools
 confucius-workspace-model-loading = Loading models…
 confucius-workspace-model-empty = No models listed

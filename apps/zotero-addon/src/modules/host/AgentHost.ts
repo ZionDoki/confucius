@@ -907,6 +907,7 @@ export class AgentHost {
               .filter(
                 (event) =>
                   event.type === "text_delta" &&
+                  event.payload.phase !== "commentary" &&
                   event.turnId === completed.turnId,
               )
               .map((event) =>
@@ -2683,7 +2684,7 @@ export class AgentHost {
     const turns = new Map<string, string[]>();
     const order: string[] = [];
     for (const event of state.events) {
-      if (event.type !== "text_delta") {
+      if (event.type !== "text_delta" || event.payload.phase === "commentary") {
         continue;
       }
       const text = (event.payload as { text?: string }).text ?? "";
@@ -2718,7 +2719,12 @@ export class AgentHost {
       throw new Error("Missing response text");
     }
     const recorded = state.events
-      .filter((event) => event.turnId === turnId && event.type === "text_delta")
+      .filter(
+        (event) =>
+          event.turnId === turnId &&
+          event.type === "text_delta" &&
+          event.payload.phase !== "commentary",
+      )
       .map((event) => (event.type === "text_delta" ? event.payload.text : ""))
       .join("")
       .trim();
@@ -4475,7 +4481,9 @@ export class AgentHost {
     ));
     const taskId = state.record.id;
     const turnKey = `${taskId}_${event.turnId ?? ""}`;
-    if (event.type === "text_delta")
+    if (event.type === "tool_requested")
+      this.externalHistoryText.delete(turnKey);
+    if (event.type === "text_delta" && event.payload.phase !== "commentary")
       this.externalHistoryText.set(
         turnKey,
         (this.externalHistoryText.get(turnKey) ?? "") + event.payload.text,
@@ -5217,6 +5225,16 @@ export class AgentHost {
     return new Promise((resolve) => {
       let settled = false;
       let text = "";
+      let commentaryText = "";
+      const flushCommentary = () => {
+        if (!text) return;
+        this.emitSessionEvent(state, input.turnId, "text_delta", {
+          text,
+          phase: "commentary",
+        });
+        commentaryText += text;
+        text = "";
+      };
       const finish = (result: ExecutorResult) => {
         if (settled) return;
         settled = true;
@@ -5224,7 +5242,19 @@ export class AgentHost {
           run.budget.elapsedMs =
             (run.budget.elapsedMs ?? 0) + Math.max(0, Date.now() - startedAt);
         signal.removeEventListener("abort", onAbort);
-        resolve({ ...result, text: result.text || text });
+        // Native results concatenate all model rounds. Remove the exact text
+        // already displayed as commentary, while preserving final-only runtime
+        // results and any partial answer returned after a stream disconnects.
+        const returnedText = result.text || text;
+        resolve({
+          ...result,
+          text:
+            commentaryText &&
+            returnedText !== text &&
+            returnedText.startsWith(commentaryText)
+              ? returnedText.slice(commentaryText.length)
+              : returnedText,
+        });
       };
       const onAbort = () => finish({ stopReason: "aborted", text });
       signal.addEventListener("abort", onAbort, { once: true });
@@ -5252,8 +5282,10 @@ export class AgentHost {
           }
           if (event.type === "text_delta") {
             text += event.payload.text;
+            if (event.payload.phase === "commentary") flushCommentary();
             return;
           }
+          if (event.type === "tool_requested") flushCommentary();
           if (isTerminalRuntimeEvent(event)) {
             finish({
               stopReason:
@@ -5525,7 +5557,7 @@ export class AgentHost {
         { role: "user", content: run.request },
         { role: "assistant", content: text },
       );
-    if (text) emit("text_delta", { text });
+    if (text) emit("text_delta", { text, phase: "final_answer" });
     const reason =
       outcome.failureMessage ??
       (outcome.work.missing.length
