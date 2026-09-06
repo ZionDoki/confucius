@@ -90,8 +90,16 @@ independent plugin updater to the stable channel. This release includes the
 - Disk-full, separate filesystem permission denial, Windows export-dialog UI and
   the full cross-engine fault matrix remain unverified. Native PDF annotation
   lookup can take about five seconds per entry; large batches may hit the deadline.
-- Released-package updater acceptance must be checked after assets are published;
-  local checks do not establish a completed public download/install/restart cycle.
+- After publication, the independent updater in the earlier Windows candidate
+  discovered, downloaded, verified and installed the public 0.4.0 asset with
+  Zotero's global automatic updates disabled. Both channel choices found the
+  stable release; normal restarts retained the Beta preference, three reports
+  and six highlights. This baseline was the unpublished candidate containing the
+  new updater, not the original published beta.1 package.
+- That post-release check found Native's diagnostic elapsed time can include
+  idle time when the plugin unloads. The checked model/tool counts, token totals,
+  saved reports and annotations were unchanged; elapsed-time accuracy remains a
+  known issue.
 
 ## 0.4.0-beta.1 - 2026-09-06
 
