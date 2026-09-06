@@ -32,6 +32,11 @@ export const annotationSchema = {
   type: "object",
   properties: {
     type: { type: "string", enum: ["highlight", "underline", "image"] },
+    anchor: {
+      type: "string",
+      description:
+        "Copy ID from [anchor:ID] in get_pages. Selects that exact native PDF passage; omit page, quote and text. Highlight is the default type. Never invent or edit an ID.",
+    },
     page: {
       type: "integer",
       minimum: 1,
@@ -75,7 +80,7 @@ export const annotationSchema = {
       description: "Optional #RRGGBB override",
     },
   },
-  required: ["type", "page"],
+  required: [],
   additionalProperties: false,
 };
 
@@ -392,7 +397,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   ),
   def(
     "get_pages",
-    "Read real physical PDF pages (1-based), preserving blank pages. Results contain complete pages; if nextPage is not null, continue there to read the omitted pages. Use non-overlapping ranges and do not treat a truncated result as having read the whole requested range. Indexed text without reliable pages is never assigned invented page numbers.",
+    "Read real physical PDF pages (1-based), preserving blank pages. Text includes [anchor:ID] before selectable passages: use that ID with commit_annotations to mark the exact native text without copying quotes or guessing pages. Markers are metadata, not paper text. If nextPage is not null, continue there; use non-overlapping ranges and do not treat a truncated result as fully read. Indexed text without reliable pages is never assigned invented page numbers.",
     {
       ...itemRef,
       start: { type: "integer", minimum: 1 },
@@ -481,7 +486,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   ),
   def(
     "propose_annotations",
-    "Propose highlights, underlines, and image-region notes without writing the PDF. Regions must come from inspect_pdf_page; never guess coordinates.",
+    "Optional saved draft for a user who wants to review candidates before submission. Normal annotation tasks should call commit_annotations directly with one or more entries. This tool does not save native PDF marks. Image regions must come from inspect_pdf_page.",
     {
       ...itemRef,
       annotations: { type: "array", maxItems: 100, items: annotationSchema },
@@ -490,7 +495,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   ),
   def(
     "commit_annotations",
-    "Save eligible entries of a persistent proposal, retaining partial success. After propose_annotations, pass libraryID, key, attachmentKey and proposalId only; omit annotations and highlights. A proposal is not a saved PDF mark: only returned annotationKeys confirm writes. The host reconciles actual annotations and preserves completed or manually removed marks; repair only remaining entries. Copy returned Zotero URIs exactly. Do not repeat an unchanged non-retryable failure.",
+    "Create native PDF annotations in one call: pass annotations:[{anchor,comment}] using IDs from get_pages. One entry or a batch is supported; no propose call is needed. Type defaults to highlight for anchors; underline and color are optional. Comments must use the user's configured response language. The tool resolves text, page and geometry, previews the actual passages, saves eligible entries, and retains partial successes. Only returned annotationKeys confirm writes. If using an optional saved proposal, pass proposalId alone. Repair only failed entries; do not repeat unchanged non-retryable failures or recreate completed/manually removed marks. Copy returned Zotero URIs exactly.",
     {
       ...itemRef,
       proposalId: {
@@ -507,7 +512,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         maxItems: 100,
         items: annotationSchema,
         description:
-          "Direct batch only when no proposalId exists. Do not resend a previously proposed batch here.",
+          "One or more annotations, normally {anchor,comment}; optional type/color. Legacy text entries require type, physical page and exact quote. Image entries require type:image, page, rect and comment. Omit this array when using proposalId.",
       },
     },
     ["libraryID", "key"],

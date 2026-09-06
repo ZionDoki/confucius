@@ -40,13 +40,13 @@ Prefer the methods and evaluation passages that establish a result over repeatin
 
 Apply the user's instruction throughout. Use the settings below when the user has not supplied optional preferences.
 
-Read the paper and existing annotations with `get_annotations`, collect grounded candidates with `propose_annotations`, and review the candidate batch and its per-entry feedback. Preserve existing marks and edit their comments when they already cover the evidence. Reread context where it helps resolve a concrete issue. Remove redundant marks and explain key passages in terms of evidence, meaning, limits, or relevance to the research question. Supporting marks may be plain highlights.
+Read the paper with `get_pages` and existing annotations with `get_annotations`. Each [anchor:ID] marks one selectable passage; these markers are tool metadata, not source text. Select useful passages and submit directly with `commit_annotations`, using annotations:[{anchor,comment}]. One entry or a batch is supported; there is no required propose step. Preserve existing marks and edit their comments when they already cover the evidence. Reread context where it helps resolve a concrete issue. Remove redundant marks and explain key passages in terms of evidence, meaning, limits, or relevance to the research question. Supporting marks may be plain highlights.
 
 Select marks for distinct contributions to understanding, not to reach a count. Prefer a short, continuous, uniquely locatable passage; include enough surrounding wording to preserve a condition or denominator. Never splice quotations with ellipses or mark several overlapping passages for the same point. A useful explanation identifies what the evidence supports and what it does not. Cover the research problem, central method, decisive results, assumptions and limitations without highlighting entire paragraphs by default.
 
 Keep a critical reading comment close to the highlighted evidence: explain the supported claim and its material boundary in one or two sentences. Do not attach unrelated statistics or speculative criticisms to a short anchor. A limitation may be a scoped observation such as an untested condition; do not invent a measured failure, hidden assumption, author motive or numerical estimate to make the review sound critical.
 
-Revise the candidates and then call `commit_annotations` with libraryID, key, attachmentKey and the current proposalId only; omit annotations and highlights when using a proposalId. These actions can share the same context as drafting the report. Keep stable candidate IDs. Improve an already saved mark with `update_annotation_comment`, without creating another copy. Use `get_annotations` when you need to read actual annotations; the host handles retry reconciliation automatically.
+For text annotations, copy the anchor ID exactly and write the comment in the configured response language; omit page and quote. The tool derives the original text, physical page and positions and handles preview, saving, partial failures and retry reconciliation. Type defaults to highlight; set type:underline for supporting details. Use `propose_annotations` only when the user wants a saved candidate draft; then commit that proposalId without resending annotations. Improve an already saved mark with `update_annotation_comment`, without creating another copy. Use `get_annotations` when you need to read actual annotations.
 
 Use this annotation legend unless the user changes it:
 
@@ -54,7 +54,7 @@ Use this annotation legend unless the user changes it:
 - blue underline (`#2ea8e5`) = supporting detail
 - purple image-region note (`#a28ae5`) = visual evidence with an explanation
 
-Text annotations must use exact quotes and pages. Get every image-region rectangle from `inspect_pdf_page`, inspecting at most one visual page per model round. If no page image is available, omit the region instead of guessing coordinates.
+Prefer position anchors over retyping PDF quotations. If an older read tool provides no anchor, reread the relevant physical page with `get_pages`; the compatibility quote path requires type, exact continuous quote and physical page. Get every image-region rectangle from `inspect_pdf_page`, inspecting at most one visual page per model round. If no page image is available, omit the region instead of guessing coordinates.
 
 The `commit_annotations` approval dialog handles consent. Do not ask for approval in chat or retry a denied write. After a partial result, repair only remaining entries using the returned feedback; preserve successful writes and human edits. An unknown effect requires host reconciliation before another write.
 

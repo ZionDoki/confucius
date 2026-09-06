@@ -73,7 +73,7 @@ test("catalog has no Chrome browser tools", () => {
   );
 });
 
-test("annotation tools expose the canonical v0.3.5 contract", () => {
+test("annotation tools expose native anchors alongside the compatible draft contract", () => {
   assert.ok(PAPER_READ_TOOLS.includes("inspect_pdf_page"));
   assert.ok(PAPER_WRITE_TOOLS.includes("propose_annotations"));
   assert.equal(READ_ONLY_TOOL_NAMES.has("inspect_pdf_page"), true);
@@ -96,4 +96,13 @@ test("annotation tools expose the canonical v0.3.5 contract", () => {
   };
   assert.ok(annotationArray.items.properties.rect);
   assert.ok(annotationArray.items.properties.color);
+  assert.ok(annotationArray.items.properties.anchor);
+  const commit = TOOL_DEFINITIONS.find(
+    (tool) => tool.name === "commit_annotations",
+  )!;
+  const entries = commit.inputSchema.properties.annotations as {
+    items: { required: string[] };
+  };
+  assert.ok(!entries.items.required.includes("page"));
+  assert.ok(!entries.items.required.includes("type"));
 });

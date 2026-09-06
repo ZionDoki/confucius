@@ -17,6 +17,16 @@ import type { OperationRepository } from "../host/OperationStore";
 import { annotationExplanationIssue } from "./AnnotationQuality";
 import { layoutQuoteVariants } from "./PdfQuote";
 import { spatialPageText } from "./PdfLayout";
+import {
+  anchorPage,
+  charText,
+  normalizeAnchor,
+  pdfPassages,
+  renderPdfPassages,
+  resolvePassage,
+  type PdfPageChar,
+  type PdfPassage,
+} from "./PdfAnchors";
 import type { ToolExecutionContext, ToolFailure } from "@confucius/protocol";
 import type {
   AnnotationDraft,
@@ -317,17 +327,6 @@ interface PdfSelectionAnnotation {
   position?: PdfPosition;
 }
 
-interface PdfPageChar {
-  u?: string;
-  char?: string;
-  rect?: number[];
-  inlineRect?: number[];
-  rotation?: number;
-  spaceAfter?: boolean;
-  lineBreakAfter?: boolean;
-  paragraphBreakAfter?: boolean;
-}
-
 interface PdfPrimaryView {
   initializedPromise?: Promise<void>;
   _findController?: PdfFindController;
@@ -551,7 +550,7 @@ interface LocatedTextAnnotation {
 type PendingTextAnnotation = Omit<
   Extract<AnnotationDraft, { type: "highlight" | "underline" }>,
   "page"
-> & { page?: number };
+> & { page?: number; anchor?: string };
 
 type PendingAnnotation =
   PendingTextAnnotation | Extract<AnnotationDraft, { type: "image" }>;
@@ -1006,6 +1005,10 @@ function normalizeAnnotationList(
     }
     const color = normalizedColor(record.color, type);
     if (type === "image") {
+      if (record.anchor !== undefined)
+        throw new Error(
+          "Image annotations require a region from inspect_pdf_page, not a text anchor",
+        );
       const comment = String(record.comment ?? "").trim();
       if (!comment) {
         throw new Error(`Image annotation ${index + 1} requires a comment`);
@@ -1016,6 +1019,25 @@ function normalizeAnnotationList(
         rect: normalizeRegionRect(record.rect),
         comment,
         color,
+      };
+    }
+    if (record.anchor !== undefined) {
+      const anchor = normalizeAnchor(String(record.anchor));
+      const page = anchorPage(anchor);
+      if (record.page !== undefined && positivePage(record.page, true) !== page)
+        throw new Error(
+          "Annotation page conflicts with the anchor; omit page when using an anchor",
+        );
+      if (record.quote !== undefined || record.text !== undefined)
+        throw new Error("Use anchor alone for location; omit quote and text");
+      return {
+        type,
+        page,
+        anchor,
+        quote: "",
+        color,
+        comment:
+          record.comment === undefined ? undefined : String(record.comment),
       };
     }
     const quote = String(record.quote ?? record.text ?? "").trim();
@@ -1757,6 +1779,53 @@ export class ZoteroToolHost {
     });
   }
 
+  private async locateAnchor(
+    view: PdfPrimaryView,
+    draft: PendingTextAnnotation,
+    fingerprint: string,
+    pages: Map<
+      number,
+      Promise<{ chars: PdfPageChar[]; passages: PdfPassage[] }>
+    >,
+  ): Promise<LocatedTextAnnotation> {
+    const page = anchorPage(draft.anchor!);
+    if (page > (readerPdfDocument(view)?.numPages ?? 0))
+      throw new Error("Annotation anchor page is outside this PDF");
+    let source = pages.get(page);
+    if (!source) {
+      source = (async () => {
+        const chars = await pageChars(view, page - 1);
+        return {
+          chars,
+          passages: await pdfPassages(chars, page, fingerprint, runtimeDigest),
+        };
+      })();
+      pages.set(page, source);
+    }
+    const { chars, passages } = await source;
+    const passage = resolvePassage(passages, draft.anchor!);
+    const rects = rangeRects(chars, passage.start, passage.end);
+    if (
+      !rects.length ||
+      rects.some(
+        (r) =>
+          r.some((n) => !Number.isFinite(n)) || r[2] <= r[0] || r[3] <= r[1],
+      )
+    )
+      throw new Error(
+        "Annotation anchor has no reliable native selection geometry",
+      );
+    const position = { pageIndex: page - 1, rects };
+    return {
+      type: draft.type,
+      text: passage.text,
+      comment: draft.comment ?? "",
+      color: draft.color ?? DEFAULT_ANNOTATION_COLORS[draft.type],
+      position,
+      ...annotationMetaForPosition(view, position),
+    };
+  }
+
   private collectionMutationVersion(
     name: string,
     collection: Zotero.Collection,
@@ -1908,22 +1977,55 @@ export class ZoteroToolHost {
               waitForPdfReader(pdf, progress),
             )
           : undefined;
+        const anchorPages = new Map<
+          number,
+          Promise<{ chars: PdfPageChar[]; passages: PdfPassage[] }>
+        >();
+        // Reserve time to freeze and save the successful portion of a batch.
+        const locatingUntil = Math.min(
+          Date.now() + 60_000,
+          (context.executionScope?.deadlineAt ?? Infinity) - 2_000,
+        );
         let firstTextSearch = true;
-        for (const entry of pending) {
+        for (const entry of [...pending].sort(
+          (a, b) =>
+            Number(b.draft?.type !== "image" && !!b.draft?.anchor) -
+            Number(a.draft?.type !== "image" && !!a.draft?.anchor),
+        )) {
           try {
+            if (!progress.active)
+              throw new ToolTimeout(
+                "Annotation preparation cancelled or timed out",
+              );
+            if (Date.now() >= locatingUntil)
+              throw new Error(
+                "Batch location budget exhausted; retry this entry using a get_pages anchor",
+              );
+            const anchored =
+              entry.draft!.type !== "image" && !!entry.draft!.anchor;
             const initializingSearch =
-              firstTextSearch && entry.draft!.type !== "image";
+              !anchored && firstTextSearch && entry.draft!.type !== "image";
             if (initializingSearch) firstTextSearch = false;
             entry.located = await progress.run(
               `checking_${entry.id}`,
-              initializingSearch ? 30_000 : 10_000,
+              Math.min(
+                initializingSearch ? 30_000 : 10_000,
+                locatingUntil - Date.now(),
+              ),
               () =>
-                this.locateCandidate(
-                  ready!.view,
-                  entry.draft!,
-                  progress,
-                  initializingSearch ? 30_000 : 5_000,
-                ),
+                anchored
+                  ? this.locateAnchor(
+                      ready!.view,
+                      entry.draft! as PendingTextAnnotation,
+                      fingerprint,
+                      anchorPages,
+                    )
+                  : this.locateCandidate(
+                      ready!.view,
+                      entry.draft!,
+                      progress,
+                      initializingSearch ? 30_000 : 5_000,
+                    ),
             );
             entry.status = "pending";
             entry.error = undefined;
@@ -1935,7 +2037,7 @@ export class ZoteroToolHost {
               entry.status = "alreadyPresent";
             }
           } catch (error) {
-            if (error instanceof ToolTimeout) throw error;
+            if (error instanceof ToolTimeout && !progress.active) throw error;
             entry.status = "skipped";
             entry.error = String(error);
           }
@@ -1947,12 +2049,14 @@ export class ZoteroToolHost {
         if (
           !eligible.length &&
           !proposal.entries.some((entry) => entry.annotationKey)
-        )
+        ) {
+          await this.saveAnnotationRecord(token, record);
           return reject(
             "No candidates have a reliable location; repair the per-entry issues",
             "invalid_args",
             { proposalId: proposal.id, entries: proposal.entries },
           );
+        }
         if (
           args.proposalId &&
           explicit !== undefined &&
@@ -1975,6 +2079,9 @@ export class ZoteroToolHost {
           ...entry.raw,
           id: entry.id,
           page: entry.located!.position.pageIndex + 1,
+          ...(entry.draft?.type !== "image" && entry.draft?.anchor
+            ? { anchor: undefined, quote: entry.located!.text }
+            : {}),
         }));
         delete args.highlights;
         // An explicit reuse adopts this candidate for the current request;
@@ -3218,12 +3325,7 @@ export class ZoteroToolHost {
     const cached = this.pageTextCache.get(key);
     if (cached !== undefined) return cached;
     const chars = await pageChars(view, page - 1);
-    let text = chars
-      .map(
-        (char) =>
-          `${char.u ?? char.char ?? ""}${char.paragraphBreakAfter ? "\n\n" : char.lineBreakAfter ? "\n" : char.spaceAfter ? " " : ""}`,
-      )
-      .join("");
+    let text = chars.map(charText).join("");
     if (!text) {
       const content = await (
         await readerPdfPage(view, page)
@@ -3279,9 +3381,30 @@ export class ZoteroToolHost {
           `Use physical pages 1-${count}, at most 50 pages per call`,
         );
       const pages = [];
+      const fingerprint = await pdfFingerprint(pdf);
       for (let page = start; page <= end; page++) {
-        const text = await progress.run(`extracting_page_${page}`, 10_000, () =>
-          this.physicalPageText(pdf, view, page),
+        const { text, anchored, truncated } = await progress.run(
+          `extracting_page_${page}`,
+          10_000,
+          async () => {
+            const chars = await pageChars(view, page - 1);
+            if (!chars.length)
+              return {
+                text: await this.physicalPageText(pdf, view, page),
+                anchored: false,
+                truncated: false,
+              };
+            const passages = await pdfPassages(
+              chars,
+              page,
+              fingerprint,
+              runtimeDigest,
+            );
+            return {
+              ...renderPdfPassages(passages, 50_000),
+              anchored: passages.some((p) => p.anchor),
+            };
+          },
         );
         pages.push({
           page,
@@ -3290,7 +3413,13 @@ export class ZoteroToolHost {
             groupID: groupIDForLibrary(pdf.libraryID),
           }),
           text: text.slice(0, 50_000),
-          truncated: text.length > 50_000,
+          truncated: truncated || text.length > 50_000,
+          ...(anchored
+            ? {
+                anchorFormat:
+                  "Each [anchor:ID] or [unanchored] starts a passage. Pass ID as annotation.anchor to commit_annotations; omit page and quote. Unanchored passages have no selectable reference.",
+              }
+            : {}),
         });
       }
       return ok("get_pages", {
@@ -4056,6 +4185,7 @@ export class ZoteroToolHost {
         object.type = "highlight";
         object.quote ??= object.text;
       }
+      if (object.anchor !== undefined) object.type ??= "highlight";
       const aliasConflict =
         (object.comment !== undefined &&
           object.rationale !== undefined &&
@@ -4070,7 +4200,8 @@ export class ZoteroToolHost {
       // candidate. Accept only the unambiguous explanation alias, never a conflict.
       if (
         object.comment === undefined &&
-        typeof object.quote === "string" &&
+        (typeof object.quote === "string" ||
+          typeof object.anchor === "string") &&
         typeof object.content === "string"
       ) {
         object.comment = object.content;
