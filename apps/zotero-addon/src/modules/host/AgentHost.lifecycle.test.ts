@@ -394,6 +394,7 @@ describe("AgentHost lifecycle ownership", () => {
       const controller = state.abort;
       const preambles = [
         "I will read the paper.",
+        "\n\n",
         "Now I will save annotations.",
       ];
       const answer =
@@ -470,7 +471,9 @@ describe("AgentHost lifecycle ownership", () => {
       assert.deepEqual(
         textEvents.map((event) => event.payload),
         [
-          ...preambles.map((text) => ({ text, phase: "commentary" })),
+          ...preambles
+            .filter((text) => text.trim())
+            .map((text) => ({ text, phase: "commentary" })),
           ...(answer ? [{ text: answer, phase: "final_answer" }] : []),
         ],
       );
@@ -485,7 +488,7 @@ describe("AgentHost lifecycle ownership", () => {
         blocks
           .filter((block) => block.kind === "commentary")
           .map((block) => block.text),
-        [preambles.join("\n\n")],
+        [preambles.filter((text) => text.trim()).join("\n\n")],
       );
     });
   }

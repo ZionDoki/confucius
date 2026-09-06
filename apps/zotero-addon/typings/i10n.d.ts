@@ -382,6 +382,7 @@ export type FluentMessageId =
   | 'confucius-workspace-timeline'
   | 'confucius-workspace-title'
   | 'confucius-workspace-toggle-sessions'
+  | 'confucius-workspace-tui-progress'
   | 'confucius-workspace-tui-thinking'
   | 'confucius-workspace-tui-tools'
   | 'confucius-workspace-ui-language'

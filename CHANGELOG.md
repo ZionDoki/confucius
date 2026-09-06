@@ -2,8 +2,33 @@
 
 ## Unreleased
 
+## 0.4.1 - 2026-09-06
+
+Confucius 0.4.1 improves PDF annotation accuracy, evidence review and feedback
+during tool execution.
+
+### Changed
+
+- PDF annotations can be committed directly from selectable source passages,
+  individually or in batches. Models no longer need to retype the source quote
+  or create a separate proposal first; existing quote/page calls remain supported.
+- Deep-reading reports are saved as drafts before a separate evidence review of
+  source pages and saved comments. Reviews retain source evidence and existing
+  annotation identities while separating earlier drafting reasoning.
+- Tool receipts avoid repeating saved report bodies, annotation geometry and
+  proposal text. PDF page results preserve complete pages and indicate where
+  reading should continue.
+
 ### Fixed
 
+- Annotation locations follow native PDF characters and positions, including
+  typographic ligatures and line breaks. Invalid or stale passage references are
+  rejected, and one unresolved entry does not discard the rest of a batch.
+- Editing a saved annotation comment validates that annotation without treating
+  unrelated annotations as part of the edit. Completed writes retain their
+  original request identity for safe continuation.
+- The configured response language is carried through reading, comments,
+  reports, progress and repair turns while source quotations retain their text.
 - Tool calls such as `commit_annotations` keep the loading indicator and status
   text below the conversation visible during approval and execution, alongside
   the progress and elapsed time shown inside the tool.
@@ -12,7 +37,42 @@
   during agent work.
 - Tool-call commentary appears in a collapsible progress section. Interrupted
   runs no longer concatenate those messages into a final answer, and completed
-  replies exclude earlier tool-call preambles.
+  replies exclude earlier tool-call preambles. Whitespace-only preambles do not
+  create empty progress blocks.
+
+### Upgrade notes
+
+- This is a stable update from 0.4.0. Install through Confucius Settings → Update
+  or install the release XPI, then restart Zotero. No new data migration or model
+  reconfiguration is required; existing tasks, annotations and explicit update
+  channel preferences are preserved.
+
+### Validation and known limits
+
+- The release candidate passes 759 automated tests, type checking, lint, build,
+  version/release checks and skill synchronization on Windows 11 with Node.js 24.
+  In normally installed Zotero 10.0.1, MiniMax-M3 saves all three target sentences
+  in one commit and returns a Chinese final reply. Existing settings, 24 tasks
+  and 20 original annotations remain unchanged; background reads retain the
+  selected tab and reuse their reader.
+- Isolated 0.3.8 → 0.4.1 upgrade checks preserve task identities, history,
+  checkpoints, notes and artifact revisions. Two restarts and explicit
+  continuation preserve the completed write without duplication. This uses a
+  deterministic local model and does not measure model quality.
+- In a fixed three-sentence case repeated five times per version, complete and
+  correctly positioned highlights increased from 10/15 to 15/15. Both versions
+  saved 15 annotations. Reported mean token use decreased 40.2%; one baseline
+  run was interrupted after saving its marks and may lack final request usage.
+  These are small-sample interface results, not universal reliability or billing
+  guarantees. The comparison isolates the annotation interface change, not all
+  differences from 0.4.0.
+- Evidence review does not guarantee factual correctness. Reading reports can
+  still confuse statistical scope or denominators; scanned PDFs, OCR and
+  cross-page sentence annotation are outside this experiment's validation.
+  One MiniMax-M3 candidate run also exposed a raw thinking marker before its
+  Chinese final reply; provider-specific reply formatting is not fully normalized.
+- Release preparation and installation checks are recorded in the
+  [0.4.1 acceptance record](https://github.com/ZionDoki/confucius/blob/v0.4.1/.github/maintainers/acceptance/release-0.4.1.md).
 
 ## 0.4.0 - 2026-09-06
 

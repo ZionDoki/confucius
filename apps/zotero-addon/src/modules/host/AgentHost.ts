@@ -5243,11 +5243,12 @@ export class AgentHost {
       let commentaryText = "";
       const flushCommentary = () => {
         if (!text) return;
-        this.emitSessionEvent(state, input.turnId, "text_delta", {
-          text,
-          phase: "commentary",
-        });
         commentaryText += text;
+        if (text.trim())
+          this.emitSessionEvent(state, input.turnId, "text_delta", {
+            text,
+            phase: "commentary",
+          });
         text = "";
       };
       const finish = (result: ExecutorResult) => {
