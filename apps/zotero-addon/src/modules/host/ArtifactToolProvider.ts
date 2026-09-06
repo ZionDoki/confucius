@@ -403,7 +403,12 @@ const schema: JsonSchemaObject = {
         'A typed body. For deep_read/report/note_draft use {"type":"markdown","markdown":"..."}; every other body.type must equal kind.',
       oneOf: artifactBodySchemas,
     },
-    status: { type: "string", enum: ["draft", "ready"] },
+    status: {
+      type: "string",
+      enum: ["draft", "ready"],
+      description:
+        "For deep_read, first save a draft, then read its source pages and saved annotations. Submit the corrected body and ready status together. A new draft revision resets those read prerequisites.",
+    },
     citations: {
       type: "array",
       description:
@@ -447,6 +452,9 @@ export class ArtifactToolProvider implements ToolProvider {
     private readonly reviewState?: (
       artifact: ArtifactRecord | null,
     ) => "draft_required" | "evidence_required" | "reviewed",
+    private readonly reviewNextAction?: (
+      artifact: ArtifactRecord | null,
+    ) => string,
   ) {}
 
   listTools(): ToolDefinition[] {
@@ -510,7 +518,8 @@ export class ArtifactToolProvider implements ToolProvider {
           code: "invalid_args" as const,
           effect: "none" as const,
           retryable: false,
-          message: DEEP_READ_REVIEW_INSTRUCTION,
+          message:
+            this.reviewNextAction?.(existing) ?? DEEP_READ_REVIEW_INSTRUCTION,
         };
     }
     context.expected ??= {};
@@ -594,7 +603,12 @@ export class ArtifactToolProvider implements ToolProvider {
           ...(artifact.kind === "deep_read" &&
           artifact.status === "draft" &&
           this.reviewState
-            ? { reviewRequired: true, nextAction: DEEP_READ_REVIEW_INSTRUCTION }
+            ? {
+                reviewRequired: true,
+                nextAction:
+                  this.reviewNextAction?.(artifact) ??
+                  DEEP_READ_REVIEW_INSTRUCTION,
+              }
             : {}),
         },
         warnings,

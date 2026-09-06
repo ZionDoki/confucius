@@ -40,7 +40,10 @@ import {
   taskContextReferences,
 } from "@confucius/protocol";
 import { TaskHistoryToolProvider, HISTORY_TOOL_NAMES } from "./HistoryTools";
-import { deepReadReviewState } from "./DeepReadReview";
+import {
+  deepReadReviewNextAction,
+  deepReadReviewState,
+} from "./DeepReadReview";
 import { deepReadReviewMessages } from "./DeepReadReviewContext";
 import { createHistoryStore } from "./MemoryTools";
 import { historySourceRefs } from "./HistorySources";
@@ -4900,6 +4903,7 @@ export class AgentHost {
       state.record.mode === "agent" && state.record.templateId === "deep-read"
         ? (artifact) => deepReadReviewState(artifact, binding, state.events)
         : undefined,
+      (artifact) => deepReadReviewNextAction(artifact, binding, state.events),
     );
   }
 

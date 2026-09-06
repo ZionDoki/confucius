@@ -18,6 +18,36 @@ export function deepReadReviewState(
   execution: ExecutionBinding | undefined,
   events: readonly ConfuciusEvent[],
 ): "draft_required" | "evidence_required" | "reviewed" {
+  return deepReadReviewStatus(artifact, execution, events).state;
+}
+
+export function deepReadReviewNextAction(
+  artifact: ArtifactRecord | null,
+  execution: ExecutionBinding | undefined,
+  events: readonly ConfuciusEvent[],
+): string {
+  const review = deepReadReviewStatus(artifact, execution, events);
+  if (review.state !== "evidence_required") return DEEP_READ_REVIEW_INSTRUCTION;
+  return [
+    `Artifact ${artifact!.id}, draft revision ${artifact!.revision}: missing successful ${review.missingReads.join(" and ")} after this revision was saved.`,
+    review.missingReads.includes("get_pages")
+      ? "Read the source pages supporting the report with get_pages (or inspect_pdf_page)."
+      : "The source-page read is already satisfied for this revision; do not repeat it unless you have an evidence gap.",
+    review.missingReads.includes("get_annotations")
+      ? "Call get_annotations for this paper's PDF attachment to review its saved comments. Updating a comment does not replace this read."
+      : "The saved-comment read is already satisfied for this revision.",
+    "Keep the current draft. After the missing read and any factual corrections, submit the corrected body with status=ready under this same artifact id in ONE artifact_upsert call. Saving another draft creates a new revision that needs another evidence pass.",
+  ].join("\n");
+}
+
+function deepReadReviewStatus(
+  artifact: ArtifactRecord | null,
+  execution: ExecutionBinding | undefined,
+  events: readonly ConfuciusEvent[],
+): {
+  state: "draft_required" | "evidence_required" | "reviewed";
+  missingReads: ("get_pages" | "get_annotations")[];
+} {
   if (
     !artifact ||
     !execution ||
@@ -25,9 +55,10 @@ export function deepReadReviewState(
     artifact.execution.intentRevision !== execution.intentRevision ||
     artifact.execution.sourceFingerprint !== execution.sourceFingerprint
   )
-    return "draft_required";
+    return { state: "draft_required", missingReads: [] };
   // A completed report may be edited without restarting its evidence pass.
-  if (artifact.status !== "draft") return "reviewed";
+  if (artifact.status !== "draft")
+    return { state: "reviewed", missingReads: [] };
   // Runtime tool events and host artifact events can use different clocks.
   // Their durable arrival order, not timestamp subtraction, establishes reads
   // after the exact saved revision (and survives checkpoint restoration).
@@ -45,7 +76,11 @@ export function deepReadReviewState(
           : undefined;
     return saved?.id === artifact.id && saved.revision === artifact.revision;
   });
-  if (savedIndex < 0) return "evidence_required";
+  if (savedIndex < 0)
+    return {
+      state: "evidence_required",
+      missingReads: ["get_pages", "get_annotations"],
+    };
   // Tools accept either a bibliographic item or its PDF attachment key. Learn
   // that relationship from actual tool results, not from model-authored text.
   const sourceRefs = new Set(artifact.sourceContextIds);
@@ -104,5 +139,11 @@ export function deepReadReviewState(
     )
       sourceRead = true;
   }
-  return sourceRead && annotationsRead ? "reviewed" : "evidence_required";
+  const missingReads: ("get_pages" | "get_annotations")[] = [];
+  if (!sourceRead) missingReads.push("get_pages");
+  if (!annotationsRead) missingReads.push("get_annotations");
+  return {
+    state: missingReads.length ? "evidence_required" : "reviewed",
+    missingReads,
+  };
 }

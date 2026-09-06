@@ -178,6 +178,14 @@ export class PresetToolProvider implements ToolProvider {
         message: "Tool is not available in the preset task",
       };
     }
+    if (name === "update_annotation_comment") {
+      // The execution dispatch gets a fresh context after approval. Resolve the
+      // annotation's current native parent again before checking source scope;
+      // do not mistake missing preflight metadata for an out-of-scope item.
+      context = { ...context, resources: undefined };
+      const invalid = await this.inner.prepare?.(name, args, context);
+      if (invalid) return invalid;
+    }
     if (!presetToolCallInScope(this.scope, name, args, context)) {
       return {
         ok: false,

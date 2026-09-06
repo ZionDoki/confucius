@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { ArtifactStore, type ArtifactFileSystem } from "./ArtifactStore";
 import type { ToolExecutionContext, ConfuciusEvent } from "@confucius/protocol";
-import { deepReadReviewState } from "./DeepReadReview";
+import {
+  deepReadReviewNextAction,
+  deepReadReviewState,
+} from "./DeepReadReview";
 import {
   ARTIFACT_UPSERT_DEFINITION,
   ArtifactToolProvider,
@@ -355,6 +358,7 @@ describe("artifact_upsert contract", () => {
           }),
         () => execution,
         (artifact) => deepReadReviewState(artifact, execution, events),
+        (artifact) => deepReadReviewNextAction(artifact, execution, events),
       );
     const save = () => ({
       id: "review",
@@ -407,8 +411,58 @@ describe("artifact_upsert contract", () => {
     assert.equal((await provider().call("artifact_upsert", save())).ok, false);
     assert.equal((await store.get("review"))?.revision, 1);
     events.push(read("get_pages", 130));
-    assert.equal((await provider().call("artifact_upsert", save())).ok, false);
+    const missingComments = await provider().call("artifact_upsert", save());
+    assert.equal(missingComments.ok, false);
+    if (!missingComments.ok) {
+      assert.match(missingComments.message, /draft revision 1/);
+      assert.match(
+        missingComments.message,
+        /missing successful get_annotations/,
+      );
+      assert.match(
+        missingComments.message,
+        /source-page read is already satisfied/,
+      );
+    }
     events.push(read("get_annotations", 140));
+    // Saving a corrected draft is a new revision; the error must identify the
+    // missing step for that revision instead of sending the model into a loop
+    // of page reads or comment writes that cannot satisfy get_annotations.
+    assert.equal(
+      (
+        await provider().call("artifact_upsert", {
+          ...save(),
+          status: "draft",
+          body: { type: "markdown", markdown: "Corrected draft" },
+        })
+      ).ok,
+      true,
+    );
+    const missingBoth = await provider().call("artifact_upsert", save());
+    assert.equal(missingBoth.ok, false);
+    if (!missingBoth.ok)
+      assert.match(
+        missingBoth.message,
+        /draft revision 2: missing successful get_pages and get_annotations/,
+      );
+    events.push(read("get_pages", 150));
+    const missingLatestComments = await provider().call(
+      "artifact_upsert",
+      save(),
+    );
+    assert.equal(missingLatestComments.ok, false);
+    if (!missingLatestComments.ok) {
+      assert.match(missingLatestComments.message, /draft revision 2/);
+      assert.match(
+        missingLatestComments.message,
+        /missing successful get_annotations/,
+      );
+      assert.match(
+        missingLatestComments.message,
+        /Updating a comment does not replace/,
+      );
+    }
+    events.push(read("get_annotations", 160));
     assert.equal((await provider().call("artifact_upsert", save())).ok, true);
     assert.equal((await store.get("review"))?.status, "ready");
     assert.equal(
