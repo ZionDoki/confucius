@@ -104,3 +104,35 @@ denied，没有新笔记或批注，最终回复为中文。
 版本、Beta 顺序与关闭不降级、网络和资产错误由自动化回归覆盖。本地候选通过
 不等于公开资产通过；发布后另核对 Latest、CHANGELOG 正文、下载摘要、实际
 更新和安装重启结果。该结果单独补记，不移动 tag 或覆盖公开 XPI。
+
+## 发布后实测
+
+2026-09-06 22:26 UTC 完成公开包与重启核对。发布提交为
+`5aae477b55c5be085d5917f497faf5425462ac88`，tag 为 `v0.4.2`；
+[GitHub Release](https://github.com/ZionDoki/confucius/releases/tag/v0.4.2)
+于 22:22:04 UTC 公开，非 draft、非 prerelease，并确认为 Latest 稳定版。
+
+- [tag CI](https://github.com/ZionDoki/confucius/actions/runs/34063719076) 的
+  Node.js 22、24 检查和发布任务全部成功；
+  [master CI](https://github.com/ZionDoki/confucius/actions/runs/34063719099) 亦成功。
+- Release 正文与 CHANGELOG 提取结果一致。三个公开资产均已上传，下载大小和
+  SHA-256 与 GitHub 元数据相同；manifest、两个更新 JSON 的版本、链接、兼容
+  声明与 SHA-512 均正确。
+- 公开 XPI 为 529,303 bytes，SHA-256 为
+  `231d3d9ee86fb5b3035f950fe46406abae03dccf1171984bf6674b4dea617f30`。
+  与本地候选摘要不同，二者没有混用，也没有覆盖公开包或移动 tag。
+- 隔离的普通 0.4.1 安装明确关闭 Beta 与 Zotero 全局自动更新，Confucius 仍能
+  手动发现 0.4.2，并通过自身更新器下载、校验、安装公开资产。重启后为非临时
+  0.4.2，报告与中文设置保留，原生偏好中的 stable 选择保留；再次检查返回
+  up-to-date，不能重复安装。另补验明确开启的 beta 偏好在候选升级和重启后保留。
+- 用户正常启动的本机 Zotero 安装经摘要核验的公开 XPI，并正常重启，进程 ID
+  确认改变。AddonManager 与健康检查均为 0.4.2，active 且非临时插件；已安装
+  文件与公开包摘要相同，再次检查确认最新，用户 beta 与自动检查选择保持不变。
+- 27 个既有任务的 ID、状态、窗口、run 和预算与安装前快照相同；模型配置指纹、
+  MiniMax-M3、zh-CN、流式回复与更新设置保留。本轮新增的两个测试任务单独保留。
+  原始 PDF 摘要不变，真实模型修订后的报告、引用和两版历史保留，计量冒烟的
+  5,348 ms 与 Token 预算经过安装与重启仍不变。
+- 没有运行中的任务；隔离 Zotero 均正常退出，临时本机验收连接已停止。
+
+原始结果保存在 ignored `output/release-0.4.2/`。公开更新验收不扩大前述模型
+质量、成本、平台或 Zotero 版本范围的结论。
