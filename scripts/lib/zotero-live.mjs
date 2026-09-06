@@ -329,7 +329,7 @@ export class IsolatedZotero {
     // through this isolated profile's RDP connection before stopping it.
     if (graceful) {
       await this.rdp.evaluate(
-        "await Zotero.Confucius.hooks.host.persistNow(); Zotero.setTimeout(()=>Zotero.Utilities.Internal.quit(0), 100); return true;",
+        "await Zotero.Confucius.hooks.host.persistNow(); Zotero.getMainWindow().setTimeout(()=>Zotero.Utilities.Internal.quit(0), 100); return true;",
       );
     } else process.kill(pid, "SIGKILL");
     await until(() => {

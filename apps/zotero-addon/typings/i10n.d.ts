@@ -449,6 +449,7 @@ export type FluentMessageId =
   | 'confucius-workspace-writeback-failed'
   | 'confucius-workspace-writeback-knowledge'
   | 'confucius-workspace-writeback-knowledge-id'
+  | 'confucius-workspace-writeback-new'
   | 'confucius-workspace-writeback-note'
   | 'confucius-workspace-writeback-partial'
   | 'confucius-workspace-writeback-pending'

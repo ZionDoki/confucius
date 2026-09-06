@@ -347,6 +347,7 @@ confucius-workspace-artifact-annotation-image-default = 图表、公式或区域
 confucius-workspace-writeback = 写回 Zotero…
 confucius-workspace-writeback-preview = 审查写回内容
 confucius-workspace-writeback-before = 写回前
+confucius-workspace-writeback-new = 尚无内容（将新建）
 confucius-workspace-writeback-after = 写回后
 confucius-workspace-writeback-request = 提交审批
 confucius-workspace-writeback-prepare = 继续

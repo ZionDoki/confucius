@@ -685,7 +685,7 @@ export class AgentHost {
       for (const state of states) {
         const interrupted =
           !!state.activeTurnId || state.record.run?.status === "running";
-        this.captureRunBudget(state);
+        if (interrupted) this.captureRunBudget(state);
         state.activeTurnId = null;
         state.abort = null;
         if (interrupted) {
@@ -3630,11 +3630,11 @@ export class AgentHost {
           },
         };
       } else {
-        return `(new ${target})`;
+        return getString("workspace-writeback-new");
       }
     }
     const targetRef = artifact.writeback?.targetRef;
-    if (!targetRef) return `(new ${target})`;
+    if (!targetRef) return getString("workspace-writeback-new");
     const separator = targetRef.indexOf(":");
     const left = separator >= 0 ? targetRef.slice(0, separator) : targetRef;
     const right = separator >= 0 ? targetRef.slice(separator + 1) : "";
@@ -5571,6 +5571,10 @@ export class AgentHost {
     isCurrent: () => boolean,
   ): Promise<void> {
     if (!isCurrent() || outcome.superseded) return;
+    this.captureRunBudget(state);
+    // A finished executor must not accrue idle time until the next host shutdown.
+    // Continuation creates a new accountant from the persisted cumulative budget.
+    state.runBudget = undefined;
     const completed = outcome.stopReason === "completed";
     const text = outcome.text;
     const emit = (

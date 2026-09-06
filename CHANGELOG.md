@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.4.2 - 2026-09-06
+
+Confucius 0.4.2 makes research reports easier to review, revise and read alongside
+the source PDF, and fixes misleading artifact permission errors.
+
 ### Changed
 
 - Artifacts open in independent, resizable windows with native window controls.
@@ -31,22 +36,40 @@
 - Report patches reject stale revisions, ambiguous text and overlapping edits
   without applying any part of the patch. Interrupted saves are reconciled by
   their persisted operation identity, preventing duplicate revisions on replay.
+- Completed tasks stop accumulating elapsed time. Closing Zotero or upgrading
+  the plugin no longer adds later idle time to a finished task's recorded cost.
+- Empty writeback previews follow the configured language instead of displaying
+  internal target names such as `zotero_note`.
+
+### Upgrade notes
+
+- This is a stable update from 0.4.1. Install through Confucius Settings → Update
+  or install the release XPI, then restart Zotero. No new data migration or model
+  reconfiguration is required. Existing reports, revisions, citations and explicit
+  update-channel settings are preserved. Previously inflated elapsed-time values
+  are not recalculated automatically; token counters are unaffected by this fix.
 
 ### Validation and known limits
 
-- The development changes pass 781 automated tests, type checking, lint, build,
-  skill synchronization and version consistency checks on Windows with Node.js 24.
-- Deterministic report-editing tests cover atomic overview/evidence corrections,
-  concurrent edits, citation preservation, bounded reads, source-review
-  prerequisites and interrupted writes. See the
-  [report revision contract and checks](.github/maintainers/research-reports.md).
-- A temporary preview loaded into normally launched Zotero 10.0.1 on Windows
-  verifies independent windows, narrow layouts, revision following, selection
-  and scroll preservation, and PDF source navigation. It uses an in-memory
-  report copy and simulated writeback receipts; no installed package is replaced.
-- The new report workflow has not yet been tested with a real model in an
-  installed Zotero build. Smaller edit payloads are measured as UTF-8 bytes,
-  not billed tokens or an end-to-end success-rate improvement.
+- The release candidate passes 782 automated tests, type checking, lint, build,
+  skill synchronization and version/release checks on Windows with Node.js 24.
+- In normally installed Zotero 10.0.1, MiniMax-M3 corrects three seeded statistical
+  errors in a report and its overview using four tool calls and one patch, without
+  write approval or permission errors. The same report, earlier revision and
+  citations remain intact; the final reply is Chinese. This single run takes
+  25.4 seconds and reports 71,125 task Tokens; it is not a billing comparison or
+  a general success-rate estimate. Stronger-than-source wording can still occur.
+- Isolated 0.4.1 → 0.4.2 installation and restart preserve reports and settings.
+  Atomic revision checks reject stale or invalid edits; actual Zotero note writes
+  require approval and cancellation creates no note. Installed window checks
+  confirm reuse, independence from the chat sidebar and in-window cancellation.
+- Bounded reads and patches avoid resending unchanged long passages. Patch
+  payloads can exceed full replacement for short reports because they contain
+  both old and new text; payload bytes are not billed Tokens. macOS, Linux and
+  other Zotero versions have not received new native-window acceptance in this
+  release. See the
+  [0.4.2 acceptance record](https://github.com/ZionDoki/confucius/blob/v0.4.2/.github/maintainers/acceptance/release-0.4.2.md)
+  and [report revision contract](https://github.com/ZionDoki/confucius/blob/v0.4.2/.github/maintainers/research-reports.md).
 
 ## 0.4.1 - 2026-09-06
 

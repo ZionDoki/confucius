@@ -347,6 +347,7 @@ confucius-workspace-artifact-annotation-image-default = Figure, formula, or regi
 confucius-workspace-writeback = Write to Zotero…
 confucius-workspace-writeback-preview = Review write-back
 confucius-workspace-writeback-before = Before
+confucius-workspace-writeback-new = No content yet (will create)
 confucius-workspace-writeback-after = After
 confucius-workspace-writeback-request = Request approval
 confucius-workspace-writeback-prepare = Continue

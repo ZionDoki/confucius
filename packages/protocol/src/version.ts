@@ -1,2 +1,2 @@
 /** Product version shared by runtime handshakes and service descriptors. */
-export const CONFUCIUS_VERSION = "0.4.1";
+export const CONFUCIUS_VERSION = "0.4.2";

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import type { ModelMessage } from "@confucius/harness";
+import { BudgetAccountant } from "@confucius/harness";
 import {
   coalesceTimeline,
   initialContextWindow,
@@ -176,6 +177,7 @@ interface TestState {
   sessionGrants: Set<string>;
   abort: AbortController | null;
   activeTurnId: string | null;
+  runBudget?: BudgetAccountant;
   externalToolNames?: Set<string>;
   externalSourceScope?: { itemRefs: Set<string> };
   externalVisualInspectionActive?: boolean;
@@ -820,7 +822,23 @@ describe("AgentHost lifecycle ownership", () => {
       state.activeTurnId = "active-turn";
       state.record.run = run(state.record);
       state.record.run.budget.toolCallsUsed = 3;
-      const sessions = new Map([[state.record.id, state]]);
+      const completed = fixture().state;
+      completed.record.id = "completed-task";
+      completed.record.status = "completed";
+      completed.record.run = run(completed.record);
+      completed.record.run.status = "completed";
+      completed.record.run.budget.modelRequestsObservable = true;
+      completed.record.run.budget.elapsedMs = 200;
+      completed.runBudget = new BudgetAccountant(
+        { maxIterations: 8, maxToolCalls: 20 },
+        () => 10_000,
+      );
+      completed.runBudget.restoreMax({ elapsedMs: 10_000 });
+      const completedBefore = structuredClone(completed.record);
+      const sessions = new Map([
+        [state.record.id, state],
+        [completed.record.id, completed],
+      ]);
       const snapshots: ResearchTaskRecord[][] = [];
       const saving = deferred<void>();
       let denials = 0;
@@ -872,18 +890,19 @@ describe("AgentHost lifecycle ownership", () => {
         await waitFor(() => snapshots.length === 1);
         assert.equal(controller.signal.aborted, true);
         assert.equal(denials, 1);
-        assert.equal(disposed, 1);
+        assert.equal(disposed, 2);
         assert.deepEqual(clearedTimers, [19]);
         assert.equal(pendingApprovals.size, 0);
         assert.equal(state.activeTurnId, null);
         assert.equal(
           sessions.size,
-          1,
+          2,
           "retain task state until the recovery snapshot is saved",
         );
         assert.equal(snapshots[0][0].status, "interrupted");
         assert.equal(snapshots[0][0].run?.stopReason, "host_shutdown");
         assert.equal(snapshots[0][0].run?.budget.toolCallsUsed, 3);
+        assert.deepEqual(snapshots[0][1], completedBefore);
         await assert.rejects(
           host.sessionPrompt(state.record.id, "late prompt"),
           /shutting down/,
@@ -908,6 +927,39 @@ describe("AgentHost lifecycle ownership", () => {
       }
     });
   }
+
+  it("freezes the measured budget before completed-task background work", async () => {
+    const { host, state } = fixture();
+    let now = 0;
+    state.record.backend = "native";
+    state.record.run = run(state.record);
+    state.record.run.status = "completed";
+    state.record.run.budget.modelRequestsObservable = true;
+    state.activeTurnId = "done-turn";
+    state.runBudget = new BudgetAccountant(
+      { maxIterations: 8, maxToolCalls: 20 },
+      () => now,
+    );
+    now = 250;
+    const saving = deferred<void>();
+    host.persistNow = () => saving.promise;
+    const finishing = host.finalizeRun(
+      state,
+      state.record.run,
+      "done-turn",
+      {
+        stopReason: "completed",
+        text: "",
+        work: { completed: [], missing: [], unknownOperationIds: [] },
+      },
+      () => state.activeTurnId === "done-turn",
+    );
+    now = 100_000;
+    saving.resolve();
+    await finishing;
+    assert.equal(state.record.run.budget.elapsedMs, 250);
+    assert.equal(state.runBudget, undefined);
+  });
 
   it("does not clear a newer run while the old final status is being persisted", async () => {
     const { host, state } = fixture();
