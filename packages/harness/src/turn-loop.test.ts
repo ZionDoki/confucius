@@ -47,6 +47,81 @@ function registerPageInspector(tools: MemoryToolProvider): void {
 }
 
 describe("TurnLoop", () => {
+  it("keeps expanded write arguments out of model history while preserving execution and replay", async () => {
+    const tools = new MemoryToolProvider();
+    let writes = 0;
+    const original = { proposalId: "p1" };
+    const expanded = {
+      ...original,
+      annotations: [{ quote: "Evidence", comment: "Explanation" }],
+    };
+    tools.register(
+      {
+        name: "commit_annotations",
+        description: "Commit",
+        inputSchema: {
+          type: "object",
+          properties: {},
+          additionalProperties: true,
+        },
+      },
+      {
+        name: "commit_annotations",
+        catalog: "paper.write",
+        concurrency: "serial",
+        mutatesState: true,
+      },
+      (args) => {
+        writes++;
+        assert.deepEqual(args, expanded);
+        return { count: 1 };
+      },
+    );
+    const provider = Object.assign(tools, {
+      prepare: async (_name: string, args: Record<string, unknown>) => {
+        Object.assign(args, expanded);
+        return null;
+      },
+    });
+    const call = { id: "write", name: "commit_annotations", args: original };
+    const first = createHarness({
+      toolProvider: provider,
+      script: [{ toolCalls: [call] }, { text: "done" }],
+    });
+    const result = await first.loop.run({
+      session: session(),
+      turnId: "expanded",
+      userText: "commit",
+    });
+    assert.equal(result.phase, "done");
+    assert.deepEqual(
+      result.messages.find((m) => m.toolCalls?.length)?.toolCalls?.[0].args,
+      original,
+    );
+    const requested = first.events.events.find(
+      (e) => e.type === "tool_requested",
+    );
+    assert.deepEqual(requested?.payload.args, original);
+    const checkpoint = first.checkpoints.latest("expanded")!;
+    assert.deepEqual(checkpoint.toolExecutions[0].args, expanded);
+    assert.deepEqual(checkpoint.toolExecutions[0].requestedArgs, original);
+    const resumed = createHarness({
+      toolProvider: provider,
+      script: [{ toolCalls: [call] }, { text: "done" }],
+    });
+    await resumed.loop.run({
+      session: session(),
+      turnId: "resumed",
+      userText: "continue",
+      resume: checkpoint,
+    });
+    assert.equal(
+      writes,
+      1,
+      "replay uses the receipt for the original compact request",
+    );
+  });
+
   it("persists a started tool record before executing the provider", async () => {
     const snapshots: Array<{ status?: string }> = [];
     const { loop, events } = createHarness({

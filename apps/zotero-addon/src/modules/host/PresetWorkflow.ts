@@ -194,7 +194,7 @@ export class PresetToolProvider implements ToolProvider {
 const common = [
   "Follow the current user request, source scope, language and format. Use task source identifiers and actual tool results.",
   "Read evidence, prepare candidates and drafts, revise concrete issues, and save the required artifacts in the current context.",
-  "Reuse existing evidence and completed writes. Do not split the work into mandatory stages or ask about optional preferences.",
+  "Reuse existing evidence and completed writes. Review a saved draft against the source before finalizing it; do not restart completed research or ask about optional preferences.",
 ].join("\n");
 const presets: Record<PresetWorkflowId, PresetWorkflow> = {
   "deep-read": {

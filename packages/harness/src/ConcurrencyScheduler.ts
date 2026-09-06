@@ -10,6 +10,7 @@ export interface ScheduledCall {
   modelCallId?: string;
   toolName: string;
   args: Record<string, unknown>;
+  requestedArgs?: Record<string, unknown>;
 }
 
 export function assertParallelSafeInvariant(meta: ToolRuntimeMeta): void {

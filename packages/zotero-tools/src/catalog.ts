@@ -32,8 +32,17 @@ export const annotationSchema = {
   type: "object",
   properties: {
     type: { type: "string", enum: ["highlight", "underline", "image"] },
-    page: { type: "integer", minimum: 1 },
-    quote: { type: "string" },
+    page: {
+      type: "integer",
+      minimum: 1,
+      description:
+        "1-based physical PDF page returned by get_pages; not the paper's printed page label",
+    },
+    quote: {
+      type: "string",
+      description:
+        "One continuous verbatim passage on this page. Copy the original wording; do not translate, paraphrase, join separated passages with ellipses, or include your explanation. Choose the shortest passage that preserves the claim and is unique on the page.",
+    },
     text: {
       type: "string",
       description: "Compatibility alias for quote on text annotations",
@@ -49,7 +58,7 @@ export const annotationSchema = {
     comment: {
       type: "string",
       description:
-        "Explain evidence, implications, limitations, or relevance to the research question; do not merely repeat the quote",
+        "In the user's configured response language, explain what this passage establishes and its evidence, assumptions, limitations, or relevance. Distinguish the paper's findings from your inference; do not merely repeat or translate the quote.",
     },
     importance: { type: "string", enum: ["key", "supporting"] },
     rationale: {
@@ -383,7 +392,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   ),
   def(
     "get_pages",
-    "Read real physical PDF pages (1-based), preserving blank pages. Indexed text without reliable pages is never assigned invented page numbers.",
+    "Read real physical PDF pages (1-based), preserving blank pages. Results contain complete pages; if nextPage is not null, continue there to read the omitted pages. Use non-overlapping ranges and do not treat a truncated result as having read the whole requested range. Indexed text without reliable pages is never assigned invented page numbers.",
     {
       ...itemRef,
       start: { type: "integer", minimum: 1 },
@@ -399,7 +408,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   ),
   def(
     "search_paper_content",
-    "Search inside one paper.",
+    "Find a literal, case-insensitive substring inside one paper. The query is one phrase, not Boolean syntax: 'A OR B' searches for those literal characters. Use search_with_regex for alternatives. A missing phrase does not prove that the topic is absent from the paper.",
     {
       ...itemRef,
       query: { type: "string" },
@@ -424,14 +433,18 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   ),
   def(
     "get_annotations",
-    "Read actual Zotero annotations and this task's candidate proposals with outcomes projected from the operation journal. Each saved annotation includes its Zotero URI. Use this read when its contents are relevant; submission reconciles native state automatically.",
-    itemRef,
+    "Read actual Zotero annotation text/comments and this task's proposal outcomes. Each saved annotation includes its Zotero URI. Follow nextOffset until null when reviewing all saved comments; submission reconciles native state automatically.",
+    {
+      ...itemRef,
+      offset: { type: "integer", minimum: 0 },
+      limit: { type: "integer", minimum: 1, maximum: 50 },
+    },
     ["libraryID", "key"],
   ),
   def("get_pdf_selection", "Current PDF reader selection, if any.", itemRef),
   def(
     "inspect_pdf_page",
-    "Inspect one PDF page. Returns normalized text-line anchors and, when supported, a temporary page PNG that is not saved. Inspect at most one visual page per model round. Request other pages in later rounds. Do not guess an image-region rectangle without a page image.",
+    "Inspect one physical PDF page to read tables/figures or ground image regions. Returns text aligned by page coordinates, normalized line anchors and, when supported, a temporary page PNG. Use this when flattened text loses table column headers or order; never guess which value belongs to which column. Inspect at most one visual page per model round. Do not guess an image-region rectangle without a page image.",
     {
       ...itemRef,
       page: { type: "integer", minimum: 1 },
@@ -477,12 +490,25 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   ),
   def(
     "commit_annotations",
-    "Save eligible entries of a persistent proposal or provided annotation batch, retaining partial success. Use proposalId from propose_annotations. The host reconciles actual annotations before writing and preserves completed or manually removed marks; repair only remaining entries. Copy returned Zotero URIs exactly.",
+    "Save eligible entries of a persistent proposal, retaining partial success. After propose_annotations, pass libraryID, key, attachmentKey and proposalId only; omit annotations and highlights. A proposal is not a saved PDF mark: only returned annotationKeys confirm writes. The host reconciles actual annotations and preserves completed or manually removed marks; repair only remaining entries. Copy returned Zotero URIs exactly. Do not repeat an unchanged non-retryable failure.",
     {
       ...itemRef,
-      proposalId: { type: "string" },
-      highlights: { type: "array" },
-      annotations: { type: "array", maxItems: 100, items: annotationSchema },
+      proposalId: {
+        type: "string",
+        description:
+          "ID returned by propose_annotations. When present, omit annotations and highlights.",
+      },
+      highlights: {
+        type: "array",
+        description: "Legacy direct batch; omit when using proposalId.",
+      },
+      annotations: {
+        type: "array",
+        maxItems: 100,
+        items: annotationSchema,
+        description:
+          "Direct batch only when no proposalId exists. Do not resend a previously proposed batch here.",
+      },
     },
     ["libraryID", "key"],
   ),

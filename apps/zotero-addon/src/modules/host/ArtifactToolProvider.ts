@@ -12,6 +12,7 @@ import type {
 import { artifactBodyMatchesKind, isArtifactKind } from "@confucius/protocol";
 import type { ToolProvider } from "@confucius/harness";
 import type { ArtifactStore } from "./ArtifactStore";
+import { DEEP_READ_REVIEW_INSTRUCTION } from "./DeepReadReview";
 
 export const ARTIFACT_UPSERT_TOOL = "artifact_upsert";
 
@@ -406,7 +407,7 @@ const schema: JsonSchemaObject = {
     citations: {
       type: "array",
       description:
-        "Evidence citations. Give an id when a typed body refers to it through citationIds.",
+        'Evidence citations, e.g. {"id":"e1","itemLibraryID":1,"itemKey":"TOOL_RETURNED_KEY","page":3,"quote":"verbatim source passage"}. Each citation requires itemLibraryID and itemKey directly; do not use a nested item or a contextId string. Give an id when the body refers to it through citationIds.',
       items: {
         type: "object",
         properties: {
@@ -430,7 +431,7 @@ const schema: JsonSchemaObject = {
 export const ARTIFACT_UPSERT_DEFINITION: ToolDefinition = {
   name: ARTIFACT_UPSERT_TOOL,
   description:
-    'Create or revise a saved research artifact. Do not call this for an ordinary reply. For deep_read, report, and note_draft, use {"type":"markdown","markdown":"..."}; for other kinds, body.type must equal kind and the body must follow its schema.',
+    'Create or revise a saved research artifact. Do not call this for an ordinary reply. For deep_read, report, and note_draft, use {"type":"markdown","markdown":"..."}; for other kinds, body.type must equal kind and the body must follow its schema. A deep-read task first saves deep_read as draft; reread its source evidence and actual annotations, correct the report/comments, then update the same id to ready. Follow reviewRequired and nextAction in the save receipt.',
   inputSchema: schema,
 };
 
@@ -443,6 +444,9 @@ export class ArtifactToolProvider implements ToolProvider {
     private readonly onUpsert: (artifact: ArtifactRecord) => void,
     private readonly execution?: () =>
       import("@confucius/protocol").ExecutionBinding | undefined,
+    private readonly reviewState?: (
+      artifact: ArtifactRecord | null,
+    ) => "draft_required" | "evidence_required" | "reviewed",
   ) {}
 
   listTools(): ToolDefinition[] {
@@ -492,6 +496,23 @@ export class ArtifactToolProvider implements ToolProvider {
         effect: "none" as const,
         message: "Artifact belongs to another task",
       };
+    if (
+      args.kind === "deep_read" &&
+      args.status !== "draft" &&
+      this.reviewState
+    ) {
+      const review = this.reviewState(existing);
+      if (review === "draft_required") args.status = "draft";
+      else if (review === "evidence_required")
+        return {
+          ok: false as const,
+          toolName: name,
+          code: "invalid_args" as const,
+          effect: "none" as const,
+          retryable: false,
+          message: DEEP_READ_REVIEW_INSTRUCTION,
+        };
+    }
     context.expected ??= {};
     context.expected[`artifact:${args.id}`] ??= String(existing?.revision ?? 0);
     context.expectedAfter ??= {};
@@ -568,7 +589,14 @@ export class ArtifactToolProvider implements ToolProvider {
         ok: true,
         toolName: name,
         effect: "applied",
-        data: { artifact },
+        data: {
+          artifact,
+          ...(artifact.kind === "deep_read" &&
+          artifact.status === "draft" &&
+          this.reviewState
+            ? { reviewRequired: true, nextAction: DEEP_READ_REVIEW_INSTRUCTION }
+            : {}),
+        },
         warnings,
       };
     } catch (error) {

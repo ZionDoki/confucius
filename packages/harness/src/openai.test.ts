@@ -229,6 +229,186 @@ describe("FilteredToolProvider", () => {
 });
 
 describe("truncateToolResult", () => {
+  it("preserves every proposal issue and candidate mapping without echoing authored prose", () => {
+    const annotations = [
+      {
+        id: "a",
+        type: "highlight",
+        page: 2,
+        quote: "Evidence",
+        comment: "中文说明",
+        status: "pending",
+      },
+      {
+        id: "b",
+        type: "underline",
+        page: 3,
+        quote: "Invalid",
+        status: "skipped",
+        error: "Repair page",
+        reviewIssue: "Explain the evidence",
+      },
+    ];
+    const raw = {
+      ok: true as const,
+      toolName: "propose_annotations",
+      data: {
+        proposalId: "p",
+        count: 1,
+        annotations,
+        issues: [{ path: "b", message: "Repair page" }],
+        persisted: true,
+      },
+    };
+    const result = truncateToolResult(raw);
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    const data = result.data as typeof raw.data;
+    assert.equal(data.proposalId, "p");
+    assert.deepEqual(data.issues, raw.data.issues);
+    assert.deepEqual(JSON.parse(JSON.stringify(data.annotations)), [
+      { inputIndex: 1, id: "a", type: "highlight", page: 2, status: "pending" },
+      {
+        inputIndex: 2,
+        id: "b",
+        type: "underline",
+        page: 3,
+        status: "skipped",
+        error: "Repair page",
+        reviewIssue: "Explain the evidence",
+      },
+    ]);
+    assert.equal(raw.data.annotations[0].comment, "中文说明");
+  });
+
+  it("keeps whole PDF pages and exposes the first unread physical page", () => {
+    const pages = [7, 8, 9].map((page) => ({
+      page,
+      text: "evidence".repeat(300),
+    }));
+    const raw = {
+      ok: true as const,
+      toolName: "get_pages",
+      data: { attachmentKey: "PDF", pageCount: 16, pages },
+    };
+    const result = truncateToolResult(raw, 4000);
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.deepEqual(result.data, {
+      attachmentKey: "PDF",
+      pageCount: 16,
+      pages: [pages[0]],
+      truncated: true,
+      nextPage: 8,
+    });
+    assert.equal(raw.data.pages.length, 3);
+  });
+
+  it("preserves a single large page and existing continuation instead of cutting evidence", () => {
+    const page = { page: 3, text: "evidence".repeat(1000) };
+    const result = truncateToolResult(
+      {
+        ok: true,
+        toolName: "get_pages",
+        data: { pages: [page], truncated: true, nextPage: 4 },
+      },
+      1000,
+    );
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.deepEqual(result.data, {
+      pages: [page],
+      truncated: true,
+      nextPage: 4,
+    });
+  });
+
+  it("returns an artifact receipt while retaining the full durable result", () => {
+    const artifact = {
+      id: "a",
+      title: "阅读报告",
+      body: "完整正文",
+      citations: [{ page: 2 }],
+      revisions: [{ body: "obsolete draft", citations: [{ page: 1 }] }],
+      status: "ready",
+      revision: 3,
+    };
+    const result = truncateToolResult({
+      ok: true,
+      toolName: "artifact_upsert",
+      data: { artifact },
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.deepEqual(result.data, {
+      artifact: { id: "a", title: "阅读报告", status: "ready", revision: 3 },
+      citationCount: 1,
+      contentStored: true,
+    });
+    assert.equal(artifact.body, "完整正文");
+    assert.equal(artifact.citations.length, 1);
+    assert.equal(artifact.revisions[0].body, "obsolete draft");
+    assert.doesNotMatch(JSON.stringify(result), /obsolete draft|revisions/);
+  });
+
+  it("preserves annotation review text, pagination and draft follow-up without geometry or historical echoes", () => {
+    const raw = {
+      ok: true as const,
+      toolName: "get_annotations",
+      data: {
+        libraryID: 1,
+        key: "PAPER",
+        nextOffset: 25,
+        totalAnnotations: 40,
+        annotations: [
+          {
+            key: "MARK",
+            comment: "保留限定",
+            text: "actual source",
+            position: { rects: [[1, 2, 3, 4]] },
+          },
+        ],
+        proposals: [
+          {
+            proposalId: "p",
+            entries: [
+              {
+                id: "a",
+                annotationKey: "MARK",
+                status: "completed",
+                draft: { comment: "old explanation" },
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const projected = truncateToolResult(raw);
+    assert.equal(projected.ok, true);
+    if (!projected.ok) return;
+    const data = projected.data as typeof raw.data;
+    assert.equal(data.nextOffset, 25);
+    assert.equal(data.annotations[0].comment, "保留限定");
+    assert.equal(data.annotations[0].key, "MARK");
+    assert.equal(data.annotations[0].position, undefined);
+    assert.equal(data.proposals[0].entries[0].draft, undefined);
+    assert(raw.data.annotations[0].position);
+    const receipt = truncateToolResult({
+      ok: true,
+      toolName: "artifact_upsert",
+      data: {
+        artifact: { id: "r", status: "draft", body: "draft" },
+        reviewRequired: true,
+        nextAction: "Reread sources",
+      },
+    });
+    assert(receipt.ok);
+    assert.equal(
+      (receipt.data as { nextAction: string }).nextAction,
+      "Reread sources",
+    );
+  });
+
   it("caps large successful payloads", () => {
     const result = truncateToolResult(
       {

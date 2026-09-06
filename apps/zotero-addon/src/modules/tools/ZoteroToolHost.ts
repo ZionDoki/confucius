@@ -15,6 +15,8 @@ import {
 import { canonical, type OperationRecord } from "../host/ReliableToolProvider";
 import type { OperationRepository } from "../host/OperationStore";
 import { annotationExplanationIssue } from "./AnnotationQuality";
+import { layoutQuoteVariants } from "./PdfQuote";
+import { spatialPageText } from "./PdfLayout";
 import type { ToolExecutionContext, ToolFailure } from "@confucius/protocol";
 import type {
   AnnotationDraft,
@@ -269,6 +271,8 @@ interface PdfFindController {
   pageMatches?: Array<number[] | undefined>;
   _pageMatches?: Array<number[] | undefined>;
   _pendingFindMatches?: Set<number>;
+  state?: { query?: string };
+  _dirtyMatch?: boolean;
   _pdfDocument?: {
     getPageData?: (input: { pageIndex: number }) => Promise<{
       chars?: PdfPageChar[];
@@ -666,20 +670,32 @@ function findPageMatches(
   return controller.pageMatches ?? controller._pageMatches ?? [];
 }
 
-async function waitForPdfFind(controller: PdfFindController): Promise<boolean> {
-  const deadline = Date.now() + 5_000;
-  let observedActivity = false;
+async function waitForPdfFind(
+  controller: PdfFindController,
+  query: string,
+  pageCount: number,
+  timeoutMs = 5_000,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
   // Let the controller reset results from any previous query before checking
   // its own activity and completion signal.
   await Zotero.Promise.delay(0);
   while (Date.now() < deadline) {
     const matches = findPageMatches(controller);
     const pending = controller._pendingFindMatches?.size ?? 0;
-    observedActivity ||= pending > 0 || matches.length > 0;
     // Reader arrays cross a chrome-window boundary in Zotero. Requiring
     // Array.isArray() for every entry rejects valid wrapped arrays, whereas the
     // controller's pending set is its own completion signal.
-    if (observedActivity && pending === 0) {
+    // A completed previous query is not evidence for this quote. Also wait for
+    // every page: native normalization may reveal additional ambiguous matches.
+    if (
+      controller.state?.query === query &&
+      controller._dirtyMatch !== true &&
+      pending === 0 &&
+      Array.from({ length: pageCount }, (_, page) => matches[page]).every(
+        (page) => page !== undefined,
+      )
+    ) {
       return true;
     }
     await Zotero.Promise.delay(25);
@@ -733,67 +749,45 @@ function rangeRects(
   return rects;
 }
 
-async function directMatchPositions(
+async function setPdfFindQuery(
   view: PdfPrimaryView,
-  pageIndex: number,
+  controller: PdfFindController,
   query: string,
-): Promise<PdfPosition[]> {
-  await view._ensureBasicPageData?.(pageIndex);
-  let chars = view._pdfPages?.[pageIndex]?.chars || [];
-  if (!chars.length) {
-    const pageData = await view._findController?._pdfDocument?.getPageData?.(
-      readerPageDataInput(view, pageIndex),
+  pageCount: number,
+  timeoutMs = 5_000,
+): Promise<void> {
+  const state = Components.utils.cloneInto(
+    {
+      active: true,
+      type: "find",
+      query,
+      phraseSearch: true,
+      highlightAll: true,
+      caseSensitive: false,
+      entireWord: false,
+      findPrevious: false,
+    },
+    view._iframeWindow,
+  );
+  if (view.setFindState) await view.setFindState(state);
+  else await controller.find(state);
+  if (!(await waitForPdfFind(controller, query, pageCount, timeoutMs)))
+    throw new Error(
+      `Native PDF search did not complete for this quote; no reliable location is available (current query: ${controller.state?.query === query ? "matched" : "different"}, pending pages: ${controller._pendingFindMatches?.size ?? "unknown"})`,
     );
-    chars = pageData?.chars || [];
-  }
-  if (!chars.length) {
-    return [];
-  }
-  let content = "";
-  const charIndexes: number[] = [];
-  chars.forEach((char, index) => {
-    const value = String(char.u ?? char.char ?? "");
-    for (let offset = 0; offset < value.length; offset += 1) {
-      content += value[offset];
-      charIndexes.push(index);
-    }
-    if (char.spaceAfter || char.lineBreakAfter || char.paragraphBreakAfter) {
-      content += " ";
-      charIndexes.push(index);
-    }
-  });
-  const needle = query.replace(/\s+/g, " ").toLocaleLowerCase();
-  const haystack = content.toLocaleLowerCase();
-  const positions: PdfPosition[] = [];
-  let from = 0;
-  while (needle && from < haystack.length) {
-    const match = haystack.indexOf(needle, from);
-    if (match < 0) {
-      break;
-    }
-    const start = charIndexes[match];
-    const end = charIndexes[match + needle.length - 1];
-    if (Number.isInteger(start) && Number.isInteger(end)) {
-      const rects = rangeRects(chars, start, end);
-      if (rects.length) {
-        positions.push({ pageIndex, rects });
-      }
-    }
-    from = match + Math.max(needle.length, 1);
-  }
-  return positions;
 }
 
 async function locateTextAnnotation(
   view: PdfPrimaryView,
   annotation: PendingTextAnnotation,
   occurrence: number,
+  findTimeoutMs = 5_000,
 ): Promise<LocatedTextAnnotation> {
   const text = String(annotation.quote ?? "").trim();
   if (!text) {
     throw new Error("Text annotation quote cannot be empty");
   }
-  const controller = view._findController;
+  const controller = waiveReaderXrays(view._findController);
   const pageCount =
     view._iframeWindow?.PDFViewerApplication?.pdfDocument?.numPages ?? 0;
   if (!controller || pageCount < 1) {
@@ -806,53 +800,60 @@ async function locateTextAnnotation(
     throw new Error(
       "PDF text search is still initializing; retry after initialization completes",
     );
-  if (view.setFindState) {
-    await view.setFindState({
-      active: true,
-      query: text,
-      highlightAll: true,
-      caseSensitive: false,
-      entireWord: false,
-    });
-  } else {
-    await controller.find({
-      type: "find",
-      query: text,
-      phraseSearch: true,
-      caseSensitive: false,
-      entireWord: false,
-      highlightAll: true,
-      findPrevious: false,
-    });
-  }
-  const findReady = await waitForPdfFind(controller);
-
   const requestedPage = Number(annotation.page);
   const pageIndexes =
     Number.isInteger(requestedPage) && requestedPage > 0
       ? [requestedPage - 1]
       : Array.from({ length: pageCount }, (_, index) => index);
-  const positions: PdfPosition[] = [];
+  const queries = new Set([text]);
   for (const pageIndex of pageIndexes) {
-    if (pageIndex < 0 || pageIndex >= pageCount) {
-      continue;
+    if (pageIndex >= 0 && pageIndex < pageCount) {
+      for (const variant of layoutQuoteVariants(
+        await pageChars(view, pageIndex),
+        text,
+      ))
+        queries.add(variant);
     }
-    let pagePositions: PdfPosition[] = [];
-    if (findReady) {
-      try {
-        pagePositions = normalizePdfMatchPositions(
-          pageIndex,
-          await controller.getMatchPositionsAsync(pageIndex),
-        );
-      } catch {
-        pagePositions = [];
-      }
-    }
-    if (!pagePositions.length) {
-      pagePositions = await directMatchPositions(view, pageIndex, text);
-    }
-    positions.push(...pagePositions);
   }
+  const uniquePositions = new Map<string, PdfPosition>();
+  const otherPages = new Set<number>();
+  for (const query of queries) {
+    await setPdfFindQuery(view, controller, query, pageCount, findTimeoutMs);
+    const nativeMatches = findPageMatches(controller);
+    for (let page = 0; page < pageCount; page++) {
+      if (!pageIndexes.includes(page) && nativeMatches[page]?.length)
+        otherPages.add(page + 1);
+    }
+    if (
+      pageIndexes.reduce(
+        (count, page) => count + (nativeMatches[page]?.length ?? 0),
+        0,
+      ) > 1
+    )
+      throw new Error(
+        "Annotation quote is ambiguous; provide a longer unique quote on a specific physical page",
+      );
+    for (const pageIndex of pageIndexes) {
+      if (
+        pageIndex < 0 ||
+        pageIndex >= pageCount ||
+        !nativeMatches[pageIndex]?.length
+      )
+        continue;
+      // Every accepted position still comes from completed native search.
+      const matches = normalizePdfMatchPositions(
+        pageIndex,
+        await controller.getMatchPositionsAsync(pageIndex),
+      );
+      if (!matches.length)
+        throw new Error(
+          "Native PDF search found text but could not provide a reliable position",
+        );
+      for (const position of matches)
+        uniquePositions.set(canonical(position), position);
+    }
+  }
+  const positions = [...uniquePositions.values()];
   if (positions.length > 1)
     throw new Error(
       "Annotation quote is ambiguous; provide a longer unique quote on a specific physical page",
@@ -862,7 +863,11 @@ async function locateTextAnnotation(
     const pageHint =
       pageIndexes.length === 1 ? ` on page ${requestedPage}` : "";
     throw new Error(
-      `Annotation quote was not found${pageHint}: ${text.slice(0, 120)}`,
+      `Annotation quote was not found${pageHint}: ${text.slice(0, 120)}${
+        otherPages.size
+          ? `. Native matches exist on physical pages ${[...otherPages].sort((a, b) => a - b).join(", ")}; reread that context and correct the page before resubmitting`
+          : ""
+      }`,
     );
   }
   await view._ensureBasicPageData?.(position.pageIndex);
@@ -1121,7 +1126,7 @@ async function renderPageImage(
       type: "image",
       mimeType: "image/png",
       data: match[1],
-      description: `PDF page ${pageNumber}; use only to ground normalized image-region annotations`,
+      description: `PDF page ${pageNumber}; verify table headers, figures and evidence, and ground image-region annotations`,
     };
   };
   try {
@@ -1732,6 +1737,7 @@ export class ZoteroToolHost {
     view: PdfPrimaryView,
     draft: PendingAnnotation,
     progress: ToolProgress,
+    findTimeoutMs = 5_000,
   ): Promise<LocatedAnnotation> {
     let token = this.findingViews.get(view);
     if (!token) {
@@ -1747,7 +1753,7 @@ export class ZoteroToolHost {
         );
       return draft.type === "image"
         ? locateImageAnnotation(view, draft)
-        : locateTextAnnotation(view, draft, 0);
+        : locateTextAnnotation(view, draft, 0, findTimeoutMs);
     });
   }
 
@@ -1902,12 +1908,22 @@ export class ZoteroToolHost {
               waitForPdfReader(pdf, progress),
             )
           : undefined;
+        let firstTextSearch = true;
         for (const entry of pending) {
           try {
+            const initializingSearch =
+              firstTextSearch && entry.draft!.type !== "image";
+            if (initializingSearch) firstTextSearch = false;
             entry.located = await progress.run(
               `checking_${entry.id}`,
-              10_000,
-              () => this.locateCandidate(ready!.view, entry.draft!, progress),
+              initializingSearch ? 30_000 : 10_000,
+              () =>
+                this.locateCandidate(
+                  ready!.view,
+                  entry.draft!,
+                  progress,
+                  initializingSearch ? 30_000 : 5_000,
+                ),
             );
             entry.status = "pending";
             entry.error = undefined;
@@ -3269,6 +3285,10 @@ export class ZoteroToolHost {
         );
         pages.push({
           page,
+          zoteroUri: buildOpenPdfUri(pdf.key, {
+            page,
+            groupID: groupIDForLibrary(pdf.libraryID),
+          }),
           text: text.slice(0, 50_000),
           truncated: text.length > 50_000,
         });
@@ -3422,12 +3442,28 @@ export class ZoteroToolHost {
     return this.annotationLocks.run([token], async () => {
       await pdf.reload?.(["childItems"], true);
       const annotations = readPdfAnnotations(pdf);
+      const offset = Number(args.offset ?? 0);
+      const limit = Number(args.limit ?? 25);
+      if (
+        !Number.isInteger(offset) ||
+        offset < 0 ||
+        !Number.isInteger(limit) ||
+        limit < 1 ||
+        limit > 50
+      )
+        return fail(
+          "get_annotations",
+          "invalid_args",
+          "Use offset >= 0 and limit between 1 and 50",
+        );
       const data = {
         libraryID: pdf.libraryID,
         key: item.key,
         attachmentKey: pdf.key,
         annotationKey: annotations[0]?.key,
-        annotations,
+        annotations: annotations.slice(offset, offset + limit),
+        totalAnnotations: annotations.length,
+        nextOffset: offset + limit < annotations.length ? offset + limit : null,
       };
       try {
         const record = await this.loadAnnotationRecord(token);
@@ -3585,12 +3621,19 @@ export class ZoteroToolHost {
           itemKey: item.key,
           attachmentKey: pdf.key,
           page: pageNumber,
+          zoteroUri: buildOpenPdfUri(pdf.key, {
+            page: pageNumber,
+            groupID: groupIDForLibrary(pdf.libraryID),
+          }),
           pageCount,
           coordinateSystem: {
             origin: "top-left",
             range: [0, 1000],
             rect: "[x,y,width,height]",
           },
+          spatialText: spatialPageText(anchors),
+          layoutGuidance:
+            "Spatial text aligns fragments by page coordinates; keep monospaced spacing when checking table columns. It does not infer cell meanings or reading order. Prefer the page image for merged headers and use adjacent prose for definitions and denominators.",
           lineAnchors: anchors,
           visualAvailable: Boolean(image),
           renderingWarning,
@@ -4023,6 +4066,16 @@ export class ZoteroToolHost {
       if (object.comment === undefined && object.rationale !== undefined)
         object.comment = object.rationale;
       delete object.rationale;
+      // Compatible models sometimes use notes_write's field name in a text
+      // candidate. Accept only the unambiguous explanation alias, never a conflict.
+      if (
+        object.comment === undefined &&
+        typeof object.quote === "string" &&
+        typeof object.content === "string"
+      ) {
+        object.comment = object.content;
+        delete object.content;
+      }
       const id =
         typeof object.id === "string"
           ? object.id

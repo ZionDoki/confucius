@@ -2,6 +2,8 @@ import { memoryJsonStorage, type JsonStorage } from "../host/RuntimeStorage";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { ZoteroToolHost } from "./ZoteroToolHost";
+import { layoutQuoteVariants } from "./PdfQuote";
+import { spatialPageText } from "./PdfLayout";
 import { ToolExecutionService } from "../host/ReliableToolProvider";
 import { ZoteroToolProvider } from "../host/ZoteroToolProvider";
 import { AgentHost } from "../host/AgentHost";
@@ -12,6 +14,74 @@ import {
   verifyWritebackSnapshot,
   type WritebackSnapshot,
 } from "../host/WritebackSnapshot";
+
+describe("PDF quote layout equivalence", () => {
+  it("keeps table headers and numeric cells in physical column order despite scrambled extraction", () => {
+    const layout = spatialPageText([
+      { text: "4", rect: [600, 31, 10, 10] },
+      { text: "baseline", rect: [600, 10, 70, 10] },
+      { text: "9", rect: [300, 30, 10, 10] },
+      { text: "method", rect: [300, 10, 65, 10] },
+      { text: "forms", rect: [50, 30, 40, 10] },
+    ]).split("\n");
+    assert.equal(layout.length, 2);
+    assert.equal(layout[0].indexOf("method"), layout[1].indexOf("9"));
+    assert.equal(layout[0].indexOf("baseline"), layout[1].indexOf("4"));
+    assert.match(layout[1], /forms\s+9\s+4/);
+  });
+  const chars = (text: string) =>
+    [...text].map((u) => ({ u, lineBreakAfter: false }));
+  it("repairs proven line-break hyphens, ligatures and quotation typography without changing the source query", () => {
+    const source = [
+      ...chars("The “workﬂow” responsi"),
+      { u: "-", lineBreakAfter: true },
+      ...chars("bilities are split."),
+    ];
+    assert.deepEqual(
+      layoutQuoteVariants(source, 'The "workflow" responsibilities are split.'),
+      ["The “workﬂow” responsi- bilities are split."],
+    );
+    const compound = [
+      ...chars("task"),
+      { u: "-", lineBreakAfter: true },
+      ...chars("driven"),
+    ];
+    assert.deepEqual(layoutQuoteVariants(compound, "task-driven"), [
+      "task- driven",
+    ]);
+  });
+  it("does not remove lexical hyphens, splice passages or accept paraphrases", () => {
+    assert.deepEqual(
+      layoutQuoteVariants(
+        chars("Please re-sign the contract."),
+        "Please resign the contract.",
+      ),
+      [],
+    );
+    assert.deepEqual(
+      layoutQuoteVariants(
+        chars("Evidence with a material condition."),
+        "Evidence ... condition.",
+      ),
+      [],
+    );
+    assert.deepEqual(
+      layoutQuoteVariants(chars("Some tasks failed."), "All tasks failed."),
+      [],
+    );
+  });
+  it("retains multiple equivalent queries so native search must check their combined ambiguity", () => {
+    const source = [
+      ...chars("responsibilities and responsi"),
+      { u: "-", lineBreakAfter: true },
+      ...chars("bilities"),
+    ];
+    assert.deepEqual(layoutQuoteVariants(source, "responsibilities").sort(), [
+      "responsi- bilities",
+      "responsibilities",
+    ]);
+  });
+});
 
 function installLibrary() {
   let sequence = 0,
@@ -605,6 +675,10 @@ function installHost(
     useReaderPageView?: boolean;
     pageTexts?: string[];
     missingQuotes?: string[];
+    delayedFind?: boolean;
+    normalizedMatchCount?: number;
+    nativeMatchPages?: number[];
+    failMatchPositions?: boolean;
   } = {},
 ): InstalledHost {
   const libraryID = options.libraryID ?? 1;
@@ -615,6 +689,8 @@ function installHost(
   const navigated: Array<Record<string, unknown>> = [];
   let keyIndex = 0;
   let query = "";
+  let searchPolls = 0;
+  const readerClones = new WeakSet<object>();
   const native = new Map<string, Record<string, unknown>>();
   const storage = memoryJsonStorage();
 
@@ -665,15 +741,40 @@ function installHost(
             }),
           },
   };
+  const completedMatches = () =>
+    Array.from({ length: pdfDocument.numPages }, (_, page) =>
+      options.nativeMatchPages && !options.nativeMatchPages.includes(page + 1)
+        ? []
+        : Array.from(
+            { length: options.normalizedMatchCount ?? 1 },
+            (_, index) => index,
+          ),
+    );
   const controller = {
     _pdfDocument: {},
+    state: { query: "previous query" },
+    _dirtyMatch: false,
     _pendingFindMatches: new Set<number>(),
     pageMatches: [[0], [0], [0], [0]],
     find: async () => undefined,
-    getMatchPositionsAsync: async () =>
-      options.missingQuotes?.includes(query)
+    getMatchPositionsAsync: async (page: number) => {
+      if (options.failMatchPositions)
+        throw new Error("Native position unavailable");
+      return options.missingQuotes?.includes(query) ||
+        (options.nativeMatchPages &&
+          !options.nativeMatchPages.includes(page + 1))
         ? []
-        : [{ rects: [[10, 20, 40, 35]] }],
+        : Array.from(
+            {
+              length: controller._dirtyMatch
+                ? 1
+                : (options.normalizedMatchCount ?? 1),
+            },
+            (_, index) => ({
+              rects: [[10 + index * 100, 20, 40 + index * 100, 35]],
+            }),
+          );
+    },
   };
   const view = {
     initializedPromise: Promise.resolve(),
@@ -688,7 +789,13 @@ function installHost(
     },
     _ensureBasicPageData: async () => undefined,
     setFindState: async (state: { query: string }) => {
+      // Reader ignores an un-cloned chrome object across its window boundary.
+      if (!readerClones.has(state)) return;
       query = state.query;
+      controller.state = { query };
+      controller._dirtyMatch = Boolean(options.delayedFind);
+      if (!options.delayedFind) controller.pageMatches = completedMatches();
+      searchPolls = 0;
     },
     getAnnotationMeta: (position: { pageIndex: number }) => ({
       pageLabel: String(position.pageIndex + 1),
@@ -715,7 +822,13 @@ function installHost(
   };
 
   (globalThis as unknown as { Components: unknown }).Components = {
-    utils: { cloneInto: (value: unknown) => value },
+    utils: {
+      cloneInto: (value: object) => {
+        const cloned = structuredClone(value);
+        readerClones.add(cloned);
+        return cloned;
+      },
+    },
   };
   (globalThis as unknown as { Zotero: unknown }).Zotero = {
     Libraries: { userLibraryID: 1 },
@@ -738,7 +851,14 @@ function installHost(
       _readers: [reader],
       open: async () => reader,
     },
-    Promise: { delay: async () => undefined },
+    Promise: {
+      delay: async () => {
+        if (controller._dirtyMatch && ++searchPolls >= 3) {
+          controller._dirtyMatch = false;
+          controller.pageMatches = completedMatches();
+        }
+      },
+    },
     DataObjectUtilities: {
       generateKey: () => `ANNKEY0${++keyIndex}`,
     },
@@ -966,6 +1086,69 @@ describe("annotation recovery and review pipeline", () => {
     page,
     quote,
   });
+  it("normalizes an unambiguous text explanation alias but rejects conflicting prose", async () => {
+    const installed = installHost();
+    const result = await installed.execute("propose_annotations", {
+      ...ref,
+      annotations: [
+        { ...draft("Evidence"), content: "中文说明" },
+        {
+          ...draft("Other evidence"),
+          content: "冲突说明",
+          comment: "既有说明",
+        },
+      ],
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    const data = result.data as {
+      annotations: Array<{ comment?: string; status: string; error?: string }>;
+    };
+    assert.equal(data.annotations[0].comment, "中文说明");
+    assert.equal(data.annotations[0].status, "pending");
+    assert.equal(data.annotations[1].status, "skipped");
+    assert.equal(installed.saved.length, 0);
+  });
+  it("passes a Reader-owned search state and waits for the new normalized results", async () => {
+    const installed = installHost({ delayedFind: true });
+    const result = await installed.execute("commit_annotations", {
+      ...ref,
+      annotations: [draft("A uniquely located claim")],
+    });
+    assert.equal(result.ok, true);
+    assert.equal(installed.saved.length, 1);
+    assert.equal(installed.saved[0].text, "A uniquely located claim");
+  });
+
+  it("rejects normalized ambiguity after the asynchronous search completes", async () => {
+    const installed = installHost({
+      delayedFind: true,
+      normalizedMatchCount: 2,
+      failMatchPositions: true,
+    });
+    const result = await installed.execute("commit_annotations", {
+      ...ref,
+      annotations: [draft("A claim with a normalized duplicate")],
+    });
+    assert.equal(result.ok, false);
+    assert.match(JSON.stringify(result), /ambiguous/);
+    assert.equal(installed.saved.length, 0);
+  });
+
+  it("reports native matches on another physical page without silently relocating the mark", async () => {
+    const installed = installHost({ nativeMatchPages: [2] });
+    const result = await installed.execute("commit_annotations", {
+      ...ref,
+      annotations: [draft("A correctly quoted claim", 3)],
+    });
+    assert.equal(result.ok, false);
+    assert.match(
+      JSON.stringify(result),
+      /Native matches exist on physical pages 2/,
+    );
+    assert.equal(installed.saved.length, 0);
+  });
+
   it("commits valid entries and reconciles subsequent batches without inspection tokens", async () => {
     const installed = installHost({
       missingQuotes: ["missing A", "missing B"],
@@ -1152,6 +1335,12 @@ describe("annotation recovery and review pipeline", () => {
       end: 3,
     });
     assert.equal(pages.ok, true);
+    if (pages.ok)
+      assert.match(
+        (pages.data as { pages: Array<{ zoteroUri: string }> }).pages[2]
+          .zoteroUri,
+        /open-pdf\/library\/items\/.*\?page=3$/,
+      );
     if (pages.ok)
       assert.deepEqual(
         (
