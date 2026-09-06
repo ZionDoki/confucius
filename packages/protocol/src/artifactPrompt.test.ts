@@ -11,6 +11,8 @@ describe("artifact upsert guidance", () => {
     assert.match(text, /Call artifact_upsert only to save a cited/);
     assert.match(text, /Do not save an ordinary reply as an artifact/);
     assert.match(text, /state what changed/);
+    assert.match(text, /omit id and taskId/);
+    assert.match(text, /copy its returned id from this task/);
     assert.doesNotMatch(text, /Before completing/);
     assert.doesNotMatch(text, /Required artifact kind/);
     assert.doesNotMatch(text, /This task's template/);

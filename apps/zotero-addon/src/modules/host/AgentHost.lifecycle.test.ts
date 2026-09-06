@@ -23,6 +23,7 @@ import { memoryJsonStorage } from "./RuntimeStorage";
 import { TaskTraceBuffer } from "./TaskTrace";
 import { responseLanguageInstruction } from "./ResponseLanguage";
 import { deepReadReviewMessages } from "./DeepReadReviewContext";
+import { ArtifactStore } from "./ArtifactStore";
 
 it("isolates a source-grounded review while preserving the durable history and later tool groups", () => {
   const tool = (toolName: string, data: unknown, id: string): ModelMessage => ({
@@ -187,7 +188,14 @@ interface LifecycleHost {
   ): Promise<void>;
   persistNow(): Promise<void>;
   queueHistory(): Promise<void>;
-  requestToolApproval(): Promise<ApprovalResolution>;
+  requestToolApproval(
+    state: TestState,
+    turnId: string,
+    callId: string,
+    toolName: string,
+    args: Record<string, unknown>,
+  ): Promise<ApprovalResolution>;
+  approvalResolve(resolution: ApprovalResolution): { ok: boolean };
 }
 
 function run(record: ResearchTaskRecord, generation = 1): RunState {
@@ -376,6 +384,111 @@ describe("AgentHost lifecycle ownership", () => {
   });
   afterEach(() => {
     Reflect.set(globalThis, "Zotero", previousZotero);
+  });
+
+  it("keeps legacy artifact calls working through the external gateway without write approvals", async () => {
+    const { host, state } = fixture();
+    const files = new Map<string, string>();
+    const artifacts = new ArtifactStore("artifacts", {
+      exists: async (path) => files.has(path),
+      read: async (path) => files.get(path)!,
+      writeAtomic: async (path, text) => {
+        files.set(path, text);
+      },
+      makeDirectory: async () => {},
+    });
+    Object.assign(host, { artifacts });
+    host.requestToolApproval = async () =>
+      assert.fail("No Zotero write to approve");
+    const body = { type: "markdown" as const, markdown: "Evidence" };
+    const foreign = await artifacts.upsert(
+      {
+        id: "paper-report",
+        taskId: "other-task",
+        kind: "report",
+        title: "Old report",
+        body,
+      },
+      "native",
+    );
+    const save = (args: Record<string, unknown>) =>
+      host.taskToolCall({
+        taskId: state.record.id,
+        name: "artifact_upsert",
+        arguments: { kind: "report", title: "Report", body, ...args },
+      });
+    const invalid = toolResult(
+      await save({ id: foreign.id, taskId: state.record.id }),
+    );
+    assert.equal(!invalid.ok && invalid.code, "invalid_args");
+    const created = toolResult(await save({ taskId: "other-task" }));
+    assert.equal(created.ok, true);
+    const id = state.record.artifactIds[0];
+    assert.ok(id);
+    assert.equal((await artifacts.get(id))?.taskId, state.record.id);
+    const revised = toolResult(await save({ id, taskId: "other-task" }));
+    assert.equal(revised.ok, true);
+    assert.equal((await artifacts.get(id))?.revision, 2);
+    assert.deepEqual(await artifacts.get(foreign.id), foreign);
+    assert.equal(files.size, 2);
+    assert(!state.events.some((event) => event.type === "approval_required"));
+  });
+
+  it("remembers allow-for-task for the approved tool and still asks for a different write tool", async () => {
+    const { host, state } = fixture();
+    state.record.backend = "native";
+    Object.assign(host, {
+      pendingApprovals: new Map(),
+      describeApprovalCall: () => "PDF",
+    });
+    const first = host.requestToolApproval(
+      state,
+      "turn",
+      "first",
+      "commit_annotations",
+      {},
+    );
+    assert.equal(
+      state.events.filter((e) => e.type === "approval_required").length,
+      1,
+    );
+    host.approvalResolve({
+      id: "approval_first",
+      verdict: "allow",
+      scope: "session",
+    });
+    assert.equal((await first).verdict, "allow");
+    assert.deepEqual([...state.sessionGrants], ["commit_annotations"]);
+    const again = await host.requestToolApproval(
+      state,
+      "later-turn",
+      "second",
+      "commit_annotations",
+      {},
+    );
+    assert.equal(again.verdict, "allow");
+    assert.equal(
+      state.events.filter((e) => e.type === "approval_required").length,
+      1,
+    );
+    const different = host.requestToolApproval(
+      state,
+      "later-turn",
+      "third",
+      "create_note",
+      {},
+    );
+    assert.equal(
+      state.events.filter((e) => e.type === "approval_required").length,
+      2,
+    );
+    host.approvalResolve({
+      id: "approval_third",
+      verdict: "deny",
+      scope: "once",
+    });
+    assert.equal((await different).verdict, "deny");
+    assert.deepEqual([...state.sessionGrants], ["commit_annotations"]);
   });
 
   for (const ending of [

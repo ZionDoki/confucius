@@ -26,6 +26,7 @@ export function artifactUpsertGuidance(
   const lines = [
     "Call artifact_upsert only to save a cited research file (deep_read, evidence_audit, literature_map, triage_table, note_draft, annotation_set, collection_diff, citation_list, or a cited report).",
     "Leave clarifications, status updates, short answers, and tool-only turns in the conversation. Do not save an ordinary reply as an artifact.",
+    "For a new artifact, omit id and taskId; the host assigns them. To revise an artifact, copy its returned id from this task. Artifact saves do not require Zotero write approval; an invalid id must be corrected, not reapproved.",
   ];
 
   const template = taskTemplate(input.templateId);

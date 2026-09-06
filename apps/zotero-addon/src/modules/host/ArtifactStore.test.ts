@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { ArtifactStore, type ArtifactFileSystem } from "./ArtifactStore";
+import {
+  createHarness,
+  session,
+} from "../../../../../packages/harness/src/test-kit";
+import { ToolExecutionService } from "./ReliableToolProvider";
+import { memoryJsonStorage } from "./RuntimeStorage";
 import type { ToolExecutionContext, ConfuciusEvent } from "@confucius/protocol";
 import {
   deepReadReviewNextAction,
@@ -328,6 +334,194 @@ describe("ArtifactStore", () => {
 });
 
 describe("artifact_upsert contract", () => {
+  it("advertises host-assigned creation and current-task revision without a taskId argument", () => {
+    const properties = ARTIFACT_UPSERT_DEFINITION.inputSchema.properties;
+    assert.equal(properties.taskId, undefined);
+    assert.match(
+      (properties.id as { description: string }).description,
+      /omit id/i,
+    );
+    assert.match(
+      ARTIFACT_UPSERT_DEFINITION.description,
+      /returned.*this task/i,
+    );
+  });
+
+  it("identifies a foreign artifact id as an argument error regardless of taskId", async () => {
+    const store = new ArtifactStore("artifacts", new MemoryFileSystem());
+    const foreign = await store.upsert(
+      {
+        id: "paper-deep-read",
+        taskId: "previous-task",
+        kind: "deep_read",
+        title: "Previous report",
+        body: { type: "markdown", markdown: "Keep this report" },
+      },
+      "native",
+    );
+    const provider = new ArtifactToolProvider(
+      store,
+      "current-task",
+      "native",
+      [],
+      () => assert.fail("A foreign artifact must never be saved"),
+    );
+    for (const taskId of ["current-task", undefined, "previous-task"]) {
+      const args = {
+        id: foreign.id,
+        ...(taskId === undefined ? {} : { taskId }),
+        kind: "deep_read",
+        title: "New report",
+        body: { type: "markdown", markdown: "New research" },
+      };
+      const context: ToolExecutionContext = {};
+      const result = await provider.prepare("artifact_upsert", args, context);
+      assert.equal(result?.code, "invalid_args");
+      assert.equal(result?.effect, "none");
+      assert.equal(result?.retryable, false);
+      assert.match(result?.message ?? "", /omit id/i);
+      assert.match(result?.message ?? "", /taskId.*approval.*cannot/i);
+      assert.equal(context.preparedOperation, undefined);
+      assert.deepEqual(await store.get(foreign.id), foreign);
+    }
+  });
+
+  it("creates independent same-title reports and ignores a legacy caller's taskId", async () => {
+    const store = new ArtifactStore("artifacts", new MemoryFileSystem());
+    const saved = [];
+    for (const taskId of ["first-task", "second-task"]) {
+      const provider = new ArtifactToolProvider(
+        store,
+        taskId,
+        "native",
+        [],
+        () => {},
+      );
+      const result = await provider.call("artifact_upsert", {
+        taskId: "a-model-supplied-task",
+        kind: "report",
+        title: "Same paper report",
+        body: { type: "markdown", markdown: "Same evidence" },
+      });
+      assert.equal(result.ok, true);
+      const { artifact } = result.data as {
+        artifact: { id: string; taskId: string; revision: number };
+      };
+      assert.equal(artifact.taskId, taskId);
+      assert.equal(artifact.revision, 1);
+      saved.push(artifact.id);
+    }
+    assert.equal(new Set(saved).size, 2);
+    assert.equal((await store.get(saved[0]))?.taskId, "first-task");
+    assert.equal((await store.get(saved[1]))?.taskId, "second-task");
+  });
+
+  it("recovers a colliding report id without approval, retains the other task, and replays only the saved revision", async () => {
+    const fs = new MemoryFileSystem();
+    let nextId = 0;
+    const store = new ArtifactStore(
+      "artifacts",
+      fs,
+      () => 100,
+      () => `art_${++nextId}`,
+    );
+    const body = {
+      type: "markdown" as const,
+      markdown: "A cited research report",
+    };
+    const otherTask = await store.upsert(
+      {
+        id: "paper-deep-read",
+        taskId: "other-task",
+        kind: "report",
+        title: "Previous",
+        body,
+      },
+      "native",
+    );
+    const execution = new ToolExecutionService(memoryJsonStorage());
+    const provider = new ArtifactToolProvider(
+      store,
+      "task",
+      "native",
+      [],
+      () => {},
+    );
+    const createArgs = { kind: "report", title: "Report", body };
+    const createCall = {
+      id: "create",
+      name: "artifact_upsert",
+      args: createArgs,
+    };
+    const reviseCall = {
+      id: "revise",
+      name: "artifact_upsert",
+      args: {
+        ...createArgs,
+        id: "art_1",
+        body: { type: "markdown", markdown: "Reviewed report" },
+      },
+    };
+    const harness = createHarness({
+      toolProvider: execution.wrap(provider),
+      modeFor: () => "auto_allow",
+      resolve: () =>
+        assert.fail("Saving a task artifact needs no Zotero write approval"),
+      script: [
+        {
+          toolCalls: [
+            {
+              id: "collision",
+              name: "artifact_upsert",
+              args: { ...createArgs, id: otherTask.id, taskId: "task" },
+            },
+          ],
+        },
+        { toolCalls: [createCall] },
+        { toolCalls: [reviseCall] },
+        { text: "已保存报告" },
+      ],
+    });
+    const result = await harness.loop.run({
+      session: session("task"),
+      turnId: "turn",
+      userText: "保存报告",
+    });
+    assert.equal(result.phase, "done");
+    const results = harness.events.events
+      .filter((e) => e.type === "tool_result")
+      .map((e) => e.payload.result);
+    assert.equal(results.length, 3);
+    assert.equal(!results[0].ok && results[0].code, "invalid_args");
+    assert.equal(results[1].ok, true);
+    assert.equal(results[2].ok, true);
+    assert(!harness.events.types().includes("approval_required"));
+    assert.deepEqual(await store.get(otherTask.id), otherTask);
+    assert.equal((await store.get("art_1"))?.taskId, "task");
+    assert.equal((await store.get("art_1"))?.revision, 2);
+    assert.equal(fs.files.size, 2);
+    assert.deepEqual(
+      (await execution.listOperations({ taskId: "task" })).map(
+        (op) => op.args.id,
+      ),
+      ["art_1", "art_1"],
+    );
+
+    const resumed = createHarness({
+      toolProvider: execution.wrap(provider),
+      script: [{ toolCalls: [createCall, reviseCall] }, { text: "完成" }],
+    });
+    await resumed.loop.run({
+      session: session("task"),
+      turnId: "resume",
+      userText: "继续",
+      resume: harness.checkpoints.latest("turn")!,
+    });
+    assert.equal((await store.get("art_1"))?.revision, 2);
+    assert.equal(fs.files.size, 2);
+    assert.deepEqual(await store.get(otherTask.id), otherTask);
+  });
+
   it("saves a deep read draft and requires fresh same-source evidence and comments before ready, including after recreation", async () => {
     const store = new ArtifactStore(
       "artifacts",

@@ -3000,9 +3000,12 @@ export class AgentHost {
       toolName: name,
       args,
     });
+    // Runtime validation also accepts legacy arguments omitted from the model's
+    // advertised schema, matching native tool dispatch.
+    const schema = provider.getSchema(name) ?? definition.inputSchema;
     const invalid =
       (await provider.prepare?.(name, args, executionContext)) ??
-      validateArgs(name, definition.inputSchema, args);
+      validateArgs(name, schema, args);
     if (!current()) return cancelled();
     if (invalid) {
       this.emitSessionEvent(state, turnId, "tool_result", {
@@ -3070,11 +3073,7 @@ export class AgentHost {
         return mcpToolResult(denied);
       }
       approvedArgs = resolution.editedArgs ?? args;
-      const editedInvalid = validateArgs(
-        name,
-        definition.inputSchema,
-        approvedArgs,
-      );
+      const editedInvalid = validateArgs(name, schema, approvedArgs);
       if (editedInvalid) {
         this.emitSessionEvent(state, turnId, "tool_result", {
           callId,

@@ -379,8 +379,12 @@ function artifactBodyDiagnostic(body: unknown): string {
 const schema: JsonSchemaObject = {
   type: "object",
   properties: {
-    id: { type: "string" },
-    taskId: { type: "string" },
+    id: {
+      type: "string",
+      minLength: 1,
+      description:
+        "To create a new artifact, omit id; the host generates it. To revise an artifact, copy the id returned by a save in this task. Do not invent a filename or reuse an id from another task.",
+    },
     kind: {
       type: "string",
       enum: [
@@ -433,10 +437,17 @@ const schema: JsonSchemaObject = {
   additionalProperties: false,
 };
 
+// Older conversations and clients can still send taskId. It never selects the
+// destination: call() binds every save to the provider's current task.
+const compatibilitySchema: JsonSchemaObject = {
+  ...schema,
+  properties: { ...schema.properties, taskId: { type: "string" } },
+};
+
 export const ARTIFACT_UPSERT_DEFINITION: ToolDefinition = {
   name: ARTIFACT_UPSERT_TOOL,
   description:
-    'Create or revise a saved research artifact. Do not call this for an ordinary reply. For deep_read, report, and note_draft, use {"type":"markdown","markdown":"..."}; for other kinds, body.type must equal kind and the body must follow its schema. A deep-read task first saves deep_read as draft; reread its source evidence and actual annotations, correct the report/comments, then update the same id to ready. Follow reviewRequired and nextAction in the save receipt.',
+    'Create or revise a saved research artifact in the current task. For a new artifact, omit id and taskId; the host assigns both. For an update, use the id returned by a save in this task. Saving a task artifact needs no Zotero write approval. Do not call this for an ordinary reply. For deep_read, report, and note_draft, use {"type":"markdown","markdown":"..."}; for other kinds, body.type must equal kind and the body must follow its schema. A deep-read task first saves deep_read as draft; reread its source evidence and actual annotations, correct the report/comments, then update the same id to ready. Follow reviewRequired and nextAction in the save receipt.',
   inputSchema: schema,
 };
 
@@ -473,7 +484,7 @@ export class ArtifactToolProvider implements ToolProvider {
   }
 
   getSchema(name: string): JsonSchemaObject | undefined {
-    return name === ARTIFACT_UPSERT_TOOL ? schema : undefined;
+    return name === ARTIFACT_UPSERT_TOOL ? compatibilitySchema : undefined;
   }
 
   async prepare(
@@ -500,9 +511,12 @@ export class ArtifactToolProvider implements ToolProvider {
       return {
         ok: false as const,
         toolName: name,
-        code: "permission_denied" as const,
+        code: "invalid_args" as const,
         effect: "none" as const,
-        message: "Artifact belongs to another task",
+        retryable: false,
+        message:
+          "Invalid id: this artifact is not available for revision in the current task. To create a new artifact, omit id; the host generates it. To revise a saved artifact, use the id returned by artifact_upsert in this task. Changing taskId or requesting approval cannot fix this id. No write was performed.",
+        details: { argument: "id", reason: "artifact_not_in_task" },
       };
     if (
       args.kind === "deep_read" &&

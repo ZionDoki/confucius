@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Fixed
+
+- The artifact tool now directs models to omit the ID when creating a report
+  and reuse the current task's saved ID when revising it. An ID that belongs to
+  another task returns an actionable argument error instead of a misleading
+  permission denial. Models are no longer asked to supply a task ID; older calls
+  remain compatible and cannot redirect a save into another task. Artifact saves
+  remain independent of Zotero write approvals.
+
 ## 0.4.1 - 2026-09-06
 
 Confucius 0.4.1 improves PDF annotation accuracy, evidence review and feedback
