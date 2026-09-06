@@ -193,7 +193,8 @@ import {
   type BackendTurnInput,
 } from "./AgentBackend";
 import {
-  ARTIFACT_UPSERT_DEFINITION,
+  ARTIFACT_TOOL_DEFINITIONS,
+  ARTIFACT_TOOL_NAMES,
   ARTIFACT_UPSERT_TOOL,
   ArtifactToolProvider,
 } from "./ArtifactToolProvider";
@@ -2893,7 +2894,7 @@ export class AgentHost {
     this.validatedRuntimeLease(state, lease, runtimeGateway);
     const tools = [
       ...new ZoteroToolProvider(this.tools).listTools(),
-      ARTIFACT_UPSERT_DEFINITION,
+      ...ARTIFACT_TOOL_DEFINITIONS,
       ...this.historyTools(state).listTools(),
     ].filter(
       (tool) =>
@@ -2977,12 +2978,11 @@ export class AgentHost {
       await this.persistNow();
     }
     if (!current()) return cancelled();
-    const innerProvider: ToolProvider =
-      name === ARTIFACT_UPSERT_TOOL
-        ? this.artifactProvider(state, turnId)
-        : HISTORY_TOOL_NAMES.has(name)
-          ? this.historyTools(state)
-          : new ZoteroToolProvider(this.tools);
+    const innerProvider: ToolProvider = ARTIFACT_TOOL_NAMES.has(name)
+      ? this.artifactProvider(state, turnId)
+      : HISTORY_TOOL_NAMES.has(name)
+        ? this.historyTools(state)
+        : new ZoteroToolProvider(this.tools);
     if (typeof params.operationId === "string")
       executionContext.operationId = `${taskId}:${params.operationId}`;
     const provider = this.execution.wrap(innerProvider, executionContext);
@@ -5086,7 +5086,7 @@ export class AgentHost {
         state.externalToolNames = new Set([
           ...READ_ONLY_TOOL_NAMES,
           ...HISTORY_TOOL_NAMES,
-          ARTIFACT_UPSERT_TOOL,
+          ...ARTIFACT_TOOL_NAMES,
           SKILL_TOOL_NAME,
         ]);
       const modelPrompt = buildTaskAttachmentUserText(
@@ -5401,7 +5401,7 @@ export class AgentHost {
           ...READ_ONLY_TOOL_NAMES,
           ...HISTORY_TOOL_NAMES,
           SKILL_TOOL_NAME,
-          ARTIFACT_UPSERT_TOOL,
+          ...ARTIFACT_TOOL_NAMES,
         ]),
       );
     const preset =

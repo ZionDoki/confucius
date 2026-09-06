@@ -137,6 +137,8 @@ for (const id of ["deep-read", "evidence-audit", "synthesis"] as const) {
     const names = presetToolNames(preset);
     assert(names.has("get_pages"));
     assert(names.has("artifact_upsert"));
+    assert(names.has("artifact_read"));
+    assert(names.has("artifact_patch"));
     if (id === "deep-read") assert(names.has("commit_annotations"));
     assert(preset.requiredArtifactKinds.length > 0);
     assert.doesNotMatch(

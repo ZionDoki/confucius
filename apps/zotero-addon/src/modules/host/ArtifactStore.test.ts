@@ -7,6 +7,8 @@ import {
 } from "../../../../../packages/harness/src/test-kit";
 import { ToolExecutionService } from "./ReliableToolProvider";
 import { memoryJsonStorage } from "./RuntimeStorage";
+import { registerHostOperationDomains } from "./HostOperationDomains";
+import { truncateToolResult } from "../../../../../packages/harness/src/truncate";
 import type { ToolExecutionContext, ConfuciusEvent } from "@confucius/protocol";
 import {
   deepReadReviewNextAction,
@@ -69,6 +71,564 @@ class BlockingFileSystem extends MemoryFileSystem {
     await super.writeAtomic(path, content);
   }
 }
+
+const reportMarkdown =
+  "# 示例论文研究报告\n\n## 一分钟速读\n方法在全部任务上成功。\n\n## 方法\n先检索候选，再检查证据。\n\n## 关键证据\n| 指标 | 结果 | 来源 |\n|---|---|---|\n| 完成任务 | 100/100 | [p.2](zotero://open-pdf/library/items/PAPER?page=2) |\n\n## 局限\n尚未验证新领域。\n";
+async function editableReport(
+  review = false,
+  fs = new MemoryFileSystem(),
+  markdown = reportMarkdown,
+) {
+  const store = new ArtifactStore(
+    "artifacts",
+    fs,
+    () => 100,
+    () => "report",
+  );
+  const binding = {
+    runId: "run",
+    intentRevision: 1,
+    sourceFingerprint: "sources",
+  };
+  const events: ConfuciusEvent[] = [];
+  const provider = new ArtifactToolProvider(
+    store,
+    "task",
+    "native",
+    ["item:1:PAPER"],
+    (artifact) => {
+      events.push({
+        id: `saved-${artifact.revision}`,
+        sessionId: "task",
+        turnId: "turn",
+        ts: 100,
+        type: "artifact_upserted",
+        payload: { artifact },
+      });
+    },
+    () => binding,
+    review
+      ? (artifact) => deepReadReviewState(artifact, binding, events)
+      : undefined,
+  );
+  assert.equal(
+    (
+      await provider.call("artifact_upsert", {
+        kind: review ? "deep_read" : "report",
+        title: "示例论文研究报告",
+        body: { type: "markdown", markdown },
+        status: review ? "draft" : "ready",
+        citations: [
+          {
+            id: "e1",
+            itemLibraryID: 1,
+            itemKey: "PAPER",
+            page: 2,
+            quote: "50 of 100 tasks were completed.",
+          },
+        ],
+      })
+    ).ok,
+    true,
+  );
+  return { provider, store, fs, events };
+}
+
+describe("editable research reports", () => {
+  it("patches the overview and evidence together, preserving identity, citations, sources and other sections", async () => {
+    const { provider, store, fs } = await editableReport();
+    const previous = (await store.get("report"))!;
+    const result = await provider.call("artifact_patch", {
+      id: "report",
+      expectedRevision: 1,
+      edits: [
+        {
+          oldText: "方法在全部任务上成功。",
+          newText: "方法只完成部分任务；新领域的表现尚未验证。",
+        },
+        { oldText: "| 完成任务 | 100/100 |", newText: "| 完成任务 | 50/100 |" },
+      ],
+    });
+    assert.equal(result.ok, true);
+    const revised = (await store.get("report"))!;
+    assert.equal(revised.revision, 2);
+    assert.equal(revised.id, previous.id);
+    assert.deepEqual(revised.citations, previous.citations);
+    assert.deepEqual(revised.sourceContextIds, previous.sourceContextIds);
+    assert.deepEqual(revised.revisions[0], previous.revisions[0]);
+    assert.equal(
+      revised.body.type === "markdown" && revised.body.markdown,
+      reportMarkdown
+        .replace(
+          "方法在全部任务上成功。",
+          "方法只完成部分任务；新领域的表现尚未验证。",
+        )
+        .replace("100/100", "50/100"),
+    );
+    assert.equal(fs.files.size, 1);
+    assert.equal(
+      result.ok &&
+        (result.data as { artifact: { body?: unknown; revisions?: unknown } })
+          .artifact.body,
+      undefined,
+    );
+    assert.equal(
+      result.ok && (result.data as { citationCount: number }).citationCount,
+      1,
+    );
+  });
+
+  it("rejects stale, missing, ambiguous and overlapping edits atomically", async () => {
+    const { provider, store } = await editableReport();
+    const before = await store.get("report");
+    const first = { oldText: "100/100", newText: "50/100" };
+    for (const edits of [
+      [first, { oldText: "absent text", newText: "x" }],
+      [first, { oldText: "方法", newText: "x" }],
+      [first, { oldText: "| 完成任务 | 100/100 |", newText: "x" }],
+      [first, { oldText: "", newText: "x" }],
+    ]) {
+      const result = await provider.call("artifact_patch", {
+        id: "report",
+        expectedRevision: 1,
+        edits,
+      });
+      assert.equal(!result.ok && result.code, "invalid_args");
+      assert.equal(result.effect, "none");
+      assert.deepEqual(await store.get("report"), before);
+    }
+    for (const fields of [{}, { title: "  " }]) {
+      const result = await provider.call("artifact_patch", {
+        id: "report",
+        expectedRevision: 1,
+        ...fields,
+      });
+      assert.equal(!result.ok && result.code, "invalid_args");
+      assert.equal(result.effect, "none");
+      assert.deepEqual(await store.get("report"), before);
+    }
+    const args = { id: "report", expectedRevision: 1, edits: [first] };
+    const prepared: ToolExecutionContext = {};
+    assert.equal(
+      await provider.prepare("artifact_patch", args, prepared),
+      null,
+    );
+    await store.upsert(
+      {
+        ...before!,
+        body: { type: "markdown", markdown: "Human correction" },
+        status: "ready",
+      },
+      "native",
+    );
+    const stale = await provider.call(
+      "artifact_patch",
+      args,
+      undefined,
+      prepared,
+    );
+    assert.equal(!stale.ok && stale.code, "invalid_args");
+    assert.match(!stale.ok ? stale.message : "", /revision changed/);
+    assert.deepEqual((await store.get("report"))?.body, {
+      type: "markdown",
+      markdown: "Human correction",
+    });
+  });
+
+  it("does not overwrite an edit made between the snapshot read and write preparation", async (t) => {
+    for (const throughGateway of [false, true]) {
+      const { provider, store } = await editableReport();
+      const get = store.get.bind(store);
+      let interleave = true;
+      const mocked = t.mock.method(
+        store,
+        "get",
+        async (id: string, refresh?: boolean) => {
+          const snapshot = await get(id, refresh);
+          if (interleave) {
+            interleave = false;
+            await store.upsert(
+              {
+                ...snapshot!,
+                body: { type: "markdown", markdown: "Human correction" },
+                status: "ready",
+              },
+              "native",
+            );
+          }
+          return snapshot;
+        },
+      );
+      const tools = throughGateway
+        ? new ToolExecutionService(memoryJsonStorage()).wrap(provider)
+        : provider;
+      const result = await tools.call("artifact_patch", {
+        id: "report",
+        expectedRevision: 1,
+        edits: [{ oldText: "100/100", newText: "50/100" }],
+      });
+      mocked.mock.restore();
+      assert.equal(result.ok, false);
+      assert.equal(result.effect, "none");
+      const current = (await get("report"))!;
+      assert.equal(current.revision, 2);
+      assert.deepEqual(current.body, {
+        type: "markdown",
+        markdown: "Human correction",
+      });
+    }
+  });
+
+  it("replaces citations only when supplied, including an explicit empty list", async () => {
+    const { provider, store } = await editableReport();
+    const citations = [
+      { id: "e2", itemLibraryID: 1, itemKey: "PAPER", page: 3 },
+    ];
+    assert.equal(
+      (
+        await provider.call("artifact_patch", {
+          id: "report",
+          expectedRevision: 1,
+          title: "核对后的报告",
+          citations,
+        })
+      ).ok,
+      true,
+    );
+    const replaced = (await store.get("report"))!;
+    assert.equal(replaced.title, "核对后的报告");
+    assert.deepEqual(replaced.citations, citations);
+    assert.deepEqual(replaced.body, {
+      type: "markdown",
+      markdown: reportMarkdown,
+    });
+    const cleared = await provider.call("artifact_patch", {
+      id: "report",
+      expectedRevision: 2,
+      citations: [],
+    });
+    assert.equal(cleared.ok, true);
+    assert.equal(
+      cleared.ok && (cleared.data as { citationCount: number }).citationCount,
+      0,
+    );
+    const current = (await store.get("report"))!;
+    assert.deepEqual(current.citations, []);
+    assert.deepEqual(current.revisions[1].citations, citations);
+    assert.deepEqual(current.sourceContextIds, ["item:1:PAPER"]);
+  });
+
+  it("reads bounded current text and citations without exposing another task or historical revisions", async () => {
+    const { provider, store } = await editableReport();
+    let offset: number | null = 0;
+    let text = "";
+    while (offset !== null) {
+      const read = await provider.call("artifact_read", {
+        id: "report",
+        expectedRevision: 1,
+        offset,
+        limit: 31,
+      });
+      assert.equal(read.ok, true);
+      assert.equal(read.effect, "none");
+      if (read.ok) {
+        const data = read.data as {
+          content: string;
+          nextOffset: number | null;
+          artifact: { revision: number };
+        };
+        assert(data.content.length <= 31);
+        assert.equal(data.artifact.revision, 1);
+        assert.deepEqual(truncateToolResult(read, 10), read);
+        text += data.content;
+        offset = data.nextOffset;
+      }
+    }
+    assert.equal(text, reportMarkdown);
+    const citations = await provider.call("artifact_read", {
+      id: "report",
+      part: "citations",
+    });
+    assert.equal(
+      citations.ok && (citations.data as { content: string }).content,
+      JSON.stringify((await store.get("report"))?.citations, null, 2),
+    );
+    const other = new ArtifactToolProvider(
+      store,
+      "other-task",
+      "native",
+      [],
+      () => assert.fail("Cross-task write"),
+    );
+    for (const tool of ["artifact_read", "artifact_patch"])
+      assert.equal(
+        (await other.call(tool, { id: "report", expectedRevision: 1 })).ok,
+        false,
+      );
+    await provider.call("artifact_patch", {
+      id: "report",
+      expectedRevision: 1,
+      title: "Changed title",
+    });
+    const stale = await provider.call("artifact_read", {
+      id: "report",
+      expectedRevision: 1,
+      offset: 31,
+    });
+    assert.equal(!stale.ok && stale.code, "invalid_args");
+    assert.equal(
+      (await provider.call("artifact_read", { id: "report", offset: 10000 }))
+        .ok,
+      false,
+    );
+  });
+
+  it("finalizes the same reviewed draft without resending the body, and never treats artifact reads as source evidence", async () => {
+    const reviewedText = reportMarkdown
+      .replace("方法在全部任务上成功。", "方法只完成一半任务。")
+      .replace("100/100", "50/100");
+    const { provider, store, events } = await editableReport(
+      true,
+      new MemoryFileSystem(),
+      reviewedText,
+    );
+    const final = { id: "report", expectedRevision: 1, status: "ready" };
+    const read = await provider.call("artifact_read", { id: "report" });
+    events.push({
+      id: "read-draft",
+      sessionId: "task",
+      ts: 100,
+      type: "tool_result",
+      payload: { callId: "read", result: read },
+    });
+    assert.equal((await provider.call("artifact_patch", final)).ok, false);
+    for (const name of ["get_pages", "get_annotations"])
+      events.push({
+        id: name,
+        sessionId: "task",
+        ts: 100,
+        type: "tool_result",
+        payload: {
+          callId: name,
+          result: {
+            ok: true,
+            toolName: name,
+            data: {
+              libraryID: 1,
+              key: "PAPER",
+              pages: [{ page: 2, text: "50 of 100 tasks were completed." }],
+              annotations: [],
+            },
+          },
+        },
+      });
+    assert.equal((await provider.call("artifact_patch", final)).ok, true);
+    const saved = (await store.get("report"))!;
+    assert.equal(saved.status, "ready");
+    assert.equal(saved.revision, 2);
+    assert.equal(
+      saved.body.type === "markdown" && saved.body.markdown,
+      reviewedText,
+    );
+    assert.equal(saved.citations.length, 1);
+    // A later corrected draft must establish its own evidence-read boundary.
+    assert.equal(
+      (
+        await provider.call("artifact_patch", {
+          id: "report",
+          expectedRevision: 2,
+          status: "draft",
+        })
+      ).ok,
+      true,
+    );
+    assert.equal(
+      (
+        await provider.call("artifact_patch", {
+          id: "report",
+          expectedRevision: 3,
+          status: "ready",
+        })
+      ).ok,
+      false,
+    );
+  });
+
+  it("keeps compact requests in checkpoints and replays a patch without a second revision", async (t) => {
+    const markdown =
+      reportMarkdown + "\nAdditional unchanged discussion. ".repeat(400);
+    const { provider, store } = await editableReport(
+      false,
+      new MemoryFileSystem(),
+      markdown,
+    );
+    const execution = new ToolExecutionService(memoryJsonStorage());
+    const args = {
+      id: "report",
+      expectedRevision: 1,
+      edits: [
+        { oldText: "方法在全部任务上成功。", newText: "方法只完成一半任务。" },
+        { oldText: "100/100", newText: "50/100" },
+      ],
+      status: "ready",
+    };
+    const call = { id: "patch", name: "artifact_patch", args };
+    const harness = createHarness({
+      toolProvider: execution.wrap(provider),
+      script: [{ toolCalls: [call] }, { text: "已修订报告" }],
+    });
+    const result = await harness.loop.run({
+      session: session("task"),
+      turnId: "patch-turn",
+      userText: "修正结果",
+    });
+    assert.equal(result.phase, "done");
+    assert.deepEqual(
+      result.messages.find((m) => m.toolCalls)?.toolCalls?.[0].args,
+      args,
+    );
+    const checkpoint = harness.checkpoints.latest("patch-turn")!;
+    assert.deepEqual(checkpoint.toolExecutions[0].requestedArgs, args);
+    const operation = (await execution.listOperations({ taskId: "task" }))[0];
+    assert.deepEqual(operation.args, args);
+    assert(
+      (operation.intent?.recovery.artifactInput as { body?: unknown })?.body,
+    );
+    const receipt = result.messages.find((m) => m.role === "tool")!.content;
+    const artifact = (await store.get("report"))!;
+    const replacementBytes = Buffer.byteLength(
+      JSON.stringify({
+        id: artifact.id,
+        kind: artifact.kind,
+        title: artifact.title,
+        body: artifact.body,
+        status: "ready",
+        citations: artifact.citations,
+        sourceContextIds: artifact.sourceContextIds,
+      }),
+    );
+    t.diagnostic(
+      JSON.stringify({
+        fixture:
+          "synthetic report with 400 unchanged discussion lines; UTF-8 bytes, not model tokens",
+        fullReplacementArgs: replacementBytes,
+        patchArgs: Buffer.byteLength(JSON.stringify(args)),
+        statusOnlyArgs: Buffer.byteLength(
+          JSON.stringify({
+            id: "report",
+            expectedRevision: 1,
+            status: "ready",
+          }),
+        ),
+        patchReceipt: Buffer.byteLength(receipt),
+      }),
+    );
+    assert(
+      Buffer.byteLength(JSON.stringify(args)) <
+        Buffer.byteLength(markdown) / 10,
+    );
+    assert(Buffer.byteLength(receipt) < Buffer.byteLength(markdown) / 10);
+    const replay = createHarness({
+      toolProvider: execution.wrap(provider),
+      script: [{ toolCalls: [call] }, { text: "完成" }],
+    });
+    await replay.loop.run({
+      session: session("task"),
+      turnId: "resume",
+      userText: "继续",
+      resume: checkpoint,
+    });
+    assert.equal((await store.get("report"))?.revision, 2);
+  });
+
+  it("reconciles an interrupted patch from its exact persisted operation, including a status-only edit", async () => {
+    class LostReceiptFS extends MemoryFileSystem {
+      loseNext = false;
+      override async writeAtomic(path: string, text: string) {
+        await super.writeAtomic(path, text);
+        if (this.loseNext) {
+          this.loseNext = false;
+          throw new Error("Receipt lost after disk write");
+        }
+      }
+    }
+    const fs = new LostReceiptFS();
+    const { provider, store } = await editableReport(false, fs);
+    const storage = memoryJsonStorage();
+    const before = new ToolExecutionService(storage);
+    fs.loseNext = true;
+    const result = await before
+      .wrap(provider)
+      .call(
+        "artifact_patch",
+        { id: "report", expectedRevision: 1, status: "draft" },
+        undefined,
+        { taskId: "task", operationId: "patch-op" },
+      );
+    assert.equal(result.effect, "unknown");
+    const after = new ToolExecutionService(storage);
+    registerHostOperationDomains(after, {
+      artifacts: store,
+      history: {
+        listNotes: async () => [],
+        readNote: async () => {
+          throw Error("Unused");
+        },
+      },
+      tools: { reconcile: async () => null },
+    });
+    assert.deepEqual(await after.unresolvedForTask("task"), []);
+    const recovered = (await after.getOperation("patch-op"))?.result;
+    assert.equal(recovered?.effect, "applied");
+    const artifact = (await store.get("report"))!;
+    assert.equal(artifact.revision, 2);
+    assert.equal(artifact.status, "draft");
+    assert.equal(artifact.revisions[1].operationId, "patch-op");
+    assert(!JSON.stringify(recovered).includes("revisions"));
+  });
+
+  it("does not reconcile an identical body saved by a different operation", async (t) => {
+    const { provider, store, fs } = await editableReport();
+    const write = fs.writeAtomic.bind(fs);
+    const mocked = t.mock.method(
+      fs,
+      "writeAtomic",
+      async (path: string, content: string) => {
+        await write(path, content);
+        throw new Error("Receipt lost after disk write");
+      },
+    );
+    const storage = memoryJsonStorage();
+    const before = new ToolExecutionService(storage);
+    const result = await before
+      .wrap(provider)
+      .call(
+        "artifact_patch",
+        { id: "report", expectedRevision: 1, status: "draft" },
+        undefined,
+        { taskId: "task", operationId: "pending-patch" },
+      );
+    mocked.mock.restore();
+    assert.equal(result.effect, "unknown");
+    const current = (await store.get("report", true))!;
+    current.revisions[1].operationId = "another-operation";
+    await store.save(current);
+    const after = new ToolExecutionService(storage);
+    registerHostOperationDomains(after, {
+      artifacts: store,
+      history: {
+        listNotes: async () => [],
+        readNote: async () => {
+          throw Error("Unused");
+        },
+      },
+      tools: { reconcile: async () => null },
+    });
+    const unresolved = await after.unresolvedForTask("task");
+    assert.deepEqual(unresolved, ["pending-patch"]);
+    assert.equal((await store.get("report"))?.revision, 2);
+  });
+});
 
 describe("ArtifactStore", () => {
   it("keeps append-only revisions in an independent JSON file", async () => {

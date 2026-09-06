@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Changed
+
+- Research reports keep a one-minute overview inside the document, followed by
+  the method, cited evidence and limitations. Reviews update the same report
+  and keep the overview consistent with corrected findings.
+- Agents can read a saved report in bounded portions and revise selected
+  passages together without resending the whole document. Unchanged citations,
+  sources and earlier revisions are preserved. An accurate deep-reading draft
+  can be marked ready after source review without rewriting its body.
+
 ### Fixed
 
 - The artifact tool now directs models to omit the ID when creating a report
@@ -10,6 +20,21 @@
   permission denial. Models are no longer asked to supply a task ID; older calls
   remain compatible and cannot redirect a save into another task. Artifact saves
   remain independent of Zotero write approvals.
+- Report patches reject stale revisions, ambiguous text and overlapping edits
+  without applying any part of the patch. Interrupted saves are reconciled by
+  their persisted operation identity, preventing duplicate revisions on replay.
+
+### Validation and known limits
+
+- The development changes pass 774 automated tests, type checking, lint, build,
+  skill synchronization and version consistency checks on Windows with Node.js 24.
+- Deterministic report-editing tests cover atomic overview/evidence corrections,
+  concurrent edits, citation preservation, bounded reads, source-review
+  prerequisites and interrupted writes. See the
+  [report revision contract and checks](.github/maintainers/research-reports.md).
+- The new report workflow has not yet been tested with a real model in an
+  installed Zotero build. Smaller edit payloads are measured as UTF-8 bytes,
+  not billed tokens or an end-to-end success-rate improvement.
 
 ## 0.4.1 - 2026-09-06
 

@@ -86,6 +86,7 @@ export class ArtifactStore {
     defaultSourceContextIds: string[] = [],
     expectedRevision?: number,
     execution?: import("@confucius/protocol").ExecutionBinding,
+    operationId?: string,
   ): Promise<ArtifactRecord> {
     if (!isArtifactKind(input.kind)) {
       throw new Error("Unknown artifact kind");
@@ -143,6 +144,7 @@ export class ArtifactStore {
       );
       const nextRevision = {
         revision,
+        ...(operationId ? { operationId } : {}),
         body: clone(input.body),
         citations: clone(citations),
         sourceContextIds,

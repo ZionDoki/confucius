@@ -36,7 +36,7 @@ export const TASK_TEMPLATES: readonly TaskTemplate[] = [
     skillSlug: "paper-deep-reading",
     source: "single",
     prompt:
-      "Review the paper attached to this task. Cover its question, method, evidence, assumptions, and limitations. Use the default annotation settings unless I specify changes here.",
+      "Review the paper attached to this task. Put a one-minute overview at the start of the report, then explain its question, method, evidence, assumptions, and limitations. Keep corrections in the same report. Use the default annotation settings unless I specify changes here.",
   },
   {
     id: "evidence-audit",

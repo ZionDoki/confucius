@@ -8,6 +8,7 @@ import { MEMORY_WRITE_TOOLS } from "@confucius/protocol";
 import type { HistoryStore } from "@confucius/memory";
 import type { ArtifactStore } from "./ArtifactStore";
 import { ARTIFACT_UPSERT_TOOL } from "./ArtifactToolProvider";
+import { ARTIFACT_PATCH_TOOL, artifactPatchReceipt } from "./ArtifactEditing";
 import { collectTagChanges } from "./ArtifactWriteback";
 import {
   verifyWritebackSnapshot,
@@ -49,9 +50,16 @@ async function reconcileArtifact(
   options: HostOperationDomainOptions,
 ): Promise<ToolResult | null> {
   const args = operation.args;
-  if (operation.name === ARTIFACT_UPSERT_TOOL && args.id) {
+  if (
+    [ARTIFACT_UPSERT_TOOL, ARTIFACT_PATCH_TOOL].includes(operation.name) &&
+    args.id
+  ) {
     const artifact = await options.artifacts.get(String(args.id), true);
     const recovery = operation.intent?.recovery;
+    const patch = operation.name === ARTIFACT_PATCH_TOOL;
+    const intended = patch
+      ? (recovery?.artifactInput as Record<string, unknown> | undefined)
+      : args;
     const expectedRevision = Number(
       recovery?.artifactRevision ??
         operation.context.expectedAfter?.artifactRevision,
@@ -66,10 +74,13 @@ async function reconcileArtifact(
     if (
       artifact &&
       revision &&
-      canonical(revision.body) === canonical(args.body)
+      (!recovery?.taskId || artifact.taskId === recovery.taskId) &&
+      (!patch || revision.operationId === operation.id) &&
+      intended &&
+      canonical(revision.body) === canonical(intended.body)
     ) {
       const result = applied(operation, {
-        artifact,
+        ...(patch ? artifactPatchReceipt(artifact) : { artifact }),
         reconciledRevision: revision.revision,
       });
       try {
@@ -230,6 +241,7 @@ export function registerHostOperationDomains(
     });
   const artifactNames = new Set([
     ARTIFACT_UPSERT_TOOL,
+    ARTIFACT_PATCH_TOOL,
     "artifact.collection_diff",
     "artifact.tag_diff",
   ]);

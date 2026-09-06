@@ -295,6 +295,8 @@ export interface ArtifactWriteback {
 
 export interface ArtifactRevision {
   revision: number;
+  /** Present on new tool writes so interrupted edits can be reconciled exactly. */
+  operationId?: string;
   body: ArtifactBody;
   citations: Citation[];
   sourceContextIds: string[];
@@ -1006,6 +1008,7 @@ function isArtifactRevision(value: unknown, kind: ArtifactKind): boolean {
   return Boolean(
     revision &&
     positiveInteger(revision.revision) &&
+    optionalString(revision.operationId) &&
     artifactBodyMatchesKind(kind, revision.body) &&
     Array.isArray(revision.citations) &&
     revision.citations.every(isCitation) &&

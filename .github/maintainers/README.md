@@ -5,6 +5,7 @@
 
 - [版本与发布规范](releases.md)：版号、Beta 渠道、更新说明、产物与发布验收。
 - [任务执行与恢复](runtime.md)：执行、存储、上下文和诊断的维护契约。
+- [研究报告修订](research-reports.md)：同一报告的读取、局部修改、复核、恢复与成本验证。
 - [历史升级验收](acceptance/upgrade-acceptance.md)：0.3.8 → 0.4.0-beta.1，macOS。
 - [Windows 验收清单](acceptance/windows-acceptance.md)：完整场景及复现入口。
 - [Windows 实测记录](acceptance/windows-acceptance-2026-09-06.md)：三引擎、PDF、恢复及明确未通过项。

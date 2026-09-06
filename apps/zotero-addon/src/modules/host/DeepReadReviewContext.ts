@@ -15,15 +15,28 @@ function resultOf(message: ModelMessage): ToolResult | undefined {
  * checkpoints, tool execution, model settings, usage accounting or permissions. */
 export function deepReadReviewMessages(
   messages: ModelMessage[],
-  savedDraft?: Pick<ArtifactRecord, "id" | "title" | "body" | "citations">,
+  savedDraft?: Pick<
+    ArtifactRecord,
+    "id" | "title" | "body" | "citations" | "revision" | "status"
+  >,
 ): ModelMessage[] {
   let draftIndex = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     const result = resultOf(messages[i]);
-    if (!result?.ok || result.toolName !== "artifact_upsert") continue;
+    if (
+      !result?.ok ||
+      !["artifact_upsert", "artifact_patch"].includes(result.toolName)
+    )
+      continue;
     const data = result.data as {
       artifact?: { kind?: string; status?: string };
     };
+    if (
+      data?.artifact?.kind === "deep_read" &&
+      data.artifact.status === "ready" &&
+      !savedDraft
+    )
+      return messages;
     if (
       data?.artifact?.kind === "deep_read" &&
       data.artifact.status === "draft"
@@ -52,8 +65,26 @@ export function deepReadReviewMessages(
         call.id === messages[draftIndex].toolCallId &&
         call.name === "artifact_upsert",
     );
-  const draft = savedDraft ?? draftCall?.args;
-  if (!draft?.body) return messages;
+  const sourceDraft = savedDraft ?? draftCall?.args;
+  if (!sourceDraft?.body) return messages;
+  const receipt = draftIndex >= 0 ? resultOf(messages[draftIndex]) : undefined;
+  const saved = receipt?.ok
+    ? (
+        receipt.data as {
+          artifact?: { id?: string; revision?: number; status?: string };
+        }
+      )?.artifact
+    : undefined;
+  // Do not inject historical revisions or writeback receipts with the current
+  // draft. Its revision lets the reviewer patch it without another full read.
+  const draft = {
+    id: savedDraft?.id ?? saved?.id ?? sourceDraft.id,
+    revision: savedDraft?.revision ?? saved?.revision,
+    status: savedDraft?.status ?? saved?.status,
+    title: sourceDraft.title,
+    body: sourceDraft.body,
+    citations: sourceDraft.citations,
+  };
   // Do not split an assistant/tool group, including parallel reads alongside
   // get_annotations. Current transient image messages stay in the retained tail.
   let boundary = annotationIndex + 1;

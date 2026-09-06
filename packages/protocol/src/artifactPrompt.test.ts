@@ -13,6 +13,10 @@ describe("artifact upsert guidance", () => {
     assert.match(text, /state what changed/);
     assert.match(text, /omit id and taskId/);
     assert.match(text, /copy its returned id from this task/);
+    assert.match(text, /artifact_patch with expectedRevision/);
+    assert.match(text, /one-minute overview INSIDE the report/);
+    assert.match(text, /opening overview and its evidence/);
+    assert.match(text, /without duplicating the report in chat/);
     assert.doesNotMatch(text, /Before completing/);
     assert.doesNotMatch(text, /Required artifact kind/);
     assert.doesNotMatch(text, /This task's template/);

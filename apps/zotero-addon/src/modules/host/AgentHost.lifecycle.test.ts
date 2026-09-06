@@ -132,6 +132,8 @@ it("isolates a source-grounded review while preserving the durable history and l
       title: "Recovered draft",
       body: { type: "markdown", markdown: "Durable report" },
       citations: [],
+      revision: 2,
+      status: "draft",
     },
   );
   assert.match(
@@ -140,6 +142,22 @@ it("isolates a source-grounded review while preserving the durable history and l
   );
   assert.doesNotMatch(JSON.stringify(recovered), /PREMATURE CONCLUSION/);
   assert.deepEqual(recovered.slice(-2), tail);
+  const historyBearingDraft = {
+    id: "r",
+    title: "Current draft",
+    revision: 3,
+    status: "draft" as const,
+    body: { type: "markdown" as const, markdown: "Latest report" },
+    citations: [],
+    revisions: [{ body: "OBSOLETE FULL REPORT" }],
+  };
+  const latest = deepReadReviewMessages(original, historyBearingDraft);
+  const inputs = latest.find((m) =>
+    m.content.startsWith("Review inputs"),
+  )!.content;
+  assert.match(inputs, /"revision":3/);
+  assert.match(inputs, /Latest report/);
+  assert.doesNotMatch(inputs, /OBSOLETE FULL REPORT|"revisions"/);
 });
 
 function deferred<T>() {
@@ -429,6 +447,35 @@ describe("AgentHost lifecycle ownership", () => {
     const revised = toolResult(await save({ id, taskId: "other-task" }));
     assert.equal(revised.ok, true);
     assert.equal((await artifacts.get(id))?.revision, 2);
+    const read = toolResult(
+      await host.taskToolCall({
+        taskId: state.record.id,
+        name: "artifact_read",
+        arguments: { id },
+      }),
+    );
+    assert.equal(read.ok, true);
+    assert.equal(
+      read.ok && (read.data as { content: string }).content,
+      "Evidence",
+    );
+    const patched = toolResult(
+      await host.taskToolCall({
+        taskId: state.record.id,
+        name: "artifact_patch",
+        arguments: {
+          id,
+          expectedRevision: 2,
+          edits: [{ oldText: "Evidence", newText: "Reviewed evidence" }],
+        },
+      }),
+    );
+    assert.equal(patched.ok, true);
+    assert.deepEqual((await artifacts.get(id))?.body, {
+      type: "markdown",
+      markdown: "Reviewed evidence",
+    });
+    assert.equal((await artifacts.get(id))?.revision, 3);
     assert.deepEqual(await artifacts.get(foreign.id), foreign);
     assert.equal(files.size, 2);
     assert(!state.events.some((event) => event.type === "approval_required"));

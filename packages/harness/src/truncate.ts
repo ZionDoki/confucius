@@ -49,6 +49,9 @@ export function truncateToolResult(
       // One complete spatial page is needed to interpret all table headers.
       return result;
     }
+    // The provider already bounds this text and returns an exact continuation
+    // offset. A second truncation would silently skip part of the report.
+    if (result.toolName === "artifact_read") return result;
     if (
       ["propose_annotations", "propose_highlights"].includes(result.toolName) &&
       Array.isArray(data.annotations)
@@ -87,7 +90,10 @@ export function truncateToolResult(
     }
     // A saved document is already durable. Return its receipt, not another copy
     // of the entire authored body in every subsequent model request.
-    if (result.toolName === "artifact_upsert" && data.artifact) {
+    if (
+      ["artifact_upsert", "artifact_patch"].includes(result.toolName) &&
+      data.artifact
+    ) {
       const artifact = data.artifact as Record<string, unknown>;
       const {
         body: _body,
@@ -100,7 +106,9 @@ export function truncateToolResult(
         data: {
           ...data,
           artifact: receipt,
-          citationCount: Array.isArray(citations) ? citations.length : 0,
+          citationCount: Array.isArray(citations)
+            ? citations.length
+            : (data.citationCount ?? 0),
           contentStored: true,
         },
       };

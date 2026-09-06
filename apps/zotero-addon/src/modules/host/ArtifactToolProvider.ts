@@ -8,11 +8,24 @@ import type {
   ToolResult,
   ToolRuntimeMeta,
   ToolExecutionContext,
+  ToolFailure,
 } from "@confucius/protocol";
 import { artifactBodyMatchesKind, isArtifactKind } from "@confucius/protocol";
 import type { ToolProvider } from "@confucius/harness";
 import type { ArtifactStore } from "./ArtifactStore";
 import { DEEP_READ_REVIEW_INSTRUCTION } from "./DeepReadReview";
+import {
+  ARTIFACT_READ_TOOL,
+  ARTIFACT_PATCH_TOOL,
+  ARTIFACT_READ_SCHEMA,
+  ARTIFACT_PATCH_SCHEMA,
+  ARTIFACT_EDIT_DEFINITIONS,
+  ARTIFACT_CITATIONS_SCHEMA,
+  patchArtifactInput,
+  readArtifactPart,
+  artifactPatchReceipt,
+  type ArtifactPatchArgs,
+} from "./ArtifactEditing";
 
 export const ARTIFACT_UPSERT_TOOL = "artifact_upsert";
 
@@ -411,25 +424,12 @@ const schema: JsonSchemaObject = {
       type: "string",
       enum: ["draft", "ready"],
       description:
-        "For deep_read, first save a draft, then read its source pages and saved annotations. Submit the corrected body and ready status together. A new draft revision resets those read prerequisites.",
+        "For deep_read, first save a draft, then read its source pages and saved annotations. Prefer artifact_patch to submit corrections and ready status together. A new draft revision resets those read prerequisites.",
     },
     citations: {
-      type: "array",
+      ...ARTIFACT_CITATIONS_SCHEMA,
       description:
         'Evidence citations, e.g. {"id":"e1","itemLibraryID":1,"itemKey":"TOOL_RETURNED_KEY","page":3,"quote":"verbatim source passage"}. Each citation requires itemLibraryID and itemKey directly; do not use a nested item or a contextId string. Give an id when the body refers to it through citationIds.',
-      items: {
-        type: "object",
-        properties: {
-          id: { type: "string" },
-          itemLibraryID: { type: "number" },
-          itemKey: { type: "string" },
-          page: { type: "integer", minimum: 1 },
-          section: { type: "string" },
-          quote: { type: "string" },
-        },
-        required: ["itemLibraryID", "itemKey"],
-        additionalProperties: false,
-      },
     },
     sourceContextIds: { type: "array", items: { type: "string" } },
   },
@@ -447,9 +447,17 @@ const compatibilitySchema: JsonSchemaObject = {
 export const ARTIFACT_UPSERT_DEFINITION: ToolDefinition = {
   name: ARTIFACT_UPSERT_TOOL,
   description:
-    'Create or revise a saved research artifact in the current task. For a new artifact, omit id and taskId; the host assigns both. For an update, use the id returned by a save in this task. Saving a task artifact needs no Zotero write approval. Do not call this for an ordinary reply. For deep_read, report, and note_draft, use {"type":"markdown","markdown":"..."}; for other kinds, body.type must equal kind and the body must follow its schema. A deep-read task first saves deep_read as draft; reread its source evidence and actual annotations, correct the report/comments, then update the same id to ready. Follow reviewRequired and nextAction in the save receipt.',
+    'Create or fully replace a saved research artifact in the current task. For focused report corrections, prefer artifact_patch instead of resending the whole body. For a new artifact, omit id and taskId; the host assigns both. For an update, use the id returned by a save in this task. Saving a task artifact needs no Zotero write approval. Do not call this for an ordinary reply. For deep_read, report, and note_draft, use {"type":"markdown","markdown":"..."}; for other kinds, body.type must equal kind and the body must follow its schema. A deep-read task first saves deep_read as draft; reread its source evidence and actual annotations, correct the report/comments, then update the same id to ready. Follow reviewRequired and nextAction in the save receipt.',
   inputSchema: schema,
 };
+
+export const ARTIFACT_TOOL_DEFINITIONS = [
+  ARTIFACT_UPSERT_DEFINITION,
+  ...ARTIFACT_EDIT_DEFINITIONS,
+];
+export const ARTIFACT_TOOL_NAMES = new Set(
+  ARTIFACT_TOOL_DEFINITIONS.map((tool) => tool.name),
+);
 
 export class ArtifactToolProvider implements ToolProvider {
   constructor(
@@ -469,21 +477,23 @@ export class ArtifactToolProvider implements ToolProvider {
   ) {}
 
   listTools(): ToolDefinition[] {
-    return [ARTIFACT_UPSERT_DEFINITION];
+    return ARTIFACT_TOOL_DEFINITIONS;
   }
 
   getMeta(name: string): ToolRuntimeMeta | null {
-    return name === ARTIFACT_UPSERT_TOOL
+    return ARTIFACT_TOOL_NAMES.has(name)
       ? {
-          name: ARTIFACT_UPSERT_TOOL,
+          name,
           catalog: "agent",
-          concurrency: "serial",
-          mutatesState: true,
+          concurrency: name === ARTIFACT_READ_TOOL ? "parallel_safe" : "serial",
+          mutatesState: name !== ARTIFACT_READ_TOOL,
         }
       : null;
   }
 
   getSchema(name: string): JsonSchemaObject | undefined {
+    if (name === ARTIFACT_READ_TOOL) return ARTIFACT_READ_SCHEMA;
+    if (name === ARTIFACT_PATCH_TOOL) return ARTIFACT_PATCH_SCHEMA;
     return name === ARTIFACT_UPSERT_TOOL ? compatibilitySchema : undefined;
   }
 
@@ -491,7 +501,9 @@ export class ArtifactToolProvider implements ToolProvider {
     name: string,
     args: Record<string, unknown>,
     context: ToolExecutionContext = {},
-  ) {
+  ): Promise<ToolFailure | null> {
+    if (name === ARTIFACT_READ_TOOL || name === ARTIFACT_PATCH_TOOL)
+      return this.prepareEdit(name, args, context);
     args.body = normalizeArtifactBodyArgument(args.body);
     const invalid = validateArgs(name, this.getSchema(name), args);
     if (
@@ -558,13 +570,81 @@ export class ArtifactToolProvider implements ToolProvider {
     return null;
   }
 
+  private async prepareEdit(
+    name: string,
+    args: Record<string, unknown>,
+    context: ToolExecutionContext,
+  ): Promise<ToolFailure | null> {
+    const invalid = validateArgs(name, this.getSchema(name), args);
+    if (invalid) return invalid;
+    const artifact = await this.store.get(String(args.id));
+    if (!artifact || artifact.taskId !== this.taskId)
+      return {
+        ok: false,
+        toolName: name,
+        code: "not_found",
+        effect: "none",
+        retryable: false,
+        message:
+          "Artifact is not available in this task. Use an id returned by a save in the current task.",
+      };
+    if (
+      args.expectedRevision !== undefined &&
+      args.expectedRevision !== artifact.revision
+    )
+      return {
+        ok: false,
+        toolName: name,
+        code: "invalid_args",
+        effect: "none",
+        retryable: false,
+        message: `Artifact revision changed (expected ${args.expectedRevision}, current ${artifact.revision}). Read the current version with artifact_read and review your edits before retrying; do not just change expectedRevision. No write was performed.`,
+        details: {
+          reason: "stale_revision",
+          currentRevision: artifact.revision,
+        },
+      };
+    if (name === ARTIFACT_READ_TOOL) return null;
+    let input: Record<string, unknown>;
+    try {
+      input = {
+        ...patchArtifactInput(artifact, args as unknown as ArtifactPatchArgs),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        toolName: name,
+        code: "invalid_args",
+        effect: "none",
+        retryable: false,
+        message: String(error),
+      };
+    }
+    // Reuse draft review and optimistic revision checks while keeping the model
+    // request compact. The complete intended body belongs only in the journal.
+    // Pin the write to the snapshot used above: another write may run before
+    // upsert preparation rereads the store and must not rebase these old edits.
+    context.expected ??= {};
+    context.expected[`artifact:${artifact.id}`] ??= String(artifact.revision);
+    const rejected = await this.prepare(ARTIFACT_UPSERT_TOOL, input, context);
+    if (rejected) return { ...rejected, toolName: name };
+    const prepared = context.preparedOperation!;
+    context.preparedOperation = {
+      ...prepared,
+      name,
+      args: { ...args },
+      recovery: { ...prepared.recovery, artifactInput: input },
+    };
+    return null;
+  }
+
   async call(
     name: string,
     args: Record<string, unknown>,
     _signal?: AbortSignal,
     context: ToolExecutionContext = {},
   ): Promise<ToolResult> {
-    if (name !== ARTIFACT_UPSERT_TOOL) {
+    if (!ARTIFACT_TOOL_NAMES.has(name)) {
       return {
         ok: false,
         toolName: name,
@@ -574,10 +654,50 @@ export class ArtifactToolProvider implements ToolProvider {
     }
     const invalid = await this.prepare(name, args, context);
     if (invalid) return invalid;
-    const normalizedArgs: Record<string, unknown> = {
-      ...args,
-      body: normalizeArtifactBodyArgument(args.body),
-    };
+    if (name === ARTIFACT_READ_TOOL) {
+      try {
+        const artifact = await this.store.get(String(args.id));
+        // Recheck after the asynchronous read, including a paged read's revision.
+        if (
+          !artifact ||
+          artifact.taskId !== this.taskId ||
+          (args.expectedRevision !== undefined &&
+            args.expectedRevision !== artifact.revision)
+        )
+          return {
+            ok: false,
+            toolName: name,
+            code: "invalid_args",
+            effect: "none",
+            message:
+              "Artifact changed during reading. Read its current version from offset=0.",
+          };
+        return {
+          ok: true,
+          toolName: name,
+          effect: "none",
+          data: readArtifactPart(artifact, args),
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          toolName: name,
+          code: "invalid_args",
+          effect: "none",
+          message: String(error),
+        };
+      }
+    }
+    const normalizedArgs: Record<string, unknown> =
+      name === ARTIFACT_PATCH_TOOL
+        ? (context.preparedOperation!.recovery.artifactInput as Record<
+            string,
+            unknown
+          >)
+        : {
+            ...args,
+            body: normalizeArtifactBodyArgument(args.body),
+          };
     if (
       isArtifactKind(normalizedArgs.kind) &&
       !artifactBodyMatchesKind(normalizedArgs.kind, normalizedArgs.body)
@@ -599,6 +719,7 @@ export class ArtifactToolProvider implements ToolProvider {
         this.sourceContextIds,
         Number(context.expected?.[`artifact:${args.id}`]),
         this.execution?.(),
+        context.operationId,
       );
       const warnings: string[] = [];
       try {
@@ -613,7 +734,9 @@ export class ArtifactToolProvider implements ToolProvider {
         toolName: name,
         effect: "applied",
         data: {
-          artifact,
+          ...(name === ARTIFACT_PATCH_TOOL
+            ? artifactPatchReceipt(artifact)
+            : { artifact }),
           ...(artifact.kind === "deep_read" &&
           artifact.status === "draft" &&
           this.reviewState

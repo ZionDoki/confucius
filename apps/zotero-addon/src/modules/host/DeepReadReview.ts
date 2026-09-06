@@ -9,7 +9,7 @@ export const DEEP_READ_REVIEW_INSTRUCTION = [
   "Reread the source pages for the decisive empirical claims with get_pages or inspect_pdf_page, and read get_annotations to audit the saved comments. These reads must occur AFTER saving the draft; a notes/history summary is not source evidence.",
   "Check each reported number with its exact metric, denominator, experiment population, interval, baseline and scope. An observed maximum is not a configured limit. Separate author-stated results from your deductions; remove unsupported claims and redundant numbers.",
   "Use the page image or spatial text to resolve table headers. If extraction is uncertain, keep only unambiguous prose aggregates and state the uncertainty; do not infer an author error.",
-  "Correct saved comments with update_annotation_comment, preserve their keys, then save the corrected report as ready. Keep all user-facing prose in the configured response language.",
+  "Correct saved comments with update_annotation_comment and preserve their keys. Use artifact_patch with the current expectedRevision to correct the report's overview and detailed evidence together, sending only changed passages with status=ready. If the report is already correct, send status=ready without resending its body or citations. Use artifact_read only when the current draft or revision is absent or stale; reading the artifact is not a source-evidence read. Keep all user-facing prose in the configured response language.",
 ].join("\n");
 
 /** A durable source-read prerequisite, not an assertion of factual correctness. */
@@ -36,7 +36,7 @@ export function deepReadReviewNextAction(
     review.missingReads.includes("get_annotations")
       ? "Call get_annotations for this paper's PDF attachment to review its saved comments. Updating a comment does not replace this read."
       : "The saved-comment read is already satisfied for this revision.",
-    "Keep the current draft. After the missing read and any factual corrections, submit the corrected body with status=ready under this same artifact id in ONE artifact_upsert call. Saving another draft creates a new revision that needs another evidence pass.",
+    "Keep the current draft. After the missing source reads, use ONE artifact_patch call with this id, expectedRevision and all needed edits plus status=ready. If no correction is needed, omit edits and just set status=ready. Do not resubmit the whole report. Saving another draft creates a new revision that needs another evidence pass.",
   ].join("\n");
 }
 
@@ -68,7 +68,9 @@ function deepReadReviewStatus(
         ? event.payload.artifact
         : event.type === "tool_result" &&
             event.payload.result.ok &&
-            event.payload.result.toolName === "artifact_upsert"
+            ["artifact_upsert", "artifact_patch"].includes(
+              event.payload.result.toolName,
+            )
           ? (
               event.payload.result.data as
                 { artifact?: { id: string; revision: number } } | undefined

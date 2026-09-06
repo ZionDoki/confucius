@@ -27,6 +27,8 @@ export function artifactUpsertGuidance(
     "Call artifact_upsert only to save a cited research file (deep_read, evidence_audit, literature_map, triage_table, note_draft, annotation_set, collection_diff, citation_list, or a cited report).",
     "Leave clarifications, status updates, short answers, and tool-only turns in the conversation. Do not save an ordinary reply as an artifact.",
     "For a new artifact, omit id and taskId; the host assigns them. To revise an artifact, copy its returned id from this task. Artifact saves do not require Zotero write approval; an invalid id must be corrected, not reapproved.",
+    "Use artifact_patch with expectedRevision for focused corrections to a saved Markdown report; send only changed passages and fields. Omitted citations and sources are preserved. Use artifact_read when the current text or revision is missing or stale; do not read a report already supplied in review inputs. Batch linked corrections, including the opening overview and its evidence, into one atomic patch. Use artifact_upsert for a new artifact or a complete replacement.",
+    "For a Markdown research report, start with a one-minute overview INSIDE the report: the research question, central method, main evidence-backed takeaway, and the most important limit or applicability condition. Then explain the method, decisive evidence with page citations, and material limitations. Keep the overview consistent with the detailed evidence when revising. Prefer a compact evidence table for exact results, denominators and baselines; do not repeat the same statistics throughout the report. Respect the user's requested format, length and configured response language.",
   ];
 
   const template = taskTemplate(input.templateId);
@@ -51,12 +53,12 @@ export function artifactUpsertGuidance(
       );
     }
     lines.push(
-      "To revise a file, call artifact_upsert with its id. Create a new artifact only when the user asks for a separate file.",
+      "To revise a file, use artifact_patch with its id and current revision; call artifact_upsert with its id only for a complete replacement. Create a new artifact only when the user asks for a separate file.",
     );
   }
 
   lines.push(
-    "After creating or revising an artifact, state what changed. Put the full content in the artifact.",
+    "After creating or revising an artifact, state what changed briefly and point to the saved report. Put the overview and full content in the artifact, without duplicating the report in chat.",
   );
   return lines.join("\n");
 }
