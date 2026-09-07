@@ -894,6 +894,93 @@ describe("ArtifactStore", () => {
 });
 
 describe("artifact_upsert contract", () => {
+  it("identifies missing text quotes in the advertised annotation schema before preparing a write", async () => {
+    const store = new ArtifactStore("artifacts", new MemoryFileSystem());
+    const provider = new ArtifactToolProvider(store, "task", "native", [], () =>
+      assert.fail("must not save"),
+    );
+    const args = {
+      kind: "annotation_set",
+      title: "Marks",
+      body: {
+        type: "annotation_set",
+        item: { libraryID: 1, key: "PAPER" },
+        annotations: [{ type: "highlight", page: 2, comment: "explanation" }],
+      },
+    };
+    const context: ToolExecutionContext = {};
+    const invalid = await provider.prepare("artifact_upsert", args, context);
+    assert.equal(invalid?.effect, "none");
+    assert.match(invalid?.message || "", /annotations\[0\]\.quote/);
+    assert.doesNotMatch(
+      invalid?.message || "",
+      /markdown=|\.claims|\.nodes|\.operations/,
+    );
+    assert.equal(context.preparedOperation, undefined);
+    assert.equal("id" in args, false);
+  });
+  it("rejects unresolved citation markers atomically and preserves citations in later patches", async () => {
+    const store = new ArtifactStore("artifacts", new MemoryFileSystem());
+    const provider = new ArtifactToolProvider(
+      store,
+      "task",
+      "native",
+      [],
+      () => {},
+    );
+    const input = {
+      kind: "report",
+      title: "Cited",
+      body: { type: "markdown", markdown: "摘要 [cite:e1]" },
+    };
+    const failed = await provider.call(
+      "artifact_upsert",
+      structuredClone(input),
+    );
+    assert.equal(failed.ok, false);
+    if (!failed.ok) assert.match(failed.message, /e1/);
+    const citation = {
+      id: "e1",
+      itemLibraryID: 1,
+      itemKey: "PAPER",
+      attachmentKey: "PDF",
+      annotationKey: "MARK",
+      page: 3,
+      title: "Paper",
+      quote: "source",
+    };
+    assert.equal(
+      (
+        await provider.call("artifact_upsert", {
+          ...structuredClone(input),
+          citations: [citation, citation],
+        })
+      ).ok,
+      false,
+    );
+    const saved = await provider.call("artifact_upsert", {
+      ...structuredClone(input),
+      citations: [citation],
+    });
+    assert(saved.ok);
+    const record = (
+      saved.data as { artifact: import("@confucius/protocol").ArtifactRecord }
+    ).artifact;
+    const patched = await provider.call("artifact_patch", {
+      id: record.id,
+      expectedRevision: 1,
+      edits: [{ oldText: "摘要", newText: "修正摘要" }],
+    });
+    assert(patched.ok);
+    assert.deepEqual((await store.get(record.id))?.citations, [citation]);
+    const broken = await provider.call("artifact_patch", {
+      id: record.id,
+      expectedRevision: 2,
+      citations: [],
+    });
+    assert.equal(broken.ok, false);
+    assert.equal((await store.get(record.id))?.revision, 2);
+  });
   it("advertises host-assigned creation and current-task revision without a taskId argument", () => {
     const properties = ARTIFACT_UPSERT_DEFINITION.inputSchema.properties;
     assert.equal(properties.taskId, undefined);

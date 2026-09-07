@@ -4,6 +4,96 @@ import { initialContextWindow } from "@confucius/protocol";
 import { WindowContext, estimateRequestTokens } from "./WindowContext";
 import { createHarness, session } from "./test-kit";
 import type { ModelRequest, ModelMessage } from "./ModelAdapter";
+import { SourceReadIndex } from "./SourceReadIndex";
+
+test("rollover carries source locations and exact archive IDs without copying page text, including restart", async () => {
+  const c = context();
+  let round = 0;
+  const requests: ModelRequest[] = [];
+  const h = createHarness({
+    context: c.manager,
+    model: {
+      async complete(request) {
+        requests.push(structuredClone(request));
+        if (round++ === 0) {
+          c.manager.request();
+          return { toolCalls: [{ id: "pages", name: "get_pages", args: {} }] };
+        }
+        return { text: "done" };
+      },
+    },
+  });
+  h.tools.register(
+    {
+      name: "get_pages",
+      description: "Read source",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "get_pages",
+      catalog: "library.read",
+      mutatesState: false,
+      concurrency: "parallel_safe",
+    },
+    () => ({
+      libraryID: 1,
+      key: "PAPER",
+      attachmentKey: "PDF",
+      pages: [
+        {
+          page: 4,
+          pageLabel: "ii",
+          text: "ORIGINAL_PASSAGE_DO_NOT_COPY",
+          zoteroUri: "zotero://open-pdf/library/items/PDF?page=4",
+          truncated: false,
+        },
+      ],
+      nextPage: null,
+    }),
+  );
+  await h.loop.run({
+    session: session(),
+    turnId: "turn",
+    userText: "Continue this review",
+  });
+  const fresh = JSON.stringify(requests[1]);
+  assert.match(fresh, /Archived source index/);
+  assert.match(fresh, /PDF\?page=4/);
+  assert.doesNotMatch(fresh, /ORIGINAL_PASSAGE_DO_NOT_COPY/);
+  const snapshot = h.checkpoints.latest("turn")!;
+  assert.equal(snapshot.sourceReads?.length, 1);
+  const ref = snapshot.sourceReads![0];
+  assert(
+    c.archived.some(
+      (a) =>
+        a.message.toolCallId &&
+        a.message.content.includes("ORIGINAL_PASSAGE_DO_NOT_COPY"),
+    ),
+  );
+  assert.match(ref.history.itemId, /^tool_turn_/);
+  const restored = context();
+  restored.manager.start(
+    {
+      session: session(),
+      turnId: "turn",
+      userText: "Continue",
+      resume: snapshot,
+    },
+    [],
+  );
+  assert.deepEqual(restored.manager.sourceReadSnapshot(), snapshot.sourceReads);
+  const index = new SourceReadIndex(snapshot.sourceReads);
+  index.record(
+    JSON.stringify({
+      ok: false,
+      toolName: "get_pages",
+      data: { libraryID: 1, key: "PAPER", pages: [{ page: 7 }] },
+    }),
+    ref.history,
+  );
+  assert.equal(index.snapshot().length, 1);
+  assert.equal(index.hint(1), "");
+});
 
 function context(failSwitch = false) {
   const archived: Array<{ message: ModelMessage; windowId: string }> = [];

@@ -59,7 +59,7 @@ function asItem(value: unknown): Zotero.Item | null {
   return value as Zotero.Item;
 }
 
-async function selectItemInMainWindow(item: Zotero.Item): Promise<void> {
+export async function selectItemInMainWindow(item: Zotero.Item): Promise<void> {
   const win = Zotero.getMainWindow() as
     | (Window & {
         ZoteroPane?: {

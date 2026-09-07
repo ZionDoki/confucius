@@ -6,6 +6,7 @@ import { BudgetAccountant } from "@confucius/harness";
 import {
   coalesceTimeline,
   initialContextWindow,
+  TASK_TEMPLATES,
   type ApprovalResolution,
   type ConfuciusEvent,
   type ResearchTaskRecord,
@@ -25,6 +26,39 @@ import { TaskTraceBuffer } from "./TaskTrace";
 import { responseLanguageInstruction } from "./ResponseLanguage";
 import { deepReadReviewMessages } from "./DeepReadReviewContext";
 import { ArtifactStore } from "./ArtifactStore";
+import { LibraryMentionSources } from "../ui/libraryMention";
+
+it("opens abstract-only citations in the library without resolving a PDF", async () => {
+  const previous = Reflect.get(globalThis, "Zotero");
+  const actions: unknown[] = [];
+  Reflect.set(globalThis, "Zotero", {
+    Items: { getByLibraryAndKey: () => ({ id: 41 }) },
+    Reader: {
+      open: () => assert.fail("an abstract citation selects its item"),
+    },
+    getMainWindow: () => ({
+      focus: () => actions.push("focus"),
+      Zotero_Tabs: { select: (id: string) => actions.push(id) },
+      ZoteroPane: { selectItem: async (id: number) => actions.push(id) },
+    }),
+  });
+  try {
+    const host = Object.create(AgentHost.prototype) as {
+      readerOpen: (params: Record<string, unknown>) => Promise<unknown>;
+    };
+    assert.deepEqual(
+      await host.readerOpen({
+        libraryID: 1,
+        key: "ABSTRACT",
+        selectItem: true,
+      }),
+      { opened: true },
+    );
+    assert.deepEqual(actions, ["focus", "zotero-pane", 41]);
+  } finally {
+    Reflect.set(globalThis, "Zotero", previous);
+  }
+});
 
 it("isolates a source-grounded review while preserving the durable history and later tool groups", () => {
   const tool = (toolName: string, data: unknown, id: string): ModelMessage => ({
@@ -117,13 +151,14 @@ it("isolates a source-grounded review while preserving the durable history and l
   const text = JSON.stringify(projected);
   assert.doesNotMatch(text, /PREMATURE CONCLUSION|BIASED REASONING/);
   for (const evidence of [
-    "Primary evidence",
     "Parallel source read",
     "Fallible draft",
     "Saved explanation",
     "Use configured Chinese",
   ])
     assert(text.includes(evidence));
+  assert.doesNotMatch(text, /Primary evidence/);
+  assert.match(text, /earlierPageIndex/);
   assert.deepEqual(projected.slice(-2), tail);
   assert.equal(JSON.stringify(original), snapshot);
   const recovered = deepReadReviewMessages(
@@ -391,6 +426,115 @@ describe("configured research response language", () => {
         Reflect.set(globalThis, "Zotero", previous);
       }
     });
+  }
+});
+
+describe("task sources attached after choosing a research mode", () => {
+  let previousZotero: unknown;
+  let previousAddon: unknown;
+  beforeEach(() => {
+    previousZotero = Reflect.get(globalThis, "Zotero");
+    previousAddon = Reflect.get(globalThis, "addon");
+    Reflect.set(globalThis, "addon", { data: {} });
+    Reflect.set(globalThis, "Zotero", {
+      locale: "en-US",
+      Prefs: { get: () => "en-US" },
+      Items: {
+        getByLibraryAndKey: (libraryID: number, key: string) => ({
+          libraryID,
+          key,
+          getDisplayTitle: () => `Mentioned paper ${key}`,
+          getAttachments: () => [key === "A" ? 10 : 20],
+        }),
+        get: (id: number) => ({
+          libraryID: 1,
+          key: id === 10 ? "PDF_A" : "PDF_B",
+          attachmentContentType: "application/pdf",
+        }),
+      },
+    });
+  });
+  afterEach(() => {
+    Reflect.set(globalThis, "Zotero", previousZotero);
+    Reflect.set(globalThis, "addon", previousAddon);
+  });
+
+  for (const backend of ["native", "codex", "kimi"] as const) {
+    for (const mode of ["agent", "plan"] as const) {
+      it(`${backend}/${mode} starts all paper templates with later @ sources and no open PDF`, async () => {
+        for (const template of TASK_TEMPLATES.filter(
+          (t) => t.source !== "selection",
+        )) {
+          const { host, state, starts, backend: runtime } = fixture();
+          let sourceScope: Set<string> | undefined;
+          const startTurn = runtime.startTurn;
+          runtime.startTurn = (input, callbacks) => {
+            sourceScope = state.externalSourceScope?.itemRefs;
+            return startTurn(input, callbacks);
+          };
+          state.record.backend = backend;
+          state.record.mode = mode;
+          Object.assign(host, { requireEndpoint: () => ({}) });
+          await host.rpc("task/stageTemplate", {
+            taskId: state.record.id,
+            templateId: template.id,
+          });
+          if (template.source !== "any") {
+            await assert.rejects(
+              host.sessionPrompt(state.record.id, "Read the task sources"),
+              /workspace-template-context-(single|multi)_required/,
+            );
+            assert.equal(starts.length, 0);
+          }
+          const mentions = new LibraryMentionSources(
+            async (taskId, context) => {
+              await host.rpc("task/setContext", {
+                taskId,
+                mode: "add",
+                context,
+              });
+            },
+          );
+          for (const key of template.source === "multi" ? ["A", "B"] : ["A"]) {
+            mentions.add(state.record.id, {
+              libraryID: 1,
+              key,
+              title: `Mentioned paper ${key}`,
+              creators: [],
+              year: "2026",
+              itemType: "journalArticle",
+            });
+          }
+          await mentions.flush(state.record.id);
+          // Staging again must preserve the newly attached task sources.
+          await host.rpc("task/stageTemplate", {
+            taskId: state.record.id,
+            templateId: template.id,
+          });
+          await host.sessionPrompt(state.record.id, "Read the task sources");
+          await waitFor(() => state.activeTurnId === null);
+          assert.ok(starts.length > 0, template.id);
+          const input = starts[0];
+          assert.equal(input.task.backend, backend);
+          assert.equal(input.mode, mode);
+          assert.equal(input.task.run!.sources.reader, undefined);
+          assert.deepEqual(
+            input.task.run!.sources.items.map((item) => item.key),
+            template.source === "multi" ? ["A", "B"] : ["A"],
+            template.id,
+          );
+          assert.equal(input.task.context.item?.key, "A");
+          if (
+            mode === "agent" &&
+            ["deep-read", "evidence-audit", "synthesis"].includes(template.id)
+          ) {
+            assert.match(input.workflowInstruction!, /Mentioned paper A/);
+            assert.match(input.workflowInstruction!, /attachmentKey=PDF_A/);
+            assert.ok(sourceScope?.has("1:PDF_A"));
+          }
+        }
+      });
+    }
   }
 });
 

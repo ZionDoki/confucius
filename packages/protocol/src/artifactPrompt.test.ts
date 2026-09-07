@@ -27,7 +27,9 @@ describe("artifact upsert guidance", () => {
     const text = artifactUpsertGuidance({ templateId: "deep-read" });
     assert.match(text, /This task uses the "Paper review" template/);
     assert.match(text, /kind deep_read/);
-    assert.match(text, /kind annotation_set/);
+    assert.doesNotMatch(text, /kind annotation_set/);
+    assert.match(text, /ONE deep_read artifact/);
+    assert.match(text, /Reading map/);
     assert.match(text, /Follow-ups and clarifications do not need an artifact/);
     assert.doesNotMatch(text, /commit_annotations/);
     assert.doesNotMatch(text, /approval dialog/i);

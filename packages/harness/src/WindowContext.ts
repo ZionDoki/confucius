@@ -2,8 +2,10 @@ import type { ContextWindowState, HistoryItemRef } from "@confucius/protocol";
 import type { TurnCheckpoint } from "./CheckpointStore";
 import type { ModelMessage, ModelRequest, ModelUsage } from "./ModelAdapter";
 import type { TurnLoopInput } from "./TurnLoop";
+import { SourceReadIndex, type SourceReadRef } from "./SourceReadIndex";
 
 export interface WindowContextOptions {
+  sourceReads?: readonly SourceReadRef[];
   window: ContextWindowState;
   contextWindowTokens: number;
   maxOutputTokens: number;
@@ -57,17 +59,24 @@ export class WindowContext {
   private toolNames = new Map<string, string>();
   private resultIds = new Map<string, string>();
   private executions = new Set<string>();
+  private sourceReads: SourceReadIndex;
   window: ContextWindowState;
   constructor(private readonly options: WindowContextOptions) {
     this.window = options.window;
+    this.sourceReads = new SourceReadIndex(options.sourceReads);
   }
   start(input: TurnLoopInput, messages: ModelMessage[]): void {
     this.turnId = input.turnId;
     this.userText = input.userText;
+    if (input.resume?.sourceReads)
+      this.sourceReads = new SourceReadIndex(input.resume.sourceReads);
     for (const message of messages.slice(1, -1)) this.seen.add(message);
   }
   request(): void {
     this.requested = true;
+  }
+  sourceReadSnapshot(): SourceReadRef[] {
+    return this.sourceReads.snapshot();
   }
   usage(usage?: ModelUsage): void {
     if (usage?.promptTokens && Number.isFinite(usage.promptTokens)) {
@@ -138,7 +147,7 @@ export class WindowContext {
   ): Promise<HistoryItemRef> {
     const id = `tool_${this.turnId}_${callId}`.replace(/[^\w-]/g, "_");
     this.resultIds.set(modelCallId, id);
-    return this.options.archive({
+    const ref = await this.options.archive({
       id,
       turnId: this.turnId,
       windowId: this.window.id,
@@ -151,6 +160,8 @@ export class WindowContext {
         toolCallId: callId,
       },
     });
+    this.sourceReads.record(content, ref);
+    return ref;
   }
   async prepare(
     messages: ModelMessage[],
@@ -202,6 +213,13 @@ export class WindowContext {
       ...latestReplayGroup(messages),
       ...messages.filter((message) => message.transient),
     ];
+    // Fit metadata into the remaining window; it must never prevent a safe rollover.
+    const baseHint = fresh[2].content;
+    for (const maxChars of [8000, 4000, 1500]) {
+      fresh[2].content = baseHint + this.sourceReads.hint(maxChars);
+      if (estimateRequestTokens({ messages: fresh, tools }) <= limit) break;
+      fresh[2].content = baseHint;
+    }
     if (estimateRequestTokens({ messages: fresh, tools }) > limit) {
       throw new Error(
         "The task instructions and tool definitions exceed this model's available context. Use a larger context window or reduce the input.",
@@ -218,6 +236,7 @@ export class WindowContext {
     };
     const checkpoint = {
       ...this.checkpoint,
+      sourceReads: this.sourceReadSnapshot(),
       window: next,
       messages: fresh,
       savedAt: Date.now(),

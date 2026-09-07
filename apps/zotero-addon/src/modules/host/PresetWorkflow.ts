@@ -14,7 +14,7 @@ export interface PresetWorkflow {
   id: PresetWorkflowId;
   source: "single" | "multi";
   instruction: string;
-  version: 1;
+  version: number;
   requiredArtifactKinds: readonly ArtifactKind[];
   annotationFirst: boolean;
 }
@@ -208,11 +208,11 @@ const common = [
 const presets: Record<PresetWorkflowId, PresetWorkflow> = {
   "deep-read": {
     id: "deep-read",
-    version: 1,
+    version: 2,
     source: "single",
     annotationFirst: true,
-    requiredArtifactKinds: ["deep_read", "annotation_set"],
-    instruction: `${common}\nRead the paper with get_pages and submit annotations directly through commit_annotations using annotations:[{anchor,comment}]. Copy IDs from [anchor:ID] passages; omit quote and page. One entry or a batch is supported; propose_annotations is optional for a saved draft requested by the user. Review the evidence and key explanations before submission. The tool resolves native positions and previews actual passages; inspect_pdf_page supports image-region evidence. The host reconciles retries; correct only unresolved entries. Never recreate a deleted or completed mark. Save a deep_read report and an annotation_set artifact that accurately distinguish saved, skipped, denied and unresolved results. Use actual returned Zotero identifiers. Default colors are yellow #ffd400 for key points, blue #2ea8e5 for supporting detail and purple #a28ae5 for visual evidence.`,
+    requiredArtifactKinds: ["deep_read"],
+    instruction: `${common}\nRead the paper with get_pages and submit annotations directly through commit_annotations using annotations:[{anchor,comment}]. Copy IDs from [anchor:ID] passages; omit quote and page. One entry or a batch is supported; propose_annotations is optional for a saved draft requested by the user. Review the evidence and key explanations before submission. The tool resolves native positions and previews actual passages; inspect_pdf_page supports image-region evidence. The host reconciles retries; correct only unresolved entries. Never recreate a deleted or completed mark. Save ONE deep_read report, with the annotation explanations and links in its appendix. Accurately distinguish saved, skipped, denied and unresolved results; do not create a separate annotation_set unless explicitly requested. End with a plain-language reading map: problem → method → evidence → limits, with inline [cite:id] references resolved by the report's citations array. Use actual returned Zotero identifiers. Default colors are yellow #ffd400 for key points, blue #2ea8e5 for supporting detail and purple #a28ae5 for visual evidence.`,
   },
   "evidence-audit": {
     id: "evidence-audit",

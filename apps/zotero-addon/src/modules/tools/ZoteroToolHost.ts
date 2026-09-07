@@ -95,7 +95,7 @@ function getItem(libraryID: number, key: string): Zotero.Item | null {
   return asItem(Zotero.Items.getByLibraryAndKey(libraryID, key));
 }
 
-function groupIDForLibrary(libraryID: number): number | undefined {
+export function groupIDForLibrary(libraryID: number): number | undefined {
   if (libraryID === Zotero.Libraries.userLibraryID) {
     return undefined;
   }

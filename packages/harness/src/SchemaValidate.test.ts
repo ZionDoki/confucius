@@ -2,6 +2,50 @@ import assert from "node:assert/strict";
 import { it } from "node:test";
 import { validateArgs } from "./SchemaValidate";
 import type { JsonSchemaObject } from "@confucius/protocol";
+
+it("reports only the selected union branch, including independent array entries", () => {
+  const body = {
+    oneOf: [
+      {
+        type: "object",
+        properties: {
+          type: { const: "markdown" },
+          markdown: { type: "string" },
+        },
+        required: ["type", "markdown"],
+        additionalProperties: false,
+      },
+      {
+        type: "object",
+        properties: {
+          type: { const: "annotation_set" },
+          quote: { type: "string" },
+        },
+        required: ["type", "quote"],
+        additionalProperties: false,
+      },
+    ],
+  };
+  const input = { rows: [{ type: "annotation_set" }, { type: "markdown" }] };
+  const failure = validateArgs(
+    "save",
+    { type: "object", properties: { rows: { type: "array", items: body } } },
+    input,
+  );
+  assert.deepEqual(
+    failure?.issues?.map((i) => i.path),
+    ["$.rows[0].quote", "$.rows[1].markdown"],
+  );
+  assert.deepEqual(input, {
+    rows: [{ type: "annotation_set" }, { type: "markdown" }],
+  });
+  const unknown = validateArgs(
+    "save",
+    { type: "object", properties: { body } },
+    { body: { type: "unknown" } },
+  );
+  assert(unknown?.issues?.some((i) => i.reason === "oneOf"));
+});
 const schema: JsonSchemaObject = {
   type: "object",
   properties: {

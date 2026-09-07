@@ -10,7 +10,11 @@ import type {
   ToolExecutionContext,
   ToolFailure,
 } from "@confucius/protocol";
-import { artifactBodyMatchesKind, isArtifactKind } from "@confucius/protocol";
+import {
+  artifactBodyMatchesKind,
+  isArtifactKind,
+  mapMarkdownCitations,
+} from "@confucius/protocol";
 import type { ToolProvider } from "@confucius/harness";
 import type { ArtifactStore } from "./ArtifactStore";
 import { DEEP_READ_REVIEW_INSTRUCTION } from "./DeepReadReview";
@@ -32,8 +36,8 @@ export const ARTIFACT_UPSERT_TOOL = "artifact_upsert";
 const itemRefSchema = {
   type: "object",
   properties: {
-    libraryID: { type: "number" },
-    key: { type: "string" },
+    libraryID: { type: "integer", minimum: 0 },
+    key: { type: "string", minLength: 1, pattern: "\\S" },
   },
   required: ["libraryID", "key"],
   additionalProperties: false,
@@ -55,11 +59,11 @@ const markdownBodySchema = {
 const annotationBodySchema = {
   type: "object",
   properties: {
-    id: { type: "string" },
+    id: { type: "string", minLength: 1, pattern: "\\S" },
     importance: { type: "string", enum: ["key", "supporting"] },
     type: { type: "string", enum: ["highlight", "underline", "image"] },
     page: { type: "integer", minimum: 1 },
-    quote: { type: "string" },
+    quote: { type: "string", minLength: 1, pattern: "\\S" },
     rect: {
       type: "array",
       items: { type: "number", minimum: 0, maximum: 1000 },
@@ -72,6 +76,24 @@ const annotationBodySchema = {
     color: { type: "string", pattern: "^#[0-9A-Fa-f]{6}$" },
   },
   required: ["type", "page"],
+  allOf: [
+    {
+      if: {
+        properties: { type: { enum: ["highlight", "underline"] } },
+        required: ["type"],
+      },
+      then: { required: ["quote"] },
+    },
+    {
+      if: { properties: { type: { const: "image" } }, required: ["type"] },
+      then: {
+        required: ["rect", "comment"],
+        properties: {
+          comment: { type: "string", minLength: 1, pattern: "\\S" },
+        },
+      },
+    },
+  ],
   additionalProperties: false,
 };
 
@@ -213,7 +235,7 @@ const artifactBodySchemas = [
               enum: ["highlight", "underline", "image"],
             },
             color: { type: "string", pattern: "^#[0-9A-Fa-f]{6}$" },
-            meaning: { type: "string" },
+            meaning: { type: "string", minLength: 1, pattern: "\\S" },
           },
           required: ["type", "meaning"],
           additionalProperties: false,
@@ -221,6 +243,7 @@ const artifactBodySchemas = [
       },
     },
     required: ["type", "item"],
+    anyOf: [{ required: ["annotations"] }, { required: ["highlights"] }],
     additionalProperties: false,
   },
   {
@@ -386,7 +409,7 @@ function artifactBodyDiagnostic(body: unknown): string {
   }
   const value = body as Record<string, unknown>;
   const keys = Object.keys(value).sort().join(", ") || "none";
-  return `Received object keys: ${keys}; type=${JSON.stringify(value.type)}; markdown=${typeof value.markdown}.`;
+  return `Received object keys: ${keys}; type=${JSON.stringify(value.type)}${value.type === "markdown" ? `; markdown=${typeof value.markdown}` : ""}.`;
 }
 
 const schema: JsonSchemaObject = {
@@ -530,6 +553,27 @@ export class ArtifactToolProvider implements ToolProvider {
           "Invalid id: this artifact is not available for revision in the current task. To create a new artifact, omit id; the host generates it. To revise a saved artifact, use the id returned by artifact_upsert in this task. Changing taskId or requesting approval cannot fix this id. No write was performed.",
         details: { argument: "id", reason: "artifact_not_in_task" },
       };
+    const body = args.body as { type?: string; markdown?: string };
+    if (body?.type === "markdown" && typeof body.markdown === "string") {
+      const citations = (args.citations ?? existing?.citations ?? []) as Array<{
+        id?: string;
+      }>;
+      const unresolved = new Set<string>();
+      mapMarkdownCitations(body.markdown, (id, marker) => {
+        if (citations.filter((citation) => citation.id === id).length !== 1)
+          unresolved.add(id);
+        return marker;
+      });
+      if (unresolved.size)
+        return {
+          ok: false,
+          toolName: name,
+          code: "invalid_args",
+          effect: "none",
+          retryable: false,
+          message: `Unresolved or duplicate citation IDs: ${[...unresolved].join(", ")}. Supply exactly one citations entry for every [cite:id] marker, using source identifiers returned by tools. No write was performed.`,
+        };
+    }
     if (
       args.kind === "deep_read" &&
       args.status !== "draft" &&

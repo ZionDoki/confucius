@@ -75,7 +75,6 @@ import {
   isUiTheme,
   isUiLanguage,
   isUiLineHeight,
-  mergeLockedContexts,
   nextReasoningFold,
   parseMindMapOutline,
   renderMarkdownHtml,
@@ -92,7 +91,6 @@ import {
   type LaunchConsumeResult,
   type LiveContextResult,
   taskTemplate,
-  withLockedContextFingerprint,
 } from "@confucius/protocol";
 import { durableExcerpt } from "@confucius/memory";
 import { slashMenuToken, type ConfuciusSkill } from "@confucius/skill-format";
@@ -102,6 +100,8 @@ import { hrefFromEvent } from "./anchorFromEvent";
 import { droppedFilePaths, droppedFilename, hasDroppedFiles } from "./fileDrop";
 import {
   libraryMentionTokenAtCaret,
+  LibraryMentionSources,
+  mentionItemKey,
   replaceLibraryMention,
   type LibraryMentionToken,
 } from "./libraryMention";
@@ -469,6 +469,7 @@ type LocateTarget = {
   key: string;
   pageIndex?: number;
   annotationKey?: string;
+  selectItem?: boolean;
 };
 
 /**
@@ -1171,10 +1172,18 @@ function bindWorkspace(
   let loadedComposerTaskId: string | null = null;
   let taskLoadGeneration = 0;
   let pendingPermissionUpdate: Promise<void> = Promise.resolve();
-  let pendingContextUpdate: Promise<void> = Promise.resolve();
   let presetUpdatePending = false;
   let modeUpdatePending = false;
-  const pendingMentionItems = new Map<string, ContextSearchItem>();
+  const mentionSources = new LibraryMentionSources(async (taskId, context) => {
+    const updated = (await rpc("task/setContext", {
+      taskId,
+      mode: "add",
+      context,
+    })) as ResearchTaskRecord;
+    const index = state.sessions.findIndex((entry) => entry.id === taskId);
+    if (index >= 0) state.sessions[index] = updated;
+    else state.sessions.unshift(updated);
+  });
   let mentionSearchTimer: number | null = null;
   type PendingAttachment = {
     uiId: string;
@@ -3329,6 +3338,7 @@ function bindWorkspace(
         key: target.key,
         pageIndex: target.pageIndex,
         annotationKey: target.annotationKey,
+        selectItem: target.selectItem,
       }).catch(() => {
         /* locate is cosmetic */
       });
@@ -3905,10 +3915,8 @@ function bindWorkspace(
     } = {},
   ): Promise<ResearchTaskRecord> {
     const current = currentTask();
-    const initialContext = pendingMentionItems.size
-      ? contextWithPendingMentions(
-          options.context ?? state.live?.lockedSnapshot,
-        )
+    const initialContext = mentionSources.context()
+      ? mentionSources.context(options.context ?? state.live?.lockedSnapshot)
       : options.context;
     const created = (await rpc("task/new", {
       title: options.title ?? "Untitled research task",
@@ -3929,8 +3937,15 @@ function bindWorkspace(
       created,
       ...state.sessions.filter((row) => row.id !== created.id),
     ];
-    pendingMentionItems.clear();
+    mentionSources.adoptDraft(created.id, created.lockedContext);
+    if (!current) {
+      // Keep the draft on the created task if a late mention needs retrying.
+      composerDrafts.set(created.id, prompt.value);
+      referenceDrafts.set(created.id, currentReferences());
+      referenceDrafts.delete("new");
+    }
     await loadTask(created.id, options.preserveModelMenu);
+    await mentionSources.flush(created.id);
     if (options.skillSlug) {
       await rpc("skill/activate", {
         sessionId: created.id,
@@ -4029,6 +4044,9 @@ function bindWorkspace(
     updateRunningUI();
     state.sendError = "";
     try {
+      const selectedTaskId = state.sessionId;
+      if (selectedTaskId) await mentionSources.flush(selectedTaskId);
+      if (state.sessionId !== selectedTaskId) return;
       const existing = currentTask();
       const stagedContext = context ?? existing?.lockedContext;
       const reuse = Boolean(
@@ -4039,11 +4057,13 @@ function bindWorkspace(
       );
       let task: ResearchTaskRecord;
       if (reuse && existing) {
-        if (stagedContext) {
+        // Changing a preset keeps its current sources. Only an explicit launch
+        // context replaces them; a rendered picker never supplies a snapshot.
+        if (context) {
           task = (await rpc("task/setContext", {
             taskId: existing.id,
             mode: "replace",
-            context: stagedContext,
+            context,
           })) as ResearchTaskRecord;
         } else {
           task = existing;
@@ -4173,83 +4193,41 @@ function bindWorkspace(
     return details.join("\n");
   }
 
-  function mentionItemKey(item: Pick<ContextSearchItem, "libraryID" | "key">) {
-    return `${item.libraryID}:${item.key}`;
-  }
-
-  function contextForMentionItem(
-    item: ContextSearchItem,
-  ): LockedContextSnapshot {
-    return withLockedContextFingerprint({
-      version: 1,
-      capturedAt: Date.now(),
-      items: [
-        {
-          id: `item:${mentionItemKey(item)}`,
-          libraryID: item.libraryID,
-          key: item.key,
-          title: item.title,
-          source: "library",
-        },
-      ],
-    });
-  }
-
-  function contextWithPendingMentions(
-    base?: LockedContextSnapshot,
-  ): LockedContextSnapshot | undefined {
-    let merged = base;
-    for (const item of pendingMentionItems.values()) {
-      const incoming = contextForMentionItem(item);
-      merged = merged ? mergeLockedContexts(merged, incoming) : incoming;
-    }
-    return merged;
-  }
-
   function taskHasMentionItem(item: ContextSearchItem): boolean {
     const task = currentTask();
     return Boolean(
       task?.lockedContext.items.some(
         (locked) => mentionItemKey(locked) === mentionItemKey(item),
-      ) || pendingMentionItems.has(mentionItemKey(item)),
+      ) || mentionSources.has(task?.id ?? null, item),
     );
   }
 
   async function addMentionContext(item: ContextSearchItem): Promise<void> {
     const task = currentTask();
-    const key = mentionItemKey(item);
     if (!task) {
-      pendingMentionItems.set(key, item);
+      mentionSources.add(null, item);
+      renderLists();
       flashContextUpdated();
       return;
     }
-    if (taskHasMentionItem(item)) {
+    if (
+      task.lockedContext.items.some(
+        (locked) => mentionItemKey(locked) === mentionItemKey(item),
+      )
+    ) {
       flashContextUpdated();
       return;
     }
     const taskId = task.id;
-    const update = pendingContextUpdate
-      .catch(() => undefined)
-      .then(async () => {
-        const updated = (await rpc("task/setContext", {
-          taskId,
-          mode: "add",
-          context: contextForMentionItem(item),
-        })) as ResearchTaskRecord;
-        const index = state.sessions.findIndex((entry) => entry.id === taskId);
-        if (index >= 0) state.sessions[index] = updated;
-        else state.sessions.unshift(updated);
-      });
-    pendingContextUpdate = update.then(
-      () => undefined,
-      () => undefined,
-    );
+    mentionSources.add(taskId, item);
     try {
-      await update;
+      await mentionSources.flush(taskId);
+      if (state.sessionId !== taskId) return;
       state.sendError = "";
       renderLists();
       flashContextUpdated();
     } catch (error) {
+      if (state.sessionId !== taskId) return;
       state.sendError = error instanceof Error ? error.message : String(error);
       renderLists();
     }
@@ -4281,6 +4259,7 @@ function bindWorkspace(
     if (!task) return;
     closePlusMenu();
     try {
+      await mentionSources.flush(task.id);
       // Capture again at action time. A polled live snapshot may be stale if
       // the Zotero selection changed while this menu was open.
       const live = (await rpc("context/live", {})) as LiveContextResult;
@@ -4305,10 +4284,7 @@ function bindWorkspace(
     }
   }
 
-  function renderTemplatePicker(
-    target: HTMLElement,
-    context: LockedContextSnapshot,
-  ): void {
+  function renderTemplatePicker(target: HTMLElement): void {
     const heading = el(doc, "div", {
       marginTop: "22px",
       fontSize: "11px",
@@ -4336,7 +4312,7 @@ function bindWorkspace(
       templateButton.appendChild(name);
       templateButton.appendChild(copy);
       templateButton.addEventListener("click", () => {
-        void stageTemplate(template, context);
+        void stageTemplate(template);
       });
       grid.appendChild(templateButton);
     }
@@ -4383,16 +4359,20 @@ function bindWorkspace(
       overview.appendChild(eyebrow);
       overview.appendChild(heading);
       overview.appendChild(copy);
-      const context = state.live?.lockedSnapshot ?? emptyLockedContext();
+      const context =
+        mentionSources.context(state.live?.lockedSnapshot) ??
+        emptyLockedContext();
       if (context) {
         const source = el(doc, "div", {
           marginTop: "12px",
           color: "var(--confucius-muted)",
           fontSize: ".9em",
         });
+        source.id = "confucius-task-sources";
+        source.title = contextDetail(context);
         source.textContent = `${getString("workspace-current-source")}: ${contextSummary(context)}`;
         overview.appendChild(source);
-        renderTemplatePicker(overview, context);
+        renderTemplatePicker(overview);
       }
       return overview;
     }
@@ -4544,7 +4524,7 @@ function bindWorkspace(
       });
       guide.textContent = getString("workspace-start-guide");
       overview.appendChild(guide);
-      if (!state.running) renderTemplatePicker(overview, task.lockedContext);
+      if (!state.running) renderTemplatePicker(overview);
     }
     return overview;
   }
@@ -5088,7 +5068,7 @@ function bindWorkspace(
     renderLists();
     try {
       if (!state.sessionId) {
-        const lockedContext = contextWithPendingMentions(
+        const lockedContext = mentionSources.context(
           state.live?.lockedSnapshot,
         );
         const created = (await rpc("task/new", {
@@ -5105,13 +5085,17 @@ function bindWorkspace(
         state.events = [];
         state.lastEventId = null;
         state.running = false;
-        pendingMentionItems.clear();
+        state.sessions.unshift(created);
+        mentionSources.adoptDraft(created.id, created.lockedContext);
       }
       // A user can select a permission mode and immediately press Send. Wait
       // for the queued session update so the visible mode is the mode used by
       // the turn that follows.
-      await Promise.all([pendingPermissionUpdate, pendingContextUpdate]);
       const promptSessionId = state.sessionId;
+      await Promise.all([
+        pendingPermissionUpdate,
+        mentionSources.flush(promptSessionId),
+      ]);
       await refreshSessions();
       renderLists();
       const started = (await rpc("task/prompt", {
@@ -7323,6 +7307,7 @@ function bindWorkspace(
     modeUpdatePending = true;
     updateRunningUI();
     try {
+      await mentionSources.flush(taskId);
       const updated = (await rpc("task/setMode", {
         taskId,
         mode,
@@ -7896,6 +7881,7 @@ function bindWorkspace(
       referenceDrafts.set(state.sessionId!, references);
       rememberComposerDraft();
     } else if (task.backend !== backend) {
+      await mentionSources.flush(task.id);
       await rpc("task/setBackend", {
         taskId: task.id,
         backend,

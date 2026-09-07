@@ -1,6 +1,30 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { escapeHtml, renderMarkdownHtml } from "./markdown";
+import {
+  escapeHtml,
+  renderMarkdownHtml,
+  mapMarkdownCitations,
+} from "./markdown";
+
+it("renders source markers inside prose and tables but not code, math or links", () => {
+  const source =
+    "摘要 [cite:overview]\n\n| 结果 | 来源 |\n|---|---|\n| 30/60 | [cite:e1] |\n\n`[cite:code]` [cite:link](https://example.com) $[cite:math]$\n\n```\n[cite:fence]\n```";
+  const html = renderMarkdownHtml(source);
+  assert.deepEqual(
+    [...html.matchAll(/data-citation-id="([^"]+)"/g)].map((m) => m[1]),
+    ["overview", "e1"],
+  );
+  const ids: string[] = [];
+  mapMarkdownCitations(source, (id, marker) => {
+    ids.push(id);
+    return marker;
+  });
+  assert.deepEqual(ids, ["overview", "e1"]);
+  assert.doesNotMatch(
+    renderMarkdownHtml('[cite:x"onclick="evil]'),
+    /data-citation-id/,
+  );
+});
 
 describe("renderMarkdownHtml", () => {
   it("renders GFM tables, emphasis, and code", () => {
@@ -42,10 +66,7 @@ describe("renderMarkdownHtml", () => {
         "and [bad](javascript:alert(1)).",
     );
     assert.match(html, /href="zotero:\/\/select\/library\/items\/ABC123"/);
-    assert.match(
-      html,
-      /data-href="zotero:\/\/select\/library\/items\/ABC123"/,
-    );
+    assert.match(html, /data-href="zotero:\/\/select\/library\/items\/ABC123"/);
     assert.match(
       html,
       /href="zotero:\/\/open-pdf\/library\/items\/PDF9KEY\?annotation=ANN1KEY"/,

@@ -8,6 +8,63 @@ import {
 } from "./artifactWindow";
 import { artifactRevisionSelection } from "./artifactWindowView";
 import { ArtifactWritebackApproval } from "./artifactWritebackApproval";
+import { citationTarget, hydrateReadingCitations } from "./readingCitations";
+
+test("report citation components navigate to the recorded physical page and native annotation", () => {
+  const citation = {
+    id: "e1",
+    itemLibraryID: 3,
+    itemKey: "PARENT",
+    attachmentKey: "PDF",
+    page: 4,
+    annotationKey: "MARK",
+    title: "Source",
+    quote: "Evidence",
+  };
+  const clicked: unknown[] = [];
+  let replacement: HTMLElement | undefined;
+  const marker = {
+    getAttribute: () => "e1",
+    replaceWith: (node: HTMLElement) => {
+      replacement = node;
+    },
+  };
+  const root = {
+    ownerDocument: {},
+    querySelectorAll: () => [marker],
+  } as unknown as HTMLElement;
+  hydrateReadingCitations(root, [citation], (_doc, target) => {
+    const button = Object.assign(new EventTarget(), {
+      classList: { add: () => {} },
+      setAttribute: () => {},
+      title: "",
+      textContent: "",
+    });
+    button.addEventListener("click", () => clicked.push(target));
+    return button as unknown as HTMLElement;
+  });
+  assert.equal(replacement?.textContent, "p. 4");
+  replacement!.dispatchEvent(new Event("click"));
+  assert.deepEqual(clicked, [
+    { libraryID: 3, key: "PDF", pageIndex: 3, annotationKey: "MARK" },
+  ]);
+  assert.match(replacement!.title, /Evidence/);
+  assert.deepEqual(citationTarget({ itemLibraryID: 1, itemKey: "ABSTRACT" }), {
+    libraryID: 1,
+    key: "ABSTRACT",
+    pageIndex: undefined,
+    annotationKey: undefined,
+    selectItem: true,
+  });
+  replacement = undefined;
+  hydrateReadingCitations(root, [citation, citation], () =>
+    assert.fail("must not guess a duplicate citation"),
+  );
+  hydrateReadingCitations(root, [], () =>
+    assert.fail("must not guess a missing citation"),
+  );
+  assert.equal(replacement, undefined);
+});
 
 class FakeWindow extends EventTarget {
   closed = false;

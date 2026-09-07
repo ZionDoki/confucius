@@ -14,6 +14,7 @@ import { getString, configuredUiLanguage } from "../../utils/locale";
 import type { WorkspaceHost } from "./WorkspaceView";
 import { UI_FONT_STACKS } from "./workspaceTypography";
 import { renderReadingSurface } from "./workspaceReading";
+import { citationTarget } from "./readingCitations";
 import { createWorkspaceButton } from "./workspaceControls";
 import { createMenuSurface, bindMenuNavigation } from "./workspaceMenus";
 import { ensurePaletteStyles } from "./workspaceSurface";
@@ -108,7 +109,13 @@ export function mountArtifactWindow(
   };
   const locateLink = (
     targetDoc: Document,
-    target: { libraryID?: number; key: string; pageIndex?: number },
+    target: {
+      libraryID?: number;
+      key: string;
+      pageIndex?: number;
+      annotationKey?: string;
+      selectItem?: boolean;
+    },
   ) => {
     const link = createWorkspaceButton(
       targetDoc,
@@ -191,10 +198,15 @@ export function mountArtifactWindow(
     const paper = element("article", "confucius-artifact-paper");
     const title = element("h1", "confucius-artifact-title");
     title.textContent = artifact.title;
-    const reading = renderReadingSurface(doc, revision.body, {
-      fillAnswerHtml,
-      locateLink,
-    });
+    const reading = renderReadingSurface(
+      doc,
+      revision.body,
+      {
+        fillAnswerHtml,
+        locateLink,
+      },
+      revision.citations,
+    );
     if (reading.firstElementChild?.localName !== "h1") paper.append(title);
     paper.append(reading);
     if (revision.citations.length) {
@@ -206,17 +218,13 @@ export function mountArtifactWindow(
       for (const citation of revision.citations) {
         const row = element("li");
         const quote = element("span");
-        quote.textContent =
-          citation.quote || citation.section || citation.itemKey;
-        row.append(
-          quote,
-          locateLink(doc, {
-            libraryID: citation.itemLibraryID,
-            key: citation.itemKey,
-            pageIndex:
-              citation.page === undefined ? undefined : citation.page - 1,
-          }),
-        );
+        quote.textContent = [
+          citation.title,
+          citation.quote || citation.section || citation.itemKey,
+        ]
+          .filter(Boolean)
+          .join(" — ");
+        row.append(quote, locateLink(doc, citationTarget(citation)));
         list.append(row);
       }
       references.append(list);

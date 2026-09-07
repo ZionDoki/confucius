@@ -12,9 +12,7 @@ describe("task templates", () => {
   it("keeps all 13 presets available independent of current context", () => {
     assert.equal(TASK_TEMPLATES.length, 13);
     assert.equal(new Set(TASK_TEMPLATES.map((item) => item.id)).size, 13);
-    assert.deepEqual(taskTemplate("deep-read")?.additionalArtifactKinds, [
-      "annotation_set",
-    ]);
+    assert.equal(taskTemplate("deep-read")?.additionalArtifactKinds, undefined);
   });
 
   it("features only the three representative research modes", () => {

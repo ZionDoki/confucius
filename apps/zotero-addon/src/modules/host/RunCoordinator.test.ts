@@ -66,6 +66,40 @@ function fixtureStore() {
   );
 }
 
+it("resumes a v1 deep-read without chasing its obsolete second artifact obligation", async () => {
+  const state = {
+    ...run(),
+    templateId: "deep-read" as const,
+    requiredArtifactKinds: ["deep_read", "annotation_set"] as const,
+  };
+  const current: RunState = {
+    ...state,
+    requiredArtifactKinds: [...state.requiredArtifactKinds],
+  };
+  const store = fixtureStore();
+  const report = await store.upsert(
+    {
+      taskId: "task",
+      kind: "deep_read",
+      title: "Report",
+      body: { type: "markdown", markdown: "Reviewed" },
+      status: "ready",
+    },
+    "native",
+    [],
+    undefined,
+    executionBinding(current),
+  );
+  assert.deepEqual(projectWork(current, [report], empty(), []).missing, []);
+  assert.equal(current.requiredArtifactKinds.length, 2); // No destructive migration.
+  const explicit = { ...current, templateVersion: 2 };
+  assert(
+    projectWork(explicit, [report], empty(), []).missing.some(
+      (m) => m.id === "artifact:annotation_set",
+    ),
+  );
+});
+
 for (const language of ["zh-CN", "en-US"] as const) {
   it(`uses ${language} for host continuation progress`, async () => {
     let calls = 0;

@@ -91,8 +91,7 @@ export function deepReadReviewMessages(
   if (draftIndex < 0) {
     // A new context window can recover the durable draft while retrieving
     // evidence again. Start its review view at the first actual source read.
-    const sourceIndex = messages.findIndex((message, index) => {
-      if (index <= annotationIndex) return false;
+    const sourceIndex = messages.findIndex((message) => {
       const result = resultOf(message);
       return (
         result?.ok &&
@@ -100,28 +99,34 @@ export function deepReadReviewMessages(
       );
     });
     if (sourceIndex < 0) return messages;
-    boundary = sourceIndex + 1;
+    boundary = Math.max(sourceIndex, annotationIndex) + 1;
   }
   while (messages[boundary]?.role === "tool") boundary++;
   const pages = new Map<string, unknown>();
+  const availablePages = new Set<string>();
   const inspections = new Map<string, unknown>();
   const annotations: unknown[] = [];
-  for (const message of messages.slice(0, boundary)) {
+  for (const [index, message] of messages.slice(0, boundary).entries()) {
     const result = resultOf(message);
     if (!result?.ok || !result.data || typeof result.data !== "object")
       continue;
     const data = result.data as Record<string, unknown>;
     const ref = `${data.libraryID}:${data.attachmentKey ?? data.key ?? data.itemKey}`;
     if (result.toolName === "get_pages" && Array.isArray(data.pages)) {
-      for (const page of data.pages)
+      for (const page of data.pages) {
+        availablePages.add(`${ref}:${page.page}`);
+        // Review the decisive pages retrieved after the draft. Reinjecting every
+        // page from the first pass makes each correction as costly as a full read.
+        if (index <= draftIndex) continue;
         pages.set(`${ref}:${page.page}`, {
           libraryID: data.libraryID,
           key: data.key,
           attachmentKey: data.attachmentKey,
           ...page,
         });
+      }
     }
-    if (result.toolName === "inspect_pdf_page")
+    if (result.toolName === "inspect_pdf_page" && index > draftIndex)
       inspections.set(`${ref}:${data.page}`, data);
     if (
       result.toolName === "get_annotations" &&
@@ -129,7 +134,6 @@ export function deepReadReviewMessages(
     )
       annotations.push(data);
   }
-  if (!pages.size && !inspections.size) return messages;
   return [
     ...messages
       .slice(0, boundary)
@@ -139,7 +143,7 @@ export function deepReadReviewMessages(
     {
       role: "system",
       content:
-        "Perform a separate evidence review of this same task. Earlier drafting reasoning and working notes have been removed from this model view; the full history remains stored. The following report is a fallible draft to check, not a source of facts. The native annotations are actual saved work: preserve their keys. Check claims against the supplied source pages and reread any evidence gaps. Do not repeat completed writes.\n" +
+        "Perform a separate evidence review of this same task. Earlier drafting reasoning and working notes have been removed from this model view; the full history remains stored. The following report is a fallible draft to check, not a source of facts. The native annotations are actual saved work: preserve their keys. Supplied sourcePages/pageInspections and savedAnnotations are already retrieved review inputs; use them directly, without repeating their reads just to start this review. Retrieve only missing decisive evidence. earlierPageIndex lists archived physical pages, not their evidence. Do not repeat completed writes.\n" +
         DEEP_READ_REVIEW_INSTRUCTION,
     },
     {
@@ -151,6 +155,7 @@ export function deepReadReviewMessages(
           sourcePages: [...pages.values()],
           pageInspections: [...inspections.values()],
           savedAnnotations: annotations,
+          earlierPageIndex: [...availablePages],
         }),
     },
     ...messages.slice(boundary),

@@ -1,6 +1,7 @@
 import type { ContextWindowState } from "@confucius/protocol";
 import type { BudgetSnapshot } from "./BudgetAccountant";
 export interface TurnCheckpoint {
+  sourceReads?: import("./SourceReadIndex").SourceReadRef[];
   budget?: BudgetSnapshot;
   window?: ContextWindowState;
   turnId: string;

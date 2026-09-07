@@ -320,3 +320,4 @@ export * from "./modelReasoning";
 export * from "./run";
 export * from "./runtimeOutcome";
 export * from "./trace";
+export { mapMarkdownCitations } from "./markdown";

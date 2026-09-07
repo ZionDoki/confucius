@@ -3,6 +3,39 @@ import type {
   ArtifactWriteback,
   CollectionDiffArtifactBody,
 } from "@confucius/protocol";
+import {
+  buildOpenPdfUri,
+  buildSelectUri,
+  mapMarkdownCitations,
+  type Citation,
+} from "@confucius/protocol";
+
+/** Preserve report source links when exporting to Zotero notes or the knowledge base. */
+export function markdownWithCitationLinks(
+  markdown: string,
+  citations: readonly Citation[],
+  groupForLibrary: (libraryID: number) => number | undefined,
+): string {
+  return mapMarkdownCitations(markdown, (id, marker) => {
+    const matches = citations.filter((citation) => citation.id === id);
+    if (matches.length !== 1) return marker;
+    const citation = matches[0];
+    const groupID = groupForLibrary(citation.itemLibraryID);
+    const href = citation.attachmentKey
+      ? buildOpenPdfUri(citation.attachmentKey, {
+          groupID,
+          page: citation.page,
+          annotationKey: citation.annotationKey,
+        })
+      : buildSelectUri(citation.itemKey, groupID);
+    const label = (
+      citation.title ||
+      citation.section ||
+      citation.itemKey
+    ).replace(/[[\]\\]/g, " ");
+    return `[${label}${citation.page ? `, p. ${citation.page}` : ""}](${href})`;
+  });
+}
 
 export interface TagChange {
   libraryID: number;

@@ -2,7 +2,9 @@ import {
   annotationsFromBody,
   DEFAULT_ANNOTATION_COLORS,
   type ArtifactBody,
+  type Citation,
 } from "@confucius/protocol";
+import { hydrateReadingCitations } from "./readingCitations";
 import { getString } from "../../utils/locale";
 function el(
   doc: Document,
@@ -23,9 +25,16 @@ export function renderReadingSurface(
     fillAnswerHtml: (node: HTMLElement, text: string) => void;
     locateLink: (
       doc: Document,
-      target: { libraryID?: number; key: string; pageIndex?: number },
+      target: {
+        libraryID?: number;
+        key: string;
+        pageIndex?: number;
+        annotationKey?: string;
+        selectItem?: boolean;
+      },
     ) => HTMLElement;
   },
+  citations: readonly Citation[] = [],
 ): HTMLElement {
   const { fillAnswerHtml, locateLink } = helpers;
   const container = el(doc, "div");
@@ -33,6 +42,7 @@ export function renderReadingSurface(
   if (body.type === "markdown") {
     container.className = "tui-answer confucius-reading-surface";
     fillAnswerHtml(container, body.markdown);
+    hydrateReadingCitations(container, citations, locateLink);
     return container;
   }
   const table = (
@@ -64,6 +74,15 @@ export function renderReadingSurface(
     return node;
   };
   if (body.type === "evidence_audit") {
+    const evidence = (text: string, ids: string[]) => {
+      const cell = el(doc, "div");
+      fillAnswerHtml(
+        cell,
+        `${text} ${ids.map((id) => `[cite:${id}]`).join(" ")}`,
+      );
+      hydrateReadingCitations(cell, citations, locateLink);
+      return cell;
+    };
     const fourColumn = body.claims.some(
       (claim) => claim.evidence !== undefined || claim.risk !== undefined,
     );
@@ -78,7 +97,10 @@ export function renderReadingSurface(
             ],
             body.claims.map((claim) => [
               claim.claim,
-              claim.evidence ?? claim.rationale ?? "",
+              evidence(
+                claim.evidence ?? claim.rationale ?? "",
+                claim.citationIds,
+              ),
               claim.verdict,
               claim.risk ?? "",
             ]),
@@ -92,7 +114,7 @@ export function renderReadingSurface(
             body.claims.map((claim) => [
               claim.claim,
               claim.verdict,
-              claim.rationale ?? "",
+              evidence(claim.rationale ?? "", claim.citationIds),
             ]),
           ),
     );

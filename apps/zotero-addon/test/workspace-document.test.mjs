@@ -281,9 +281,9 @@ test("permission changes are committed before prompts and gate auto memory", () 
     "utf8",
   );
   assert.equal(view.includes("pendingPermissionUpdate"), true);
-  assert.equal(
-    view.includes("pendingPermissionUpdate, pendingContextUpdate"),
-    true,
+  assert.match(
+    view,
+    /await Promise\.all\(\[\s*pendingPermissionUpdate,\s*mentionSources\.flush\(promptSessionId\)/,
   );
   assert.equal(
     host.includes('state.record.permissionMode === "auto_allow"'),
@@ -832,7 +832,7 @@ test("triage entry and knowledge output: item menu, launch queue, propose_note",
   assert.equal(view.includes('"workspace/launch-consume"'), true);
   assert.equal(view.includes("context: initialContext,"), true);
   assert.equal(
-    view.includes("const initialContext = pendingMentionItems.size"),
+    view.includes("const initialContext = mentionSources.context()"),
     true,
   );
   assert.equal(host.includes("pane?.getCollectionTreeRows?.()"), true);

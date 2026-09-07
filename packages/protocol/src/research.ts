@@ -126,6 +126,10 @@ export interface Citation {
   id?: string;
   itemLibraryID: number;
   itemKey: string;
+  /** Exact PDF and native annotation identities returned by source tools. */
+  attachmentKey?: string;
+  annotationKey?: string;
+  title?: string;
   page?: number;
   section?: string;
   quote?: string;
@@ -415,6 +419,9 @@ export function isCitation(value: unknown): value is Citation {
     optionalPositiveInteger(citation.page) &&
     optionalString(citation.section) &&
     optionalString(citation.quote) &&
+    optionalString(citation.attachmentKey) &&
+    optionalString(citation.annotationKey) &&
+    optionalString(citation.title) &&
     optionalString(citation.id),
   );
 }

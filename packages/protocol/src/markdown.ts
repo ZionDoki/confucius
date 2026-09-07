@@ -7,6 +7,28 @@ export function escapeHtml(value: string): string {
     .replace(/"/g, "&quot;");
 }
 
+/** Transform visible citation markers while leaving code, math and links intact. */
+export function mapMarkdownCitations(
+  source: string,
+  replace: (id: string, marker: string) => string,
+): string {
+  let fenced = false;
+  return source
+    .split("\n")
+    .map((line) => {
+      if (line.trim().startsWith("```")) {
+        fenced = !fenced;
+        return line;
+      }
+      if (fenced) return line;
+      return line.replace(
+        /`[^`]*`|\[[^\]]+\]\([^)]+\)|\$\$.*?\$\$|\$[^$]*\$|\[cite:([a-zA-Z0-9_-]{1,80})\]/g,
+        (marker, id: string | undefined) => (id ? replace(id, marker) : marker),
+      );
+    })
+    .join("\n");
+}
+
 function isSafeHref(href: string): boolean {
   return /^(https?:|mailto:|zotero:|#)/i.test(href.trim());
 }
@@ -139,6 +161,12 @@ function renderInline(source: string, slots: MathSlot[]): string {
       // scheme is dropped; the workspace hydrates real <a href> from it.
       html += `<a href="${href}" data-href="${href}" rel="noreferrer">${escapeHtml(link[1])}</a>`;
       rest = rest.slice(link[0].length);
+      continue;
+    }
+    const citation = rest.match(/^\[cite:([a-zA-Z0-9_-]{1,80})\]/);
+    if (citation) {
+      html += `<span class="confucius-citation-reference" data-citation-id="${citation[1]}">${citation[0]}</span>`;
+      rest = rest.slice(citation[0].length);
       continue;
     }
     if (rest.startsWith("**") || rest.startsWith("__")) {

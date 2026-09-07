@@ -1,6 +1,68 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { collectTagChanges, writebackBodyForTarget } from "./ArtifactWriteback";
+import { groupIDForLibrary } from "../tools/ZoteroToolHost";
+import {
+  collectTagChanges,
+  writebackBodyForTarget,
+  markdownWithCitationLinks,
+} from "./ArtifactWriteback";
+
+it("exports page, annotation and abstract references with the correct Zotero library scope", () => {
+  const text = markdownWithCitationLinks(
+    "摘要 [cite:p]；标注 [cite:a]；相关文献 [cite:b]；`[cite:p]`",
+    [
+      {
+        id: "p",
+        itemLibraryID: 3,
+        itemKey: "PAPER",
+        attachmentKey: "PDF",
+        page: 4,
+      },
+      {
+        id: "a",
+        itemLibraryID: 3,
+        itemKey: "PAPER",
+        attachmentKey: "PDF",
+        page: 4,
+        annotationKey: "MARK",
+      },
+      { id: "b", itemLibraryID: 1, itemKey: "RELATED", title: "Abstract only" },
+    ],
+    (id) => (id === 3 ? 88 : undefined),
+  );
+  assert.match(text, /zotero:\/\/open-pdf\/groups\/88\/items\/PDF\?page=4/);
+  assert.match(text, /annotation=MARK&page=4/);
+  assert.match(text, /zotero:\/\/select\/library\/items\/RELATED/);
+  assert.match(text, /`\[cite:p\]`/);
+});
+
+it("writes personal-library citations without asking Zotero for a nonexistent group", () => {
+  const previous = Reflect.get(globalThis, "Zotero");
+  Reflect.set(globalThis, "Zotero", {
+    Libraries: { userLibraryID: 1 },
+    Groups: {
+      getGroupIDFromLibraryID: (id: number) => {
+        if (id === 1) throw new Error("Group with libraryID 1 does not exist");
+        assert.equal(id, 3);
+        return 88;
+      },
+    },
+  });
+  try {
+    const text = markdownWithCitationLinks(
+      "[cite:personal] [cite:shared]",
+      [
+        { id: "personal", itemLibraryID: 1, itemKey: "PAPER" },
+        { id: "shared", itemLibraryID: 3, itemKey: "SHARED" },
+      ],
+      groupIDForLibrary,
+    );
+    assert.match(text, /zotero:\/\/select\/library\/items\/PAPER/);
+    assert.match(text, /zotero:\/\/select\/groups\/88\/items\/SHARED/);
+  } finally {
+    Reflect.set(globalThis, "Zotero", previous);
+  }
+});
 
 const body = {
   type: "collection_diff" as const,

@@ -51,6 +51,16 @@ export function projectWork(
     ],
     missing: [
       ...run.requiredArtifactKinds
+        // Version 1 of the preset imposed a second file. Resuming its completed
+        // report must not chase that obsolete template obligation after upgrade.
+        .filter(
+          (kind) =>
+            !(
+              run.templateId === "deep-read" &&
+              run.templateVersion < 2 &&
+              kind === "annotation_set"
+            ),
+        )
         .filter((kind) => !ready.some((artifact) => artifact.kind === kind))
         .map((kind) => ({
           id: `artifact:${kind}`,

@@ -1,6 +1,15 @@
 import { SURFACE_CSS } from "./workspaceSurface";
 
 export const TUI_CSS = `
+.confucius-citation-link {
+  display: inline; margin: 0 2px; padding: 1px 5px;
+  border: 1px solid var(--confucius-line); border-radius: 4px;
+  background: transparent; color: var(--confucius-accent); font: inherit;
+  font-size: .85em; cursor: pointer; vertical-align: baseline;
+}
+.confucius-citation-link:hover, .confucius-citation-link:focus-visible {
+  text-decoration: underline;
+}
 @keyframes confucius-waiting-turn {
   0% { transform: rotate(0deg); opacity: 0.85; }
   50% { opacity: 0.4; }

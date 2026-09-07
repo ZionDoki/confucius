@@ -157,7 +157,9 @@ export function validateValue(
       value: normalized,
       issues: check(normalized)
         ? []
-        : (check.errors ?? []).slice(0, 64).map(fromAjv),
+        : diagnosticErrors(schema as Schema, normalized, check.errors ?? [])
+            .slice(0, 64)
+            .map(fromAjv),
     };
   } catch (error) {
     return {
@@ -171,6 +173,83 @@ export function validateValue(
       ],
     };
   }
+}
+
+/** Validate the full union, but explain only a uniquely identified type branch.
+ * Irrelevant oneOf failures can otherwise hide the actionable error in a batch. */
+function diagnosticErrors(
+  schema: Schema,
+  value: unknown,
+  errors: ErrorObject[],
+): ErrorObject[] {
+  let selected = errors;
+  const escape = (key: string) => key.replace(/~/g, "~0").replace(/\//g, "~1");
+  const visit = (
+    s: Schema,
+    v: unknown,
+    path: string,
+    instance: string,
+    depth = 0,
+  ) => {
+    if (!s || typeof s !== "object" || depth > 32) return;
+    const object =
+      v && typeof v === "object" && !Array.isArray(v)
+        ? (v as Record<string, unknown>)
+        : undefined;
+    const keyword = s.oneOf ? "oneOf" : "anyOf";
+    const branches = s.oneOf ?? s.anyOf;
+    if (branches && object && typeof object.type === "string") {
+      const matches = branches.flatMap((branch, index) => {
+        const type = typeof branch === "object" && branch.properties?.type;
+        return type &&
+          typeof type === "object" &&
+          (type.const === object.type ||
+            (Array.isArray(type.enum) && type.enum.includes(object.type)))
+          ? [index]
+          : [];
+      });
+      if (matches.length === 1) {
+        const prefix = `${path}/${keyword}`;
+        const branchPath = `${prefix}/${matches[0]}`;
+        selected = selected.filter((error) => {
+          const inside =
+            error.instancePath === instance ||
+            error.instancePath.startsWith(`${instance}/`);
+          return (
+            !inside ||
+            !(
+              error.schemaPath === prefix ||
+              error.schemaPath.startsWith(`${prefix}/`)
+            ) ||
+            error.schemaPath.startsWith(`${branchPath}/`)
+          );
+        });
+        visit(branches[matches[0]], v, branchPath, instance, depth + 1);
+      }
+    }
+    for (const [key, child] of Object.entries(s.properties ?? {}))
+      if (object && Object.hasOwn(object, key))
+        visit(
+          child,
+          object[key],
+          `${path}/properties/${escape(key)}`,
+          `${instance}/${escape(key)}`,
+          depth + 1,
+        );
+    if (Array.isArray(v) && s.items)
+      v.forEach((child, index) =>
+        visit(
+          s.items!,
+          child,
+          `${path}/items`,
+          `${instance}/${index}`,
+          depth + 1,
+        ),
+      );
+  };
+  visit(schema, value, "#", "");
+  // An ambiguous union must still fail, even if no branch-local error remains.
+  return selected.length ? selected : errors;
 }
 
 function validator(schema: Schema): ValidateFunction {

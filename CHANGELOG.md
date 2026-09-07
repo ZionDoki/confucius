@@ -2,6 +2,64 @@
 
 ## Unreleased
 
+## 0.4.3-beta.1 - 2026-09-07
+
+This Beta improves paper-review delivery, source navigation and task source
+attachment after starting without a selected paper.
+
+### Changed
+
+- Paper reviews deliver one report with annotation explanations in its appendix
+  and a plain-language reading map at the end. The overview, evidence and map
+  support inline source components that open the cited Zotero item, physical PDF
+  page or saved annotation. Note and knowledge-base writeback preserves links.
+- Native context recovery retains a bounded index of archived PDF pages and
+  source locations. Evidence review reuses the decisive pages retrieved after
+  saving the draft instead of reinserting the entire first reading pass.
+
+### Fixed
+
+- Papers selected with @ become task sources even when no paper was selected or
+  open at startup. Switching research modes preserves them, and sending waits
+  for source updates; failed attachments remain available for retry.
+- Annotation artifact schemas now advertise required text quotes and image
+  regions/comments. Validation identifies errors in the selected body type,
+  avoiding misleading errors about unrelated artifact fields. Broken or
+  ambiguous inline citation references are rejected before a report is saved.
+- Continuing an older paper-review task no longer requires a second annotation
+  artifact solely because its original template imposed that extra file.
+- Reports with inline citations can be written back to a personal-library note
+  without incorrectly looking up that library as a Zotero group.
+
+### Upgrade notes
+
+- This is a prerelease. Enable Include prereleases in Confucius Settings →
+  Update to receive it; stable-channel users remain on the latest stable release.
+- No data migration or model reconfiguration is required from 0.4.2. Existing
+  tasks, reports and annotation artifacts remain available. Restart Zotero after
+  installation. Explicit update-channel and automatic-check settings are kept;
+  turning prereleases off does not downgrade an installed Beta.
+- Existing report text does not gain source components automatically. Ask for
+  citations to be added in the original task when needed.
+
+### Validation and known limits
+
+- Windows 11 / Node.js 24 development checks passed: 802 tests, typecheck, lint
+  and build. The source-attachment regression covers 54 backend/mode/template
+  combinations using the real host with simulated Zotero items and backends.
+- A normal Zotero 10.0.1 installation in an isolated profile upgraded from the
+  public 0.4.2 package to the candidate Beta and restarted successfully. Existing
+  reports, revisions and settings survived; the real @ picker, immediate preset
+  switching and approved note writeback with citation links passed. See the
+  [Beta acceptance record](https://github.com/ZionDoki/confucius/blob/v0.4.3-beta.1/.github/maintainers/acceptance/release-0.4.3-beta.1.md).
+- Targeted M3/K3 challenges and Zotero 10.0.1 citation-component checks are
+  recorded in the [research harness acceptance](https://github.com/ZionDoki/confucius/blob/v0.4.3-beta.1/.github/maintainers/acceptance/research-harness-2026-09-07.md).
+  Repeated PDF reads, unsupported model conclusions and endpoint timeouts remain
+  possible; these limited samples do not establish a universally best model.
+- A complete rereading of the original paper and new real-PDF annotation
+  writeback were not repeated. macOS, Linux and other supported Zotero versions
+  were not tested locally for this Beta.
+
 ## 0.4.2 - 2026-09-06
 
 Confucius 0.4.2 makes research reports easier to review, revise and read alongside

@@ -1,5 +1,6 @@
 import type { RuntimeTurnLease } from "@confucius/protocol";
 import { registerHostOperationDomains } from "./HostOperationDomains";
+import { selectItemInMainWindow } from "../ui/linkNavigator";
 import {
   captureWritebackSnapshot,
   verifyWritebackSnapshot,
@@ -177,6 +178,7 @@ import {
 import {
   ZoteroToolHost,
   findPdf,
+  groupIDForLibrary,
   liveReaderContext,
 } from "../tools/ZoteroToolHost";
 import {
@@ -202,6 +204,7 @@ import {
   collectTagChanges,
   writebackBodyForTarget,
   recoverPendingWriteback,
+  markdownWithCitationLinks,
 } from "./ArtifactWriteback";
 import { createArtifactStore } from "./ArtifactStore";
 import {
@@ -1883,6 +1886,7 @@ export class AgentHost {
     const current = () =>
       state.record.run === ownerRun && state.activeTurnId === ownerTurn;
     return new WindowContext({
+      sourceReads: state.latestCheckpoint?.sourceReads,
       window: state.record.contextWindow,
       contextWindowTokens: this.contextWindowTokens(),
       maxOutputTokens: outputTokens,
@@ -3257,12 +3261,12 @@ export class AgentHost {
           ? {
               libraryID: existing.libraryID,
               key: existing.key,
-              content: renderArtifactBody(revision.body),
+              content: renderArtifactBody(revision.body, revision.citations),
             }
           : {
               libraryID: source?.itemLibraryID ?? item?.libraryID,
               parentKey: source?.itemKey ?? item?.key,
-              content: renderArtifactBody(revision.body),
+              content: renderArtifactBody(revision.body, revision.citations),
             },
         context: this.toolContext(
           state,
@@ -3341,6 +3345,7 @@ export class AgentHost {
               annotations: prepared.args.annotations as AnnotationDraft[],
             }
           : writebackBodyForTarget(revision.body, target),
+        revision.citations,
       ),
     };
   }
@@ -3722,12 +3727,18 @@ export class AgentHost {
             existing ? "update_note" : "create_note",
             existing
               ? {
-                  content: renderArtifactBody(revision.body),
+                  content: renderArtifactBody(
+                    revision.body,
+                    revision.citations,
+                  ),
                   libraryID: existing.libraryID,
                   key: existing.key,
                 }
               : {
-                  content: renderArtifactBody(revision.body),
+                  content: renderArtifactBody(
+                    revision.body,
+                    revision.citations,
+                  ),
                   libraryID: citation?.itemLibraryID ?? item?.libraryID,
                   parentKey: citation?.itemKey ?? item?.key,
                 },
@@ -3806,7 +3817,7 @@ export class AgentHost {
         entryId: existing?.entryId,
         knowledgeBaseId,
         title: artifact.title,
-        content: renderArtifactBody(revision.body),
+        content: renderArtifactBody(revision.body, revision.citations),
         kind: artifact.kind,
       };
       const provider: ToolProvider = {
@@ -6179,6 +6190,10 @@ export class AgentHost {
     if (!item) {
       throw new Error("Item not found");
     }
+    if (params.selectItem === true) {
+      await selectItemInMainWindow(item);
+      return { opened: true };
+    }
     const annotationKey =
       typeof params.annotationKey === "string"
         ? params.annotationKey.trim()
@@ -6519,10 +6534,17 @@ function parseKnowledgeTarget(
   };
 }
 
-function renderArtifactBody(body: ArtifactBody): string {
+function renderArtifactBody(
+  body: ArtifactBody,
+  citations: readonly import("@confucius/protocol").Citation[] = [],
+): string {
   switch (body.type) {
     case "markdown":
-      return body.markdown;
+      return markdownWithCitationLinks(
+        body.markdown,
+        citations,
+        groupIDForLibrary,
+      );
     case "evidence_audit":
       if (
         body.claims.some(

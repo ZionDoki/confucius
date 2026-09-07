@@ -1026,6 +1026,7 @@ export class TurnLoop {
       toolExecutions,
     });
     await this.deps.checkpoints.save({
+      sourceReads: this.deps.context?.sourceReadSnapshot(),
       window: this.deps.context?.window,
       turnId,
       iteration,
