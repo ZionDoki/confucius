@@ -95,6 +95,7 @@ export const RPC_METHODS = {
   taskPrompt: "task/prompt",
   taskAbort: "task/abort",
   taskDelete: "task/delete",
+  taskRetryPostProcessing: "task/retryPostProcessing",
   taskContinue: "task/continue",
   taskEvents: "task/events",
   taskTrace: "task/trace",
@@ -128,6 +129,7 @@ export const RPC_METHODS = {
   updateInstall: "update/install",
   updateSetAuto: "update/setAuto",
   updateSetPrerelease: "update/setPrerelease",
+  annotationBatches: "annotation/batches",
   memoryProposalList: "memory/proposal/list",
   memoryProposalResolve: "memory/proposal/resolve",
 } as const;

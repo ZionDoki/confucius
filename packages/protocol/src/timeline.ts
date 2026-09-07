@@ -100,6 +100,27 @@ function attachCall(
  * unfolded; thinking and tool calls each fold into a single group until
  * the next answer.
  */
+export function visibleModelEvents(events: ConfuciusEvent[]): ConfuciusEvent[] {
+  const failed = new Set(
+    events
+      .filter(
+        (event) =>
+          event.type === "model_request_progress" &&
+          event.payload.status === "failed",
+      )
+      .map((event) => {
+        const p = event.payload as import("./events").ModelRequestProgress;
+        return `${p.requestId}:${p.attempt}`;
+      }),
+  );
+  return events.filter(
+    (event) =>
+      !(event.type === "text_delta" || event.type === "reasoning_delta") ||
+      !event.payload.requestId ||
+      !failed.has(`${event.payload.requestId}:${event.payload.attempt}`),
+  );
+}
+
 export function coalesceTimeline(events: ConfuciusEvent[]): TimelineBlock[] {
   const blocks: TimelineBlock[] = [];
   const reasoning = { text: "" };
@@ -112,7 +133,7 @@ export function coalesceTimeline(events: ConfuciusEvent[]): TimelineBlock[] {
     flushText(blocks, text);
   };
 
-  for (const event of events) {
+  for (const event of visibleModelEvents(events)) {
     if (event.type === "text_delta") {
       if (event.payload.phase === "commentary") {
         flushText(blocks, text);

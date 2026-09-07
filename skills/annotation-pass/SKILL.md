@@ -11,11 +11,15 @@ allowed-tools:
   - propose_annotations
   - propose_highlights
   - commit_annotations
+  - update_annotation
+  - delete_annotation
   - open_item
 triggers:
   - annotate
   - 标注
 ---
+
+The host freezes each PDF's pre-existing colors when it joins this task and remaps conflicts automatically. Use the final colors returned in previews and receipts in the report legend. The task chat has one persistent annotation batch across follow-ups, retries and Agent changes; new and branched tasks have new batches. Only verified Confucius Agent annotations may be changed with `update_annotation` (comment and/or a same-PDF text anchor), `update_annotation_comment`, or `delete_annotation`, across tasks and Agents. Keep the original batch and creation source; unknown old marks remain existing annotations. Labels, author names and colors never authorize changes. After interruption, use receipts and reconcile unknown writes; never recreate an already saved or deleted annotation.
 
 Prepare annotations for the user's reading goal. Respect the requested count and scope. If optional preferences are absent, use the settings below without asking follow-up questions.
 

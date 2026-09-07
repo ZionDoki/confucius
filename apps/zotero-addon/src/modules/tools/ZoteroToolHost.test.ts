@@ -84,6 +84,40 @@ describe("native passage annotation contract", () => {
     };
   }
 
+  it("changes an owned text selection inside its PDF while preserving key, color and origin", async () => {
+    const installed = installHost({
+      nativeChars: [positionedChars(["First evidence. Second evidence."])],
+    });
+    const { anchors } = await readAnchors(installed);
+    const saved = await installed.execute(
+      "commit_annotations",
+      {
+        libraryID: 1,
+        key: "ITEMKEY1",
+        annotations: [{ anchor: anchors[0], comment: "first" }],
+      },
+      undefined,
+      { taskId: "creator", agent: "native" },
+    );
+    assert.equal(saved.ok, true);
+    const key = installed.saved[0].key as string;
+    const before = await installed.host.ownership.owned("1_PDFKEY01", key);
+    const original = installed.native.get(key)!;
+    const changed = await installed.execute(
+      "update_annotation",
+      { libraryID: 1, key, anchor: anchors[1], comment: "reviewed" },
+      undefined,
+      { taskId: "reviewer", agent: "codex" },
+    );
+    assert.equal(changed.ok, true, JSON.stringify(changed));
+    assert.equal(original.annotationText, "Second evidence.");
+    assert.equal(original.annotationComment, "reviewed");
+    const after = await installed.host.ownership.owned("1_PDFKEY01", key);
+    assert.equal(after?.batchId, before?.batchId);
+    assert.equal(after?.createdAt, before?.createdAt);
+    assert.equal(after?.agent, "native");
+    assert.equal(installed.native.size, 1);
+  });
   it("commits a single read anchor without propose, copied quotation, page or native search", async () => {
     const installed = installHost({
       nativeChars: [
@@ -1136,6 +1170,9 @@ function installHost(
         }
         const annotation = {
           libraryID,
+          parentItemID: attachment.id,
+          getTags: () => (json.tags ?? []) as Array<{ tag: string }>,
+          saveTx: async () => undefined,
           isAnnotation: () => true,
           annotationType: json.type,
           annotationText: json.text,
@@ -2516,4 +2553,163 @@ it("isolates cancellation of a background reader open and reuses in-flight initi
   assert.equal(opens, 1);
   assert.equal(stages.length, count);
   assert.ok(stages.includes("initializing_pdf"));
+});
+
+it("changes conflicting colors, retains the original batch across Agents, and protects human annotations", async () => {
+  const env = installHost();
+  const first = await env.execute(
+    "commit_annotations",
+    {
+      libraryID: 1,
+      key: "ITEMKEY1",
+      annotations: [
+        {
+          type: "highlight",
+          quote: "Original evidence",
+          page: 1,
+          comment: "old",
+        },
+      ],
+    },
+    undefined,
+    { taskId: "first", agent: "native", taskTitle: "First batch" },
+  );
+  assert.equal(first.ok, true);
+  const key = String(env.saved[0].key);
+  const original = await env.host.ownership.owned("1_PDFKEY01", key);
+  const second = await env.execute(
+    "commit_annotations",
+    {
+      libraryID: 1,
+      key: "ITEMKEY1",
+      annotations: [
+        {
+          type: "highlight",
+          quote: "Other evidence",
+          page: 2,
+          color: "#FFD400",
+        },
+      ],
+    },
+    undefined,
+    { taskId: "second", agent: "kimi", taskTitle: "Second batch" },
+  );
+  assert.equal(second.ok, true);
+  assert.notEqual(env.saved[1].color, env.saved[0].color);
+  assert.ok(JSON.stringify(env.saved[1].tags).includes("Second batch"));
+  const edited = await env.execute(
+    "update_annotation_comment",
+    { libraryID: 1, key, comment: "corrected" },
+    undefined,
+    { taskId: "second", agent: "kimi" },
+  );
+  assert.equal(edited.ok, true, JSON.stringify(edited));
+  const modified = await env.host.ownership.owned("1_PDFKEY01", key);
+  assert.equal(modified?.batchId, original?.batchId);
+  assert.equal(modified?.agent, "native");
+  assert.equal(modified?.modifiedBy?.agent, "kimi");
+  assert.ok(modified?.modifiedAt);
+  env.native.set("HUMAN", {
+    ...env.native.get(key),
+    key: "HUMAN",
+    annotationColor: "#123456",
+  });
+  for (const name of [
+    "update_annotation_comment",
+    "delete_annotation",
+    "update_item_metadata",
+  ]) {
+    const denied = await env.execute(
+      name,
+      {
+        libraryID: 1,
+        key: "HUMAN",
+        comment: "forbidden",
+        fields: { title: "forbidden" },
+      },
+      undefined,
+      { taskId: "third", agent: "codex" },
+    );
+    assert.equal(denied.ok, false);
+    if (!denied.ok) assert.equal(denied.code, "permission_denied");
+  }
+  const deleted = await env.execute(
+    "delete_annotation",
+    { libraryID: 1, key },
+    undefined,
+    { taskId: "third", agent: "codex" },
+  );
+  assert.equal(deleted.ok, true, JSON.stringify(deleted));
+  assert.ok(!env.native.has(key));
+  assert.ok(env.native.has("HUMAN"));
+  const view = await env.host.annotationBatchView(1, "PDFKEY01");
+  assert.equal(view.existingCount, 1);
+  assert.equal(view.total, 2);
+});
+
+it("rejects edits made stale by human changes after approval preview", async () => {
+  const env = installHost();
+  await env.execute(
+    "commit_annotations",
+    {
+      libraryID: 1,
+      key: "ITEMKEY1",
+      annotations: [
+        { type: "highlight", quote: "Evidence", page: 1, comment: "old" },
+      ],
+    },
+    undefined,
+    { taskId: "creator" },
+  );
+  const key = String(env.saved[0].key);
+  const args = { libraryID: 1, key, comment: "agent change" };
+  const context: ToolExecutionContext = { taskId: "editor" };
+  assert.equal(
+    await env.host.prepare("update_annotation", args, context),
+    null,
+  );
+  env.native.get(key)!.annotationComment = "human edit";
+  const result = await env.host.execute(
+    "update_annotation",
+    args,
+    undefined,
+    context,
+  );
+  assert.equal(result.ok, false);
+  assert.equal(env.native.get(key)!.annotationComment, "human edit");
+});
+
+it("legacy creation receipts grant edit permission without inventing a batch, agent or creation date", async () => {
+  const env = installHost();
+  const saved = await env.execute(
+    "commit_annotations",
+    {
+      libraryID: 1,
+      key: "ITEMKEY1",
+      annotations: [
+        { type: "highlight", page: 1, quote: "Legacy proof", comment: "old" },
+      ],
+    },
+    undefined,
+    { taskId: "old-task" },
+  );
+  assert.equal(saved.ok, true);
+  const key = env.saved[0].key as string;
+  await env.storage.write("ownership_1_PDFKEY01", {
+    version: 1,
+    batches: {},
+    marks: {},
+    filter: { mode: "all", batchIds: [], includeExisting: false },
+  });
+  const read = await env.execute("get_annotations", {
+    libraryID: 1,
+    key: "ITEMKEY1",
+  });
+  assert.equal(read.ok, true);
+  const mark = await env.host.ownership.owned("1_PDFKEY01", key);
+  assert.equal(mark?.taskId, "old-task");
+  assert.equal(mark?.batchId, undefined);
+  assert.equal(mark?.createdAt, undefined);
+  assert.equal(mark?.agent, undefined);
+  assert.ok(mark?.proofOperationId);
 });

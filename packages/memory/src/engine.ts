@@ -127,6 +127,8 @@ export class MemoryEngine {
   }
 
   async save(input: {
+    /** Host-preallocated identity for an approved, replayable creation. */
+    id?: string;
     content: string;
     type?: MemoryType;
     title?: string;
@@ -138,7 +140,7 @@ export class MemoryEngine {
     const timestamp = this.now();
     const content = input.content.trim();
     const record: MemoryRecord = {
-      id: this.idFactory(),
+      id: input.id ?? this.idFactory(),
       type: input.type ?? "fact",
       title: (input.title ?? content.slice(0, 64)).trim(),
       content,
@@ -151,11 +153,16 @@ export class MemoryEngine {
       confidence: clamp01(input.confidence ?? 0.9),
       history: [],
     };
-    await this.serialize(() =>
-      this.store.put(record).then(() => this.store.rebuildIndex()),
-    );
+    const saved = await this.serialize(async () => {
+      const existing = input.id
+        ? await this.store.recover(input.id)
+        : undefined;
+      if (!existing) await this.store.put(record);
+      await this.store.rebuildIndex();
+      return existing ?? record;
+    });
     this.reindex();
-    return record;
+    return saved;
   }
 
   async update(input: {

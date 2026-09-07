@@ -99,6 +99,11 @@ export class ConfuciusMemoryToolProvider implements ToolProvider {
   constructor(
     private readonly engine: MemoryEngine,
     private readonly logs?: ConversationLogEngine,
+    private readonly propose?: (
+      name: string,
+      args: Record<string, unknown>,
+      context: ToolExecutionContext,
+    ) => Promise<ToolResult>,
   ) {}
 
   listTools(): ToolDefinition[] {
@@ -140,11 +145,26 @@ export class ConfuciusMemoryToolProvider implements ToolProvider {
     name: string,
     args: Record<string, unknown>,
     _signal?: AbortSignal,
+    context: ToolExecutionContext = {},
   ): Promise<ToolResult> {
+    if (isMemoryProposalTool(name))
+      return this.propose
+        ? this.propose(name, args, context)
+        : {
+            ok: false,
+            toolName: name,
+            code: "permission_denied",
+            message:
+              "Memory writes require a task proposal and explicit approval",
+          };
     return callMemoryCatalogTool(this.engine, this.logs, name, args);
   }
 }
 
 export function createHistoryStore(): HistoryStore {
   return new HistoryStore(new ZoteroMemoryFs(), runtimePath("history"));
+}
+
+export function isMemoryProposalTool(name: string): boolean {
+  return ["memory_save", "memory_update", "memory_delete"].includes(name);
 }

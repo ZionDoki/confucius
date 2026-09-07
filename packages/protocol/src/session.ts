@@ -76,6 +76,22 @@ export interface WorkflowState {
 
 /** Schema-v3 task with a durable history and replaceable context windows. */
 export interface ResearchTaskRecord extends SessionRecord {
+  annotationBatchId?: string;
+  postProcessing?: Array<{
+    turnId: string;
+    runId?: string;
+    userText: string;
+    assistantText: string;
+    pending: Array<"title" | "memory">;
+    error?: string;
+    requests?: import("./events").ModelRequestProgress[];
+    attempts?: number;
+    usage?: {
+      promptTokens?: number;
+      completionTokens?: number;
+      totalTokens?: number;
+    };
+  }>;
   schemaVersion: 4;
   contextWindow?: ContextWindowState;
   references?: TaskContextReference[];
@@ -190,6 +206,29 @@ export function migrateSessionRecord(
       ].includes(status)
         ? recoverableTurn
         : undefined,
+      postProcessing: Array.isArray(candidate.postProcessing)
+        ? candidate.postProcessing
+            .filter(
+              (job) =>
+                job &&
+                typeof job.turnId === "string" &&
+                typeof job.userText === "string" &&
+                typeof job.assistantText === "string" &&
+                Array.isArray(job.pending) &&
+                job.pending.every(
+                  (step) => step === "title" || step === "memory",
+                ),
+            )
+            .map((job) => ({
+              ...job,
+              error:
+                job.error ?? "Final steps were interrupted; retry to finish",
+            }))
+        : undefined,
+      annotationBatchId:
+        typeof candidate.annotationBatchId === "string"
+          ? candidate.annotationBatchId
+          : undefined,
       workflow: undefined,
       run:
         restoreRun(candidate.run) ?? migrateWorkflow(candidate, input.id, now),

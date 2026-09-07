@@ -1,3 +1,4 @@
+import type { MemoryOp } from "./types";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
@@ -40,7 +41,12 @@ function makeStack() {
     })(),
   });
   const logs = new ConversationLogEngine({ fs, root: "/logs", now });
-  const promotion = new MemoryPromotion(memory, logs);
+  const proposals = new Map<string, MemoryOp>();
+  const promotion = new MemoryPromotion(memory, logs, {
+    propose: async (op, hash) => {
+      proposals.set(hash, op);
+    },
+  });
   const inner: ToolProvider = {
     listTools: () => [],
     getMeta: () => null,
@@ -55,6 +61,7 @@ function makeStack() {
     memory,
     logs,
     hooked,
+    proposals,
     tick: (ms = 1_000) => {
       clock += ms;
     },
@@ -116,7 +123,7 @@ describe("historyBudgetChars + compactHistory + searchable logs", () => {
 
 describe("tool access hook promotion", () => {
   it("routes conversation_log_* and memory reads through the hook and promotes", async () => {
-    const { hooked, memory, logs, tick } = makeStack();
+    const { hooked, memory, logs, tick, proposals } = makeStack();
     await logs.appendTurn({
       sessionId: "ses_hook",
       title: "Survey preference",
@@ -154,6 +161,10 @@ describe("tool access hook promotion", () => {
     assert.equal(log.sessionId, "ses_hook");
     assert.match(log.excerpt, /survey papers/i);
 
+    assert.equal(memory.stats().total, 0);
+    assert.equal(proposals.size, 1);
+    // Simulate the separate explicit approval before exercising memory-read pinning.
+    await memory.applyOps([...proposals.values()], "ses_hook");
     const promoted = await memory.list({ tags: [PROMOTED_FROM_LOG_TAG] });
     assert.equal(promoted.length, 1);
     assert.equal(isPromotedFromLog(promoted[0].tags), true);

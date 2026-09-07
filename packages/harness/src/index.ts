@@ -86,3 +86,9 @@ export { abortError, errorMessage, isAbortError } from "./abort";
 
 export { WindowContext, estimateRequestTokens } from "./WindowContext";
 export type { WindowContextOptions } from "./WindowContext";
+
+export {
+  retryModelRequest,
+  transientModelError,
+  modelRetryDelay,
+} from "./ModelRetry";

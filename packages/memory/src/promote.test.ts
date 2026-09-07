@@ -1,3 +1,4 @@
+import type { MemoryOp } from "./types";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { MemoryEngine } from "./engine";
@@ -31,12 +32,17 @@ function makePair() {
     })(),
   });
   const logs = new ConversationLogEngine({ fs, root: "/logs", now });
+  const proposals = new Map<string, MemoryOp>();
   const promotion = new MemoryPromotion(memory, logs, {
+    propose: async (op, hash) => {
+      proposals.set(hash, op);
+    },
     logPromoteHits: LOG_PROMOTE_HITS,
     memoryPinHits: MEMORY_PIN_HITS,
   });
   return {
     memory,
+    proposals,
     logs,
     promotion,
     tick: () => {
@@ -46,8 +52,8 @@ function makePair() {
 }
 
 describe("MemoryPromotion", () => {
-  it("promotes a repeatedly retrieved log excerpt into a durable memory", async () => {
-    const { logs, memory, promotion, tick } = makePair();
+  it("proposes a repeatedly retrieved log excerpt without writing memory", async () => {
+    const { logs, memory, proposals, promotion, tick } = makePair();
     await logs.appendTurn({
       sessionId: "ses_promo",
       title: "Preferences",
@@ -65,14 +71,16 @@ describe("MemoryPromotion", () => {
     }
     tick();
     const promoted = await promotion.considerLogHits(hits, "survey papers");
-    assert.equal(promoted.length, 1);
-    assert.equal(promoted[0].op, "add");
-    const record = memory.get(promoted[0].id);
-    assert.ok(record);
-    assert.equal(isPromotedFromLog(record.tags), true);
-    assert.ok(record.tags.includes("log:ses_promo"));
-    assert.match(record.content, /survey papers/i);
-    assert.doesNotMatch(record.content, /\*\*user:\*\*/);
+    assert.equal(promoted.length, 0);
+    assert.equal(memory.stats().total, 0);
+    assert.equal(proposals.size, 1);
+    const proposal = [...proposals.values()][0];
+    assert.equal(proposal.op, "add");
+    if (proposal.op !== "add") return;
+    assert.equal(isPromotedFromLog(proposal.tags), true);
+    assert.ok(proposal.tags?.includes("log:ses_promo"));
+    assert.match(proposal.content, /survey papers/i);
+    assert.doesNotMatch(proposal.content, /\*\*user:\*\*/);
 
     tick();
     const again = await promotion.considerLogHits(hits, "survey papers");

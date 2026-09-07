@@ -1,3 +1,4 @@
+import { runtimeFailure } from "@confucius/protocol";
 import {
   execFile,
   spawn,
@@ -311,7 +312,7 @@ export class KimiAdapter implements RuntimeAdapter {
         );
         active.sink.emit(
           "turn_failed",
-          { message: errorMessage(error) },
+          { message: errorMessage(error), failure: runtimeFailure(error) },
           input.turnId,
         );
         active.turnId = undefined;
@@ -332,12 +333,16 @@ export class KimiAdapter implements RuntimeAdapter {
     const session = this.sessions.get(taskId);
     if (!session) return;
     try {
-      await session.connection.closeSession({ sessionId: session.sessionId });
+      await withTimeout(
+        session.connection.closeSession({ sessionId: session.sessionId }),
+        1500,
+        () => "Kimi session close timed out",
+      );
     } catch {
       // Older Kimi ACP builds need only process teardown.
     }
-    session.child.kill();
     this.sessions.delete(taskId);
+    await stopKimiProcess(session.child);
   }
 
   async analyze(prompt: string, cwd: string): Promise<string> {
@@ -363,18 +368,17 @@ export class KimiAdapter implements RuntimeAdapter {
         sessionId: created.sessionId,
         modeId: "plan",
       });
-      await opened.connection.prompt({
-        sessionId: created.sessionId,
-        prompt: [{ type: "text", text: prompt }],
-      });
+      await withTimeout(
+        opened.connection.prompt({
+          sessionId: created.sessionId,
+          prompt: [{ type: "text", text: prompt }],
+        }),
+        60_000,
+        () => "Kimi analysis timed out",
+      );
       return text;
     } finally {
-      if (opened.sessionId) {
-        await opened.connection
-          .closeSession({ sessionId: opened.sessionId })
-          .catch(() => undefined);
-      }
-      opened.child.kill();
+      await stopKimiProcess(opened.child);
     }
   }
 
@@ -794,3 +798,15 @@ const denyApprovals: ApprovalBrokerLike = {
     scope: "once",
   }),
 };
+
+async function stopKimiProcess(
+  child: import("node:child_process").ChildProcess,
+): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise<void>((resolve, reject) => {
+    child.once("exit", () => resolve());
+    child.once("error", reject);
+  });
+  child.kill("SIGKILL");
+  await exited;
+}

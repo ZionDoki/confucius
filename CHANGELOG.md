@@ -2,6 +2,62 @@
 
 ## Unreleased
 
+## 0.4.3-beta.2 - 2026-09-07
+
+This Beta improves request recovery, annotation ownership and batch filtering,
+and individual memory review.
+
+### Changed
+
+- Model timeouts, network interruptions, HTTP 408/429 and transient server failures
+  receive at most three attempts per request, with cancellable backoff. Failed
+  streaming fragments remain diagnostic data and do not become answers or tool
+  calls. Interrupted tasks preserve checkpoints and write receipts for Continue.
+- Native titles and memory extraction use the same retry policy and expose
+  separate final-step retries. Codex/Kimi preserve structured failures and session
+  identities; host recovery waits for executor teardown and receipt checks.
+- Each task chat owns a persistent annotation batch across follow-ups, retries and
+  Agent changes. New or branched tasks receive new batches. New colors avoid the
+  PDF's frozen initial colors, with final colors shown in previews and receipts.
+- Confucius annotations support cross-task and cross-Agent comment/selection
+  updates and deletion. Host provenance, rather than editable labels or colors,
+  authorizes changes; original batch/source/time survive edits and deletion receipts.
+- The reader filters both PDF marks and its annotation sidebar by current task,
+  selected historical batches, existing annotations or all annotations.
+- Memory additions, updates and deletions remain proposals until individually
+  approved at the corresponding task ending. Rejection and approval survive restart;
+  repeated approval is idempotent. Failed writes remain pending for recovery.
+
+### Upgrade notes
+
+- This is a prerelease. Enable Include prereleases in Confucius Settings →
+  Update to receive it. Restart Zotero after installation. Existing tasks and
+  reports remain available; explicit update-channel choices are preserved.
+- Old automatic-memory settings become proposal generation with individual
+  approval. Unassociated legacy proposals remain accessible from the knowledge base.
+- Unknown old annotations remain “Existing annotations”; batches, creation sources
+  and times are not inferred. Explicit host creation receipts can establish legacy
+  edit permission. Continuing an old task creates a batch only for subsequent marks.
+- Back up both the Zotero library and the local Confucius runtime directory to retain
+  annotation provenance, batches and pending proposals when moving machines.
+
+### Validation and known limits
+
+- macOS development checks passed: 828 tests, typecheck, lint, build, skill sync
+  and version consistency.
+- A normal XPI installation in an isolated Zotero 10.0.1 library passed 22 checks
+  covering real annotation writes, provenance enforcement, both reader views,
+  native search, individual memory approval/rejection, restart and add-on disable.
+  See the [acceptance record](https://github.com/ZionDoki/confucius/blob/v0.4.3-beta.2/.github/maintainers/acceptance/request-recovery-batches-memory-2026-09-07.md).
+- The public Beta 1 package upgraded to the candidate Beta 2 in an isolated
+  Zotero profile and passed nine checks: tasks, annotations, memories and pending
+  proposals survive; automatic memory consent becomes individual review; repeated
+  approval remains idempotent across restart. See the
+  [Beta 2 release acceptance](https://github.com/ZionDoki/confucius/blob/v0.4.3-beta.2/.github/maintainers/acceptance/release-0.4.3-beta.2.md).
+- Cross-Agent host operations used synthetic execution identities. Live provider
+  outages, real CLI recovery, Windows/Linux and other Zotero versions were not
+  retested. The acceptance record distinguishes protocol tests from live UI checks.
+
 ## 0.4.3-beta.1 - 2026-09-07
 
 This Beta improves paper-review delivery, source navigation and task source

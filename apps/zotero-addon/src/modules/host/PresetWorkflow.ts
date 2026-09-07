@@ -74,7 +74,9 @@ export function presetToolNames(workflow: PresetWorkflow): ReadonlySet<string> {
           "propose_annotations",
           "propose_highlights",
           "commit_annotations",
+          "update_annotation",
           "update_annotation_comment",
+          "delete_annotation",
         ]
       : []),
   ]);
@@ -86,7 +88,13 @@ export function presetToolCallInScope(
   args: Record<string, unknown>,
   context?: ToolExecutionContext,
 ): boolean {
-  if (toolName === "update_annotation_comment")
+  if (
+    [
+      "update_annotation",
+      "update_annotation_comment",
+      "delete_annotation",
+    ].includes(toolName)
+  )
     return Boolean(
       context?.resources?.some(
         (resource) =>
@@ -179,7 +187,13 @@ export class PresetToolProvider implements ToolProvider {
         message: "Tool is not available in the preset task",
       };
     }
-    if (name === "update_annotation_comment") {
+    if (
+      [
+        "update_annotation",
+        "update_annotation_comment",
+        "delete_annotation",
+      ].includes(name)
+    ) {
       // The execution dispatch gets a fresh context after approval. Resolve the
       // annotation's current native parent again before checking source scope;
       // do not mistake missing preflight metadata for an out-of-scope item.
@@ -203,6 +217,7 @@ export class PresetToolProvider implements ToolProvider {
 const common = [
   "Follow the current user request, source scope, language and format. Use task source identifiers and actual tool results.",
   "Read evidence, prepare candidates and drafts, revise concrete issues, and save the required artifacts in the current context.",
+  "Annotation colors are assigned by the host against the frozen PDF baseline. Use actual returned colors in legends. Only verified Confucius Agent annotations may be updated or deleted, across tasks and agents; keep original batch ownership. Untraceable marks remain existing annotations.",
   "Reuse existing evidence and completed writes. Review a saved draft against the source before finalizing it; do not restart completed research or ask about optional preferences.",
 ].join("\n");
 const presets: Record<PresetWorkflowId, PresetWorkflow> = {

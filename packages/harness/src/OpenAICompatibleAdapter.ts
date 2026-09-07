@@ -1,3 +1,5 @@
+import type { ModelRequestProgress } from "@confucius/protocol";
+import { retryModelRequest } from "./ModelRetry";
 import { abortError, isAbortError } from "./abort";
 import {
   ModelError,
@@ -6,8 +8,6 @@ import {
 } from "./ModelAdapter";
 import {
   ModelDeadline,
-  cancelModelTimeout,
-  scheduleModelTimeout,
   type ModelTimers,
   type ModelTimeouts,
 } from "./ModelDeadline";
@@ -64,8 +64,9 @@ export interface OpenAICompatibleConfig extends ModelTimers {
    */
   reasoningEffort?: ReasoningEffort;
   /** Called incrementally while streaming (also works for reasoning). */
-  onTextDelta?: (text: string) => void;
-  onReasoningDelta?: (text: string) => void;
+  onTextDelta?: (text: string, attempt?: ModelRequestProgress) => void;
+  onReasoningDelta?: (text: string, attempt?: ModelRequestProgress) => void;
+  onRequestProgress?: (progress: ModelRequestProgress) => void | Promise<void>;
   onUsage?: (usage: ModelUsage) => void;
   fetchImpl?: typeof fetch;
 }
@@ -80,9 +81,6 @@ interface ByteReader {
   read(): Promise<{ done: boolean; value?: Uint8Array }>;
   cancel(): Promise<void>;
 }
-
-const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
-const MAX_ATTEMPTS = 2;
 
 export function detectApiStyle(baseUrl: string): ApiStyle {
   try {
@@ -148,6 +146,7 @@ export function describeNonJsonModelBody(
 
 export class OpenAICompatibleAdapter implements ModelAdapter {
   readonly accountsAttempts = true;
+  readonly handlesRetries = true;
   private readonly style: ApiStyle;
   private readonly baseUrl: string;
   private readonly profile: ModelProfile;
@@ -166,6 +165,32 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
   }
 
   async complete(
+    request: ModelRequest,
+    signal?: AbortSignal,
+  ): Promise<ModelTurn> {
+    return retryModelRequest(
+      (progress) => {
+        const attempt = new OpenAICompatibleAdapter({
+          ...this.config,
+          onTextDelta: (text) => this.config.onTextDelta?.(text, progress),
+          onReasoningDelta: (text) =>
+            this.config.onReasoningDelta?.(text, progress),
+        });
+        return attempt.completeOnce(request, signal);
+      },
+      {
+        ...this.config,
+        signal,
+        requestId: request.requestId,
+        onProgress: async (progress) => {
+          await request.onRequestProgress?.(progress);
+          await this.config.onRequestProgress?.(progress);
+        },
+      },
+    );
+  }
+
+  private async completeOnce(
     request: ModelRequest,
     signal?: AbortSignal,
   ): Promise<ModelTurn> {
@@ -270,23 +295,12 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         ? this.buildOllamaBody(request, stream)
         : this.buildOpenAIBody(request, stream);
 
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      if (signal?.aborted) throw abortError();
-      await request.onAttempt?.();
-      if (signal?.aborted) throw abortError();
-      const response = await (deadline
-        ? deadline.race(
-            fetchImpl(url, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${this.config.apiKey}`,
-              },
-              body: JSON.stringify(body),
-              signal,
-            }),
-          )
-        : fetchImpl(url, {
+    if (signal?.aborted) throw abortError();
+    await request.onAttempt?.();
+    if (signal?.aborted) throw abortError();
+    return await (deadline
+      ? deadline.race(
+          fetchImpl(url, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -294,28 +308,17 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
             },
             body: JSON.stringify(body),
             signal,
-          }));
-      if (
-        response.ok ||
-        !RETRYABLE_STATUS.has(response.status) ||
-        attempt === MAX_ATTEMPTS
-      ) {
-        return response;
-      }
-      await (deadline ? deadline.race(response.text()) : response.text()).catch(
-        () => "",
-      );
-      if (attempt < MAX_ATTEMPTS && !signal?.aborted) {
-        const wait = retryDelay(
-          headerValue(response, "retry-after"),
-          800 * attempt,
-        );
-        await (deadline
-          ? deadline.race(delay(wait, signal, this.config))
-          : delay(wait, signal, this.config));
-      }
-    }
-    throw new Error("Model request retry loop exited unexpectedly");
+          }),
+        )
+      : fetchImpl(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${this.config.apiKey}`,
+          },
+          body: JSON.stringify(body),
+          signal,
+        }));
   }
 
   private buildOpenAIBody(
@@ -542,7 +545,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       if (!ended && !finish)
         throw new ModelError(
           "Model stream ended before a terminal event",
-          "protocol",
+          "transport",
           { retryable: true },
         );
       if (!sawData)
@@ -711,7 +714,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       if (!ended || !sawData)
         throw new ModelError(
           "Ollama stream ended before done:true",
-          "protocol",
+          "transport",
           { retryable: true },
         );
     } catch (error) {
@@ -1050,29 +1053,6 @@ function bufferedResponse(text: string): Response {
   return { body: { getReader: () => reader } } as unknown as Response;
 }
 
-function delay(
-  ms: number,
-  signal?: AbortSignal,
-  timers: ModelTimers = {},
-): Promise<void> {
-  if (signal?.aborted) return Promise.reject(abortError());
-  return new Promise((resolve, reject) => {
-    const onAbort = () => {
-      cancelModelTimeout(timers, timer);
-      reject(abortError());
-    };
-    const timer = scheduleModelTimeout(
-      timers,
-      () => {
-        signal?.removeEventListener("abort", onAbort);
-        resolve();
-      },
-      ms,
-    );
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 function headerValue(response: Response, name: string): string {
   try {
     return response.headers?.get?.(name) ?? "";
@@ -1229,18 +1209,20 @@ function httpModelError(
   const code =
     status === 401 || status === 403
       ? "auth"
-      : status === 429
-        ? "rate_limit"
-        : status >= 500
-          ? "server"
-          : /context.{0,30}(length|window|limit)|token.{0,30}(limit|exceed)/i.test(
-                body,
-              )
-            ? "context_overflow"
-            : "invalid_request";
+      : status === 408
+        ? "timeout"
+        : status === 429
+          ? "rate_limit"
+          : status >= 500
+            ? "server"
+            : /context.{0,30}(length|window|limit)|token.{0,30}(limit|exceed)/i.test(
+                  body,
+                )
+              ? "context_overflow"
+              : "invalid_request";
   return new ModelError(`Model HTTP ${status}: ${body.slice(0, 500)}`, code, {
-    retryable: code === "server" || code === "rate_limit",
-    retryAfterMs: retryDelay(retryAfter, 800),
+    retryable: ["timeout", "server", "rate_limit"].includes(code),
+    ...(retryAfter ? { retryAfterMs: retryDelay(retryAfter, 1000) } : {}),
   });
 }
 

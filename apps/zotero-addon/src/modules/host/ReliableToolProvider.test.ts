@@ -225,8 +225,7 @@ describe("shared tool execution journal", () => {
   });
 
   it("excludes human approval time while preserving one active preparation/execution budget", async (t) => {
-    let now = 1000;
-    t.mock.method(Date, "now", () => now);
+    t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1000 });
     const service = new ToolExecutionService(memoryJsonStorage(), undefined, {
       timeoutMs: 100,
     });
@@ -236,12 +235,12 @@ describe("shared tool execution journal", () => {
       provider(
         async () => {
           writes++;
-          now += 30;
+          t.mock.timers.tick(30);
           return applied;
         },
         async () => {
           prepares++;
-          now += 20;
+          t.mock.timers.tick(20);
           return null;
         },
       ),
@@ -252,16 +251,16 @@ describe("shared tool execution journal", () => {
     const args = { key: "NOTE" };
     assert.equal(await wrapped.prepare!("write", args, context), null);
     context.executionScope!.pause!();
-    now += 10000;
+    t.mock.timers.tick(10000);
     context.executionScope!.resume!();
-    assert.equal(context.executionScope!.deadlineAt - now, 80);
+    assert.equal(context.executionScope!.deadlineAt - Date.now(), 80);
     assert.equal(
       (await wrapped.call("write", args, undefined, context)).effect,
       "applied",
     );
     assert.equal(prepares, 1);
     assert.equal(writes, 1);
-    assert.equal(context.executionScope!.deadlineAt - now, 50);
+    assert.equal(context.executionScope!.deadlineAt - Date.now(), 50);
   });
 
   it("keeps cancellation effective while approval time is paused", async () => {
@@ -672,7 +671,9 @@ describe("shared tool execution journal", () => {
     const service = new ToolExecutionService(
       storage,
       () => Promise.resolve(applied),
-      { timeoutMs: 15 },
+      // The total deadline includes async hashing and journal preparation. Allow
+      // those to finish under suite load so this tests an in-flight write timeout.
+      { timeoutMs: 250 },
     );
     const first = await service
       .wrap(inner)

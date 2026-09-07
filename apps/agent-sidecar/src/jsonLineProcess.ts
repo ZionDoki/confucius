@@ -99,6 +99,20 @@ export class JsonLineProcess {
     if (!this.child.killed) this.child.kill();
   }
 
+  async closeAndWait(): Promise<void> {
+    if (this.child.exitCode !== null || this.child.signalCode !== null) {
+      this.close();
+      return;
+    }
+    const exited = new Promise<void>((resolve, reject) => {
+      this.child.once("exit", () => resolve());
+      this.child.once("error", reject);
+    });
+    this.close();
+    this.child.kill("SIGKILL");
+    await exited;
+  }
+
   private send(message: JsonRpcMessage): void {
     if (!this.child.stdin.writable) throw new Error("Runtime stdin is closed");
     this.child.stdin.write(`${JSON.stringify(message)}\n`);
@@ -116,7 +130,12 @@ export class JsonLineProcess {
       if (!pending) return;
       this.pending.delete(message.id ?? "");
       if (message.error) {
-        pending.reject(new Error(message.error.message || "Runtime RPC error"));
+        pending.reject(
+          Object.assign(
+            new Error(message.error.message || "Runtime RPC error"),
+            { code: message.error.code, data: message.error.data },
+          ),
+        );
       } else {
         pending.resolve(message.result);
       }

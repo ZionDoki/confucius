@@ -48,10 +48,7 @@ describe("markdown round-trip", () => {
       content: "用户正在研究多模态检索增强生成。",
       tags: ["中文", "rag"],
     });
-    const parsed = parseMemoryFile(
-      "mem_test01.md",
-      serializeMemory(original),
-    );
+    const parsed = parseMemoryFile("mem_test01.md", serializeMemory(original));
     assert.ok(parsed);
     assert.equal(parsed.content, "用户正在研究多模态检索增强生成。");
     assert.deepEqual(parsed.tags, ["中文", "rag"]);
@@ -67,12 +64,35 @@ describe("markdown round-trip", () => {
 });
 
 describe("FileMemoryStore", () => {
+  it("reconciles deletion receipts and refuses to overwrite an unreadable existing identity", async () => {
+    class LostDeleteReceipt extends InMemoryFileSystem {
+      override async deleteFile(path: string) {
+        await super.deleteFile(path);
+        throw new Error("lost deletion receipt");
+      }
+    }
+    const fs = new LostDeleteReceipt();
+    const store = new FileMemoryStore(fs, "/mem");
+    await store.put(record());
+    assert.equal(await store.remove("mem_test01"), true);
+    assert.equal(store.get("mem_test01"), undefined);
+    assert.equal(await store.remove("mem_test01"), false);
+    await fs.writeFile("/mem/memories/mem_broken.md", "garbage");
+    await assert.rejects(store.recover("mem_broken"), /Cannot reconcile/);
+    assert.equal(await store.recover("mem_missing"), undefined);
+  });
+
   it("persists, reloads, and deletes memory files", async () => {
     const fs = new InMemoryFileSystem();
     let store = new FileMemoryStore(fs, "/mem");
     await store.put(record());
     await store.put(
-      record({ id: "mem_second", type: "fact", title: "Fact", content: "A fact." }),
+      record({
+        id: "mem_second",
+        type: "fact",
+        title: "Fact",
+        content: "A fact.",
+      }),
     );
     await store.rebuildIndex();
 
@@ -95,7 +115,12 @@ describe("FileMemoryStore", () => {
     const store = new FileMemoryStore(fs, "/mem");
     await store.put(record());
     await store.put(
-      record({ id: "mem_fact1", type: "fact", title: "A fact", content: "Fact." }),
+      record({
+        id: "mem_fact1",
+        type: "fact",
+        title: "A fact",
+        content: "Fact.",
+      }),
     );
     await store.rebuildIndex();
     const index = await fs.readFile("/mem/MEMORY.md");

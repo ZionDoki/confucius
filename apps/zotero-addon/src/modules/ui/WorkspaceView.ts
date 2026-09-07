@@ -1,3 +1,5 @@
+import { renderMemoryProposal } from "./memoryProposalCards";
+import { setAnnotationFilterTask } from "./annotationBatchFilter";
 import { artifactWindows } from "./artifactWindow";
 import { UI_FONT_STACKS } from "./workspaceTypography";
 import { getPref } from "../../utils/prefs";
@@ -2388,6 +2390,26 @@ function bindWorkspace(
     if (!state.memories.length) {
       memories.appendChild(muted(doc, getString("workspace-no-memory")));
     }
+    const existingTaskIds = new Set(state.sessions.map((task) => task.id));
+    for (const proposal of state.memoryProposals.filter(
+      (proposal) =>
+        !existingTaskIds.has(proposal.taskId) && proposal.status === "pending",
+    )) {
+      memories.appendChild(
+        renderMemoryProposal(
+          doc,
+          proposal,
+          getPref("uiLanguage") !== "en-US",
+          async (id, verdict) => {
+            await rpc("memory/proposal/resolve", { id, verdict });
+            await refreshMemoryProposals();
+            await refreshMemories();
+            renderLists();
+            renderKnowledgeWindow();
+          },
+        ),
+      );
+    }
     for (const memory of state.memories) {
       const card = el(doc, "div");
       card.className = "confucius-kb-memory";
@@ -3872,6 +3894,7 @@ function bindWorkspace(
         loaded.draft?.references ?? loaded.references ?? [],
       );
     state.sessionId = taskId;
+    setAnnotationFilterTask(taskId);
     state.lastEventId = null;
     state.running = false;
     state.pendingUserText = "";
@@ -4599,6 +4622,7 @@ function bindWorkspace(
         if (state.sessionId === taskId) {
           taskLoadGeneration += 1;
           state.sessionId = null;
+          setAnnotationFilterTask(null);
           state.events = [];
           state.lastEventId = null;
           state.running = false;
@@ -4717,6 +4741,37 @@ function bindWorkspace(
       err.textContent = state.sendError;
       activityStream.appendChild(err);
     }
+    const memoryCards = state.memoryProposals.filter(
+      (proposal) => proposal.taskId === state.sessionId,
+    );
+    const placedMemoryCards = new Set<string>();
+    const appendMemoryCard = (proposal: MemoryProposal) => {
+      if (placedMemoryCards.has(proposal.id)) return;
+      placedMemoryCards.add(proposal.id);
+      activityStream.appendChild(
+        renderMemoryProposal(
+          doc,
+          proposal,
+          getPref("uiLanguage") !== "en-US",
+          async (id, verdict) => {
+            await rpc("memory/proposal/resolve", { id, verdict });
+            await refreshMemoryProposals();
+            await refreshMemories();
+            renderLists();
+            renderKnowledgeWindow();
+          },
+        ),
+      );
+    };
+    const terminalTurns = new Set(
+      state.events
+        .filter((event) =>
+          ["turn_completed", "turn_failed", "turn_aborted"].includes(
+            event.type,
+          ),
+        )
+        .map((event) => event.turnId),
+    );
     const keyedBlocks = keyedTimeline(state.events);
     const timelineBlocks = keyedBlocks.map((entry) => entry.block);
     if (
@@ -4733,7 +4788,56 @@ function bindWorkspace(
           node.dataset.entryId = keyedBlocks[index].key;
           activityStream.appendChild(node);
         }
+        for (const proposal of memoryCards) {
+          if (
+            proposal.turnId &&
+            terminalTurns.has(proposal.turnId) &&
+            keyedBlocks[index].key.startsWith(`${proposal.turnId}:`) &&
+            !keyedBlocks[index + 1]?.key.startsWith(`${proposal.turnId}:`)
+          )
+            appendMemoryCard(proposal);
+        }
       });
+    }
+    for (const proposal of memoryCards)
+      if (
+        terminalTurns.has(proposal.turnId) ||
+        (!state.running && !state.sending)
+      )
+        appendMemoryCard(proposal);
+    for (const job of currentTask()?.postProcessing ?? []) {
+      if (!job.pending.length || !job.error) continue;
+      const row = el(doc, "div");
+      row.dataset.entryId = `post-processing:${job.turnId}`;
+      row.appendChild(
+        muted(
+          doc,
+          `${getPref("uiLanguage") !== "en-US" ? "任务成果已保留，结束步骤待重试" : "Results saved; final steps need retry"}: ${job.pending.map((step) => (step === "title" ? "标题 / Title" : "记忆提取 / Memory")).join("、")}`,
+        ),
+      );
+      const retry = button(
+        doc,
+        "",
+        getPref("uiLanguage") !== "en-US" ? "重试" : "Retry",
+      );
+      retry.disabled = state.running || state.sending;
+      retry.addEventListener("click", async () => {
+        retry.disabled = true;
+        try {
+          await rpc("task/retryPostProcessing", {
+            taskId: state.sessionId,
+            turnId: job.turnId,
+          });
+          await refreshMemoryProposals();
+          await loadTask(state.sessionId!, true);
+          renderLists();
+        } catch (error) {
+          row.appendChild(muted(doc, String(error)));
+          retry.disabled = false;
+        }
+      });
+      row.appendChild(retry);
+      activityStream.appendChild(row);
     }
     const representedArtifactRevisions = new Set(
       timelineBlocks
@@ -4991,10 +5095,12 @@ function bindWorkspace(
       !state.sessions.some((task) => task.id === state.sessionId)
     )
       state.sessionId = null;
+    setAnnotationFilterTask(null);
     if (!state.sessionId && !state.sessions.length)
       prompt.value = composerDrafts.get("new") ?? "";
     if (!state.sessionId && state.sessions[0]) {
       state.sessionId = state.sessions[0].id;
+      setAnnotationFilterTask(state.sessionId);
     }
     // The first poll restores the selected task without calling loadTask.
     // Hydrate its composer too, including a cached task retained across layouts.
@@ -5080,6 +5186,7 @@ function bindWorkspace(
           mode: state.mode,
         })) as SessionRow;
         state.sessionId = created.id;
+        setAnnotationFilterTask(created.id);
         referenceDrafts.set(created.id, submittedReferences);
         referenceDrafts.delete("new");
         state.events = [];
@@ -5500,7 +5607,8 @@ function bindWorkspace(
       "number",
     );
 
-    let memoryChoice: MemoryConsent = live.memoryConsent ?? "review";
+    let memoryChoice: MemoryConsent =
+      live.memoryConsent === "off" ? "off" : "review";
     const sectionIntro = (target: HTMLElement, text: string): void => {
       const intro = el(doc, "p", {
         margin: "0 0 12px",
@@ -5787,7 +5895,7 @@ function bindWorkspace(
       gap: "6px",
       marginBottom: "16px",
     });
-    for (const choice of ["off", "review", "auto"] as const) {
+    for (const choice of ["off", "review"] as const) {
       const label = el(doc, "label", {
         display: "grid",
         gridTemplateColumns: "18px minmax(0, 1fr)",
@@ -5822,112 +5930,6 @@ function bindWorkspace(
       memoryModes.appendChild(label);
     }
     memoryTab.appendChild(memoryModes);
-    const proposalHeading = el(doc, "div", {
-      marginBottom: "6px",
-      fontSize: "11px",
-      color: "var(--confucius-muted)",
-      fontWeight: "700",
-      letterSpacing: ".07em",
-      textTransform: "uppercase",
-    });
-    proposalHeading.textContent = getString("workspace-memory-proposals");
-    const proposalList = el(doc, "div");
-    const paintMemoryProposals = (): void => {
-      proposalList.textContent = "";
-      const pending = state.memoryProposals.filter(
-        (proposal) => proposal.status === "pending",
-      );
-      if (!pending.length) {
-        proposalList.appendChild(
-          muted(doc, getString("workspace-memory-no-proposals")),
-        );
-        return;
-      }
-      for (const proposal of pending) {
-        const row = el(doc, "div", {
-          padding: "10px 0",
-          borderTop: "0",
-        });
-        const op = el(doc, "div", {
-          marginBottom: "5px",
-          color: "var(--confucius-accent-text)",
-          fontSize: "11px",
-          fontWeight: "700",
-          textTransform: "uppercase",
-        });
-        op.textContent = `${proposal.op} · ${proposal.type ?? "memory"}`;
-        const titleInput = el(
-          doc,
-          "input",
-          {
-            width: "100%",
-            height: "31px",
-            marginBottom: "5px",
-            padding: "0 7px",
-            boxSizing: "border-box",
-            border: "0",
-            borderRadius: "6px",
-          },
-          { type: "text", value: proposal.title ?? "" },
-        ) as HTMLInputElement;
-        const contentInput = el(doc, "textarea", {
-          width: "100%",
-          minHeight: "74px",
-          padding: "7px",
-          boxSizing: "border-box",
-          border: "0",
-          borderRadius: "6px",
-          resize: "vertical",
-        }) as HTMLTextAreaElement;
-        contentInput.value = proposal.content ?? "";
-        titleInput.disabled = proposal.op === "delete";
-        contentInput.disabled = proposal.op === "delete";
-        const buttons = el(doc, "div", {
-          display: "flex",
-          gap: "6px",
-          marginTop: "6px",
-        });
-        const accept = button(
-          doc,
-          "",
-          getString("workspace-memory-accept"),
-          "primary",
-        );
-        const reject = button(doc, "", getString("workspace-memory-reject"));
-        const resolve = (verdict: "accept" | "reject"): void => {
-          void (async () => {
-            await rpc("memory/proposal/resolve", {
-              id: proposal.id,
-              verdict,
-              edited: {
-                title: titleInput.value,
-                content: contentInput.value,
-                tags: proposal.tags,
-                type: proposal.type,
-              },
-            });
-            await refreshMemoryProposals();
-            await refreshMemories();
-            paintMemoryProposals();
-          })().catch((error) => {
-            runtimeError.textContent =
-              error instanceof Error ? error.message : String(error);
-          });
-        };
-        accept.addEventListener("click", () => resolve("accept"));
-        reject.addEventListener("click", () => resolve("reject"));
-        buttons.appendChild(accept);
-        buttons.appendChild(reject);
-        row.appendChild(op);
-        row.appendChild(titleInput);
-        row.appendChild(contentInput);
-        row.appendChild(buttons);
-        proposalList.appendChild(row);
-      }
-    };
-    memoryTab.appendChild(proposalHeading);
-    memoryTab.appendChild(proposalList);
-    paintMemoryProposals();
 
     const settingsTask = currentTask();
     type SecurityProfile = "zotero_only" | "workspace";
@@ -6953,7 +6955,6 @@ function bindWorkspace(
     ]).then(() => {
       if (!overlay.parentElement) return;
       paintRuntimePanel();
-      paintMemoryProposals();
     });
   }
 

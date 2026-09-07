@@ -18,6 +18,7 @@ export interface RunState {
   requiredArtifactKinds: ArtifactKind[];
   status: "running" | "interrupted" | "completed" | "failed";
   stopReason?: string;
+  modelRequest?: import("./events").ModelRequestProgress;
   budget: {
     maxIterations: number;
     maxToolCalls: number;

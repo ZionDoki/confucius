@@ -1,3 +1,4 @@
+import { runtimeFailure } from "@confucius/protocol";
 import {
   codexModels,
   codexModelParams,
@@ -27,6 +28,7 @@ import type {
 } from "./PluginRuntimeTypes";
 
 interface CodexSession {
+  retryAttempt?: number;
   taskId: string;
   profile: PluginRuntimeTurnInput["capabilityProfile"];
   rpc: RuntimeJsonLineProcess;
@@ -253,7 +255,7 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
         );
         provisional.sink.emit(
           "turn_failed",
-          { message: error.message },
+          { message: error.message, failure: runtimeFailure(error) },
           turnId,
         );
         this.sessions.delete(input.taskId);
@@ -284,6 +286,7 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
       usage ?? new RuntimeUsageCounter(!input.externalSessionId);
     session.mcpToken = input.mcp.token;
     session.hostTurnId = input.turnId;
+    session.retryAttempt = 1;
 
     if (input.runtimeModel) {
       const models = await withTimeout(
@@ -347,8 +350,9 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
   async dispose(taskId: string): Promise<void> {
     const session = this.sessions.get(taskId);
     if (!session) return;
-    session.rpc.close();
     this.sessions.delete(taskId);
+    if (session.rpc.closeAndWait) await session.rpc.closeAndWait();
+    else session.rpc.close();
   }
 
   async disposeAll(): Promise<void> {
@@ -358,6 +362,7 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
   async analyze(prompt: string, cwd: string): Promise<string> {
     const rpc = await this.openRpc("zotero_only");
     let text = "";
+    let failure: Error | undefined;
     let complete!: () => void;
     const done = new Promise<void>((resolve) => {
       complete = resolve;
@@ -367,7 +372,28 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
       if (message.method === "item/agentMessage/delta") {
         text += String(params.delta ?? "");
       }
-      if (message.method === "turn/completed") complete();
+      if (message.method === "error" && params.willRetry !== true) {
+        failure = Object.assign(
+          new Error(runtimeFailure(params.error ?? params).message),
+          asRecord(params.error),
+        );
+        complete();
+      }
+      if (message.method === "turn/completed") {
+        const turn = asRecord(params.turn);
+        if (turn.status !== "completed")
+          failure = Object.assign(
+            new Error(
+              runtimeFailure(turn.error ?? "Analysis did not complete").message,
+            ),
+            asRecord(turn.error),
+          );
+        complete();
+      }
+    });
+    rpc.onFailure((error) => {
+      failure = error;
+      complete();
     });
     try {
       const configuredMcpServers = await this.configuredMcpServers(rpc);
@@ -390,9 +416,10 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
         input: [{ type: "text", text: prompt, text_elements: [] }],
       });
       await withTimeout(done, 60_000, "Codex analysis timed out");
+      if (failure) throw failure;
       return text;
     } finally {
-      rpc.close();
+      await rpc.closeAndWait();
     }
   }
 
@@ -579,7 +606,11 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
         if (outcome.phase === "failed")
           session.sink.emit(
             "turn_failed",
-            { message: errorFromTurn(turn), stopReason: outcome.stopReason },
+            {
+              message: errorFromTurn(turn),
+              stopReason: outcome.stopReason,
+              failure: runtimeFailure(turn.error),
+            },
             turnId,
           );
         else if (outcome.phase === "aborted")
@@ -601,6 +632,26 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
         return;
       }
       case "error":
+        if (params.willRetry === true) {
+          session.sink.emit(
+            "model_request_progress",
+            {
+              requestId: `cli_${turnId}`,
+              attempt: session.retryAttempt ?? 1,
+              status: "failed",
+              ...runtimeFailure(params),
+              exhausted: false,
+            },
+            turnId,
+          );
+          session.retryAttempt = (session.retryAttempt ?? 1) + 1;
+          session.sink.emit(
+            "reasoning_delta",
+            { text: "", statusText: "连接暂时中断，运行方式正在重试" },
+            turnId,
+          );
+          return;
+        }
         session.sink.emit(
           "task_status_changed",
           { status: "failed", reason: String(params.message ?? "") },
@@ -608,7 +659,10 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
         );
         session.sink.emit(
           "turn_failed",
-          { message: String(params.message ?? "Codex runtime error") },
+          {
+            message: runtimeFailure(params).message,
+            failure: runtimeFailure(params),
+          },
           turnId,
         );
         return;

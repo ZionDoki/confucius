@@ -470,3 +470,110 @@ it("failure to persist the run does not dispatch an executor", async () => {
   );
   assert.equal(calls, 0);
 });
+
+for (const backend of ["codex", "kimi"]) {
+  it(`${backend}: transient termination stops the old executor and rechecks receipts before two bounded recoveries`, async () => {
+    const state = run();
+    state.budget.modelRequestsObservable = false;
+    let starts = 0,
+      stops = 0,
+      reads = 0;
+    const waits: number[] = [];
+    const coordinator = new RunCoordinator({
+      run: state,
+      current: () => true,
+      persist: async () => {},
+      progress: () => {},
+      snapshot: async () => {
+        reads++;
+        return {
+          ...empty(),
+          completed: [{ id: "saved-annotation", description: "saved" }],
+        };
+      },
+      recover: async () => {
+        stops++;
+      },
+      wait: async (ms) => {
+        waits.push(ms);
+      },
+      executor: {
+        run: async (input) => {
+          assert.equal(
+            stops,
+            starts,
+            "each replacement waits for old execution teardown",
+          );
+          if (starts) {
+            assert.equal(input.continuation, true);
+            assert.match(input.prompt, /saved-annotation/);
+          }
+          starts++;
+          return {
+            stopReason: "error",
+            text: "failed fragment",
+            failure: { retryable: true, message: "connection reset" },
+          };
+        },
+      },
+    });
+    assert.equal(
+      (await coordinator.execute("go", new AbortController().signal))
+        .stopReason,
+      "model_retries_exhausted",
+    );
+    assert.equal(starts, 3);
+    assert.equal(stops, 2);
+    assert.ok(reads >= 6);
+    assert.deepEqual(waits, [1000, 2000]);
+    assert.equal(state.budget.executorStarts, 3);
+    assert.equal(state.modelRequest?.exhausted, true);
+    assert.equal(state.modelRequest?.attempt, 3);
+    assert.equal(restoreRun(state)?.modelRequest?.exhausted, true);
+  });
+}
+it("unknown writes, authentication failures and cancelled recovery never start another executor", async () => {
+  for (const kind of ["unknown", "auth", "cancel"]) {
+    const state = run();
+    state.budget.modelRequestsObservable = false;
+    const abort = new AbortController();
+    let starts = 0;
+    const coordinator = new RunCoordinator({
+      run: state,
+      current: () => true,
+      persist: async () => {},
+      progress: () => {},
+      snapshot: async () => ({
+        ...empty(),
+        unknownOperationIds:
+          kind === "unknown" && starts ? ["unconfirmed-write"] : [],
+      }),
+      recover: async () => {
+        if (kind === "cancel") abort.abort();
+      },
+      wait: async (_ms, signal) => {
+        if (signal.aborted) throw new Error("cancelled");
+      },
+      executor: {
+        run: async () => {
+          starts++;
+          return {
+            stopReason: "error",
+            text: "",
+            failure: { retryable: kind !== "auth", message: "failed" },
+          };
+        },
+      },
+    });
+    const result = await coordinator.execute("go", abort.signal);
+    assert.equal(starts, 1);
+    assert.equal(
+      result.stopReason,
+      kind === "unknown"
+        ? "outcome_unknown"
+        : kind === "cancel"
+          ? "aborted"
+          : "error",
+    );
+  }
+});

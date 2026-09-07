@@ -261,7 +261,7 @@ describe("OpenAICompatibleAdapter streaming", () => {
       }),
       /Model HTTP 503:.*upstream capacity exhausted/,
     );
-    assert.equal(calls, 2);
+    assert.equal(calls, 3);
   });
 });
 

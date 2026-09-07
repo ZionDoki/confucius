@@ -53,6 +53,7 @@ export const PAPER_WRITE_TOOLS = [
   "propose_highlights",
   "propose_annotations",
   "commit_annotations",
+  "update_annotation",
   "update_annotation_comment",
   "delete_annotation",
 ] as const;
@@ -135,6 +136,11 @@ export interface PreparedOperation {
 }
 
 export interface ToolExecutionContext {
+  annotationBatchId?: string;
+  taskTitle?: string;
+  taskCreatedAt?: number;
+  agent?: string;
+  runtime?: "native" | "plugin" | "sidecar";
   taskId?: string;
   runId?: string;
   intentRevision?: number;

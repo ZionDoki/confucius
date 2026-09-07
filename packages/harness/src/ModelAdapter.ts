@@ -1,3 +1,4 @@
+import type { ModelRequestProgress } from "@confucius/protocol";
 import { abortError } from "./abort";
 
 export interface ModelToolCall {
@@ -46,6 +47,9 @@ export class ModelError extends Error {
     readonly options: {
       retryable?: boolean;
       retryAfterMs?: number;
+      requestId?: string;
+      attempts?: number;
+      exhausted?: boolean;
       partial?: ModelTurn;
     } = {},
   ) {
@@ -83,6 +87,8 @@ export interface ModelMessage {
 }
 
 export interface ModelRequest {
+  requestId?: string;
+  onRequestProgress?: (progress: ModelRequestProgress) => void | Promise<void>;
   /** Host accounting/checkpoint hook, awaited before each transport attempt. */
   onAttempt?: () => Promise<void>;
   deadlineMs?: number;
@@ -100,6 +106,7 @@ export interface ModelRequest {
 }
 
 export interface ModelAdapter {
+  readonly handlesRetries?: boolean;
   readonly accountsAttempts?: boolean;
   complete(request: ModelRequest, signal?: AbortSignal): Promise<ModelTurn>;
 }

@@ -209,13 +209,16 @@ describe("TurnLoop", () => {
 
     assert.equal(result.phase, "done");
     assert.equal(result.text, "Found one matching paper.");
-    assert.deepEqual(events.types(), [
-      "turn_started",
-      "tool_requested",
-      "tool_result",
-      "text_delta",
-      "turn_completed",
-    ]);
+    assert.deepEqual(
+      events.types().filter((type) => type !== "model_request_progress"),
+      [
+        "turn_started",
+        "tool_requested",
+        "tool_result",
+        "text_delta",
+        "turn_completed",
+      ],
+    );
     assert.ok(checkpoints.count("turn_1") >= 2);
     const toolResult = events.events.find(
       (event) => event.type === "tool_result",
@@ -318,8 +321,18 @@ describe("TurnLoop", () => {
     });
 
     assert.equal(result.phase, "done");
-    assert.ok(events.types().includes("approval_required"));
-    assert.ok(events.types().includes("approval_resolved"));
+    assert.ok(
+      events
+        .types()
+        .filter((type) => type !== "model_request_progress")
+        .includes("approval_required"),
+    );
+    assert.ok(
+      events
+        .types()
+        .filter((type) => type !== "model_request_progress")
+        .includes("approval_resolved"),
+    );
     const denied = events.events.find((event) => event.type === "tool_result");
     assert.equal(denied?.type, "tool_result");
     if (denied?.type === "tool_result") {
@@ -442,11 +455,10 @@ describe("TurnLoop", () => {
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
 
-    assert.deepEqual(events.types(), [
-      "turn_started",
-      "tool_requested",
-      "approval_required",
-    ]);
+    assert.deepEqual(
+      events.types().filter((type) => type !== "model_request_progress"),
+      ["turn_started", "tool_requested", "approval_required"],
+    );
     assert.ok(releaseApproval, "approval resolver should be waiting");
     assert.equal(
       events.events.some((event) => event.type === "tool_result"),
@@ -461,8 +473,18 @@ describe("TurnLoop", () => {
     const result = await running;
 
     assert.equal(result.phase, "done");
-    assert.ok(events.types().includes("approval_resolved"));
-    assert.ok(events.types().includes("tool_result"));
+    assert.ok(
+      events
+        .types()
+        .filter((type) => type !== "model_request_progress")
+        .includes("approval_resolved"),
+    );
+    assert.ok(
+      events
+        .types()
+        .filter((type) => type !== "model_request_progress")
+        .includes("tool_result"),
+    );
   });
 
   it("stops when the iteration budget is exhausted", async () => {
@@ -513,7 +535,13 @@ describe("TurnLoop", () => {
       .types()
       .filter((type) => type === "tool_requested");
     assert.equal(requested.length, 2);
-    assert.equal(events.types().at(-1), "turn_failed");
+    assert.equal(
+      events
+        .types()
+        .filter((type) => type !== "model_request_progress")
+        .at(-1),
+      "turn_failed",
+    );
   });
 
   it("rejects invalid tool arguments without calling the tool", async () => {

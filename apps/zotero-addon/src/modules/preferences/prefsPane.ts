@@ -110,15 +110,15 @@ export function bindPrefsWindow(win: Window): void {
   ) as HTMLSelectElement | null;
   if (memoryConsent) {
     const current = getPref("memoryConsent");
-    memoryConsent.value = isMemoryConsent(current) ? current : "review";
+    memoryConsent.value = current === "off" ? "off" : "review";
     memoryConsent.addEventListener("change", () => {
       const next = isMemoryConsent(memoryConsent.value)
         ? memoryConsent.value
         : "review";
-      setPref("memoryConsent", next);
+      setPref("memoryConsent", next === "off" ? "off" : "review");
       // Keep the legacy preference coherent for older add-on builds without
       // ever turning an upgrade into silent automatic extraction.
-      setPref("memoryAutoExtract", next === "auto");
+      setPref("memoryAutoExtract", next !== "off");
     });
   }
   const bindBudget = (

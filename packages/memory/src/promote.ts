@@ -7,7 +7,7 @@ export const PROMOTED_FROM_LOG_TAG = "promoted-from-log";
 /** Tag applied when a memory is retrieved often enough to stay in the system prompt. */
 export const PINNED_TAG = "confucius:pinned";
 
-/** Distinct log retrievals before an excerpt is written as a memory. */
+/** Distinct log retrievals before an excerpt is proposed as a memory. */
 export const LOG_PROMOTE_HITS = 3;
 /** Distinct memory retrievals before a memory is pinned into the system prompt. */
 export const MEMORY_PIN_HITS = 8;
@@ -17,13 +17,14 @@ const MIN_EXCERPT_CHARS = 48;
 export interface PromotionOptions {
   logPromoteHits?: number;
   memoryPinHits?: number;
+  propose?: (op: import("./types").MemoryOp, sourceId: string) => Promise<void>;
 }
 
 /**
  * Rehearsal-based promotion:
  *
  * - Logs (episodic) stay on disk forever. Repeated retrieval of the same
- *   excerpt distills it into a durable memory (semantic).
+ *   excerpt proposes it as a durable memory, pending individual approval.
  * - Memories that keep being retrieved are pinned so they always ride in
  *   the system prompt, instead of competing with one-off search hits.
  *
@@ -37,7 +38,7 @@ export class MemoryPromotion {
   constructor(
     private readonly memory: MemoryEngine,
     private readonly logs: ConversationLogEngine,
-    options: PromotionOptions = {},
+    private readonly options: PromotionOptions = {},
   ) {
     this.logPromoteHits = options.logPromoteHits ?? LOG_PROMOTE_HITS;
     this.memoryPinHits = options.memoryPinHits ?? MEMORY_PIN_HITS;
@@ -69,16 +70,18 @@ export class MemoryPromotion {
         await this.logs.markPromoted(candidate.hash, duplicates[0].id);
         continue;
       }
-      const record = await this.memory.save({
-        type: "note",
-        title: excerpt.slice(0, 64).replace(/\n/g, " "),
-        content: excerpt.slice(0, 800),
-        tags: [PROMOTED_FROM_LOG_TAG, `log:${candidate.sessionId}`],
-        confidence: 0.75,
-        sourceSessionId: candidate.sessionId,
-      });
-      await this.logs.markPromoted(candidate.hash, record.id);
-      changes.push({ op: "add", id: record.id, title: record.title });
+      if (!this.options.propose) continue;
+      await this.options.propose(
+        {
+          op: "add",
+          type: "note",
+          title: excerpt.slice(0, 64).replace(/\n/g, " "),
+          content: excerpt.slice(0, 800),
+          tags: [PROMOTED_FROM_LOG_TAG, `log:${candidate.sessionId}`],
+          confidence: 0.75,
+        },
+        candidate.hash,
+      );
       promoted += 1;
     }
     return changes;

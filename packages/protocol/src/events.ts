@@ -12,7 +12,21 @@ import type {
 
 export type { ArtifactKind, ArtifactRecord, Citation } from "./research";
 
+export interface ModelRequestProgress {
+  requestId: string;
+  attempt: number;
+  status: "started" | "completed" | "failed";
+  code?: string;
+  retryable?: boolean;
+  exhausted?: boolean;
+  delayMs?: number;
+  message?: string;
+  partial?: { text?: string; reasoning?: string };
+  purpose?: "title" | "memory";
+}
+
 export type ConfuciusEventType =
+  | "model_request_progress"
   | "session_created"
   | "session_updated"
   | "turn_started"
@@ -58,6 +72,7 @@ export interface PlanStep {
 }
 
 type EventPayloads = {
+  model_request_progress: ModelRequestProgress;
   context_usage_updated: { inputTokens: number; capacityTokens?: number };
   model_usage_updated: {
     inputTokens: number;
@@ -83,8 +98,15 @@ type EventPayloads = {
   approval_required: { request: ApprovalRequest };
   approval_resolved: { resolution: ApprovalResolution };
   artifact_upserted: { artifact: ArtifactSummary };
-  text_delta: { text: string; phase?: "commentary" | "final_answer" };
+  text_delta: {
+    text: string;
+    phase?: "commentary" | "final_answer";
+    requestId?: string;
+    attempt?: number;
+  };
   reasoning_delta: {
+    requestId?: string;
+    attempt?: number;
     text: string;
     /** Host-authored workflow phase shown while a long turn is running. */
     statusText?: string;
@@ -98,7 +120,11 @@ type EventPayloads = {
     total: number;
   };
   turn_completed: { phase: TurnPhase; stopReason?: string };
-  turn_failed: { message: string; stopReason?: string };
+  turn_failed: {
+    message: string;
+    stopReason?: string;
+    failure?: import("./runtimeFailure").RuntimeFailure;
+  };
   turn_aborted: { reason: string; stopReason?: string };
   task_status_changed: { status: TaskStatus; reason?: string };
   runtime_status: { runtime: RuntimeStatus };

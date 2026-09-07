@@ -91,6 +91,42 @@ export function describeCallForApproval(
       ? (resolveItem(ref.libraryID, ref.key)?.title ?? "")
       : "";
 
+  if (
+    [
+      "update_annotation",
+      "update_annotation_comment",
+      "delete_annotation",
+    ].includes(toolName)
+  ) {
+    const action =
+      toolName === "delete_annotation"
+        ? language === "zh-CN"
+          ? "删除 Confucius 标注"
+          : "Delete Confucius annotation"
+        : language === "zh-CN"
+          ? "修改 Confucius 标注"
+          : "Update Confucius annotation";
+    const change =
+      toolName === "delete_annotation"
+        ? ""
+        : [
+            args.comment !== undefined
+              ? language === "zh-CN"
+                ? "评论"
+                : "comment"
+              : "",
+            args.anchor !== undefined
+              ? language === "zh-CN"
+                ? "文本选区"
+                : "text selection"
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" + ");
+    return [action, refTitle && clip(refTitle), change]
+      .filter(Boolean)
+      .join(" · ");
+  }
   const highlights = args.highlights ?? args.annotations;
   const highlightText = firstHighlightText(highlights);
   const annotationCount = itemCount(highlights);

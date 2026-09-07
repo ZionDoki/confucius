@@ -1,3 +1,12 @@
+import {
+  AnnotationOwnership,
+  type AnnotationOwnerContext,
+} from "./AnnotationOwnership";
+import {
+  annotationMatchesFilter,
+  type AnnotationBatchFilter,
+  type AnnotationBatchView,
+} from "@confucius/protocol";
 import { deadline, ToolProgress, ToolTimeout } from "./Deadline";
 import { literalMatches, regexMatches } from "./RegexWorker";
 import { validateArgs, validateValue } from "@confucius/harness";
@@ -1373,6 +1382,18 @@ async function pdfFingerprint(pdf: Zotero.Item): Promise<string> {
     modified: info.lastModified,
   });
 }
+function annotationCreationTime(
+  item: Zotero.Item | null,
+  field: "dateAdded" | "dateModified" = "dateAdded",
+): number {
+  const stamp = String(item?.[field] ?? "");
+  const time = Date.parse(
+    /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/.test(stamp)
+      ? stamp.replace(" ", "T") + "Z"
+      : stamp,
+  );
+  return Number.isFinite(time) ? time : Date.now();
+}
 function readPdfAnnotations(pdf: Zotero.Item) {
   return (pdf.getAnnotations?.(false) || [])
     .map((entry) =>
@@ -1482,13 +1503,144 @@ export class ZoteroToolHost {
   private nextFindingView = 0;
   private readonly pageTextCache = new Map<string, string>();
   private readonly annotationLocks = new ResourceLocks();
+  readonly ownership: AnnotationOwnership;
   private operations?: OperationRepository;
   private readonly pendingDownloads = new Set<string>();
   constructor(
     private readonly storage: JsonStorage = runtimeJsonStorage(
       "annotation-records",
     ),
-  ) {}
+  ) {
+    this.ownership = new AnnotationOwnership(storage);
+  }
+
+  private ownerContext(context: ToolExecutionContext): AnnotationOwnerContext {
+    return {
+      taskId: context.taskId ?? "local",
+      title: context.taskTitle ?? context.taskId ?? "Annotation task",
+      createdAt: context.taskCreatedAt,
+      agent: context.agent,
+      runtime: context.runtime,
+    };
+  }
+
+  async freezeTaskPdf(
+    context: ToolExecutionContext,
+    libraryID: number,
+    key: string,
+    attachmentKey?: string,
+  ) {
+    const item = getItem(libraryID, key);
+    if (!item) return;
+    const pdf = await findPdf(item, attachmentKey);
+    if (!pdf) return;
+    return this.annotationLocks.run(
+      [`${pdf.libraryID}_${pdf.key}`],
+      async () => {
+        await pdf.reload?.(["childItems"], true);
+        return this.ownership.freeze(
+          `${pdf.libraryID}_${pdf.key}`,
+          this.ownerContext(context),
+          readPdfAnnotations(pdf).map((mark) => mark.color),
+        );
+      },
+    );
+  }
+
+  async annotationBatchView(
+    libraryID: number,
+    key: string,
+    filter?: AnnotationBatchFilter,
+  ): Promise<AnnotationBatchView> {
+    const pdf = getItem(libraryID, key);
+    if (!pdf?.isAttachment?.()) throw new Error("PDF not found");
+    const token = `${libraryID}_${key}`;
+    await this.restoreLegacyOwnership(pdf);
+    if (filter)
+      await this.ownership.change(token, (record) => {
+        record.filter = filter;
+      });
+    const record = await this.ownership.read(token);
+    const marks = readPdfAnnotations(pdf);
+    const membership = Object.fromEntries(
+      marks.map((mark) => [
+        mark.key,
+        record.marks[mark.key]?.status === "created" &&
+        record.batches[record.marks[mark.key].batchId ?? ""]
+          ? record.marks[mark.key].batchId!
+          : null,
+      ]),
+    );
+    return {
+      membership,
+      filter: record.filter,
+      total: marks.length,
+      existingCount: Object.values(membership).filter((id) => !id).length,
+      batches: Object.values(record.batches)
+        .map(({ batch }) => ({
+          ...batch,
+          count: Object.values(membership).filter((id) => id === batch.id)
+            .length,
+        }))
+        .sort((a, b) => b.createdAt - a.createdAt),
+    };
+  }
+
+  /** Only an explicit committed host receipt can establish legacy creation ownership.
+   * Reused annotations, proposal text, tags and task dates prove nothing. */
+  private async restoreLegacyOwnership(pdf: Zotero.Item): Promise<void> {
+    if (!this.operations) return;
+    const token = `${pdf.libraryID}_${pdf.key}`;
+    const record = await this.ownership.read(token);
+    const actual = new Set(readPdfAnnotations(pdf).map((mark) => mark.key));
+    if ([...actual].every((key) => record.marks[key])) return;
+    const proofs: Array<{
+      key: string;
+      taskId: string;
+      operationId: string;
+      agent?: string;
+    }> = [];
+    for (const operation of await this.operations.listOperations({
+      name: "commit_annotations",
+      resources: [`zotero:${pdf.libraryID}:${pdf.key}`],
+    })) {
+      const result = operation.result;
+      const data = result?.ok ? result.data : result?.details;
+      const rows = (
+        data as { committed?: Array<{ annotationKey?: string }> } | undefined
+      )?.committed;
+      if (!Array.isArray(rows) || !operation.context.taskId) continue;
+      const planned = this.operationAnnotationEntries(operation);
+      for (const row of rows)
+        if (
+          row.annotationKey &&
+          actual.has(row.annotationKey) &&
+          !record.marks[row.annotationKey] &&
+          planned.some(
+            (entry) =>
+              entry.annotationKey === row.annotationKey &&
+              entry.status === "pending",
+          )
+        )
+          proofs.push({
+            key: row.annotationKey,
+            taskId: operation.context.taskId,
+            operationId: operation.id,
+            agent: operation.context.agent,
+          });
+    }
+    if (proofs.length)
+      await this.ownership.change(token, (value) => {
+        for (const proof of proofs)
+          value.marks[proof.key] ??= {
+            createdBy: "confucius-agent",
+            status: "created",
+            taskId: proof.taskId,
+            agent: proof.agent,
+            proofOperationId: proof.operationId,
+          };
+      });
+  }
 
   setOperationReader(operations: OperationRepository): void {
     this.operations = operations;
@@ -1585,6 +1737,46 @@ export class ZoteroToolHost {
       )
         return reject("The explicit parent must be a regular Zotero item");
       if (TOOL_META[name]?.mutatesState) {
+        if (item.isAnnotation?.()) {
+          const parent = item.parentItemID
+            ? asItem(Zotero.Items.get(item.parentItemID))
+            : null;
+          if (parent) await this.restoreLegacyOwnership(parent);
+          if (
+            !parent ||
+            !(await this.ownership.owned(
+              `${parent.libraryID}_${parent.key}`,
+              item.key,
+            ))
+          )
+            return reject(
+              "Only annotations with verified Confucius Agent creation provenance may be modified or deleted",
+              "permission_denied",
+            );
+          if (
+            ![
+              "update_annotation",
+              "update_annotation_comment",
+              "delete_annotation",
+              "batch_update_tags",
+            ].includes(name)
+          )
+            return reject(
+              "Use the dedicated annotation tools to modify an Agent annotation",
+              "permission_denied",
+            );
+          if (
+            name === "batch_update_tags" &&
+            [
+              ...((args.add ?? []) as string[]),
+              ...((args.remove ?? []) as string[]),
+            ].some((tag) => tag.startsWith("Confucius "))
+          )
+            return reject(
+              "Batch and creation tags are managed by Confucius",
+              "permission_denied",
+            );
+        }
         if (item.isAnnotation?.() && item.parentItemID) {
           const parent = asItem(Zotero.Items.get(item.parentItemID));
           if (parent)
@@ -1732,8 +1924,64 @@ export class ZoteroToolHost {
     context.expectedAfter ??= {};
     if (name === "update_item_metadata")
       context.expectedAfter.fields = canonical(args.fields);
-    if (name === "update_annotation_comment")
-      context.expectedAfter.comment = String(args.comment ?? "");
+    if (
+      [
+        "update_annotation",
+        "update_annotation_comment",
+        "delete_annotation",
+      ].includes(name)
+    ) {
+      const target = getItem(defaultLibraryID(args), String(args.key));
+      if (!target?.isAnnotation?.())
+        return reject("Target is not an annotation");
+      const parent = target.parentItemID
+        ? asItem(Zotero.Items.get(target.parentItemID))
+        : null;
+      if (!parent) return reject("Annotation PDF not found", "not_found");
+      context.expectedAfter.ownershipPdf ??= `${parent.libraryID}_${parent.key}`;
+      context.expectedAfter.modifiedAt ??= String(Date.now());
+      context.expectedAfter.modifier ??= canonical(this.ownerContext(context));
+      if (
+        name !== "delete_annotation" &&
+        !context.expectedAfter.annotationUpdate
+      ) {
+        if (args.comment === undefined && args.anchor === undefined)
+          return reject("Provide comment or anchor");
+        const change: Record<string, unknown> = {};
+        if (args.comment !== undefined) change.comment = String(args.comment);
+        if (args.anchor !== undefined) {
+          if (!["highlight", "underline"].includes(target.annotationType))
+            return reject(
+              "Only text highlights and underlines support selection changes",
+            );
+          const progress = new ToolProgress(context, context.signal, 60_000);
+          try {
+            const ready = await waitForPdfReader(parent, progress);
+            Object.assign(
+              change,
+              await this.locateAnchor(
+                ready.view,
+                {
+                  type: target.annotationType as "highlight" | "underline",
+                  quote: "",
+                  anchor: String(args.anchor),
+                  color: target.annotationColor,
+                  comment:
+                    args.comment === undefined
+                      ? target.annotationComment
+                      : String(args.comment),
+                },
+                await pdfFingerprint(parent),
+                new Map(),
+              ),
+            );
+          } finally {
+            progress.close();
+          }
+        }
+        context.expectedAfter.annotationUpdate = canonical(change);
+      }
+    }
     if (name === "batch_update_tags") {
       const current = getItem(defaultLibraryID(args), String(args.key));
       const tags = new Set(current?.getTags().map((tag) => tag.tag));
@@ -1900,8 +2148,20 @@ export class ZoteroToolHost {
         ),
       );
     }
-    if (name === "update_annotation_comment")
-      return canonical({ comment: item.annotationComment });
+    if (
+      [
+        "update_annotation",
+        "update_annotation_comment",
+        "delete_annotation",
+      ].includes(name)
+    )
+      return canonical({
+        version: itemVersion(item),
+        comment: item.annotationComment,
+        text: item.annotationText,
+        position: item.annotationPosition,
+        color: item.annotationColor,
+      });
     if (["add_to_collection", "remove_from_collection"].includes(name)) {
       const collection = Zotero.Collections.getByLibraryAndKey(
         defaultLibraryID(args),
@@ -2004,6 +2264,12 @@ export class ZoteroToolHost {
         );
       await pdf.reload?.(["childItems"], true);
       const actual = readPdfAnnotations(pdf);
+      const { batch } = await this.ownership.freeze(
+        token,
+        this.ownerContext(context),
+        actual.map((mark) => mark.color),
+      );
+      context.annotationBatchId = batch.id;
       await this.projectAnnotationOutcomes(proposal, pdf, actual);
       const progress = new ToolProgress(context, context.signal, 120_000);
       try {
@@ -2105,6 +2371,14 @@ export class ZoteroToolHost {
           return reject(
             "proposalId and supplied annotations conflict; prepare the revised proposal",
           );
+        for (const entry of eligible) {
+          entry.located!.color = await this.ownership.color(
+            token,
+            batch.id,
+            entry.located!.color,
+          );
+          entry.draft!.color = entry.located!.color;
+        }
         for (const entry of eligible)
           entry.annotationKey ??= (
             Zotero as typeof Zotero & {
@@ -2115,6 +2389,7 @@ export class ZoteroToolHost {
         args.proposalId = proposal.id;
         args.annotations = eligible.map((entry) => ({
           ...entry.raw,
+          color: entry.located!.color,
           id: entry.id,
           page: entry.located!.position.pageIndex + 1,
           ...(entry.draft?.type !== "image" && entry.draft?.anchor
@@ -2129,6 +2404,8 @@ export class ZoteroToolHost {
         record.latest[taskId] = proposal.id;
         context.expectedAfter ??= {};
         Object.assign(context.expectedAfter, {
+          annotationBatch: canonical(batch),
+          annotationCreator: canonical(this.ownerContext(context)),
           annotationRequest: request,
           annotationArgs: canonical(args),
           annotationProposal: proposal.id,
@@ -2291,7 +2568,7 @@ export class ZoteroToolHost {
       case "update_item_metadata":
         return this.updateItemMetadata(args);
       case "batch_update_tags":
-        return this.batchUpdateTags(args);
+        return this.batchUpdateTags(args, context);
       case "link_related_items":
         return this.linkRelated(args);
       case "create_note":
@@ -2330,10 +2607,11 @@ export class ZoteroToolHost {
         return this.proposeAnnotations(args, context);
       case "commit_annotations":
         return this.commitAnnotations(args, context, signal);
+      case "update_annotation":
       case "update_annotation_comment":
-        return this.updateAnnotationComment(args);
+        return this.updateAnnotation(name, args, context);
       case "delete_annotation":
-        return this.deleteAnnotation(args);
+        return this.deleteAnnotation(args, context);
       default:
         return fail(name, "not_found", `Unknown Zotero tool: ${name}`);
     }
@@ -3068,6 +3346,7 @@ export class ZoteroToolHost {
 
   private async batchUpdateTags(
     args: Record<string, unknown>,
+    context: ToolExecutionContext,
   ): Promise<ToolResult> {
     const ref = requireItemRef(args);
     if (!ref.ok) {
@@ -3082,6 +3361,16 @@ export class ZoteroToolHost {
       for (const tag of (args.remove as string[]) || []) item.removeTag(tag);
       await item.save();
     });
+    if (item.isAnnotation?.() && item.parentItemID) {
+      const parent = asItem(Zotero.Items.get(item.parentItemID));
+      if (parent)
+        await this.ownership.modified(
+          `${parent.libraryID}_${parent.key}`,
+          item.key,
+          this.ownerContext(context),
+          Date.now(),
+        );
+    }
     return ok("batch_update_tags", {
       ...summarizeItem(item),
       tags: item.getTags?.() || [],
@@ -3608,7 +3897,45 @@ export class ZoteroToolHost {
     const token = `${pdf.libraryID}_${pdf.key}`;
     return this.annotationLocks.run([token], async () => {
       await pdf.reload?.(["childItems"], true);
-      const annotations = readPdfAnnotations(pdf);
+      const all = readPdfAnnotations(pdf);
+      const ownershipWarnings: string[] = [];
+      const ownership = await this.restoreLegacyOwnership(pdf)
+        .then(() => this.ownership.read(token))
+        .catch((error) => {
+          ownershipWarnings.push(
+            `Annotation provenance store unavailable; origin remains unknown: ${String(error)}`,
+          );
+          return { marks: {}, batches: {} } as Pick<
+            import("./AnnotationOwnership").PdfOwnership,
+            "marks" | "batches"
+          >;
+        });
+      const annotations = all
+        .map((mark) => {
+          const provenance =
+            ownership.marks[mark.key]?.status === "created"
+              ? ownership.marks[mark.key]
+              : undefined;
+          const batch = provenance?.batchId
+            ? ownership.batches[provenance.batchId]?.batch
+            : undefined;
+          return {
+            ...mark,
+            provenance,
+            batch,
+            batchName: batch?.name ?? "原有标注",
+            editableByAgent: !!provenance,
+          };
+        })
+        .filter(
+          (mark) =>
+            !args.batchIds ||
+            annotationMatchesFilter(mark.batch?.id, {
+              mode: "selected",
+              batchIds: args.batchIds as string[],
+              includeExisting: args.includeExisting === true,
+            }),
+        );
       const offset = Number(args.offset ?? 0);
       const limit = Number(args.limit ?? 25);
       if (
@@ -3638,28 +3965,26 @@ export class ZoteroToolHost {
           (proposal) => proposal.taskId === (context.taskId ?? "local"),
         );
         for (const proposal of proposals)
-          await this.projectAnnotationOutcomes(
-            proposal,
-            pdf,
-            annotations,
-            true,
-          );
-        return ok("get_annotations", {
-          ...data,
-          proposals: proposals.map((proposal) => ({
-            proposalId: proposal.id,
-            entries: proposal.entries.map(
-              ({ id, status, annotationKey, error, raw, reviewIssue }) => ({
-                id,
-                status,
-                annotationKey,
-                error,
-                draft: raw,
-                reviewIssue,
-              }),
-            ),
-          })),
-        });
+          await this.projectAnnotationOutcomes(proposal, pdf, all, true);
+        return {
+          ...ok("get_annotations", {
+            ...data,
+            proposals: proposals.map((proposal) => ({
+              proposalId: proposal.id,
+              entries: proposal.entries.map(
+                ({ id, status, annotationKey, error, raw, reviewIssue }) => ({
+                  id,
+                  status,
+                  annotationKey,
+                  error,
+                  draft: raw,
+                  reviewIssue,
+                }),
+              ),
+            })),
+          }),
+          warnings: ownershipWarnings,
+        };
       } catch (error) {
         return {
           ...ok("get_annotations", data),
@@ -4394,6 +4719,7 @@ export class ZoteroToolHost {
       id: entry.id,
       status: entry.status,
       type: entry.draft?.type,
+      color: entry.located?.color ?? entry.draft?.color,
       annotationKey: entry.annotationKey,
       page: entry.located
         ? entry.located.position.pageIndex + 1
@@ -4573,21 +4899,74 @@ export class ZoteroToolHost {
             try {
               progress.setStage(`saving_${entry.id}`);
               // Keep the actual write promise alive: the shared executor owns timeout reporting and retains its resource lock until this non-cancellable write settles.
+              const batch = JSON.parse(
+                context.expectedAfter?.annotationBatch ?? "null",
+              ) as import("@confucius/protocol").AnnotationBatch | null;
+              if (!batch)
+                throw new Error("Prepared annotation batch is missing");
+              const token = `${pdf.libraryID}_${pdf.key}`;
+              await this.ownership.assertColor(
+                token,
+                batch.id,
+                entry.located!.color,
+              );
+              const planned = (await this.ownership.read(token)).marks[
+                entry.annotationKey!
+              ];
+              if (!planned)
+                await this.ownership.plan(
+                  token,
+                  entry.annotationKey!,
+                  batch.id,
+                  JSON.parse(context.expectedAfter?.annotationCreator ?? "{}"),
+                  canonical(entry.located),
+                );
+              else if (
+                planned.status !== "planned" ||
+                planned.expected !== canonical(entry.located)
+              )
+                throw new Error("Annotation write identity was already used");
+              const date = new Date(batch.createdAt);
+              const day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
               const annotation = await Zotero.Annotations.saveFromJSON(
                 pdf,
                 {
                   key: entry.annotationKey,
                   ...entry.located!,
+                  tags: [
+                    { name: `Confucius 批次：${batch.name}` },
+                    { name: `Confucius 批次日期：${day}` },
+                  ],
                   readOnly: false,
                 } as unknown as _ZoteroTypes.Annotations.AnnotationJson,
                 { notifierData: { instanceID: ready!.reader._instanceID } },
+              );
+              await this.ownership.confirm(
+                `${pdf.libraryID}_${pdf.key}`,
+                annotation.key,
+                canonical(entry.located),
+                annotationCreationTime(annotation),
               );
               created.push(annotation);
               entry.status = "committed";
             } catch (error) {
               await pdf.reload?.(["childItems"], true);
               const saved = getItem(pdf.libraryID, entry.annotationKey!);
-              if (saved?.isAnnotation?.()) {
+              if (
+                saved?.isAnnotation?.() &&
+                entry.located &&
+                saved.annotationColor === entry.located.color &&
+                saved.annotationComment === entry.located.comment &&
+                saved.annotationText === entry.located.text &&
+                canonical(annotationPosition(saved)) ===
+                  canonical(entry.located.position)
+              ) {
+                await this.ownership.confirm(
+                  `${pdf.libraryID}_${pdf.key}`,
+                  saved.key,
+                  canonical(entry.located),
+                  annotationCreationTime(saved),
+                );
                 entry.status = "committed";
                 warnings.push(
                   `Annotation saved but its response failed: ${String(error)}`,
@@ -4797,11 +5176,38 @@ export class ZoteroToolHost {
         return applied();
     }
     if (
-      operation.name === "update_annotation_comment" &&
-      item?.annotationComment === operation.args.comment
-    )
-      return applied();
-    if (operation.name === "delete_annotation" && !item) return applied();
+      [
+        "update_annotation",
+        "update_annotation_comment",
+        "delete_annotation",
+      ].includes(operation.name) &&
+      context.expectedAfter?.ownershipPdf
+    ) {
+      const change = JSON.parse(context.expectedAfter.annotationUpdate ?? "{}");
+      const deleted = operation.name === "delete_annotation";
+      if (
+        deleted
+          ? !item
+          : item?.isAnnotation?.() &&
+            (change.comment === undefined ||
+              item.annotationComment === change.comment) &&
+            (!change.position ||
+              (canonical(annotationPosition(item)) ===
+                canonical(change.position) &&
+                item.annotationText === change.text))
+      ) {
+        await this.ownership.modified(
+          context.expectedAfter.ownershipPdf,
+          key,
+          JSON.parse(context.expectedAfter.modifier),
+          item
+            ? annotationCreationTime(item, "dateModified")
+            : (operation.finishedAt ?? operation.startedAt),
+          deleted,
+        );
+        return applied();
+      }
+    }
     if (operation.name === "link_related_items" && item) {
       const other = getItem(libraryID, String(operation.args.relatedKey));
       await other?.reload?.(["relations"], true);
@@ -4897,6 +5303,23 @@ export class ZoteroToolHost {
               )
             : undefined;
           if (saved) {
+            const mark = (
+              await this.ownership.read(`${pdf.libraryID}_${pdf.key}`)
+            ).marks[saved.key];
+            if (
+              mark?.status === "planned" &&
+              entry.located &&
+              saved.color === entry.located.color &&
+              saved.comment === entry.located.comment &&
+              saved.text === entry.located.text &&
+              canonical(saved.position) === canonical(entry.located.position)
+            )
+              await this.ownership.confirm(
+                `${pdf.libraryID}_${pdf.key}`,
+                saved.key,
+                canonical(entry.located),
+                annotationCreationTime(getItem(pdf.libraryID, saved.key)),
+              );
             entry.status = "committed";
             entry.error = undefined;
           } else if (entry.status === "pending" || entry.status === "unknown") {
@@ -4923,56 +5346,75 @@ export class ZoteroToolHost {
     );
   }
 
-  private async updateAnnotationComment(
+  private async updateAnnotation(
+    name: string,
     args: Record<string, unknown>,
+    context: ToolExecutionContext,
   ): Promise<ToolResult> {
-    const ref = requireItemRef(args);
-    if (!ref.ok) {
-      return fail("update_annotation_comment", "invalid_args", ref.message);
-    }
-    const item = getItem(ref.libraryID, ref.key);
-    if (!item) {
+    const item = getItem(defaultLibraryID(args), String(args.key));
+    const pdf = context.expectedAfter?.ownershipPdf;
+    if (
+      !item?.isAnnotation?.() ||
+      !pdf ||
+      !(await this.ownership.owned(pdf, item.key))
+    )
       return fail(
-        "update_annotation_comment",
-        "not_found",
-        "Annotation not found",
+        name,
+        "permission_denied",
+        "Annotation creation provenance is not verified",
       );
+    const change = JSON.parse(context.expectedAfter?.annotationUpdate ?? "{}");
+    if (change.comment !== undefined) item.annotationComment = change.comment;
+    if (change.position) {
+      item.annotationText = change.text;
+      item.annotationPosition = JSON.stringify(change.position);
+      item.annotationPageLabel = change.pageLabel;
+      item.annotationSortIndex = change.sortIndex;
     }
-    if (item.isAnnotation?.()) {
-      item.annotationComment = String(args.comment ?? "");
-      await item.saveTx();
-      return ok("update_annotation_comment", {
-        libraryID: item.libraryID,
-        key: item.key,
-        comment: item.annotationComment || "",
-      });
-    }
-    return fail(
-      "update_annotation_comment",
-      "invalid_args",
-      "Target item is not an annotation",
+    await item.saveTx();
+    await this.ownership.modified(
+      pdf,
+      item.key,
+      JSON.parse(context.expectedAfter!.modifier),
+      Date.now(),
     );
+    return ok(name, {
+      libraryID: item.libraryID,
+      key: item.key,
+      comment: item.annotationComment,
+      text: item.annotationText,
+      position: annotationPosition(item),
+      provenance: await this.ownership.owned(pdf, item.key),
+    });
   }
 
   private async deleteAnnotation(
     args: Record<string, unknown>,
+    context: ToolExecutionContext,
   ): Promise<ToolResult> {
-    const ref = requireItemRef(args);
-    if (!ref.ok) {
-      return fail("delete_annotation", "invalid_args", ref.message);
-    }
-    const item = getItem(ref.libraryID, ref.key);
-    if (!item) {
-      return fail("delete_annotation", "not_found", "Not found");
-    }
-    if (!item.isAnnotation?.()) {
+    const item = getItem(defaultLibraryID(args), String(args.key));
+    const pdf = context.expectedAfter?.ownershipPdf;
+    if (
+      !item?.isAnnotation?.() ||
+      !pdf ||
+      !(await this.ownership.owned(pdf, item.key))
+    )
       return fail(
         "delete_annotation",
-        "invalid_args",
-        "Target item is not an annotation",
+        "permission_denied",
+        "Annotation creation provenance is not verified",
       );
-    }
     await item.eraseTx();
-    return ok("delete_annotation", { libraryID: ref.libraryID, key: ref.key });
+    await this.ownership.modified(
+      pdf,
+      item.key,
+      JSON.parse(context.expectedAfter!.modifier),
+      Date.now(),
+      true,
+    );
+    return ok("delete_annotation", {
+      libraryID: item.libraryID,
+      key: item.key,
+    });
   }
 }

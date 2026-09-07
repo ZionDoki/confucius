@@ -354,6 +354,11 @@ export interface ArtifactUpsertInput {
 }
 
 export interface MemoryProposal {
+  runId?: string;
+  turnId?: string;
+  source?: string;
+  sourceId?: string;
+  approvedOperation?: Record<string, unknown>;
   id: string;
   taskId: string;
   op: "add" | "update" | "delete";

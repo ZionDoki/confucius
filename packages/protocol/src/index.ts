@@ -166,12 +166,14 @@ export type {
 } from "./research";
 
 export type {
+  ModelRequestProgress,
   ConfuciusEvent,
   ConfuciusEventBase,
   ConfuciusEventType,
   PlanStep,
 } from "./events";
 export {
+  visibleModelEvents,
   coalesceTimeline,
   nextReasoningFold,
   toolLineStatus,
@@ -321,3 +323,7 @@ export * from "./run";
 export * from "./runtimeOutcome";
 export * from "./trace";
 export { mapMarkdownCitations } from "./markdown";
+
+export * from "./annotations";
+
+export * from "./runtimeFailure";

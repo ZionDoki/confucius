@@ -248,3 +248,51 @@ describe("Codex App Server contract", () => {
     );
   });
 });
+
+it("CLI willRetry is progress only; a terminal transient error remains structured and stale errors are ignored", () => {
+  const adapter = new CodexAdapter() as unknown as {
+    onNotification(session: unknown, message: unknown): void;
+  };
+  const events: Array<{
+    type: string;
+    payload: { failure?: { retryable: boolean } };
+  }> = [];
+  const session = {
+    threadId: "provider",
+    hostTurnId: "host",
+    turnId: "turn",
+    sink: {
+      emit(type: string, payload: { failure?: { retryable: boolean } }) {
+        events.push({ type, payload });
+      },
+    },
+  };
+  const params = {
+    threadId: "provider",
+    turnId: "turn",
+    willRetry: true,
+    error: {
+      message: "stream disconnected",
+      codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 503 } },
+    },
+  };
+  adapter.onNotification(session, { method: "error", params });
+  assert.equal(
+    events.some((e) => e.type === "turn_failed"),
+    false,
+  );
+  assert.equal(events.at(-1)?.type, "reasoning_delta");
+  adapter.onNotification(session, {
+    method: "error",
+    params: { ...params, willRetry: false, turnId: "old" },
+  });
+  assert.equal(events.length, 2);
+  adapter.onNotification(session, {
+    method: "error",
+    params: { ...params, willRetry: false },
+  });
+  assert.equal(
+    events.find((e) => e.type === "turn_failed")?.payload.failure?.retryable,
+    true,
+  );
+});

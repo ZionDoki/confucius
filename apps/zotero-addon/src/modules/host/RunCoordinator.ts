@@ -1,3 +1,4 @@
+import { modelRetryDelay } from "@confucius/harness";
 import type {
   ArtifactRecord,
   RunState,
@@ -12,6 +13,7 @@ export interface ExecutorResult {
   messages?: ModelMessage[];
   checkpoint?: TurnCheckpoint;
   failureMessage?: string;
+  failure?: import("@confucius/protocol").RuntimeFailure;
 }
 
 export interface RunExecutor {
@@ -131,6 +133,11 @@ export class RunCoordinator {
       persist(): Promise<void>;
       current(): boolean;
       progress(message: string): void;
+      requestProgress?(
+        progress: import("@confucius/protocol").ModelRequestProgress,
+      ): void;
+      recover?(): Promise<void>;
+      wait?: (ms: number, signal: AbortSignal) => Promise<void>;
       language?: UiLanguage;
     },
   ) {}
@@ -146,6 +153,26 @@ export class RunCoordinator {
     let previousGap = "";
     let repeatedGap = 0;
     let continuation = false;
+    let recoveries = 0;
+    let requestId = `runtime_${run.id}_${run.budget.executorStarts + 1}`;
+    const requestProgress = (status: "started" | "completed" | "failed") => {
+      if (run.budget.modelRequestsObservable) return;
+      run.modelRequest = {
+        requestId,
+        attempt: recoveries + 1,
+        status,
+        ...(status === "failed"
+          ? {
+              code: result.failure?.code,
+              message: result.failureMessage ?? result.failure?.message,
+              retryable: result.failure?.retryable ?? false,
+              exhausted: !!result.failure?.retryable && recoveries >= 2,
+              partial: { text: result.text },
+            }
+          : {}),
+      };
+      this.options.requestProgress?.(run.modelRequest);
+    };
     const finish = async (reason: string): Promise<RunOutcome> => {
       if (!this.options.current())
         return { ...result, stopReason: reason, work, superseded: true };
@@ -182,6 +209,7 @@ export class RunCoordinator {
         return finish("executor_budget");
       run.status = "running";
       run.budget.executorStarts++;
+      requestProgress("started");
       await this.options.persist();
       if (!this.options.current() || signal.aborted) break;
       try {
@@ -201,10 +229,41 @@ export class RunCoordinator {
         };
       }
       if (!this.options.current()) return { ...result, work, superseded: true };
+      requestProgress(
+        result.stopReason === "completed" ? "completed" : "failed",
+      );
       work = await this.options.snapshot();
       if (signal.aborted) return finish("aborted");
       if (work.unknownOperationIds.length) return finish("outcome_unknown");
-      if (result.stopReason !== "completed") return finish(result.stopReason);
+      if (result.stopReason !== "completed") {
+        if (
+          !run.budget.modelRequestsObservable &&
+          result.failure?.retryable &&
+          this.options.recover
+        ) {
+          if (recoveries >= 2) return finish("model_retries_exhausted");
+          recoveries++;
+          this.options.progress(
+            `连接暂时中断，自动恢复 ${recoveries}/2；已保存的成果将保留。`,
+          );
+          try {
+            await this.options.recover();
+            await (this.options.wait ?? modelRetryDelay)(
+              1000 * 2 ** (recoveries - 1),
+              signal,
+            );
+          } catch (error) {
+            result.failureMessage =
+              error instanceof Error ? error.message : String(error);
+            return finish(signal.aborted ? "aborted" : "incomplete");
+          }
+          continuation = true;
+          continue;
+        }
+        return finish(result.stopReason);
+      }
+      recoveries = 0;
+      requestId = `runtime_${run.id}_${run.budget.executorStarts + 1}`;
       if (!work.missing.length) return finish("completed");
       const gap = JSON.stringify({
         missing: work.missing

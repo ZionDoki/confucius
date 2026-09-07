@@ -59,7 +59,9 @@ describe("evals/* golden traces", () => {
         turnId: "t_eval",
         userText: testCase.userText,
       });
-      const types = harness.events.types();
+      const types = harness.events
+        .types()
+        .filter((type) => type !== "model_request_progress");
 
       if (testCase.expectedEventTypes) {
         assert.deepEqual(types, testCase.expectedEventTypes);

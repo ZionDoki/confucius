@@ -1,3 +1,4 @@
+import { runtimeFailure } from "@confucius/protocol";
 import { runtimePath } from "./RuntimeStorage";
 import { kimiModels, selectKimiModel } from "./RuntimeModels";
 import {
@@ -340,7 +341,7 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
         );
         active.sink.emit(
           "turn_failed",
-          { message: errorMessage(error) },
+          { message: errorMessage(error), failure: runtimeFailure(error) },
           input.turnId,
         );
         active.turnId = undefined;
@@ -372,8 +373,9 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
     } catch {
       // Older Kimi ACP builds need only process teardown.
     }
-    session.rpc.close();
     this.sessions.delete(taskId);
+    if (session.rpc.closeAndWait) await session.rpc.closeAndWait();
+    else session.rpc.close();
   }
 
   async disposeAll(): Promise<void> {
@@ -404,13 +406,17 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
         sessionId: opened.sessionId,
         modeId: "plan",
       });
-      await opened.rpc.request("session/prompt", {
-        sessionId: opened.sessionId,
-        prompt: [{ type: "text", text: prompt }],
-      });
+      await withTimeout(
+        opened.rpc.request("session/prompt", {
+          sessionId: opened.sessionId,
+          prompt: [{ type: "text", text: prompt }],
+        }),
+        60_000,
+        "Kimi analysis timed out",
+      );
       return text;
     } finally {
-      opened.rpc.close();
+      await opened.rpc.closeAndWait();
     }
   }
 
@@ -449,7 +455,11 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
         { status: "failed", reason: "runtime process exited" },
         turnId,
       );
-      holder.sink.emit("turn_failed", { message: error.message }, turnId);
+      holder.sink.emit(
+        "turn_failed",
+        { message: error.message, failure: runtimeFailure(error) },
+        turnId,
+      );
     });
     try {
       const initialized = await withTimeout(

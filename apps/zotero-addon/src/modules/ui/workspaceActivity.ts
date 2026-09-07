@@ -55,7 +55,8 @@ export function reconcileActivity(
       const signature = String(fresh.outerHTML);
       if (
         previous.dataset.renderSignature === signature ||
-        previous.contains(current.ownerDocument?.activeElement ?? null)
+        (previous.contains(current.ownerDocument?.activeElement ?? null) &&
+          previous.dataset.proposalStatus === fresh.dataset.proposalStatus)
       ) {
         chosen = previous;
       } else {

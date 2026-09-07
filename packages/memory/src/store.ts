@@ -67,13 +67,35 @@ export class FileMemoryStore {
   }
 
   all(): MemoryRecord[] {
-    return [...this.records.values()].sort(
-      (a, b) => b.updatedAt - a.updatedAt,
-    );
+    return [...this.records.values()].sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
   get(id: string): MemoryRecord | undefined {
     return this.records.get(id);
+  }
+
+  /** Reconcile a preallocated creation whose filesystem receipt was lost. */
+  async recover(id: string): Promise<MemoryRecord | undefined> {
+    const cached = this.records.get(id);
+    if (cached) return cached;
+    const path = this.memoryPath(id);
+    if (!(await this.containsFile(path))) return undefined;
+    const record = parseMemoryFile(
+      fileName(path),
+      await this.fs.readFile(path),
+    );
+    if (!record || record.id !== id) {
+      throw new Error(`Cannot reconcile existing memory ${id}`);
+    }
+    this.records.set(id, record);
+    return record;
+  }
+
+  private async containsFile(path: string): Promise<boolean> {
+    const normalized = path.replaceAll("\\", "/");
+    return (await this.fs.listFiles(this.memoriesDir)).some(
+      (entry) => entry.replaceAll("\\", "/") === normalized,
+    );
   }
 
   stats(): MemoryStats {
@@ -84,16 +106,26 @@ export class FileMemoryStore {
   }
 
   async put(record: MemoryRecord): Promise<void> {
-    this.records.set(record.id, record);
     await this.fs.makeDirectory(this.memoriesDir);
-    await this.fs.writeFile(this.memoryPath(record.id), serializeMemory(record));
+    await this.fs.writeFile(
+      this.memoryPath(record.id),
+      serializeMemory(record),
+    );
+    this.records.set(record.id, record);
     this.accessDirty.delete(record.id);
   }
 
   async remove(id: string): Promise<boolean> {
-    const existed = this.records.delete(id);
+    const existed = this.records.has(id);
     if (existed) {
-      await this.fs.deleteFile(this.memoryPath(id)).catch(() => undefined);
+      const path = this.memoryPath(id);
+      try {
+        await this.fs.deleteFile(path);
+      } catch (error) {
+        // A missing receipt is safe to acknowledge only after checking disk.
+        if (await this.containsFile(path)) throw error;
+      }
+      this.records.delete(id);
       this.accessDirty.delete(id);
     }
     return existed;

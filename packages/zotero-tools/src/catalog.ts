@@ -441,6 +441,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     "Read actual Zotero annotation text/comments and this task's proposal outcomes. Each saved annotation includes its Zotero URI. Follow nextOffset until null when reviewing all saved comments; submission reconciles native state automatically.",
     {
       ...itemRef,
+      batchIds: { type: "array", items: { type: "string" } },
+      includeExisting: { type: "boolean" },
       offset: { type: "integer", minimum: 0 },
       limit: { type: "integer", minimum: 1, maximum: 50 },
     },
@@ -518,8 +520,19 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     ["libraryID", "key"],
   ),
   def(
+    "update_annotation",
+    "Update a Confucius Agent annotation's comment or text selection in the same PDF. Other sources are protected. Original batch and creator are retained.",
+    {
+      libraryID: { type: "integer" },
+      key: { type: "string" },
+      comment: { type: "string" },
+      anchor: { type: "string" },
+    },
+    ["libraryID", "key"],
+  ),
+  def(
     "update_annotation_comment",
-    "Update an annotation comment.",
+    "Update the comment of an annotation created by a Confucius Agent, including another task or Agent. Other sources are protected.",
     {
       libraryID: { type: "integer" },
       key: { type: "string" },
@@ -527,10 +540,12 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     ["libraryID", "key", "comment"],
   ),
-  def("delete_annotation", "Delete an annotation.", itemRef, [
-    "libraryID",
-    "key",
-  ]),
+  def(
+    "delete_annotation",
+    "Delete an annotation created by a Confucius Agent, including another task or Agent. Never delete annotations of unknown or other origin.",
+    itemRef,
+    ["libraryID", "key"],
+  ),
   def(
     "memory_search",
     "Search long-term memory for relevant prior knowledge about the user.",

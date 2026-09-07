@@ -1,8 +1,4 @@
-import {
-  cancelModelTimeout,
-  scheduleModelTimeout,
-  type ModelTimers,
-} from "./ModelDeadline";
+import { retryModelRequest } from "./ModelRetry";
 import type { WindowContext } from "./WindowContext";
 import type {
   ConfuciusEvent,
@@ -59,6 +55,7 @@ export interface TurnLoopInput {
 }
 
 export type TurnStopReason =
+  | "model_retries_exhausted"
   | "completed"
   | "iteration_budget"
   | "tool_budget"
@@ -126,6 +123,7 @@ export interface TurnLoopDeps {
 }
 
 export class TurnLoop {
+  private modelRequest?: import("@confucius/protocol").ModelRequestProgress;
   constructor(private readonly deps: TurnLoopDeps) {}
 
   async run(input: TurnLoopInput): Promise<TurnLoopResult> {
@@ -241,56 +239,26 @@ export class TurnLoop {
         } catch (error) {
           if (error instanceof ModelError) {
             this.deps.budget.recordUsage(error.options.partial?.usage);
-            const partial = error.options.partial;
-            if (partial?.text) {
-              delivered += partial.text;
-              messages.push({
-                role: "assistant",
-                content: partial.text,
-                replayState: partial.replayState,
-              });
-              await this.checkpoint(
-                input.turnId,
-                this.deps.budget.iterationsUsed,
-                messages,
-                toolExecutions,
-              );
-            }
-            const hasPartial = Boolean(partial?.text || partial?.reasoning);
+            if (error.options.exhausted) stopReason = "model_retries_exhausted";
             if (
-              !hasPartial &&
+              error.code === "context_overflow" &&
+              this.deps.context &&
               !input.signal?.aborted &&
               modelRecoveries < (this.deps.maxModelRecoveries ?? 2)
             ) {
-              if (error.code === "context_overflow" && this.deps.context) {
-                modelRecoveries++;
-                this.deps.context.request();
-                continue;
-              }
-              if (
-                error.options.retryable &&
-                ["transport", "timeout", "server", "rate_limit"].includes(
-                  error.code,
-                )
-              ) {
-                modelRecoveries++;
-                await cancellableDelay(
-                  Math.min(
-                    error.options.retryAfterMs ??
-                      200 * 2 ** (modelRecoveries - 1),
-                    30_000,
-                  ),
-                  input.signal,
-                  this.deps,
-                );
-                continue;
-              }
+              modelRecoveries++;
+              this.deps.context.request();
+              continue;
             }
-            if (partial !== undefined || error.code === "protocol")
+            if (
+              !error.options.exhausted &&
+              (error.options.partial !== undefined || error.code === "protocol")
+            )
               stopReason = "incomplete";
           }
           throw error;
         }
+        modelRecoveries = 0;
         this.deps.budget.recordUsage(modelTurn.usage);
         this.deps.context?.usage(modelTurn.usage);
         removeTransientMessages(messages);
@@ -473,6 +441,19 @@ export class TurnLoop {
         "Run budget exhausted before completion",
       );
     } catch (error) {
+      try {
+        await this.checkpoint(
+          input.turnId,
+          this.deps.budget.iterationsUsed,
+          messages,
+          toolExecutions,
+        );
+      } catch (storageError) {
+        if (errorMessage(storageError) !== errorMessage(error))
+          error = new Error(
+            `${errorMessage(error)}; checkpoint could not be saved: ${errorMessage(storageError)}`,
+          );
+      }
       if (input.signal?.aborted || isAbortError(error)) {
         this.emit(input, "turn_aborted", { reason: "signal" });
         return resultOf("aborted");
@@ -493,14 +474,39 @@ export class TurnLoop {
     const hasTransientMedia = messages.some(
       (message) => message.transient && Boolean(message.images?.length),
     );
+    const onRequestProgress = async (
+      progress: import("@confucius/protocol").ModelRequestProgress,
+    ) => {
+      this.modelRequest = progress;
+      this.emit(input, "model_request_progress", progress);
+      if (progress.status === "failed" && progress.delayMs !== undefined)
+        this.emit(input, "reasoning_delta", {
+          text: "",
+          statusText: `请求暂时失败，自动重试 ${progress.attempt}/2`,
+        });
+    };
     const makeRequest = () => ({
+      ...(this.deps.model.handlesRetries ? { onRequestProgress } : {}),
       messages,
       tools,
       ...(this.deps.model.accountsAttempts ? { onAttempt } : {}),
       deadlineMs: this.deps.budget.remainingElapsedMs(),
     });
     try {
-      if (!this.deps.model.accountsAttempts) await onAttempt();
+      if (!this.deps.model.handlesRetries) {
+        return await retryModelRequest(
+          async () => {
+            if (!this.deps.model.accountsAttempts) await onAttempt();
+            return hasTransientMedia
+              ? this.completeWithTransientMediaDeadline(
+                  makeRequest(),
+                  input.signal,
+                )
+              : this.deps.model.complete(makeRequest(), input.signal);
+          },
+          { ...this.deps, signal: input.signal, onProgress: onRequestProgress },
+        );
+      }
       return hasTransientMedia
         ? await this.completeWithTransientMediaDeadline(
             makeRequest(),
@@ -1021,6 +1027,7 @@ export class TurnLoop {
       iteration,
       budget: this.deps.budget.snapshot(),
       toolCallsUsed: this.deps.budget.toolCallsUsed,
+      modelRequest: this.modelRequest,
       savedAt: this.deps.now(),
       messages,
       toolExecutions,
@@ -1032,6 +1039,7 @@ export class TurnLoop {
       iteration,
       budget: this.deps.budget.snapshot(),
       toolCallsUsed: this.deps.budget.toolCallsUsed,
+      modelRequest: this.modelRequest,
       savedAt: this.deps.now(),
       messages: cloneValue(durableMessages(messages)),
       toolExecutions: cloneValue(toolExecutions),
@@ -1122,33 +1130,6 @@ class TurnStopError extends ModelError {
     super(message, "invalid_request");
   }
 }
-function cancellableDelay(
-  ms: number,
-  signal?: AbortSignal,
-  timers: ModelTimers = {},
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(abortError());
-      return;
-    }
-    const onAbort = () => {
-      cancelModelTimeout(timers, timer);
-      signal?.removeEventListener("abort", onAbort);
-      reject(abortError());
-    };
-    const timer = scheduleModelTimeout(
-      timers,
-      () => {
-        signal?.removeEventListener("abort", onAbort);
-        resolve();
-      },
-      ms,
-    );
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 /** Keep model history protocol-valid after cancellation or a failed tool batch.
  * This only repairs the conversation; it never resolves an execution journal.
  */

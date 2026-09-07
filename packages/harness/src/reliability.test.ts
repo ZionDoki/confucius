@@ -113,7 +113,7 @@ describe("transport outcome contract", () => {
       return { ok: true, toolName: "create_collection", data: {} };
     };
     const result = await h.loop.run(runInput);
-    assert.equal(result.stopReason, "incomplete");
+    assert.equal(result.stopReason, "model_retries_exhausted");
     assert.equal(calls, 0);
   });
   it("accepts a finish frame without DONE but rejects an unknown finish reason", async () => {

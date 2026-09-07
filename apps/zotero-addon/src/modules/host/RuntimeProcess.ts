@@ -136,6 +136,7 @@ export class RuntimeJsonLineProcess {
   private nextId = 1;
   private stderr = "";
   private intentionalClose = false;
+  private exited = false;
   private writeQueue: Promise<unknown> = Promise.resolve();
 
   private constructor(
@@ -146,6 +147,7 @@ export class RuntimeJsonLineProcess {
     void this.readStderr();
     void process.wait().then(
       ({ exitCode }) => {
+        this.exited = true;
         this.failAll(
           new Error(
             `Runtime exited (${exitCode})${
@@ -239,6 +241,13 @@ export class RuntimeJsonLineProcess {
     void this.process.stdin.close().catch(() => undefined);
     void this.process.kill().catch(() => undefined);
     this.rejectPending(new Error("Runtime connection closed"));
+  }
+
+  async closeAndWait(): Promise<void> {
+    this.close();
+    // Hard termination returns only after the old process has exited.
+    if (!this.exited) await this.process.kill(0);
+    await this.process.wait();
   }
 
   private send(message: RuntimeJsonRpcMessage): void {

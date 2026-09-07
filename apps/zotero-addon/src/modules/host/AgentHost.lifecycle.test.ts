@@ -326,6 +326,9 @@ function fixture() {
   const host = Object.create(AgentHost.prototype) as LifecycleHost;
   let sequence = 0;
   Object.assign(host, {
+    freezeBoundAnnotations: async () => undefined,
+    postProcessingRuns: new Set(),
+    externalHistoryText: new Map(),
     updates: { dispose() {} },
     taskTraceBuffer: new TaskTraceBuffer(),
     listeners: new Set(),
@@ -812,6 +815,86 @@ describe("AgentHost lifecycle ownership", () => {
     });
   }
 
+  it("CLI stream retries replace unfinished text and exhausted output stays diagnostic", async () => {
+    const { host, state, backend } = fixture();
+    state.record.backend = "codex";
+    state.record.run = run(state.record);
+    state.abort = new AbortController();
+    state.activeTurnId = "cli-output";
+    Object.assign(host, {
+      externalHistoryText: new Map(),
+      memoryConsent: () => "off",
+    });
+    backend.startTurn = async (input, callbacks) => {
+      let sequence = 0;
+      const emit = (
+        type: ConfuciusEvent["type"],
+        payload: ConfuciusEvent["payload"],
+      ) =>
+        callbacks.event({
+          id: `cli-${++sequence}`,
+          sessionId: state.record.id,
+          turnId: input.turnId,
+          ts: sequence,
+          type,
+          payload,
+        } as ConfuciusEvent);
+      emit("text_delta", { text: "Failed fragment" });
+      emit("model_request_progress", {
+        requestId: "cli-output",
+        attempt: 1,
+        status: "failed",
+        retryable: true,
+      });
+      emit("text_delta", { text: "Replacement fragment" });
+      callbacks.stopped?.({
+        stopReason: "incomplete",
+        text: "",
+        failure: { retryable: true, message: "stream disconnected" },
+      });
+      return {};
+    };
+    const result = await host.executeBackend(
+      state,
+      {
+        task: state.record,
+        turnId: state.activeTurnId,
+        prompt: "Read",
+        mode: "agent",
+        capabilityProfile: "zotero_only",
+      },
+      state.abort.signal,
+    );
+    assert.equal(result.text, "Replacement fragment");
+    await host.finalizeRun(
+      state,
+      state.record.run,
+      "cli-output",
+      {
+        ...result,
+        stopReason: "model_retries_exhausted",
+        work: { completed: [], missing: [], unknownOperationIds: [] },
+      },
+      () => true,
+    );
+    assert.equal(
+      state.events.some(
+        (event) =>
+          event.type === "text_delta" && event.payload.phase === "final_answer",
+      ),
+      false,
+    );
+    assert.equal(
+      state.messages.some(
+        (message) =>
+          message.role === "assistant" &&
+          String(message.content).includes("fragment"),
+      ),
+      false,
+    );
+    assert.ok(state.record.recoverableTurn);
+  });
+
   it("finishes a revised read-only request without reviving the prior annotation obligation", async () => {
     const { host, state, backend, starts } = fixture();
     Reflect.deleteProperty(host, "workSnapshot");
@@ -1102,6 +1185,51 @@ describe("AgentHost lifecycle ownership", () => {
     saving.resolve();
     await finishing;
     assert.equal(state.record.run.budget.elapsedMs, 250);
+    assert.equal(state.runBudget, undefined);
+  });
+
+  it("accounts final-step attempts and usage after the main budget is frozen", async () => {
+    const { host, state } = fixture();
+    state.record.run = run(state.record);
+    state.record.run.status = "completed";
+    const before = { ...state.record.run.budget };
+    Object.assign(host, {
+      externalAnalysisAdapter: () => ({
+        complete: async (
+          request: import("@confucius/harness").ModelRequest,
+        ) => {
+          await request.onRequestProgress?.({
+            requestId: "aux",
+            attempt: 1,
+            status: "started",
+          });
+          return {
+            text: "Title",
+            usage: { promptTokens: 5, completionTokens: 3, totalTokens: 8 },
+          };
+        },
+      }),
+    });
+    const job = {
+      turnId: "ended-turn",
+      runId: state.record.run.id,
+      userText: "Read",
+      assistantText: "Done",
+      pending: ["title"],
+    };
+    const adapter = Reflect.get(host, "auxiliaryAdapter").call(
+      host,
+      state,
+      job,
+      "title",
+    ) as import("@confucius/harness").ModelAdapter;
+    await adapter.complete({ messages: [] });
+    assert.equal(state.record.run.status, "completed");
+    assert.equal(
+      state.record.run.budget.iterationsUsed,
+      before.iterationsUsed + 1,
+    );
+    assert.equal(state.record.run.budget.totalTokens, before.totalTokens + 8);
     assert.equal(state.runBudget, undefined);
   });
 
