@@ -1,7 +1,7 @@
 # 0.4.3-beta.1 发布验收
 
-2026-09-07 UTC，Windows 11、Zotero 10.0.1、Node.js 24。以下先记录本地候选包，
-公开 CI 包的摘要与安装结果另行补记，不混用两者的二进制摘要。
+2026-09-07 UTC，Windows 11、Zotero 10.0.1、Node.js 24。本记录分别记录本地候选包
+与发布后的公开 CI 包，不混用两者的二进制摘要。
 
 ## 发布范围
 
@@ -53,3 +53,29 @@
 
 原始报告、日志和临时脚本保存在已忽略的 `output/release-0.4.3-beta.1/`。
 用户日常使用的 Zotero 配置未安装候选包。
+
+## 公开发布与更新验收
+
+`v0.4.3-beta.1` 指向提交 `cad9b2f6c8116b04e008fdbb6173a5f3e0c33d7e`。
+[GitHub Release](https://github.com/ZionDoki/confucius/releases/tag/v0.4.3-beta.1)
+于 2026-09-07 03:26:38 UTC 发布，`draft=false`、`prerelease=true`；Latest
+继续指向 `v0.4.2`。tag 与公开安装包未被覆盖或移动。
+
+- [tag CI](https://github.com/ZionDoki/confucius/actions/runs/34079551692) 的
+  Node.js 22、24 验证与发布任务全部成功；对应的
+  [master CI](https://github.com/ZionDoki/confucius/actions/runs/34079551780) 也通过。
+- 发布正文与 CHANGELOG 提取结果一致。只有 `confucius.xpi` 和
+  `update-beta.json` 两个资产，均为 uploaded；下载大小与 GitHub SHA-256 一致。
+- 公开 XPI 为 535,369 bytes，SHA-256：
+  `de284d12127b762e1fca93c9edee9308d4aeffb4f5cdbe600239f028f1840434`。
+  公开更新 JSON 为 587 bytes；其中的版本、下载链接、兼容声明和 SHA-512 均通过核对。
+- 另建一个隔离的普通 0.4.2 安装，明确关闭自动检查和 Zotero 全局自动更新。
+  stable 渠道检查不提供 Beta；开启 Beta 后能发现 `0.4.3-beta.1`。
+- 使用 Confucius 自身更新器下载、校验并安装公开资产，安装文件摘要与公开 XPI
+  相同。正常重启后为非临时 Beta，报告与中文设置保留，显式 beta 偏好与自动检查
+  关闭状态保留；再次检查为最新版本，不能重复安装。
+- 在已安装的 Beta 中关闭预览渠道，再次正常重启仍是 `0.4.3-beta.1`，显式 stable
+  偏好持久保留，不能安装较低版本，验证没有自动降级。
+
+隔离测试进程均正常退出。用户日常 Zotero 的安装和配置未变更。本节验证公开包与
+更新流程，不扩大前述模型质量、操作系统或 Zotero 版本的验证范围。
