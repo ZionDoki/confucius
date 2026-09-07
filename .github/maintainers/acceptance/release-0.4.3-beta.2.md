@@ -57,3 +57,29 @@ Beta 发布配置为 `prerelease=true`、`make_latest=false`，稳定版 Latest 
 组合未重新实测。旧版升级、当前功能验收与模型质量是独立范围。
 
 临时脚本、日志和隔离文库保存在已忽略的 `output/release-0.4.3-beta.2/`。
+
+## 公开发布与更新验收
+
+`v0.4.3-beta.2` 指向提交 `ac856e5e35077a058fc3db09830db79dd9b7b056`。
+[GitHub Release](https://github.com/ZionDoki/confucius/releases/tag/v0.4.3-beta.2)
+于 2026-09-07 11:12:10 UTC 发布，`draft=false`、`prerelease=true`；Latest
+保持 `v0.4.2`。发布后未移动 tag，也未替换公开资产。
+
+- [tag CI](https://github.com/ZionDoki/confucius/actions/runs/34115201246) 的
+  Node.js 22、24 验证与发布任务均成功；对应
+  [master CI](https://github.com/ZionDoki/confucius/actions/runs/34115201252) 通过。
+- 发布正文与 CHANGELOG 提取结果完全一致。仅有 `confucius.xpi` 和
+  `update-beta.json` 两个资产，均为 uploaded，下载大小和 GitHub SHA-256 一致。
+- 公开 XPI 为 551,970 bytes，SHA-256：
+  `2403afc7b67f1bd007f30ffe5726d01a14b46f2be6aa2cd27f3ec9b42a1b2584`。
+  更新 JSON 为 587 bytes；版本、下载地址、兼容范围及 SHA-512 与公开 XPI 对应。
+- 另建普通 Beta 1 隔离安装，运行真实 Confucius 更新器。关闭 Beta 渠道时不提供
+  Beta 2；开启后发现 `0.4.3-beta.2`，下载、校验并安装成功。
+- 实际安装文件摘要与公开 GitHub 资产一致。正常重启后为非临时 Beta 2，任务、
+  原生标注、已存记忆和待审批提案保留；`auto` 记忆偏好转为逐条 review。
+- 旧提案批准及重复点击只新增一条记忆，再次重启后批准状态保持。
+- 更新器再次检查为已是最新版本，不提供重复安装；关闭 Beta 渠道后不提供降级，
+  再次重启仍是 Beta 2，显式 stable 偏好持久保留。
+
+公开更新脚本的 16 项检查全部通过，隔离测试进程已退出。此节只扩展公开安装包
+与更新流程的证据，不扩大模型故障、操作系统或 Zotero 版本的验证范围。
