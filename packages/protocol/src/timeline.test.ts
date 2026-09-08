@@ -34,6 +34,91 @@ describe("nextReasoningFold", () => {
 });
 
 describe("coalesceTimeline", () => {
+  for (const backend of ["kimi", "codex"] as const) {
+    it(`${backend} runtime snapshots stay out of live and reopened conversations`, () => {
+      const runtime = (turnId: string, model?: string) =>
+        event(
+          "runtime_status",
+          {
+            runtime: { backend, state: "ready", checkedAt: 1 },
+            selection: model ? { model } : undefined,
+          },
+          { turnId },
+        );
+      const events = [
+        runtime("first"),
+        event("turn_started", { userText: "你好" }, { turnId: "first" }),
+        runtime("first", "confirmed-model"),
+        event(
+          "reasoning_delta",
+          { text: "Public summary." },
+          { turnId: "first" },
+        ),
+        event("text_delta", { text: "你好！" }, { turnId: "first" }),
+        runtime("first", "confirmed-model"),
+        event("text_delta", { text: "有什么可以帮你？" }, { turnId: "first" }),
+        event("turn_completed", { phase: "done" }, { turnId: "first" }),
+        runtime("second"),
+        event("turn_started", { userText: "读论文" }, { turnId: "second" }),
+        runtime("second", "confirmed-model"),
+        event("text_delta", { text: "请选一篇论文。" }, { turnId: "second" }),
+        event("turn_completed", { phase: "done" }, { turnId: "second" }),
+      ];
+      const saved = structuredClone(events);
+      // Every polling snapshot must be clean, not just the completed history.
+      for (let count = 1; count <= events.length; count++) {
+        const live = coalesceTimeline(events.slice(0, count));
+        assert.equal(
+          live.some((block) => block.kind === "status"),
+          false,
+        );
+      }
+      assert.deepEqual(coalesceTimeline(events), [
+        { kind: "user", text: "你好" },
+        { kind: "reasoning", text: "Public summary." },
+        { kind: "text", text: "你好！有什么可以帮你？", turnId: "first" },
+        { kind: "user", text: "读论文" },
+        { kind: "text", text: "请选一篇论文。", turnId: "second" },
+      ]);
+      assert.deepEqual(
+        events,
+        saved,
+        "runtime provenance remains in raw events",
+      );
+    });
+  }
+
+  it("keeps runtime diagnostics out of chat while retaining actual turn failures and stops", () => {
+    const events = ["native", "kimi", "codex"].flatMap((backend) =>
+      ["ready", "unavailable", "auth_required", "error"].map((state) =>
+        event("runtime_status", {
+          runtime: { backend, state, checkedAt: 1, message: "probe detail" },
+        }),
+      ),
+    );
+    events.push(
+      event("turn_failed", { message: "登录已过期，请重新登录后重试。" }),
+      event("turn_aborted", { reason: "User cancelled" }),
+    );
+    assert.deepEqual(coalesceTimeline(events), [
+      { kind: "status", tone: "fail", text: "登录已过期，请重新登录后重试。" },
+      { kind: "status", tone: "abort", text: "Stopped" },
+    ]);
+  });
+
+  it("preserves real conversation content that mentions runtime status strings", () => {
+    assert.deepEqual(
+      coalesceTimeline([
+        event("turn_started", { userText: "为什么会显示 kimi: ready？" }),
+        event("text_delta", { text: "codex: ready 表示引擎已就绪。" }),
+      ]),
+      [
+        { kind: "user", text: "为什么会显示 kimi: ready？" },
+        { kind: "text", text: "codex: ready 表示引擎已就绪。", turnId: "t" },
+      ],
+    );
+  });
+
   it("folds tool commentary separately and preserves the actual reply", () => {
     const blocks = coalesceTimeline([
       event("turn_started", { userText: "Read the paper" }),

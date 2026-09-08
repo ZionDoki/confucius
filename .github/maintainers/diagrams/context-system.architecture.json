@@ -1,0 +1,542 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Confucius · 按下一步组装上下文",
+    "subtitle": "当前源码 · 2026-09-08 ｜ 精确证据 + 本地 BM25 + 材料覆盖；普通运行与完整交接零额外维护调用。",
+    "output": "context-system.html",
+    "animation": "none",
+    "visual_preset": "classic",
+    "quality_profile": "standard",
+    "views": [
+      {
+        "id": "working",
+        "label": "01 日常运行",
+        "focus": [
+          "request",
+          "assembly",
+          "window",
+          "model",
+          "history",
+          "recall"
+        ],
+        "note": "工具读取前预算；原文先存档。按页、段、结构化记录索引，分库 BM25 与排名融合，精确位置和版本支持回读。"
+      },
+      {
+        "id": "handoff",
+        "label": "02 事务交接",
+        "focus": [
+          "task",
+          "notes",
+          "handoff",
+          "window",
+          "model"
+        ],
+        "note": "显式证据直读 → 完整查询与最多两条独立待办补查 → 按来源和待办选材 → 校验并提交。阶段事实与笔记折叠到有界工作集。"
+      },
+      {
+        "id": "retention",
+        "label": "03 归档与保留",
+        "focus": [
+          "history",
+          "archive",
+          "recall",
+          "maintenance",
+          "memory"
+        ],
+        "note": "热记录超限先本地归档，零模型调用。蒸馏独立，原文只由保留策略删除；活跃引用与在途读取受到保护。"
+      },
+      {
+        "id": "coverage",
+        "label": "04 全量材料",
+        "focus": [
+          "request",
+          "task",
+          "notes",
+          "handoff",
+          "recall"
+        ],
+        "note": "view=coverage 分页枚举任务绑定的材料，显示读取覆盖、报告分析、失败及下一未读页。集合成员未完整枚举时保持未知；读取和分析不冒充核验。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "request",
+      "type": "frontend",
+      "label": "当前用户请求",
+      "sublabel": "任务目标 · 选中的 Zotero 来源",
+      "pos": [
+        40,
+        300
+      ],
+      "size": [
+        210,
+        76
+      ]
+    },
+    {
+      "id": "assembly",
+      "type": "backend",
+      "label": "统一输入与读取预算",
+      "sublabel": "稳定提示前缀 · 读取并行最多 4 个",
+      "pos": [
+        350,
+        300
+      ],
+      "size": [
+        230,
+        76
+      ]
+    },
+    {
+      "id": "window",
+      "type": "messagebus",
+      "label": "当前上下文窗口",
+      "sublabel": "消息 · 已读片段 · 本轮工具结果",
+      "tag": "Native 输入可观测；CLI 内部未知",
+      "pos": [
+        690,
+        300
+      ],
+      "size": [
+        230,
+        76
+      ]
+    },
+    {
+      "id": "model",
+      "type": "backend",
+      "label": "模型与工具循环",
+      "sublabel": "Native API / Codex CLI / Kimi CLI",
+      "pos": [
+        1030,
+        300
+      ],
+      "size": [
+        230,
+        76
+      ]
+    },
+    {
+      "id": "task",
+      "type": "database",
+      "label": "宿主任务事实与覆盖账",
+      "sublabel": "完成 / 待办 · 各来源读取与分析",
+      "tag": "权威写入凭据独立；观察 ≠ 核验",
+      "pos": [
+        350,
+        95
+      ],
+      "size": [
+        230,
+        82
+      ]
+    },
+    {
+      "id": "handoff",
+      "type": "backend",
+      "label": "可恢复的交接事务",
+      "sublabel": "校验 → 准备 → 提交 → 激活",
+      "tag": "约 2k 工作集；按待办和来源选材",
+      "pos": [
+        690,
+        95
+      ],
+      "size": [
+        230,
+        82
+      ]
+    },
+    {
+      "id": "notes",
+      "type": "database",
+      "label": "任务工作笔记",
+      "sublabel": "阶段发现 · 下一步 · 精确证据",
+      "tag": "有用增量才保存；分析只是报告",
+      "pos": [
+        1030,
+        95
+      ],
+      "size": [
+        230,
+        82
+      ]
+    },
+    {
+      "id": "memory",
+      "type": "database",
+      "label": "跨任务工作记忆",
+      "sublabel": "可复用结论 · 受保护偏好",
+      "tag": "正文按需读取，普通记忆可过期",
+      "pos": [
+        350,
+        535
+      ],
+      "size": [
+        230,
+        82
+      ]
+    },
+    {
+      "id": "recall",
+      "type": "backend",
+      "label": "片段检索与精确回读",
+      "sublabel": "BM25 · 完整查询 · 有界补查",
+      "tag": "ref + offset / endOffset + 版本",
+      "pos": [
+        690,
+        535
+      ],
+      "size": [
+        230,
+        82
+      ]
+    },
+    {
+      "id": "history",
+      "type": "database",
+      "label": "近期原始记录",
+      "sublabel": "按任务 / 窗口索引消息与工具结果",
+      "tag": "热记录目标：10 任务 / 30 天 / 50 MiB",
+      "pos": [
+        1030,
+        535
+      ],
+      "size": [
+        230,
+        82
+      ]
+    },
+    {
+      "id": "maintenance",
+      "type": "backend",
+      "label": "独立记忆蒸馏",
+      "sublabel": "跨窗口与来源选择有界材料",
+      "tag": "蒸馏成功或失败均不删除原文",
+      "pos": [
+        1030,
+        725
+      ],
+      "size": [
+        230,
+        82
+      ]
+    },
+    {
+      "id": "archive",
+      "type": "database",
+      "label": "本地原文归档",
+      "sublabel": "引用不变 · 可搜索 / 读回 / 导出",
+      "tag": "90 天 / 500 MiB；依赖与读取受保护",
+      "pos": [
+        690,
+        725
+      ],
+      "size": [
+        230,
+        82
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "当前运行：有限窗口中的推理与工具调用",
+      "wraps": [
+        "assembly",
+        "window",
+        "model"
+      ],
+      "pad": 30
+    },
+    {
+      "kind": "region",
+      "label": "窗口外：可检索记录与后台维护",
+      "wraps": [
+        "memory",
+        "recall",
+        "history",
+        "maintenance",
+        "archive"
+      ],
+      "pad": 30
+    }
+  ],
+  "connections": [
+    {
+      "id": "request-input",
+      "from": "request",
+      "to": "assembly",
+      "variant": "emphasis"
+    },
+    {
+      "id": "assemble-window",
+      "from": "assembly",
+      "to": "window",
+      "variant": "emphasis"
+    },
+    {
+      "id": "window-model",
+      "from": "window",
+      "to": "model",
+      "variant": "emphasis"
+    },
+    {
+      "id": "task-state",
+      "from": "task",
+      "to": "assembly",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "save-progress",
+      "from": "model",
+      "to": "notes",
+      "label": "保存进度",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelAt": [
+        1190,
+        235
+      ]
+    },
+    {
+      "id": "notes-handoff",
+      "from": "notes",
+      "to": "handoff",
+      "label": "最新笔记",
+      "fromSide": "left",
+      "toSide": "right",
+      "labelDy": -12
+    },
+    {
+      "id": "fresh-window",
+      "from": "handoff",
+      "to": "window",
+      "label": "重建工作集",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        864,
+        235
+      ],
+      "variant": "emphasis"
+    },
+    {
+      "id": "model-result",
+      "from": "model",
+      "to": "window",
+      "label": "结果追加后继续",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [
+        [
+          1145,
+          449
+        ],
+        [
+          805,
+          449
+        ]
+      ],
+      "labelAt": [
+        975,
+        437
+      ]
+    },
+    {
+      "id": "archive-results",
+      "from": "model",
+      "to": "history",
+      "label": "逐步存档",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        1197,
+        485
+      ]
+    },
+    {
+      "id": "read-history",
+      "from": "history",
+      "to": "recall",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "read-memory",
+      "from": "memory",
+      "to": "recall",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "retrieved-context",
+      "from": "recall",
+      "to": "window",
+      "label": "所需原文片段",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelAt": [
+        742,
+        489
+      ]
+    },
+    {
+      "id": "memory-hints",
+      "from": "memory",
+      "to": "assembly",
+      "label": "偏好 + 引用目录",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelAt": [
+        532,
+        452
+      ]
+    },
+    {
+      "id": "task-handoff",
+      "from": "task",
+      "to": "handoff",
+      "label": "宿主事实",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelDy": -12
+    },
+    {
+      "id": "local-archive",
+      "from": "history",
+      "to": "archive",
+      "label": "本地归档 · 零模型调用",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [
+        [
+          1145,
+          676
+        ],
+        [
+          805,
+          676
+        ]
+      ],
+      "labelAt": [
+        979,
+        665
+      ],
+      "variant": "dashed"
+    },
+    {
+      "id": "archive-recall",
+      "from": "archive",
+      "to": "recall",
+      "fromSide": "left",
+      "toSide": "bottom",
+      "via": [
+        [
+          645,
+          766
+        ],
+        [
+          645,
+          647
+        ],
+        [
+          805,
+          647
+        ]
+      ]
+    },
+    {
+      "id": "optional-distill",
+      "from": "archive",
+      "to": "maintenance",
+      "label": "按需蒸馏",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelDy": -12,
+      "variant": "dashed"
+    },
+    {
+      "id": "distilled-memory",
+      "from": "maintenance",
+      "to": "memory",
+      "label": "有限工作记忆",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [
+        [
+          1145,
+          870
+        ],
+        [
+          465,
+          870
+        ]
+      ],
+      "labelAt": [
+        790,
+        858
+      ],
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "普通运行：先预算，后读取",
+      "items": [
+        "模型使用有限工作窗口；原始工具结果先存档。宿主按剩余空间分配页数和文本预算，普通并行读取最多四个。超大结构化结果返回完整读取凭证，不静默截断 JSON。",
+        "输入预算 = 窗口容量 − 输出预留 − max(1,000, 10% 容量)，并用 Native 实际用量校准。新窗口以可用输入的 60% 为目标；必需完整工具交互可超过目标，但不能突破硬上限。",
+        "历史与笔记按页、段和结构化记录建立本地 BM25 索引；默认搜索配额 2 / 4 / 2，游标随资料版本变化失效。相同原文中的不同片段可独立召回。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "换窗：可恢复事务",
+      "items": [
+        "宿主校验运行、意图和来源版本，记录完成事项、待办、最新笔记及关键证据。run.request 与权威写入凭据决定当前任务；模型摘要不产生权限。",
+        "Native 用检查点提交新窗口，优先保留当前完整工具交互。Codex/Kimi 先创建候选会话，再提交宿主状态并启动推理；成功激活后释放旧会话。准备阶段只允许发现工具目录。",
+        "在途或未知工具结果、未处理审批阻止切换。准备、保存和启动失败保留恢复状态；重启不重置预算。用户更新要求或来源后，旧交接及迟到回调失效。",
+        "精确引用先回读并检查版本；完整下一步查询为主，最多补两条独立待办。按材料覆盖和容量选材，保留最新完整工具交互和阶段发现；不逐步调用模型写摘要。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "成本：只为信息缺口调用辅助模型",
+      "items": [
+        "普通运行和信息完整的交接不增加模型调用。资料不足时，每个用户轮次最多一次交接补充，与蒸馏共享两次维护请求额度；重试计入，重启不恢复额度。",
+        "辅助请求沿用当前模型的最低受支持思考档，输入约 8k tokens、输出目标 1k、超时 60 秒。Native 有接口硬限制；CLI 内部重试与未报告用量保持未知。",
+        "补充失败且仍无法构建可继续工作集时，保留旧窗口与恢复状态。必需提示或来源本身过大时明确报告容量不足，停止反复尝试换窗。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "归档、蒸馏、删除相互独立",
+      "items": [
+        "热记录超出 10 个任务 / 30 天 / 50 MiB 后转为本地归档，不调用模型。确认原文落盘后，释放重复日志和内存工作副本；历史原文与引用保持不变。",
+        "归档默认保留 90 天、总容量目标 500 MiB。非空原文读取或继续任务续期；搜索、后台维护与诊断导出不续期。蒸馏从不同窗口和来源有界取样，成功或失败都不决定删除。",
+        "历史自动清理开启时，按期限与容量清理最久未使用的可删除记录。活跃或待恢复任务依赖、在途读取和交接事务受到保护，允许暂时超限，详情显示原因。"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "可见性、版本与迁移边界",
+      "items": [
+        "已存档、已提供给后端、已完成业务核验分别记录。Native 可观测请求包含哪些内容；CLI 模型是否实际看到宿主提供的内容仍未知。提供证据不等于完成业务核验。",
+        "普通只读结果仅在来源版本可确认一致时复用。显式刷新、写后检查和论文核验执行真实读取；文件已变而阅读器仍旧时，要求重新打开当前 PDF。",
+        "首次迁移保留备份，只补元数据与索引。旧用户显式关闭自动记忆时，历史自动清理保持关闭。用户成果、知识库、保护记忆与权威写入凭据独立保存；已清理原文不可恢复。"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "全量工作：枚举、观察、分析分开",
+      "items": [
+        "覆盖账复用当前任务来源与运行绑定。分页列出所有绑定材料，返回已观察页数、截断页数和下一未读页；Top-K 不代表全部处理。",
+        "来源绑定改变只失效受影响条目；实际读取发现 PDF 版本变化时旧页面与分析失效。模型报告分析要附证据，但仍不构成业务核验。",
+        "集合与搜索成员是否枚举完整仍明确为未知。归档保留覆盖元数据与原始证据；普通步骤维持稳定提示和工具目录。"
+      ]
+    }
+  ]
+}

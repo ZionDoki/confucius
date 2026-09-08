@@ -5,6 +5,79 @@ import {
   type TimelineBlock,
 } from "@confucius/protocol";
 
+/** The RPC and durable timeline can report the same failed submission. */
+export function sendErrorInTimeline(
+  message: string,
+  events: readonly ConfuciusEvent[],
+  afterEventId: string | null | undefined,
+): boolean {
+  if (!message || afterEventId === undefined) return false;
+  const boundary = afterEventId
+    ? events.findIndex((event) => event.id === afterEventId)
+    : -1;
+  if (afterEventId && boundary < 0) return false;
+  return events
+    .slice(boundary + 1)
+    .some(
+      (event) =>
+        event.type === "turn_failed" && event.payload.message === message,
+    );
+}
+
+/** Only the final elapsed clock stays outside the animated status text. */
+export function waitingTextParts(text: string): {
+  message: string;
+  elapsed: string;
+} {
+  const match = text.match(/^(.*) · (\d+:[0-5]\d)$/s);
+  return match
+    ? { message: match[1], elapsed: match[2] }
+    : { message: text, elapsed: "" };
+}
+
+export function createWaitingIndicator(
+  doc: Document,
+  workText: string,
+): HTMLElement {
+  const create = (tag: string) =>
+    doc.createElementNS("http://www.w3.org/1999/xhtml", tag) as HTMLElement;
+  const label = create("div");
+  label.className = "tui-waiting";
+  const mark = create("span");
+  mark.className = "tui-waiting-mark";
+  mark.setAttribute("aria-hidden", "true");
+  const content = create("span");
+  content.className = "tui-waiting-content";
+  const text = create("span");
+  text.className = "tui-waiting-text";
+  text.setAttribute("role", "status");
+  const elapsed = create("span");
+  elapsed.className = "tui-waiting-elapsed";
+  content.append(text, elapsed);
+  label.append(mark, content);
+  updateWaitingIndicator(label, workText);
+  return label;
+}
+
+/** Preserve both animated elements while polling, streaming, and changing stages. */
+export function updateWaitingIndicator(
+  label: HTMLElement,
+  workText: string,
+): void {
+  if (label.dataset.waitingText === workText) return;
+  label.dataset.waitingText = workText;
+  const parts = waitingTextParts(workText);
+  const text = label.querySelector(".tui-waiting-text");
+  if (text && text.textContent !== parts.message)
+    text.textContent = parts.message;
+  const elapsed = label.querySelector<HTMLElement>(".tui-waiting-elapsed");
+  if (elapsed) {
+    const clock = parts.elapsed ? ` · ${parts.elapsed}` : "";
+    if (elapsed.textContent !== clock) elapsed.textContent = clock;
+    elapsed.hidden = !parts.elapsed;
+  }
+}
+
 /** Keys are local to a durable turn, so new text and earlier tool results do not replace unrelated turns. */
 export function keyedTimeline(
   events: ConfuciusEvent[],
@@ -45,16 +118,26 @@ export function reconcileActivity(
       node as HTMLElement,
     ]),
   );
-  let cursor: Node | null = current.firstChild;
+  const desired: HTMLElement[] = [];
   for (const fresh of Array.from(next.children) as HTMLElement[]) {
     const previous = fresh.dataset.entryId
       ? old.get(fresh.dataset.entryId)
       : undefined;
     let chosen = fresh;
     if (previous) {
+      const waiting =
+        fresh.dataset.entryId === "waiting"
+          ? previous.querySelector<HTMLElement>(".tui-waiting")
+          : null;
+      const nextWaiting = waiting
+        ? fresh.querySelector<HTMLElement>(".tui-waiting")
+        : null;
       // Generated signatures exclude transient state such as an opened details element.
       const signature = String(fresh.outerHTML);
-      if (
+      if (waiting && nextWaiting) {
+        updateWaitingIndicator(waiting, nextWaiting.dataset.waitingText ?? "");
+        chosen = previous;
+      } else if (
         previous.dataset.renderSignature === signature ||
         (previous.contains(current.ownerDocument?.activeElement ?? null) &&
           previous.dataset.proposalStatus === fresh.dataset.proposalStatus)
@@ -72,13 +155,18 @@ export function reconcileActivity(
         fresh.dataset.renderSignature = signature;
       }
     } else fresh.dataset.renderSignature = String(fresh.outerHTML);
+    desired.push(chosen);
+  }
+  // Remove replaced rows before placing their successors. Leaving them at the
+  // cursor needlessly reparents every later retained row, restarting CSS
+  // animations and disturbing focus even when its DOM identity is unchanged.
+  const retained = new Set<Node>(desired);
+  for (const node of Array.from(current.childNodes))
+    if (node && !retained.has(node)) current.removeChild(node);
+  let cursor: Node | null = current.firstChild;
+  for (const chosen of desired) {
     if (chosen !== cursor) current.insertBefore(chosen, cursor);
     cursor = chosen.nextSibling;
-  }
-  while (cursor) {
-    const nextNode = cursor.nextSibling;
-    current.removeChild(cursor);
-    cursor = nextNode;
   }
 }
 
@@ -188,6 +276,8 @@ export function contextActivity(
   const labels = {
     searching: english ? "Searching context" : "正在检索上下文",
     reading: english ? "Reading context" : "正在读取上下文",
+    preparing: english ? "Preparing handoff" : "正在准备交接",
+    archiving: english ? "Archiving history" : "正在归档历史",
     distilling: english ? "Distilling memory" : "正在提炼记忆",
     clearing: english ? "Clearing old work" : "正在清理旧记录",
     switching: english ? "Switching context" : "正在切换上下文",

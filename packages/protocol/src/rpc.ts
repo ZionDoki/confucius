@@ -618,6 +618,7 @@ export interface ModelConfigView {
   streamResponses: boolean;
   memoryAutoExtract: boolean;
   memoryConsent: MemoryConsent;
+  historyAutoCleanup?: boolean;
   /** Run Codex/Kimi directly inside the Zotero add-on. */
   pluginRuntimeHost: boolean;
   /** "auto" leaves the server default; "off" disables thinking where the API allows it. */
@@ -655,6 +656,7 @@ export interface ConfigSetParams {
   streamResponses?: boolean;
   memoryAutoExtract?: boolean;
   memoryConsent?: MemoryConsent;
+  historyAutoCleanup?: boolean;
   reasoningEffort?: ReasoningEffort;
   contextWindowTokens?: number;
   /** Switch the active endpoint. */

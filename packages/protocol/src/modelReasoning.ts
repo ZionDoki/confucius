@@ -5,11 +5,12 @@ export interface ModelReasoning {
   source: "documented" | "unknown";
   efforts: readonly ReasoningEffort[];
   transport: "openai" | "thinking" | "ollama" | "none";
+  thinkingKeep?: "all";
 }
 
 /** Native API capabilities, independent of CLI catalogs. See docs/model-selection.md. */
 export function modelReasoning(model: string, baseUrl = ""): ModelReasoning {
-  const id = model.toLowerCase().split("/").at(-1) ?? "";
+  const id = model.trim().toLowerCase().split("/").at(-1) ?? "";
   const profile = (
     transport: ModelReasoning["transport"],
     ...efforts: ReasoningEffort[]
@@ -21,7 +22,7 @@ export function modelReasoning(model: string, baseUrl = ""): ModelReasoning {
   if (/\/api\/chat\/?$/.test(baseUrl)) {
     if (/^gpt-oss(?:[:\-]|$)/.test(id))
       return profile("ollama", "low", "medium", "high");
-    if (/^(qwen3|deepseek-r1)(?::|$)/.test(id))
+    if (/^(qwen3|deepseek-r1|deepseek-v3\.1)(?::|$)/.test(id))
       return profile("ollama", "off", "on");
     return { source: "unknown", transport: "none", efforts: ["auto"] };
   }
@@ -29,17 +30,28 @@ export function modelReasoning(model: string, baseUrl = ""): ModelReasoning {
     return profile("thinking", "off", "low", "high", "max");
   if (/^kimi-k2[.-][56](?:-|$)/.test(id))
     return profile("thinking", "off", "on");
-  if (/^gpt-6-astra(?:-|$)/.test(id))
+  if (/^kimi-k2\.7-code(?:-highspeed)?$/.test(id))
+    return { ...profile("thinking", "on"), thinkingKeep: "all" };
+  // K3 is always thinking; its public API accepts effort without a toggle.
+  if (/^kimi-k3(?:-\d{4}-\d{2}-\d{2})?$/.test(id))
+    return profile("openai", "low", "high", "max");
+  // Coding Plan IDs have different controls from public Moonshot model IDs.
+  // Disabling thinking on these routes selects an older model instead.
+  if (/^kimi-for-coding(?:-highspeed)?$/.test(id))
+    return profile("thinking", "on");
+  if (/^k3(?:-256k)?$/.test(id))
+    return profile("thinking", "low", "high", "max");
+  if (/^gpt-6-astra(?:-\d{4}-\d{2}-\d{2})?$/.test(id))
     return profile("openai", "low", "medium", "high", "xhigh", "max");
   if (/^gpt-5\.6(?:-(sol|terra|luna))?(?:-\d{4}-\d{2}-\d{2})?$/.test(id))
     return profile("openai", "off", "low", "medium", "high", "xhigh", "max");
-  if (/^gpt-5\.[245](?:-\d{4}-\d{2}-\d{2})?$/.test(id))
+  if (/^gpt-5\.(?:[25]|4(?:-(?:mini|nano))?)(?:-\d{4}-\d{2}-\d{2})?$/.test(id))
     return profile("openai", "off", "low", "medium", "high", "xhigh");
   if (/^gpt-5\.1(?:-\d{4}-\d{2}-\d{2})?$/.test(id))
     return profile("openai", "off", "low", "medium", "high");
   if (/^gpt-5(?:-(mini|nano))?(?:-\d{4}-\d{2}-\d{2})?$/.test(id))
     return profile("openai", "minimal", "low", "medium", "high");
-  if (/^(o1|o3|o4-mini)(?:-\d{4}-\d{2}-\d{2})?$/.test(id))
+  if (/^(o1|o3(?:-mini)?|o4-mini)(?:-\d{4}-\d{2}-\d{2})?$/.test(id))
     return profile("openai", "low", "medium", "high");
   return { source: "unknown", transport: "none", efforts: ["auto"] };
 }
@@ -73,7 +85,10 @@ export function modelReasoningBody(
       };
     case "thinking":
       return {
-        thinking: { type: effort === "off" ? "disabled" : "enabled" },
+        thinking: {
+          type: effort === "off" ? "disabled" : "enabled",
+          ...(capability.thinkingKeep ? { keep: capability.thinkingKeep } : {}),
+        },
         ...(effort === "off" || effort === "on"
           ? {}
           : { reasoning_effort: effort }),

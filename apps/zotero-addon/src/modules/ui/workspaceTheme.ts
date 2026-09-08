@@ -11,9 +11,16 @@ export const TUI_CSS = `
   text-decoration: underline;
 }
 @keyframes confucius-waiting-turn {
-  0% { transform: rotate(0deg); opacity: 0.85; }
-  50% { opacity: 0.4; }
-  100% { transform: rotate(360deg); opacity: 0.85; }
+  to { transform: rotate(360deg); }
+}
+@keyframes confucius-waiting-glaze {
+  0%, 18% { background-position: 130% 50%; opacity: 0; }
+  45% { opacity: .45; }
+  78%, 100% { background-position: -30% 50%; opacity: 0; }
+}
+@keyframes confucius-waiting-shine {
+  0%, 12% { background-position: 140% 50%; }
+  70%, 100% { background-position: -40% 50%; }
 }
 .confucius-workspace-root {
   min-width: 0;
@@ -34,21 +41,83 @@ export const TUI_CSS = `
   max-width: 100%;
 }
 .tui-waiting {
+  --confucius-waiting-period: 3.2s;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
+  min-width: 0;
   font-size: 12.5px;
+  line-height: 1.6;
   font-weight: 500;
   letter-spacing: 0.04em;
   color: var(--confucius-muted);
 }
 .tui-waiting-mark {
-  width: 11px;
-  height: 11px;
+  position: relative;
+  display: inline-block;
+  width: 19px;
+  height: 19px;
+  margin-top: 1px;
   flex: none;
-  color: var(--confucius-secondary);
-  transform-origin: 50% 50%;
-  animation: confucius-waiting-turn 5.6s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+  overflow: hidden;
+  background: var(--confucius-loading-deep);
+  mask: url("chrome://confucius/content/icons/favicon.svg") center / contain no-repeat;
+  -webkit-mask: url("chrome://confucius/content/icons/favicon.svg") center / contain no-repeat;
+}
+.tui-waiting-mark::before {
+  content: "";
+  position: absolute;
+  inset: -40%;
+  background: conic-gradient(from -45deg, var(--confucius-loading-deep) 0deg, var(--confucius-accent) 80deg, var(--confucius-loading-bright) 140deg, var(--confucius-accent) 190deg, var(--confucius-loading-deep) 250deg, var(--confucius-loading-bright) 325deg, var(--confucius-loading-deep) 360deg);
+  animation: confucius-waiting-turn var(--confucius-waiting-period) linear infinite;
+}
+.tui-waiting-mark::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 28%, var(--confucius-loading-bright) 48%, transparent 68%);
+  background-size: 250% 100%;
+  animation: confucius-waiting-glaze calc(var(--confucius-waiting-period) * 1.5) ease-in-out infinite;
+}
+.tui-waiting-content {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.tui-waiting-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+@supports (background-clip: text) or (-webkit-background-clip: text) {
+  .tui-waiting-text {
+    color: transparent;
+    background: linear-gradient(105deg, var(--confucius-muted) 0%, var(--confucius-muted) 40%, var(--confucius-loading-shine) 48%, var(--confucius-loading-shine) 52%, var(--confucius-muted) 60%, var(--confucius-muted) 100%);
+    background-size: 250% 100%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    animation: confucius-waiting-shine var(--confucius-waiting-period) ease-in-out infinite;
+  }
+}
+.tui-waiting-elapsed {
+  flex: none;
+  white-space: nowrap;
+  color: var(--confucius-muted);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .02em;
+}
+.tui-waiting-elapsed[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce), (forced-colors: active) {
+  .tui-waiting-mark { background: var(--confucius-accent); }
+  .tui-waiting-mark::before, .tui-waiting-mark::after {
+    display: none;
+    animation: none;
+  }
+  .tui-waiting-text {
+    background: none;
+    color: var(--confucius-muted);
+    animation: none;
+  }
 }
 .tui-answer table { border-collapse: collapse; margin: 8px 0; width: auto; }
 .tui-answer {
@@ -1062,17 +1131,36 @@ export const TUI_CSS = `
 :is(#confucius-settings-overlay, #confucius-knowledge-overlay) :is(input, textarea, select) { color: var(--confucius-ink); accent-color: var(--confucius-accent); }
 .confucius-workspace-root :is(button, input, select, summary) { min-height: 28px; }
 .confucius-workspace-root textarea::placeholder { color: var(--confucius-muted); opacity: 1; }
-.confucius-workspace-root .confucius-task-search { width: 100%; height: auto; max-height: none; min-height: 40px; box-sizing: border-box; padding: 10px 12px; margin-bottom: 12px; border: 0; border-radius: 10px; background: var(--confucius-surface); font: inherit; }
+.confucius-workspace-root .confucius-task-search { width: 100%; height: 32px; max-height: none; min-height: 32px; box-sizing: border-box; padding: 6px 9px; margin-bottom: 8px; border: 0; border-radius: 7px; background: var(--confucius-surface); font: inherit; }
 .confucius-session-pane { scroll-padding-block: 12px; }
-.confucius-session-pane h3 { margin: 20px 8px 12px; font-size: .82em; font-weight: 600; color: var(--confucius-muted); }
-.confucius-session-pane .confucius-task-row { position: relative; display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding: 4px; border-radius: 8px; }
+.confucius-task-section-toggle { display: block; margin: 16px 0 4px; padding: 4px 8px; border: 0; background: transparent; color: var(--confucius-muted); font: inherit; font-size: .85em; font-weight: 600; text-align: left; cursor: pointer; }
+.confucius-task-section-toggle:first-child { margin-top: 4px; }
+.confucius-session-pane .confucius-task-row { position: relative; display: flex; align-items: center; gap: 2px; margin-bottom: 2px; padding: 0 3px; border-radius: 6px; }
+.confucius-session-pane .confucius-task-row:not([data-task-group=recent]) { margin-left: 17px; }
 .confucius-task-row[data-active=true] { background: var(--confucius-selected); }
 .confucius-task-row:hover { background: var(--confucius-hover); }
-.confucius-task-open { appearance: none; display: block; flex: 1; min-width: 0; height: auto; max-height: none; min-height: 60px; margin: 0; padding: 10px 8px; border: 0; border-radius: 6px; box-sizing: border-box; background: transparent; color: var(--confucius-ink); text-align: left; cursor: pointer; font: inherit; }
-.confucius-task-open span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
-.confucius-task-open small { display: block; margin-top: 6px; color: var(--confucius-muted); font-size: .82em; }
-.confucius-task-row[data-task-status=running] .confucius-task-open small,
-.confucius-task-row[data-task-status=awaiting_approval] .confucius-task-open small { color: var(--confucius-accent-text); }
+.confucius-task-open { appearance: none; display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; height: 32px; max-height: none; min-height: 32px; margin: 0; padding: 5px 6px; border: 0; border-radius: 6px; box-sizing: border-box; background: transparent; color: var(--confucius-ink); text-align: left; cursor: pointer; font: inherit; }
+.confucius-task-open span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 450; }
+.confucius-task-open small { display: none; }
+.confucius-task-row:is([data-task-status=running], [data-task-status=awaiting_approval]) .confucius-task-open::after { content: ''; flex: 0 0 5px; width: 5px; height: 5px; border-radius: 50%; background: var(--confucius-accent); }
+.confucius-task-row[data-task-status=awaiting_approval] .confucius-task-open::after { border-radius: 1px; transform: rotate(45deg); }
+.confucius-session-pane :is(.confucius-task-menu-trigger, .confucius-article-new) { flex: 0 0 26px; width: 26px; min-width: 26px; min-height: 28px; height: 28px; padding: 0; border: 0; background: transparent; opacity: 0; }
+.confucius-task-row:is(:hover, :focus-within) .confucius-task-menu-trigger,
+.confucius-article-row:is(:hover, :focus-within) .confucius-article-new { opacity: 1; }
+.confucius-article-row { display: flex; align-items: center; gap: 2px; padding: 0 3px; border-radius: 6px; margin-bottom: 2px; }
+.confucius-article-row:hover { background: var(--confucius-hover); }
+.confucius-article-toggle { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; height: 34px; border: 0; border-radius: 6px; padding: 6px; background: transparent; color: var(--confucius-ink); font: inherit; text-align: left; cursor: pointer; }
+.confucius-article-toggle::before { content: ''; flex: 0 0 5px; width: 5px; height: 5px; border-right: 1.5px solid var(--confucius-muted); border-bottom: 1.5px solid var(--confucius-muted); transform: rotate(-45deg); }
+.confucius-article-toggle[aria-expanded=true]::before { transform: rotate(45deg); }
+.confucius-article-toggle span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.confucius-article-toggle small { color: var(--confucius-muted); font-size: .8em; font-variant-numeric: tabular-nums; }
+.confucius-workspace-root .confucius-attached-sources { appearance: none; display: flex; align-items: center; gap: 7px; flex: 0 1 420px; min-width: 0; max-width: 100%; padding: 5px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--confucius-ink); font: inherit; cursor: pointer; text-align: left; }
+.confucius-attached-sources:hover { background: var(--confucius-hover); }
+.confucius-attached-sources small { flex-shrink: 0; color: var(--confucius-muted); font-size: .8em; }
+.confucius-attached-sources > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .9em; }
+.confucius-attached-sources[data-empty=true] > span { color: var(--confucius-muted); }
+.confucius-workspace-root[data-confucius-density=narrow] .confucius-attached-sources { display: block; padding: 3px 4px; }
+.confucius-workspace-root[data-confucius-density=narrow] .confucius-attached-sources > :is(small, span) { display: block; }
 .confucius-session-pane .confucius-task-empty { padding: 8px; color: var(--confucius-muted); font-size: .9em; }
 .confucius-activity-shell { max-width: 880px; margin: 0 auto; padding-bottom: 16px; }
 .confucius-activity-head { display: none; }

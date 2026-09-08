@@ -26,7 +26,7 @@ import type { PermissionGate } from "./PermissionGate";
 import { validateArgs, validateArgumentShape } from "./SchemaValidate";
 import type { ToolProvider } from "./ToolProvider";
 import { abortError, errorMessage, isAbortError } from "./abort";
-import { truncateToolResult } from "./truncate";
+import { budgetToolResult } from "./truncate";
 
 const DEFAULT_TRANSIENT_MEDIA_TIMEOUT_MS = 45_000;
 
@@ -260,6 +260,7 @@ export class TurnLoop {
         }
         modelRecoveries = 0;
         this.deps.budget.recordUsage(modelTurn.usage);
+        await this.deps.context?.provided();
         this.deps.context?.usage(modelTurn.usage);
         removeTransientMessages(messages);
         // Some adapters return a partial turn when a streaming request is
@@ -863,6 +864,10 @@ export class TurnLoop {
         messages,
         toolExecutions,
       );
+      const outputBudgetTokens = this.deps.context?.readBudget(
+        messages,
+        batch.length,
+      );
       const rawResults = await Promise.all(
         batch.map(async (call) => {
           let result: ToolResult;
@@ -874,6 +879,7 @@ export class TurnLoop {
               call.args,
               input.signal,
               {
+                outputBudgetTokens,
                 taskId: input.session.id,
                 turnId: input.turnId,
                 operationId: `${input.session.id}:${input.turnId}:${call.callId}`,
@@ -931,14 +937,19 @@ export class TurnLoop {
       );
       // Persist complete results before truncating model input. A failed journal write
       // leaves the last checkpoint's started call unresolved, preventing blind replay.
+      const archived = new Map<
+        string,
+        import("@confucius/protocol").HistoryItemRef
+      >();
       for (const { call, result } of rawResults) {
-        await this.deps.context?.toolResult(
+        const ref = await this.deps.context?.toolResult(
           call.callId,
           call.toolName,
           JSON.stringify(result),
           call.args,
           call.modelCallId,
         );
+        if (ref) archived.set(call.callId, ref);
       }
       const results = rawResults.map(({ call, result, transientMedia }) => {
         const acceptedMedia: ToolTransientMedia[] = [];
@@ -957,7 +968,11 @@ export class TurnLoop {
             : result;
         return {
           call,
-          result: truncateToolResult(durable),
+          result: budgetToolResult(
+            durable,
+            outputBudgetTokens,
+            archived.get(call.callId),
+          ),
           transientMedia: acceptedMedia,
         };
       });

@@ -415,7 +415,15 @@ confucius-workspace-security-normalized-changed = The path was normalized. Revie
 # Durable research context
 confucius-workspace-task-search = Search tasks
 confucius-workspace-tasks-running = In progress
-confucius-workspace-tasks-recent = Recent tasks
+confucius-workspace-tasks-recent = Recent conversations
+confucius-workspace-task-articles = Articles
+confucius-workspace-article-new-chat = New conversation about this article
+confucius-workspace-sidebar-collapse = Collapse conversations
+confucius-workspace-sidebar-expand = Expand conversations
+confucius-workspace-attached-label = Attached
+confucius-workspace-attached-next = Next message
+confucius-workspace-attached-empty = Open a PDF to attach it
+confucius-workspace-attached-follow = Follows the current PDF and keeps manual attachments. Running messages continue using their original file.
 confucius-workspace-task-actions = Task actions
 confucius-workspace-reference-task = Conversations
 confucius-workspace-reference-literature = Literature

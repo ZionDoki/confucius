@@ -63,6 +63,7 @@ export interface WorkSnapshot {
   completed: Array<{ id: string; revision?: number; description: string }>;
   missing: WorkGap[];
   unknownOperationIds: string[];
+  coverage?: import("./sourceCoverage").SourceCoverage;
 }
 
 export function executionBinding(run?: RunState): ExecutionBinding | undefined {

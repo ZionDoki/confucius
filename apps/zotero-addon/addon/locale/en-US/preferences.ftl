@@ -44,3 +44,6 @@ pref-memory-auto = Auto: save directly
 pref-security-title = Safety capabilities
 pref-security-help = Tasks start with Zotero access only. Shell and general file writes are disabled, and Zotero writes show a diff.
 pref-security-workspace = Choose and confirm an absolute path to enable workspace access. Commands and file changes still require one-time or task-level approval.
+
+pref-history-auto-cleanup = Automatically clean up expired archived history
+pref-history-retention-help = Recent work is archived locally without a model call. Archives are kept for 90 days after archiving or an explicit read, up to 500 MiB. Active task dependencies stay protected. Memory extraction has a separate setting.

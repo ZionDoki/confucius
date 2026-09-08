@@ -8,6 +8,7 @@ import {
   type ContextSearchItem,
 } from "@confucius/protocol";
 import {
+  contextForMentionItems,
   libraryMentionTokenAtCaret,
   LibraryMentionSources,
   replaceLibraryMention,
@@ -135,6 +136,18 @@ describe("papers attached through library mentions", () => {
       saved.items.map((item) => item.key),
       ["A", "B"],
     );
+  });
+
+  it("pins a late explicit mention even when task creation already captured that paper automatically", async () => {
+    let saved = contextForMentionItems([paper("A")]);
+    saved.items[0].source = "reader";
+    const mentions = new LibraryMentionSources(async (_id, incoming) => {
+      saved = mergeLockedContexts(saved, incoming);
+    });
+    mentions.add(null, paper("A"));
+    mentions.adoptDraft("created-task", saved);
+    await mentions.flush("created-task");
+    assert.equal(saved.items[0].source, "library");
   });
 
   it("retains failed attachments for retry and isolates another task from their failure", async () => {

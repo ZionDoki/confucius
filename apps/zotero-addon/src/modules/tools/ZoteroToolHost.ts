@@ -1,4 +1,9 @@
 import {
+  CONTEXT_POLICY,
+  contextTextSlice,
+  contextTextTokens,
+} from "@confucius/protocol";
+import {
   AnnotationOwnership,
   type AnnotationOwnerContext,
 } from "./AnnotationOwnership";
@@ -66,8 +71,6 @@ import {
   type PdfPosition,
   type PdfViewportLike,
 } from "./pdfPosition";
-
-const MAX_NOTE = 20_000;
 
 function ok(
   toolName: string,
@@ -230,37 +233,58 @@ async function importDoiFromCsl(
   return item;
 }
 
-export async function findPdf(
-  item: Zotero.Item,
-  attachmentKey?: string,
-): Promise<Zotero.Item | null> {
-  if (
-    item.isAttachment?.() &&
-    item.attachmentContentType === "application/pdf"
-  ) {
-    if (attachmentKey && attachmentKey !== item.key)
-      throw new Error(
-        "Explicit attachment does not belong to the selected PDF",
-      );
-    return item;
-  }
-  if (item.isNote?.()) return null;
-  const pdfs = (item.getAttachments?.() || [])
+/** Enumerate sources without choosing a PDF on the user's behalf. */
+export function pdfAttachments(item: Zotero.Item): Zotero.Item[] {
+  if (item.isAttachment?.())
+    return item.attachmentContentType === "application/pdf" ? [item] : [];
+  if (item.isNote?.() || item.isAnnotation?.()) return [];
+  return (item.getAttachments?.() || [])
     .map((id) => asItem(Zotero.Items.get(id)))
     .filter(
       (entry): entry is Zotero.Item =>
         entry?.attachmentContentType === "application/pdf",
     );
+}
+
+export function pdfAttachmentInfo(pdf: Zotero.Item) {
+  return {
+    attachmentKey: pdf.key,
+    title: String(pdf.getDisplayTitle?.() || pdf.getField?.("title") || ""),
+    filename: pdf.attachmentFilename || "",
+    zoteroUri: buildOpenPdfUri(pdf.key, {
+      groupID: groupIDForLibrary(pdf.libraryID),
+    }),
+  };
+}
+
+class PdfAttachmentChoiceRequired extends Error {
+  readonly details;
+
+  constructor(item: Zotero.Item, pdfs: Zotero.Item[]) {
+    super("Multiple PDF attachments are available. Choose the file to use.");
+    this.details = {
+      reason: "multiple_pdf_attachments",
+      libraryID: item.libraryID,
+      key: item.key,
+      attachments: pdfs.map(pdfAttachmentInfo),
+      nextAction:
+        "Retry with an attachmentKey from this list. Use the file selected in the task context; otherwise inspect the titles and filenames. If the intended file is still unclear, ask the user by filename rather than asking them to supply an internal key.",
+    };
+  }
+}
+
+export async function findPdf(
+  item: Zotero.Item,
+  attachmentKey?: string,
+): Promise<Zotero.Item | null> {
+  const pdfs = pdfAttachments(item);
   if (attachmentKey) {
     const selected = pdfs.find((pdf) => pdf.key === attachmentKey);
     if (!selected)
       throw new Error("Explicit PDF attachment not found under this item");
     return selected;
   }
-  if (pdfs.length > 1)
-    throw new Error(
-      `Multiple PDF attachments; specify attachmentKey: ${pdfs.map((pdf) => pdf.key).join(", ")}`,
-    );
+  if (pdfs.length > 1) throw new PdfAttachmentChoiceRequired(item, pdfs);
   return pdfs[0] ?? null;
 }
 
@@ -1373,8 +1397,10 @@ async function pdfFingerprint(pdf: Zotero.Item): Promise<string> {
     throw new Error(
       "PDF file is unavailable locally; download it before reading or annotating",
     );
-  if (!path) return `${pdf.libraryID}:${pdf.key}`;
+  if (!path) return `unversioned:${pdf.libraryID}:${pdf.key}`;
   const info = await IOUtils.stat(path);
+  if (!Number.isFinite(info.size) || !Number.isFinite(info.lastModified))
+    return `unversioned:${pdf.libraryID}:${pdf.key}:${path}`;
   return canonical({
     key: pdf.key,
     path,
@@ -1504,7 +1530,7 @@ export class ZoteroToolHost {
   private readonly pageTextCache = new Map<string, string>();
   private readonly pageReads = new Map<
     string,
-    { at: number; operationId?: string }
+    { at: number; operationId?: string; text: string; anchored: boolean }
   >();
   private readonly annotationLocks = new ResourceLocks();
   readonly ownership: AnnotationOwnership;
@@ -1536,19 +1562,25 @@ export class ZoteroToolHost {
   ) {
     const item = getItem(libraryID, key);
     if (!item) return;
-    const pdf = await findPdf(item, attachmentKey);
-    if (!pdf) return;
-    return this.annotationLocks.run(
-      [`${pdf.libraryID}_${pdf.key}`],
-      async () => {
-        await pdf.reload?.(["childItems"], true);
-        return this.ownership.freeze(
-          `${pdf.libraryID}_${pdf.key}`,
-          this.ownerContext(context),
-          readPdfAnnotations(pdf).map((mark) => mark.color),
-        );
-      },
-    );
+    // Baselines cover every candidate when no attachment was selected. Starting
+    // a task must not require the single-PDF choice that a later read/write needs.
+    const pdfs = attachmentKey
+      ? [await findPdf(item, attachmentKey)].filter((pdf): pdf is Zotero.Item =>
+          Boolean(pdf),
+        )
+      : pdfAttachments(item);
+    for (const pdf of pdfs)
+      await this.annotationLocks.run(
+        [`${pdf.libraryID}_${pdf.key}`],
+        async () => {
+          await pdf.reload?.(["childItems"], true);
+          await this.ownership.freeze(
+            `${pdf.libraryID}_${pdf.key}`,
+            this.ownerContext(context),
+            readPdfAnnotations(pdf).map((mark) => mark.color),
+          );
+        },
+      );
   }
 
   async annotationBatchView(
@@ -1822,7 +1854,8 @@ export class ZoteroToolHost {
       }
     }
     if (
-      (TOOL_META[name]?.catalog === "paper.read" ||
+      ((TOOL_META[name]?.catalog === "paper.read" &&
+        name !== "get_paper_metadata") ||
         [
           "propose_annotations",
           "propose_highlights",
@@ -1835,7 +1868,8 @@ export class ZoteroToolHost {
         try {
           const selected =
             args.attachmentKey ??
-            (context.source?.key === item.key
+            (context.source?.libraryID === item.libraryID &&
+            context.source.key === item.key
               ? context.source.attachmentKey
               : undefined);
           const pdf = await findPdf(item, selected as string | undefined);
@@ -1852,6 +1886,11 @@ export class ZoteroToolHost {
               args.key = pdf.key;
           }
         } catch (error) {
+          if (error instanceof PdfAttachmentChoiceRequired)
+            return {
+              ...reject(error.message),
+              details: error.details,
+            };
           return reject(String(error), "not_found");
         }
       }
@@ -2540,7 +2579,7 @@ export class ZoteroToolHost {
       case "get_item_notes":
         return this.getItemNotes(args);
       case "get_note_content":
-        return this.getNoteContent(args);
+        return this.getNoteContent(args, context);
       case "get_collections":
         return this.getCollections(args);
       case "get_collection_items":
@@ -2589,7 +2628,7 @@ export class ZoteroToolHost {
       case "list_sections":
         return this.getOutline(name, args);
       case "get_paper_section":
-        return this.getPaperSection(args);
+        return this.getPaperSection(args, context);
       case "get_pages":
         return this.getPages(args, signal, context);
       case "get_page_count":
@@ -2778,6 +2817,7 @@ export class ZoteroToolHost {
       extra: item.getField?.("extra") || "",
       abstract: item.getField?.("abstractNote") || "",
       url: item.getField?.("url") || "",
+      pdfAttachments: pdfAttachments(item).map(pdfAttachmentInfo),
     });
   }
 
@@ -2810,7 +2850,10 @@ export class ZoteroToolHost {
     return ok("get_item_notes", { notes: notes.filter(Boolean) });
   }
 
-  private getNoteContent(args: Record<string, unknown>): ToolResult {
+  private getNoteContent(
+    args: Record<string, unknown>,
+    context: ToolExecutionContext = {},
+  ): ToolResult {
     const ref = requireItemRef(args);
     if (!ref.ok) {
       return fail("get_note_content", "invalid_args", ref.message);
@@ -2819,11 +2862,20 @@ export class ZoteroToolHost {
     if (!item?.isNote?.()) {
       return fail("get_note_content", "not_found", "Note not found");
     }
+    const html = item.getNote?.() || "";
+    const slice = contextTextSlice(
+      html,
+      context.outputBudgetTokens ?? CONTEXT_POLICY.readTokens,
+      Number(args.offset ?? 0),
+    );
     return ok("get_note_content", {
+      offset: Number(args.offset ?? 0),
+      totalChars: html.length,
+      nextOffset: slice.nextOffset,
       libraryID: item.libraryID,
       key: item.key,
       zoteroUri: buildSelectUri(item.key, groupIDForLibrary(item.libraryID)),
-      html: (item.getNote?.() || "").slice(0, MAX_NOTE),
+      html: slice.content,
     });
   }
 
@@ -3619,6 +3671,7 @@ export class ZoteroToolHost {
 
   private async getPaperSection(
     args: Record<string, unknown>,
+    context: ToolExecutionContext = {},
   ): Promise<ToolResult> {
     const ref = requireItemRef(args);
     if (!ref.ok) {
@@ -3639,11 +3692,19 @@ export class ZoteroToolHost {
     if (!section) {
       return fail("get_paper_section", "not_found", "Section not found");
     }
+    const slice = contextTextSlice(
+      section.content,
+      context.outputBudgetTokens ?? CONTEXT_POLICY.readTokens,
+      Number(args.offset ?? 0),
+    );
     return ok("get_paper_section", {
+      offset: Number(args.offset ?? 0),
+      totalChars: section.content.length,
+      nextOffset: slice.nextOffset,
       libraryID: ref.libraryID,
       key: ref.key,
       section: section.normalizedName,
-      content: section.content.slice(0, MAX_NOTE),
+      content: slice.content,
     });
   }
 
@@ -3651,10 +3712,18 @@ export class ZoteroToolHost {
     pdf: Zotero.Item,
     view: PdfPrimaryView,
     page: number,
+    refresh = false,
   ): Promise<string> {
-    const key = `${await pdfFingerprint(pdf)}:${page}`;
+    const version = await pdfFingerprint(pdf);
+    const key = `${version}:${page}`;
     const cached = this.pageTextCache.get(key);
-    if (cached !== undefined) return cached;
+    if (
+      !refresh &&
+      typeof pdf.getFilePathAsync === "function" &&
+      !version.startsWith("unversioned:") &&
+      cached !== undefined
+    )
+      return cached;
     const chars = await pageChars(view, page - 1);
     let text = chars.map(charText).join("");
     if (!text) {
@@ -3713,75 +3782,106 @@ export class ZoteroToolHost {
         );
       const pages = [];
       let returnedCharacters = 0;
+      let returnedTokens = 0;
+      const tokenBudget =
+        context.outputBudgetTokens ?? CONTEXT_POLICY.readTokens;
+      const pageBudget = Math.max(
+        1,
+        Math.min(50, Math.ceil(tokenBudget / 1200)),
+      );
       let nextPage: number | null = null;
       const rereadReason = String(args.rereadReason ?? "").trim();
       const fingerprint = await pdfFingerprint(pdf);
       for (let page = start; page <= end; page++) {
-        const readKey =
-          context.taskId && context.turnId
-            ? `${context.taskId}:${context.turnId}:${fingerprint}:${page}`
-            : undefined;
-        const previous = readKey ? this.pageReads.get(readKey) : undefined;
-        if (previous && !rereadReason) {
-          pages.push({
-            page,
-            text: "",
-            omitted: true,
-            previouslyRead: previous,
-            message:
-              "This page was already returned in this turn. Reuse that evidence; if it is unavailable, truncated by the engine, or needs verification, call get_pages for the needed pages with a specific rereadReason.",
-          });
-          continue;
-        }
-        const { text, anchored, truncated } = await progress.run(
-          `extracting_page_${page}`,
-          10_000,
-          async () => {
-            const chars = await pageChars(view, page - 1);
-            if (!chars.length)
-              return {
-                text: await this.physicalPageText(pdf, view, page),
-                anchored: false,
-                truncated: false,
-              };
-            const passages = await pdfPassages(
-              chars,
-              page,
-              fingerprint,
-              runtimeDigest,
-            );
-            return {
-              ...renderPdfPassages(passages, 50_000),
-              anchored: passages.some((p) => p.anchor),
-            };
-          },
-        );
-        if (returnedCharacters && returnedCharacters + text.length > 24_000) {
+        if (
+          pages.length >= pageBudget ||
+          (pages.length && returnedTokens >= tokenBudget)
+        ) {
           nextPage = page;
           break;
         }
-        returnedCharacters += Math.min(text.length, 50_000);
-        const clipped = truncated || text.length > 50_000;
+        const readKey =
+          context.taskId && !fingerprint.startsWith("unversioned:")
+            ? `${context.taskId}:${fingerprint}:${page}`
+            : undefined;
+        const previous = readKey ? this.pageReads.get(readKey) : undefined;
+        const { text, anchored, truncated } =
+          previous && !rereadReason
+            ? {
+                text: previous.text,
+                anchored: previous.anchored,
+                truncated: false,
+              }
+            : await progress.run(
+                `extracting_page_${page}`,
+                10_000,
+                async () => {
+                  const chars = await pageChars(view, page - 1);
+                  if (!chars.length)
+                    return {
+                      text: await this.physicalPageText(
+                        pdf,
+                        view,
+                        page,
+                        !!rereadReason,
+                      ),
+                      anchored: false,
+                      truncated: false,
+                    };
+                  const passages = await pdfPassages(
+                    chars,
+                    page,
+                    fingerprint,
+                    runtimeDigest,
+                  );
+                  return {
+                    ...renderPdfPassages(passages, Number.MAX_SAFE_INTEGER),
+                    anchored: passages.some((p) => p.anchor),
+                  };
+                },
+              );
+        if (
+          returnedCharacters &&
+          returnedTokens + contextTextTokens(text) > tokenBudget
+        ) {
+          nextPage = page;
+          break;
+        }
+        returnedCharacters += text.length;
+        returnedTokens += contextTextTokens(text);
+        const clipped = truncated;
         const readAt = Date.now();
         if (readKey && !clipped) {
           this.pageReads.delete(readKey);
           this.pageReads.set(readKey, {
             at: readAt,
             operationId: context.operationId,
+            text,
+            anchored,
           });
-          if (this.pageReads.size > 2000)
+          if (this.pageReads.size > 32)
             this.pageReads.delete(this.pageReads.keys().next().value!);
         }
         pages.push({
           page,
           readAt,
-          ...(previous ? { previouslyRead: previous, rereadReason } : {}),
+          ...(rereadReason ? { rereadReason } : {}),
+          ...(previous
+            ? {
+                previouslyRead: {
+                  at: previous.at,
+                  operationId: previous.operationId,
+                },
+                rereadReason,
+                reused: !rereadReason,
+              }
+            : {}),
           zoteroUri: buildOpenPdfUri(pdf.key, {
             page,
             groupID: groupIDForLibrary(pdf.libraryID),
           }),
-          text: text.slice(0, 50_000),
-          truncated: truncated || text.length > 50_000,
+          text,
+          truncated,
           ...(anchored
             ? {
                 anchorFormat:
@@ -3796,10 +3896,13 @@ export class ZoteroToolHost {
         attachmentKey: pdf.key,
         pageCount: count,
         pageSource: "pdf_physical",
+        sourceVersion: fingerprint.startsWith("unversioned:")
+          ? `unversioned:${pdf.libraryID}:${pdf.key}`
+          : `pdf:${await runtimeDigest(fingerprint)}`,
         nextPage,
         requestedRange: { start, end },
         textCoverage:
-          "Host text only; downstream engine truncation is not observable. Omitted pages are explicitly labelled.",
+          "Host text is archived before any model-window selection. This response is not a claim of model review; use exact page/ref continuation when needed.",
         pages,
       });
     } finally {
@@ -3983,7 +4086,16 @@ export class ZoteroToolHost {
         );
       const offset = Number(args.offset ?? 0);
       const requestedLimit = Number(args.limit ?? 25);
-      const limit = Math.min(requestedLimit, 50);
+      const limit = Math.max(
+        1,
+        Math.min(
+          requestedLimit,
+          50,
+          context.outputBudgetTokens === undefined
+            ? 50
+            : Math.floor(context.outputBudgetTokens / 250),
+        ),
+      );
       if (
         !Number.isInteger(offset) ||
         offset < 0 ||

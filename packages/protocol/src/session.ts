@@ -1,4 +1,11 @@
+import { CONTEXT_POLICY } from "./contextPolicy";
 import { restoreRun, type RunState } from "./run";
+import {
+  restoreContextHandoff,
+  restoreContextSwitch,
+  type ContextHandoff,
+  type ContextSwitchState,
+} from "./contextHandoff";
 import {
   runtimeModelSelection,
   type RuntimeModelSelection,
@@ -15,6 +22,7 @@ import type {
   AgentBackendKind,
   CapabilityProfile,
   LockedContextSnapshot,
+  LockedItemContext,
   RecoverableTurn,
   TaskStatus,
 } from "./research";
@@ -87,6 +95,7 @@ export interface ResearchTaskRecord extends SessionRecord {
     requests?: import("./events").ModelRequestProgress[];
     attempts?: number;
     maintenanceTarget?: string;
+    maintenanceAttempts?: number;
     maintenanceSourceUpdatedAt?: number;
     maintenanceBatchId?: string;
     /** Durable model result, saved before applying any memory or deleting originals. */
@@ -108,12 +117,25 @@ export interface ResearchTaskRecord extends SessionRecord {
   externalSessionId?: string;
   externalTurnId?: string;
   contextResetRequested?: boolean;
+  contextHandoff?: ContextHandoff;
+  contextSwitch?: ContextSwitchState;
   historyClearedAt?: number;
   historyCleanupBatch?: string;
-  maintenanceBudget?: { turnId: string; attempts: number };
+  historyDistilledAt?: number;
+  historyDistillationAttemptedAt?: number;
+  historyRetention?: import("./contextHandoff").HistoryRetentionState;
+  historyRetentionReasons?: string[];
+  historyRetainedBytes?: number;
+  maintenanceBudget?: {
+    turnId: string;
+    attempts: number;
+    handoffAttempts?: number;
+  };
   status: TaskStatus;
   activeKnowledgeBaseId?: string;
   lockedContext: LockedContextSnapshot;
+  /** Articles used by submitted turns, retained when the focused reader changes. */
+  articleSources?: LockedItemContext[];
   artifactIds: string[];
   recoverableTurn?: RecoverableTurn;
   /** Legacy decode only; new writes use run. */
@@ -182,6 +204,12 @@ export function migrateSessionRecord(
       lockedContext: isLockedContextSnapshot(locked)
         ? withLockedContextFingerprint(locked)
         : emptyLockedContext(now),
+      articleSources: isLockedContextSnapshot({
+        ...emptyLockedContext(now),
+        items: candidate.articleSources,
+      })
+        ? candidate.articleSources
+        : undefined,
       artifactIds: Array.isArray(candidate.artifactIds)
         ? [
             ...new Set(
@@ -203,6 +231,8 @@ export function migrateSessionRecord(
           : undefined,
       contextResetRequested:
         candidate.contextResetRequested === true || undefined,
+      contextHandoff: restoreContextHandoff(candidate.contextHandoff),
+      contextSwitch: restoreContextSwitch(candidate.contextSwitch),
       historyClearedAt:
         typeof candidate.historyClearedAt === "number"
           ? candidate.historyClearedAt
@@ -212,7 +242,15 @@ export function migrateSessionRecord(
         typeof candidate.maintenanceBudget.turnId === "string" &&
         Number.isSafeInteger(candidate.maintenanceBudget.attempts) &&
         candidate.maintenanceBudget.attempts >= 0
-          ? candidate.maintenanceBudget
+          ? {
+              ...candidate.maintenanceBudget,
+              handoffAttempts:
+                Number.isSafeInteger(
+                  candidate.maintenanceBudget.handoffAttempts,
+                ) && candidate.maintenanceBudget.handoffAttempts! >= 0
+                  ? candidate.maintenanceBudget.handoffAttempts
+                  : CONTEXT_POLICY.handoffAttempts,
+            }
           : undefined,
       externalTurnId:
         backend !== "native" && typeof candidate.externalTurnId === "string"

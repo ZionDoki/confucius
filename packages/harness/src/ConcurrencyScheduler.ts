@@ -1,4 +1,4 @@
-import type { ToolRuntimeMeta } from "@confucius/protocol";
+import { CONTEXT_POLICY, type ToolRuntimeMeta } from "@confucius/protocol";
 
 export interface ScheduledCall {
   callId: string;
@@ -44,6 +44,7 @@ export function splitBatches(
       meta?.concurrency === "parallel_safe" && meta.mutatesState === false;
     if (parallelSafe) {
       parallel.push(call);
+      if (parallel.length >= CONTEXT_POLICY.parallelReads) flushParallel();
     } else {
       flushParallel();
       batches.push([call]);

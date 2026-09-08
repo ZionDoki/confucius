@@ -121,6 +121,15 @@ export function bindPrefsWindow(win: Window): void {
       setPref("memoryAutoExtract", next !== "off");
     });
   }
+  const historyCleanup = doc.getElementById(
+    "confucius-pref-historyAutoCleanup",
+  ) as HTMLInputElement | null;
+  if (historyCleanup) {
+    historyCleanup.checked = getPref("historyAutoCleanup") !== false;
+    historyCleanup.addEventListener("change", () =>
+      setPref("historyAutoCleanup", historyCleanup.checked),
+    );
+  }
   const bindBudget = (
     id: string,
     key: "maxIterations" | "maxToolCalls",

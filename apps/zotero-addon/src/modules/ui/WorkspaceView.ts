@@ -30,6 +30,11 @@ import {
   markScrollContainer,
 } from "./workspaceScrollbars";
 import { createTaskList } from "./workspaceTasks";
+import {
+  contextArticles,
+  followReaderContext,
+  readerAttachmentIdentity,
+} from "../host/TaskSources";
 import { exportTaskTrace } from "./taskTraceExport";
 import {
   keyedTimeline,
@@ -37,6 +42,9 @@ import {
   retryActivity,
   contextActivity,
   turnAwaitingReply,
+  createWaitingIndicator,
+  updateWaitingIndicator,
+  sendErrorInTimeline,
 } from "./workspaceActivity";
 import {
   composerKeyAction,
@@ -79,6 +87,7 @@ import {
   UI_LINE_HEIGHT_VALUES,
   clampUiFontSize,
   emptyLockedContext,
+  withLockedContextFingerprint,
   isUiFont,
   isUiTheme,
   isUiLanguage,
@@ -124,6 +133,7 @@ let workspaceViewState:
       drafts: Map<string, string>;
       references: Map<string, TaskContextReference[]>;
       viewports: Map<string, { scrollTop: number; followsBottom: boolean }>;
+      showSessions?: boolean;
     }
   | undefined;
 const linkHosts = new WeakMap<HTMLElement, WorkspaceHost | null>();
@@ -574,8 +584,8 @@ function applyFill(node: HTMLElement, compact = false): void {
     padding: "0px",
     width: "auto",
     height: "auto",
-    maxWidth: compact ? "100%" : "none",
-    minWidth: compact ? "0px" : "640px",
+    maxWidth: "100%",
+    minWidth: "0px",
     minHeight: compact ? "0px" : "420px",
     overflow: "hidden",
     containerType: "inline-size",
@@ -1168,6 +1178,9 @@ function bindWorkspace(
     runtimeHostConnected: false,
   };
   let initialViewReady = false;
+  let failedPrompt:
+    | { taskId: string; afterEventId: string | null; message: string }
+    | undefined;
   const traceExports = new Set<string>();
   const composerDrafts = cachedView?.drafts ?? new Map<string, string>();
   const referenceDrafts =
@@ -1182,6 +1195,7 @@ function bindWorkspace(
   let loadedComposerTaskId: string | null = null;
   let taskLoadGeneration = 0;
   let pendingPermissionUpdate: Promise<void> = Promise.resolve();
+  let pendingReaderUpdate: Promise<void> = Promise.resolve();
   let presetUpdatePending = false;
   let modeUpdatePending = false;
   const mentionSources = new LibraryMentionSources(async (taskId, context) => {
@@ -1242,6 +1256,7 @@ function bindWorkspace(
     alignItems: "center",
     gap: "8px",
     minWidth: "0px",
+    flex: "1 1 auto",
   });
   brandGroup.className = "confucius-brand-group";
   const brand = el(doc, "div", {
@@ -1268,6 +1283,17 @@ function bindWorkspace(
     : getString("workspace-host-missing");
   brandGroup.appendChild(brandMark(doc));
   brandGroup.appendChild(brand);
+  const attachedSources = el(doc, "button", undefined, {
+    id: "confucius-attached-sources",
+    type: "button",
+    "aria-haspopup": "menu",
+  });
+  attachedSources.className = "confucius-attached-sources";
+  const attachedLabel = el(doc, "small");
+  const attachedTitle = el(doc, "span");
+  attachedSources.append(attachedLabel, attachedTitle);
+  attachedSources.addEventListener("click", () => showAttachedSources());
+  brandGroup.appendChild(attachedSources);
   brandGroup.appendChild(status);
   let newSessionLabel = getString("workspace-new-session");
   const newSessionBtn = button(doc, "confucius-new-session", newSessionLabel);
@@ -1315,13 +1341,21 @@ function bindWorkspace(
       cursor: "pointer",
       minHeight: "32px",
       font: "inherit",
-      display: compact ? "inline-flex" : "none",
+      display: "inline-flex",
     },
     { id: "confucius-toggle-sessions", type: "button" },
   );
-  sessionsToggle.textContent = getString("workspace-toggle-sessions");
-  sessionsToggle.setAttribute("aria-label", sessionsToggle.textContent);
-  sessionsToggle.setAttribute("aria-pressed", "false");
+  sessionsToggle.className =
+    "confucius-icon-button confucius-navigation-toggle";
+  const navigationIcon = workspaceLayoutIcon(doc, "sidebar");
+  navigationIcon.setAttribute("style", "transform: scaleX(-1)");
+  sessionsToggle.append(navigationIcon);
+  sessionsToggle.setAttribute(
+    "aria-label",
+    getString("workspace-toggle-sessions"),
+  );
+  sessionsToggle.setAttribute("aria-controls", "confucius-session-pane");
+  brandGroup.prepend(sessionsToggle);
   const topbarActions = el(doc, "div", {
     display: "flex",
     alignItems: "center",
@@ -1332,7 +1366,6 @@ function bindWorkspace(
   });
   topbarActions.className = "confucius-topbar-actions";
   topbarActions.appendChild(newSessionBtn);
-  topbarActions.appendChild(sessionsToggle);
   topbarActions.appendChild(knowledgeBtn);
   topbarActions.appendChild(layoutBtn);
   topbarActions.appendChild(settingsBtn);
@@ -1347,7 +1380,7 @@ function bindWorkspace(
     position: "relative",
   });
   columns.className = "confucius-columns";
-  let showSessions = !compact;
+  let showSessions = cachedView?.showSessions ?? !compact;
   const sessionPane = el(doc, "div", {
     flex: "0 0 auto",
     width: compact ? "160px" : "220px",
@@ -1361,6 +1394,7 @@ function bindWorkspace(
     display: showSessions ? "block" : "none",
   });
   sessionPane.className = "confucius-pane confucius-session-pane";
+  sessionPane.id = "confucius-session-pane";
   sessionPane.setAttribute(
     "aria-label",
     getString("workspace-toggle-sessions"),
@@ -1707,8 +1741,13 @@ function bindWorkspace(
   }
 
   function syncAuxiliaryPanes(): void {
-    sessionsToggle.style.display = auxiliaryOverlay ? "inline-flex" : "none";
-    paintToggle(sessionsToggle, auxiliaryOverlay && showSessions);
+    sessionsToggle.style.display = "inline-flex";
+    sessionsToggle.setAttribute("aria-expanded", String(showSessions));
+    sessionsToggle.title = getString(
+      showSessions ? "workspace-sidebar-collapse" : "workspace-sidebar-expand",
+    );
+    sessionsToggle.setAttribute("aria-label", sessionsToggle.title);
+    paintToggle(sessionsToggle, showSessions);
 
     if (!auxiliaryOverlay) {
       sessionPane.style.position = "static";
@@ -1719,9 +1758,9 @@ function bindWorkspace(
       sessionPane.style.zIndex = "";
       sessionPane.style.maxWidth = "";
       sessionPane.style.boxShadow = "none";
-      sessionPane.style.display = "block";
-      sessionPane.style.width = "220px";
-      sessionPane.style.minWidth = "180px";
+      sessionPane.style.display = showSessions ? "block" : "none";
+      sessionPane.style.width = "248px";
+      sessionPane.style.minWidth = "220px";
       return;
     }
 
@@ -1774,12 +1813,12 @@ function bindWorkspace(
     status.style.display = narrow ? "none" : "inline";
     Object.assign(topbarActions.style, {
       display: stacked ? "grid" : "flex",
-      gridTemplateColumns: stacked ? "repeat(5, minmax(0, 1fr))" : "",
+      gridTemplateColumns: stacked ? "repeat(4, minmax(0, 1fr))" : "",
       width: stacked ? "100%" : "auto",
       marginLeft: stacked ? "0px" : "auto",
       gap: stacked ? "4px" : "8px",
     });
-    for (const action of [newSessionBtn, sessionsToggle]) {
+    for (const action of [newSessionBtn]) {
       Object.assign(action.style, {
         minWidth: "0px",
         maxWidth: "100%",
@@ -1792,7 +1831,8 @@ function bindWorkspace(
       });
     }
     newSessionBtn.textContent = narrow ? "+" : newSessionLabel;
-    sessionsToggle.textContent = narrow ? "☰" : sessionsLabel;
+    brand.style.display = measured < 400 ? "none" : "";
+    status.style.display = measured < 900 ? "none" : "inline";
 
     stopBtn.textContent = "■";
     timelinePane.style.padding = stacked ? "10px" : "18px 24px";
@@ -1819,6 +1859,7 @@ function bindWorkspace(
       drafts: composerDrafts,
       references: referenceDrafts,
       viewports: timelineViewports,
+      showSessions,
     };
     for (const pending of draftSaves.values()) {
       win?.clearTimeout(pending.timer);
@@ -1886,6 +1927,7 @@ function bindWorkspace(
   }
 
   function renderAttachmentTray(): void {
+    syncHeaderSources();
     attachmentTray.textContent = "";
     attachmentTray.style.display = pendingAttachments.length ? "flex" : "none";
     for (const item of pendingAttachments) {
@@ -3346,26 +3388,10 @@ function bindWorkspace(
     events: ConfuciusEvent[],
   ): HTMLElement {
     const wrap = tuiBlock(targetDoc, { margin: "10px 0 4px" });
-    const label = el(targetDoc, "div");
-    label.className = "tui-waiting";
-    label.setAttribute("role", "status");
-    const mark = targetDoc.createElementNS(SVG_NS, "svg");
-    mark.setAttribute("viewBox", "0 0 256 256");
-    mark.setAttribute("aria-hidden", "true");
-    mark.classList.add("tui-waiting-mark");
-    const markPath = targetDoc.createElementNS(SVG_NS, "path");
-    markPath.setAttribute(
-      "d",
-      "M200 76 A 90 90 0 1 0 200 180 Q 187 178 173 164 A 58 58 0 1 1 173 92 Q 187 80 200 76 Z",
+    wrap.dataset.entryId = "waiting";
+    wrap.appendChild(
+      createWaitingIndicator(targetDoc, runningStageText(events)),
     );
-    markPath.setAttribute("fill", "currentColor");
-    mark.appendChild(markPath);
-    const text = el(targetDoc, "span");
-    text.className = "tui-waiting-text";
-    text.textContent = runningStageText(events);
-    label.appendChild(mark);
-    label.appendChild(text);
-    wrap.appendChild(label);
     return wrap;
   }
 
@@ -3962,6 +3988,39 @@ function bindWorkspace(
     if (generation !== taskLoadGeneration || state.sessionId !== taskId) return;
     syncModeButton();
     updateRunningUI();
+    await syncFocusedReader();
+  }
+
+  function syncFocusedReader(
+    refresh = false,
+    taskId = state.sessionId,
+  ): Promise<void> {
+    const update = pendingReaderUpdate
+      .catch(() => undefined)
+      .then(async () => {
+        if (
+          !taskId ||
+          state.sessionId !== taskId ||
+          state.running ||
+          (state.sending && !refresh)
+        )
+          return;
+        await mentionSources.flush(taskId);
+        if (state.sessionId !== taskId || state.running) return;
+        const updated = (await rpc("task/setContext", {
+          taskId,
+          mode: "follow_reader",
+          refresh,
+        })) as ResearchTaskRecord;
+        const index = state.sessions.findIndex((task) => task.id === taskId);
+        if (index >= 0) state.sessions[index] = updated;
+        // Poll will supply a fresh preview; do not show an older polled tab as the
+        // next attachment immediately after Send's authoritative host capture.
+        if (refresh) state.live = null;
+        syncHeaderSources();
+      });
+    pendingReaderUpdate = update;
+    return update;
   }
 
   async function createTask(
@@ -4254,11 +4313,131 @@ function bindWorkspace(
     return details.join("\n");
   }
 
+  function attachedContext(): LockedContextSnapshot {
+    const task = currentTask();
+    let context =
+      task?.lockedContext ?? state.live?.lockedSnapshot ?? emptyLockedContext();
+    if (task && state.running && state.live?.lockedSnapshot)
+      context = followReaderContext(context, state.live.lockedSnapshot);
+    return mentionSources.context(context, task?.id ?? null) ?? context;
+  }
+
+  function attachmentIsNext(context: LockedContextSnapshot): boolean {
+    const task = currentTask();
+    return Boolean(
+      task &&
+      state.running &&
+      readerAttachmentIdentity(context) !==
+        readerAttachmentIdentity(task.run?.sources ?? task.lockedContext),
+    );
+  }
+
+  function syncHeaderSources(): void {
+    const context = attachedContext();
+    const articles = contextArticles(context);
+    const reader = context.reader;
+    if (reader)
+      articles.sort(
+        (a, b) =>
+          Number(
+            b.libraryID === reader.libraryID &&
+              b.key === (reader.parentKey ?? reader.attachmentKey),
+          ) -
+          Number(
+            a.libraryID === reader.libraryID &&
+              a.key === (reader.parentKey ?? reader.attachmentKey),
+          ),
+      );
+    const names = [
+      ...articles.map((item) => item.title || item.key),
+      ...pendingAttachments.map((item) => item.name),
+    ];
+    if (context.collection) names.push(context.collection.name);
+    if (context.savedSearch) names.push(context.savedSearch.name);
+    const label = getString(
+      attachmentIsNext(context)
+        ? "workspace-attached-next"
+        : "workspace-attached-label",
+    );
+    attachedLabel.textContent = label;
+    attachedTitle.textContent = names.length
+      ? `${names[0]}${names.length > 1 ? ` +${names.length - 1}` : ""}`
+      : getString("workspace-attached-empty");
+    attachedSources.dataset.empty = String(!names.length);
+    attachedSources.title = `${label}\n${names.join("\n")}\n${getString("workspace-attached-follow")}`;
+    attachedSources.setAttribute(
+      "aria-label",
+      `${label}: ${names.join(", ") || getString("workspace-attached-empty")}`,
+    );
+  }
+
+  function showAttachedSources(anchor: HTMLElement = attachedSources): void {
+    const existing = doc.getElementById("confucius-source-menu");
+    if (existing) {
+      existing.remove();
+      return;
+    }
+    closeEndpointMenu();
+    closePlusMenu();
+    closeMentionMenu();
+    closeSlashMenu();
+    const context = attachedContext();
+    const menu = menuPanel("confucius-source-menu");
+    menu.appendChild(
+      createMenuHeader(
+        doc,
+        getString(
+          attachmentIsNext(context)
+            ? "workspace-attached-next"
+            : "workspace-attached-label",
+        ),
+        getString("workspace-attached-follow"),
+      ),
+    );
+    for (const item of contextArticles(context)) {
+      const row = menuRow(item.title || item.key, {
+        hint: item.source === "reader" ? "PDF" : "@",
+        onClick: () => {
+          menu.remove();
+          void rpc("reader/open", {
+            libraryID: item.libraryID,
+            key: item.attachmentKey ?? item.key,
+            selectItem: !item.attachmentKey,
+          }).catch((error) => {
+            state.sendError = String(error);
+            renderLists();
+          });
+        },
+      });
+      row.title = item.title || item.key;
+      menu.appendChild(row);
+    }
+    for (const item of pendingAttachments)
+      menu.appendChild(menuRow(item.name, { hint: attachmentMeta(item) }));
+    for (const source of [context.collection, context.savedSearch])
+      if (source) menu.appendChild(menuRow(source.name));
+    if (!contextHasSources(context) && !pendingAttachments.length)
+      menu.appendChild(menuRow(getString("workspace-attached-empty")));
+    if (currentTask()) {
+      const pin = menuRow(getString("workspace-context-add"), {
+        onClick: () => {
+          menu.remove();
+          void updateTaskContext("add");
+        },
+      });
+      pin.dataset.contextAction = "add";
+      menu.appendChild(pin);
+    }
+    placeMenu(anchor, menu, 380);
+  }
+
   function taskHasMentionItem(item: ContextSearchItem): boolean {
     const task = currentTask();
     return Boolean(
       task?.lockedContext.items.some(
-        (locked) => mentionItemKey(locked) === mentionItemKey(item),
+        (locked) =>
+          locked.source !== "reader" &&
+          mentionItemKey(locked) === mentionItemKey(item),
       ) || mentionSources.has(task?.id ?? null, item),
     );
   }
@@ -4273,7 +4452,9 @@ function bindWorkspace(
     }
     if (
       task.lockedContext.items.some(
-        (locked) => mentionItemKey(locked) === mentionItemKey(item),
+        (locked) =>
+          locked.source !== "reader" &&
+          mentionItemKey(locked) === mentionItemKey(item),
       )
     ) {
       flashContextUpdated();
@@ -4642,6 +4823,30 @@ function bindWorkspace(
     status: taskStatusLabel,
     exportTrace: (taskId) => void saveTaskTrace(taskId),
     isExporting: (taskId) => traceExports.has(taskId),
+    newForArticle: (article) => {
+      void (async () => {
+        await rpc("reader/open", {
+          libraryID: article.libraryID,
+          key: article.attachmentKey ?? article.key,
+          selectItem: !article.attachmentKey,
+        });
+        await createTask({
+          title: getString("workspace-untitled-task"),
+          context: withLockedContextFingerprint({
+            ...emptyLockedContext(),
+            items: [{ ...article, source: "library" }],
+          }),
+        });
+        if (auxiliaryOverlay) {
+          showSessions = false;
+          syncAuxiliaryPanes();
+        }
+        renderLists();
+      })().catch((error) => {
+        state.sendError = String(error);
+        renderLists();
+      });
+    },
     open: (taskId) => {
       void loadTask(taskId).then(() => {
         if (auxiliaryOverlay) {
@@ -4689,6 +4894,10 @@ function bindWorkspace(
       String(state.events.length),
       state.running ? "1" : "0",
       state.sending ? "1" : "0",
+      state.live?.lockedSnapshot
+        ? readerAttachmentIdentity(state.live.lockedSnapshot)
+        : "",
+      state.live?.lockedSnapshot?.reader?.title ?? "",
       state.pendingUserText,
       state.sendError,
       state.mode,
@@ -4711,6 +4920,7 @@ function bindWorkspace(
     applyAppearance();
     syncEndpointButton();
     syncPresetChip();
+    syncHeaderSources();
     lastListSignature = listSignature();
     if (initialViewReady || state.sessions.length) {
       updateTaskList(state.sessions, state.sessionId);
@@ -4774,7 +4984,17 @@ function bindWorkspace(
     if (state.pendingUserText) {
       activityStream.appendChild(renderUserLine(doc, state.pendingUserText));
     }
-    if (state.sendError) {
+    if (
+      state.sendError &&
+      !sendErrorInTimeline(
+        state.sendError,
+        state.events,
+        failedPrompt?.taskId === state.sessionId &&
+          failedPrompt.message === state.sendError
+          ? failedPrompt.afterEventId
+          : undefined,
+      )
+    ) {
       const err = tuiBlock(doc, { color: "var(--confucius-danger)" });
       err.textContent = state.sendError;
       activityStream.appendChild(err);
@@ -4908,11 +5128,46 @@ function bindWorkspace(
       const banner = muted(
         doc,
         getPref("uiLanguage") === "en-US"
-          ? "Older raw work was distilled and cleared. Saved artifacts and original sources remain available."
-          : "旧工作原文已提炼并清理，已保存成果和原始资料仍可使用。",
+          ? "Older raw work was cleared by the retention policy and cannot be recovered. Saved artifacts and original sources remain available."
+          : "旧工作原文已按保留策略清理，无法恢复；已保存成果和原始资料仍可使用。",
       );
       banner.dataset.entryId = "history-cleared";
       activityStream.appendChild(banner);
+    }
+    const historyTask = currentTask();
+    if (historyTask?.historyRetention) {
+      const english = getPref("uiLanguage") === "en-US";
+      const tier = historyTask.historyRetention.tier;
+      const names = english
+        ? { hot: "Recent", archived: "Archived", pruned: "Cleaned up" }
+        : { hot: "近期", archived: "已归档", pruned: "已清理" };
+      const reasons = historyTask.historyRetentionReasons ?? [];
+      const reasonNames: Record<string, string> = english
+        ? {
+            active_or_recoverable: "active or recoverable task",
+            reading: "read in progress",
+            referenced_by_active_task: "referenced by active work",
+            context_transaction: "handoff in progress",
+            archive_capacity_protected:
+              "archive temporarily exceeds 500 MiB because records are protected",
+            cleanup_disabled:
+              "archive exceeds 500 MiB; automatic history cleanup is off",
+          }
+        : {
+            active_or_recoverable: "活跃或待恢复任务",
+            reading: "正在读取",
+            referenced_by_active_task: "活跃任务引用",
+            context_transaction: "交接事务进行中",
+            archive_capacity_protected: "受保护记录暂使归档超过 500 MiB",
+            cleanup_disabled: "归档超过 500 MiB；历史自动清理已关闭",
+          };
+      const budget = historyTask.maintenanceBudget;
+      const details = muted(
+        doc,
+        `${names[tier]} · ${((historyTask.historyRetainedBytes ?? 0) / 1048576).toFixed(1)} MiB${reasons.length ? ` · ${reasons.map((r) => reasonNames[r] ?? r).join("、")}` : ""}${budget ? ` · ${english ? "Context maintenance" : "上下文维护"} ${budget.attempts}/2 (${english ? "handoff" : "交接补充"} ${budget.handoffAttempts ?? 0}/1)` : ""}${historyTask.backend !== "native" ? (english ? " · CLI internal usage / model visibility unknown" : " · CLI 内部用量及模型可见性未知") : ""}`,
+      );
+      details.dataset.entryId = "history-retention";
+      activityStream.appendChild(details);
     }
     const sources = renderHistorySources();
     if (sources) activityStream.appendChild(sources);
@@ -5219,11 +5474,14 @@ function bindWorkspace(
     }
     state.sending = true;
     state.sendError = "";
+    failedPrompt = undefined;
     state.pendingUserText = text;
     sendBtn.setAttribute("disabled", "true");
     status.style.color = "var(--confucius-accent)";
     status.textContent = getString("workspace-sending");
     renderLists();
+    let promptAttempt:
+      { taskId: string; afterEventId: string | null } | undefined;
     try {
       if (!state.sessionId) {
         const lockedContext = mentionSources.context(
@@ -5255,8 +5513,13 @@ function bindWorkspace(
         pendingPermissionUpdate,
         mentionSources.flush(promptSessionId),
       ]);
+      await syncFocusedReader(true, promptSessionId);
       await refreshSessions();
       renderLists();
+      promptAttempt = {
+        taskId: promptSessionId,
+        afterEventId: state.events.at(-1)?.id ?? null,
+      };
       const started = (await rpc("task/prompt", {
         taskId: promptSessionId,
         text,
@@ -5311,9 +5574,11 @@ function bindWorkspace(
       renderLists();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (promptAttempt && state.sessionId !== promptAttempt.taskId) return;
+      failedPrompt = promptAttempt ? { ...promptAttempt, message } : undefined;
       state.sendError = message;
       status.style.color = "var(--confucius-danger)";
-      status.textContent = message;
+      status.textContent = getString("workspace-task-status-failed");
       renderLists();
     } finally {
       state.sending = false;
@@ -8476,7 +8741,7 @@ function bindWorkspace(
         const live = (await rpc("context/live", {})) as LiveContextResult;
         state.live = live;
       } catch {
-        /* live context is cosmetic */
+        /* Retry on the next poll; Send captures its own fresh reader context. */
       }
       try {
         // Item and reader entry points carry a click-time context snapshot.
@@ -8550,6 +8815,7 @@ function bindWorkspace(
         }
       }
       // Restore the task and its contents before presenting the first view.
+      await syncFocusedReader();
       // Runtime discovery and other auxiliary data can take seconds on a cold
       // start; they must not leave a temporary welcome page on screen.
       initialViewReady = true;
@@ -8566,10 +8832,10 @@ function bindWorkspace(
         status.style.color = "var(--confucius-accent)";
         const workText = runningStageText(state.events);
         status.textContent = workText;
-        const waitingText = timelinePane.querySelector(
-          ".tui-waiting-text",
+        const waiting = timelinePane.querySelector(
+          ".tui-waiting",
         ) as HTMLElement | null;
-        if (waitingText) waitingText.textContent = workText;
+        if (waiting) updateWaitingIndicator(waiting, workText);
       } else {
         status.style.color = "var(--confucius-ink)";
         status.textContent = getString("workspace-host-zotero");
@@ -8698,6 +8964,7 @@ function bindWorkspace(
       drafts: composerDrafts,
       references: referenceDrafts,
       viewports: timelineViewports,
+      showSessions,
     };
     options.onLayoutChange?.(compact ? "window" : "sidebar");
   });
@@ -8746,6 +9013,7 @@ function bindWorkspace(
       sourceMenu &&
       target &&
       !sourceMenu.contains(target) &&
+      !attachedSources.contains(target) &&
       !doc.getElementById("confucius-task-sources")?.contains(target)
     )
       sourceMenu.remove();

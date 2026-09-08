@@ -46,6 +46,18 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
   ]);
   private readonly activeTasks = new Map<string, ExternalKind>();
   private readonly activeTurnIds = new Map<string, string>();
+  private readonly activeSessionKeys = new Map<string, string>();
+  private readonly preparedSessions = new Map<
+    string,
+    {
+      taskId: string;
+      backend: ExternalKind;
+      sessionKey: string;
+      capability: ReturnType<PluginRuntimeCapabilityStore["reserve"]>;
+      input: PluginRuntimeTurnInput;
+      handle: import("./PluginRuntimeTypes").PluginRuntimeTurnHandle;
+    }
+  >();
   private readonly starts = new Map<string, Promise<unknown>>();
   private cachedStatuses: RuntimeStatus[] | null = null;
 
@@ -129,6 +141,15 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
       case "runtime/configure":
         result = await this.configureRuntime(params);
         break;
+      case "task/prepareSession":
+        result = await this.prepareSession(params);
+        break;
+      case "task/activateSession":
+        result = await this.activateSession(params);
+        break;
+      case "task/discardSession":
+        result = await this.discardSession(params);
+        break;
       case "task/startTurn":
         result = await this.startTurn(params);
         break;
@@ -174,6 +195,10 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
 
   isCurrentLease(lease: RuntimeTurnLease): boolean {
     return this.capabilities.isCurrent(lease);
+  }
+
+  isKnownLease(lease: RuntimeTurnLease): boolean {
+    return this.capabilities.isKnown(lease);
   }
 
   leaseSignal(lease: RuntimeTurnLease): AbortSignal | undefined {
@@ -224,6 +249,140 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
     );
     this.cachedStatuses = null;
     return { ok: true, executable };
+  }
+
+  private async prepareSession(
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    if (!this.enabled)
+      throw new Error("The in-plugin Runtime Host is disabled");
+    const taskId = safeTaskId(String(params.taskId ?? ""));
+    const transactionId = safeTaskId(String(params.transactionId ?? ""));
+    const backend = externalKind(params.backend);
+    const turnId = String(params.turnId ?? ""),
+      runId = String(params.runId ?? "");
+    const generation = Number(params.generation);
+    if (
+      !turnId ||
+      !runId ||
+      !Number.isSafeInteger(generation) ||
+      generation < 0
+    )
+      throw new Error("Prepared sessions require a bound run generation");
+    const existing = this.preparedSessions.get(transactionId);
+    if (existing) {
+      if (existing.taskId !== taskId || existing.backend !== backend)
+        throw new Error("Context transaction belongs to another task");
+      if (
+        existing.capability.generation === generation &&
+        existing.capability.turnId === turnId &&
+        existing.capability.runId === runId
+      )
+        return { ...existing.handle, cwd: existing.input.cwd };
+      await this.discardSession(params);
+    }
+    const capability = this.capabilities.reserve({
+      taskId,
+      turnId,
+      runId,
+      generation,
+    });
+    const profile =
+      params.capabilityProfile === "workspace" ? "workspace" : "zotero_only";
+    const sessionKey = `${taskId}_${transactionId}`;
+    const input: PluginRuntimeTurnInput = {
+      taskId,
+      sessionKey,
+      prepareOnly: true,
+      turnId,
+      prompt: "",
+      mode: params.mode === "plan" ? "plan" : "agent",
+      capabilityProfile: profile,
+      cwd: await this.resolveCwd(
+        taskId,
+        profile,
+        typeof params.workingDirectory === "string"
+          ? params.workingDirectory
+          : undefined,
+      ),
+      runtimeModel: runtimeModelSelection(params.runtimeModel),
+      externalSessionId:
+        typeof params.externalSessionId === "string"
+          ? params.externalSessionId
+          : undefined,
+      mcp: {
+        url: `${zoteroLoopbackOrigin()}${CONFUCIUS_MCP_PATH}`,
+        token: capability.token,
+      },
+      developerInstructions: externalInstructions(profile, {
+        includeArtifactGuidance: params.includeArtifactGuidance !== false,
+        workflowInstruction:
+          typeof params.workflowInstruction === "string"
+            ? params.workflowInstruction
+            : undefined,
+      }),
+    };
+    try {
+      const handle = await this.adapter(backend).startTurn(
+        input,
+        { emit() {} },
+        this.approvals,
+      );
+      this.preparedSessions.set(transactionId, {
+        taskId,
+        backend,
+        sessionKey,
+        capability,
+        input,
+        handle,
+      });
+      return { ...handle, cwd: input.cwd };
+    } catch (error) {
+      this.capabilities.discard(capability);
+      await this.adapter(backend)
+        .dispose(sessionKey)
+        .catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async activateSession(
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const transactionId = safeTaskId(String(params.transactionId ?? ""));
+    // After a host/process restart, restore the persisted candidate ID without inferring.
+    await this.prepareSession(params);
+    const prepared = this.preparedSessions.get(transactionId)!;
+    this.capabilities.activate(prepared.capability);
+    try {
+      const result = await this.startLeasedTurn(
+        { ...params, sessionKey: prepared.sessionKey },
+        prepared.capability,
+      );
+      if (result.superseded) return result;
+      this.preparedSessions.delete(transactionId);
+      return result;
+    } catch (error) {
+      // Candidate can be re-prepared from its persisted external ID; old session stays intact.
+      this.preparedSessions.delete(transactionId);
+      this.capabilities.discard(prepared.capability);
+      throw error;
+    }
+  }
+
+  private async discardSession(
+    params: Record<string, unknown>,
+  ): Promise<{ ok: true }> {
+    const id = String(params.transactionId ?? "");
+    const prepared = this.preparedSessions.get(id);
+    if (prepared && prepared.taskId !== String(params.taskId))
+      throw new Error("Context transaction belongs to another task");
+    if (prepared) {
+      this.preparedSessions.delete(id);
+      this.capabilities.discard(prepared.capability);
+      await this.adapter(prepared.backend).dispose(prepared.sessionKey);
+    }
+    return { ok: true };
   }
 
   private async startTurn(
@@ -295,6 +454,10 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
     if (!this.capabilities.isCurrent(capability)) return { superseded: true };
     const input: PluginRuntimeTurnInput = {
       taskId,
+      sessionKey:
+        typeof params.sessionKey === "string"
+          ? params.sessionKey
+          : this.activeSessionKeys.get(taskId),
       turnId: capability.turnId,
       prompt: String(params.prompt ?? ""),
       mode: params.mode === "plan" ? "plan" : "agent",
@@ -349,13 +512,39 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
       );
     sink.emit("task_status_changed", { status: "running" }, input.turnId);
     try {
+      const previousKey = this.activeSessionKeys.get(taskId) ?? taskId;
       const handle = await adapter.startTurn(input, sink, this.approvals);
+      if (
+        !this.capabilities.isCurrent(capability) &&
+        this.activeTurnIds.has(taskId)
+      )
+        return { superseded: true };
+      const activeKey = input.sessionKey ?? taskId;
+      this.activeSessionKeys.set(taskId, activeKey);
+      if (previousKey !== activeKey)
+        await adapter.dispose(previousKey).catch(() => undefined);
+      if (runtime && handle.runtimeModel)
+        sink.emit(
+          "runtime_status",
+          {
+            runtime,
+            selection: handle.runtimeModel,
+            reasoningSummary: backend === "codex" ? "auto" : "provider_default",
+          },
+          input.turnId,
+        );
       return { ...handle, cwd };
     } catch (error) {
       const owned = this.capabilities.isCurrent(capability);
       sink.emit("task_status_changed", { status: "failed" }, input.turnId);
       sink.emit("turn_failed", { message: errorMessage(error) }, input.turnId);
-      if (owned) await this.releaseTask(taskId, backend);
+      if (owned) {
+        this.capabilities.revoke(taskId);
+        await adapter
+          .dispose(input.sessionKey ?? taskId)
+          .catch(() => undefined);
+        this.activeTurnIds.delete(taskId);
+      }
       throw error;
     }
   }
@@ -365,7 +554,9 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
   ): Promise<{ ok: true }> {
     const taskId = String(params.taskId ?? "");
     this.capabilities.revoke(taskId);
-    await this.adapterForTask(taskId, params.backend).interrupt(taskId);
+    await this.adapterForTask(taskId, params.backend).interrupt(
+      this.activeSessionKeys.get(taskId) ?? taskId,
+    );
     this.approvals.rejectTask(taskId);
     return { ok: true };
   }
@@ -392,7 +583,13 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
       `analysis_${adapter.kind}`,
       "zotero_only",
     );
-    return { text: await adapter.analyze(String(params.prompt ?? ""), cwd) };
+    return {
+      text: await adapter.analyze(
+        String(params.prompt ?? ""),
+        cwd,
+        runtimeModelSelection(params.runtimeModel),
+      ),
+    };
   }
 
   private async resolveCwd(
@@ -464,8 +661,12 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
     this.capabilities.revoke(taskId);
     this.approvals.rejectTask(taskId);
     await this.adapter(backend)
-      .dispose(taskId)
+      .dispose(this.activeSessionKeys.get(taskId) ?? taskId)
       .catch(() => undefined);
+    this.activeSessionKeys.delete(taskId);
+    for (const [transactionId, prepared] of this.preparedSessions)
+      if (prepared.taskId === taskId)
+        await this.discardSession({ taskId, transactionId });
     this.activeTasks.delete(taskId);
     this.activeTurnIds.delete(taskId);
     this.approvals.rejectTask(taskId);
@@ -490,11 +691,14 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
         this.approvals.rejectTask(taskId);
         this.capabilities.revoke(taskId);
         await this.adapter(backend)
-          .dispose(taskId)
+          .dispose(this.activeSessionKeys.get(taskId) ?? taskId)
           .catch(() => undefined);
       }),
     );
     this.activeTurnIds.clear();
+    this.activeSessionKeys.clear();
+    for (const [transactionId, prepared] of this.preparedSessions)
+      await this.discardSession({ taskId: prepared.taskId, transactionId });
   }
 }
 

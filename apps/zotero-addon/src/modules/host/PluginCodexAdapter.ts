@@ -1,6 +1,7 @@
 import { runtimeFailure } from "@confucius/protocol";
 import {
   codexModels,
+  lowestRuntimeSelection,
   codexModelParams,
   validateRuntimeModel,
 } from "./RuntimeModels";
@@ -14,6 +15,7 @@ import {
   type CapabilityProfile,
   type PlanStep,
   type RuntimeStatus,
+  type RuntimeModelSelection,
 } from "@confucius/protocol";
 import {
   RuntimeJsonLineProcess,
@@ -210,11 +212,12 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
     sink: PluginRuntimeEventSink,
     approvals: PluginApprovalBrokerLike,
   ): Promise<PluginRuntimeTurnHandle> {
-    let session = this.sessions.get(input.taskId);
+    const sessionKey = input.sessionKey ?? input.taskId;
+    let session = this.sessions.get(sessionKey);
     const usage = session?.usage;
     if (session?.mcpToken && session.mcpToken !== input.mcp.token) {
       const externalSessionId = session.threadId;
-      await this.dispose(input.taskId);
+      await this.dispose(sessionKey);
       input = { ...input, externalSessionId };
       session = undefined;
     }
@@ -225,7 +228,7 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
         );
       }
       const threadId = session.threadId;
-      await this.dispose(input.taskId);
+      await this.dispose(sessionKey);
       input = {
         ...input,
         externalSessionId: input.externalSessionId ?? threadId,
@@ -250,7 +253,7 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
         (message) => void this.onServerRequest(provisional, message),
       );
       rpc.onFailure((error) => {
-        if (this.sessions.get(input.taskId) !== provisional) return;
+        if (this.sessions.get(sessionKey) !== provisional) return;
         const turnId = provisional.hostTurnId;
         provisional.sink.emit(
           "task_status_changed",
@@ -262,9 +265,9 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
           { message: error.message, failure: runtimeFailure(error) },
           turnId,
         );
-        this.sessions.delete(input.taskId);
+        this.sessions.delete(sessionKey);
       });
-      this.sessions.set(input.taskId, provisional);
+      this.sessions.set(sessionKey, provisional);
       try {
         const response = await withTimeout(
           (async () => {
@@ -283,7 +286,7 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
           30_000,
           "Codex thread startup timed out",
         );
-        if (this.sessions.get(input.taskId) !== provisional)
+        if (this.sessions.get(sessionKey) !== provisional)
           throw new Error("Codex startup was cancelled");
         const threadId =
           String(asRecord(response.thread).id ?? "") || input.externalSessionId;
@@ -294,8 +297,8 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
         provisional.threadId = threadId;
         session = provisional;
       } catch (error) {
-        if (this.sessions.get(input.taskId) === provisional)
-          this.sessions.delete(input.taskId);
+        if (this.sessions.get(sessionKey) === provisional)
+          this.sessions.delete(sessionKey);
         if (rpc.closeAndWait) await rpc.closeAndWait();
         else rpc.close();
         throw error;
@@ -322,6 +325,11 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
       );
       validateRuntimeModel(models, input.runtimeModel);
     }
+    if (input.prepareOnly)
+      return {
+        externalSessionId: session.threadId,
+        runtimeModel: input.runtimeModel,
+      };
     session.starting = true;
     session.pendingNotifications = [];
     let started = false;
@@ -386,7 +394,12 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
     await Promise.all([...this.sessions.keys()].map((id) => this.dispose(id)));
   }
 
-  async analyze(prompt: string, cwd: string): Promise<string> {
+  async analyze(
+    prompt: string,
+    cwd: string,
+    selection?: RuntimeModelSelection,
+  ): Promise<string> {
+    const deadline = Date.now() + 60_000;
     const rpc = await this.openRpc("zotero_only");
     let text = "";
     const output = new CodexOutputTracker((type, payload) => {
@@ -434,12 +447,20 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
     try {
       return await withTimeout(
         (async () => {
+          const models = await codexModels(rpc);
+          const selected = selection
+            ? validateRuntimeModel(models, { modelId: selection.modelId })
+            : models.find((m) => m.isDefault);
+          const runtimeModel = selected
+            ? lowestRuntimeSelection(selected)
+            : undefined;
           const configuredMcpServers = await this.configuredMcpServers(rpc);
           const started = await rpc.request<Record<string, unknown>>(
             "thread/start",
             {
               cwd,
               ephemeral: true,
+              ...codexModelParams(runtimeModel),
               approvalPolicy: "never",
               sandbox: "read-only",
               baseInstructions:
@@ -454,13 +475,14 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
           if (!threadId) throw new Error("Codex did not return a thread id");
           await rpc.request("turn/start", {
             threadId,
+            ...codexModelParams(runtimeModel),
             input: [{ type: "text", text: prompt, text_elements: [] }],
           });
           await done;
           if (failure) throw failure;
           return text;
         })(),
-        60_000,
+        Math.max(1, deadline - Date.now()),
         "Codex analysis timed out",
       );
     } finally {

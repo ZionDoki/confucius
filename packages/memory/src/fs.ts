@@ -6,6 +6,7 @@ export interface MemoryFileSystem {
   readFile(path: string): Promise<string>;
   writeFile(path: string, content: string): Promise<void>;
   deleteFile(path: string): Promise<void>;
+  /** Full child paths; missing paths and regular files have no children. */
   listFiles(dir: string): Promise<string[]>;
   makeDirectory(dir: string): Promise<void>;
   fileSize?(path: string): Promise<number>;

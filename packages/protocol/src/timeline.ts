@@ -235,16 +235,10 @@ export function coalesceTimeline(events: ConfuciusEvent[]): TimelineBlock[] {
       continue;
     }
     if (event.type === "runtime_status") {
-      flushAnswer();
-      blocks.push({
-        kind: "status",
-        tone: event.payload.runtime.state === "error" ? "fail" : "info",
-        text: `${event.payload.runtime.backend}: ${event.payload.runtime.state}${
-          event.payload.runtime.message
-            ? ` — ${event.payload.runtime.message}`
-            : ""
-        }`,
-      });
+      // Runtime controls and trace diagnostics own these snapshots. They can
+      // arrive before and after model selection, including between text chunks;
+      // neither show a chat row nor flush the pending reply when one arrives.
+      // Execution failures remain visible through turn_failed below.
       continue;
     }
     if (event.type === "context_drifted") {

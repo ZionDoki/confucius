@@ -1,4 +1,9 @@
-import type { ToolResult } from "@confucius/protocol";
+import {
+  contextTextSlice,
+  contextTextTokens,
+  type ToolResult,
+  type HistoryItemRef,
+} from "@confucius/protocol";
 
 export const MAX_TOOL_RESULT_CHARS = 20_000;
 
@@ -156,6 +161,40 @@ export function truncateToolResult(
       truncated: true,
       preview,
       originalChars: encoded.length,
+    },
+  };
+}
+
+/** The original result is durable before this function is used. Never present cut JSON as structured data. */
+export function budgetToolResult(
+  result: ToolResult,
+  tokens?: number,
+  ref?: HistoryItemRef,
+): ToolResult {
+  const concise = truncateToolResult(result);
+  if (
+    tokens === undefined ||
+    contextTextTokens(JSON.stringify(concise)) <= tokens
+  )
+    return concise;
+  if (!ref) return concise; // Legacy hosts have no recoverable raw ref; preserve their existing behavior.
+  const archivedRef = `h:${ref.taskId}:${ref.windowId}:${ref.itemId}`;
+  if (!result.ok)
+    return {
+      ...result,
+      message: contextTextSlice(result.message, Math.max(20, tokens - 100))
+        .content,
+      details: { archivedRef, truncated: true, nextOffset: 0 },
+    };
+  return {
+    ok: true,
+    toolName: result.toolName,
+    data: {
+      archivedRef,
+      truncated: true,
+      nextOffset: 0,
+      message:
+        "Full structured result was archived. Use context_read with archivedRef and nextOffset; this receipt is not evidence that its contents were reviewed.",
     },
   };
 }

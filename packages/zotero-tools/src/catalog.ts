@@ -24,7 +24,8 @@ const itemRef = {
   },
   attachmentKey: {
     type: "string",
-    description: "Explicit PDF attachment key when the item has multiple PDFs",
+    description:
+      "PDF attachment key selected in the task context or copied from get_item/get_item_metadata pdfAttachments. Required when the item has multiple PDFs; keep the same key on subsequent reads and annotations.",
   },
 };
 
@@ -181,8 +182,8 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   ),
   def(
     "get_note_content",
-    "Read a note. libraryID and key of the note; the result carries a zoteroUri.",
-    itemRef,
+    "Read a bounded note passage. Continue at nextOffset until null; the result carries a zoteroUri.",
+    { ...itemRef, offset: { type: "integer", minimum: 0 } },
     ["libraryID", "key"],
   ),
   def("get_collections", "List collections.", {
@@ -388,16 +389,17 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   ]),
   def(
     "get_paper_section",
-    "Get one section's text.",
+    "Read a bounded passage of one section. Continue at nextOffset until null.",
     {
       ...itemRef,
       section: { type: "string" },
+      offset: { type: "integer", minimum: 0 },
     },
     ["libraryID", "key", "section"],
   ),
   def(
     "get_pages",
-    "Read real physical PDF pages (1-based), preserving blank pages. Text includes [anchor:ID] before selectable passages: use that ID with commit_annotations to mark the exact native text without copying quotes or guessing pages. Markers are metadata, not paper text. Repeated pages in the same turn are omitted unless rereadReason explains the evidence gap or missing engine output. If nextPage is not null, continue there; use non-overlapping ranges and do not treat a truncated result as fully read. Indexed text without reliable pages is never assigned invented page numbers.",
+    "Read real physical PDF pages (1-based), preserving blank pages. Text includes [anchor:ID] before selectable passages: use that ID with commit_annotations to mark the exact native text without copying quotes or guessing pages. Markers are metadata, not paper text. Complete page results may be reused only when their file version is unchanged. Supply rereadReason for refresh, verification or a specific evidence gap; those reads execute again. If nextPage is not null, continue there; use non-overlapping ranges and do not treat a truncated result as fully read. Indexed text without reliable pages is never assigned invented page numbers.",
     {
       ...itemRef,
       start: { type: "integer", minimum: 1 },

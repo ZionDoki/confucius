@@ -415,7 +415,15 @@ confucius-workspace-security-normalized-changed = 路径已规范化。请检查
 # Durable research context
 confucius-workspace-task-search = 搜索任务
 confucius-workspace-tasks-running = 进行中
-confucius-workspace-tasks-recent = 最近任务
+confucius-workspace-tasks-recent = 最近对话
+confucius-workspace-task-articles = 文章
+confucius-workspace-article-new-chat = 新建此文章的对话
+confucius-workspace-sidebar-collapse = 折叠对话栏
+confucius-workspace-sidebar-expand = 展开对话栏
+confucius-workspace-attached-label = 已附加
+confucius-workspace-attached-next = 下一条消息
+confucius-workspace-attached-empty = 打开 PDF 即可附加
+confucius-workspace-attached-follow = 自动跟随当前 PDF，保留手动附件；正在执行的消息继续使用原文件。
 confucius-workspace-task-actions = 任务操作
 confucius-workspace-reference-task = 会话
 confucius-workspace-reference-literature = 文献

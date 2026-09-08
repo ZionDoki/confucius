@@ -21,6 +21,7 @@ import {
 } from "@confucius/harness";
 import {
   workToDistill,
+  archivesToPrune,
   distillationMessages,
   distillationMemories,
   parseDistillation,
@@ -148,6 +149,9 @@ type MaintenanceHost = {
     current: () => boolean,
   ): Promise<void>;
   resumeContextCleanup(state: State): Promise<void>;
+  clearRetiredContext(state: State): Promise<void>;
+  archiveRetiredContext(state: State): Promise<void>;
+  retentionReasons(state: State): Promise<string[]>;
   retryPostProcessing(id: string): Promise<ResearchTaskRecord>;
   sessionDelete(id: string): Promise<{ ok: boolean }>;
   scheduleContextMaintenanceNow(owner: State, turnId: string): Promise<void>;
@@ -219,6 +223,8 @@ async function fixture() {
     execution: new ToolExecutionService(memoryJsonStorage()),
     backendFor: () => ({ dispose: async () => {} }),
     memoryConsent: () => "review",
+    historyCleanupEnabled: () => true,
+    ids: () => "testid",
     persistNow: () => persist(),
     emitSessionEvent: (
       _state: State,
@@ -286,54 +292,111 @@ test("deleting a task clears its history and duplicate transcript without deleti
   assert.deepEqual(f.target.record.artifactIds, ["kept-report"]);
 });
 
-test("successful distillation commits before removing raw copies, keeping artifact identities", async () => {
+test("successful distillation retains readable originals and independent artifact identities", async () => {
   const f = await fixture();
-  let committed = false;
-  f.persist(async () => {
-    if (f.job.maintenanceApplied) committed = true;
-  });
-  const prune = f.history.prune.bind(f.history);
-  f.history.prune = async (id) => {
-    assert.ok(committed);
-    await prune(id);
+  f.history.prune = async () => {
+    assert.fail("Distillation cannot authorize deletion");
   };
+  await f.history.archive("old", 100);
   await f.host.runContextMaintenance(f.owner, f.job, () => true);
   assert.equal(f.calls(), 1);
   assert.equal((await f.memory.list()).length, 1);
-  assert.equal(f.target.messages.length, 0);
+  assert.equal(f.target.messages.length, 1);
   assert.deepEqual(f.target.record.artifactIds, ["kept-report"]);
-  assert.ok(f.target.record.historyClearedAt);
-  assert.doesNotMatch(JSON.stringify(f.fs.snapshot()), /RAW_OLD_CONTEXT/);
-  await assert.rejects(
-    f.history.read({ taskId: "old", windowId: "w", itemId: "i" }),
-    /cleared/,
+  assert.equal(f.target.record.historyClearedAt, undefined);
+  assert.equal(f.target.record.historyDistilledAt, 2);
+  assert.match(
+    (await f.history.read({ taskId: "old", windowId: "w", itemId: "i" }))
+      .content,
+    /RAW_OLD_CONTEXT/,
   );
 });
 
-test("post-cleanup diagnostic events do not re-enter retention or trigger another distillation", async () => {
+test("hot-tier archive needs no model, releases working copies only after persistence and preserves refs", async () => {
   const f = await fixture();
-  await f.host.runContextMaintenance(f.owner, f.job, () => true);
-  f.owner.record.postProcessing = [];
-  await f.history.append({
-    taskId: "old",
-    windowId: "after-cleanup",
-    itemId: "status",
-    role: "event",
-    purpose: "diagnostic",
-    content: "session_updated: completed",
-    sourceIds: [],
-  });
-  const info = await f.history.retentionInfo("old");
-  assert.equal(info.items, 1);
-  assert.equal(info.retrievableItems, 0);
-  await f.host.scheduleContextMaintenanceNow(f.owner, "next-turn");
-  assert.equal(f.calls(), 1);
-  assert.deepEqual(f.owner.record.postProcessing, []);
+  await f.host.archiveRetiredContext(f.target);
+  assert.equal(f.calls(), 0);
+  assert.equal(f.target.messages.length, 0);
+  assert.equal(await f.logs.read("old"), null);
+  assert.equal(
+    (await f.history.retentionInfo("old")).retention.tier,
+    "archived",
+  );
+  assert.equal(
+    (await f.history.retentionInfo("old")).retention.projectionPending,
+    false,
+  );
+  assert.match(
+    (await f.history.read({ taskId: "old", windowId: "w", itemId: "i" }))
+      .content,
+    /RAW_OLD_CONTEXT/,
+  );
+  assert.ok(
+    (await f.history.exportTask("old")).items.some((i) =>
+      i.content?.includes("RAW_OLD_CONTEXT"),
+    ),
+  );
+});
 
-  // Reusing an old task to save meaningful work must make that work eligible.
-  await f.history.writeNote("old", "new-work", "New reusable evidence");
-  await f.host.scheduleContextMaintenanceNow(f.owner, "later-turn");
-  assert.equal(f.calls(), 2);
+test("failed archive state persistence leaves the old working projection recoverable", async () => {
+  const f = await fixture();
+  f.persist(async () => {
+    if (!f.target.messages.length) throw new Error("state offline");
+  });
+  await assert.rejects(f.host.archiveRetiredContext(f.target), /state offline/);
+  assert.equal(f.target.messages.length, 1);
+  assert.ok(await f.logs.read("old"));
+  assert.match(
+    (await f.history.read({ taskId: "old", windowId: "w", itemId: "i" }))
+      .content,
+    /RAW_OLD_CONTEXT/,
+  );
+});
+
+test("archive expiration and capacity honor last explicit use, protected references and soft overflow", () => {
+  const now = 200 * 86400000;
+  const base = {
+    id: "a",
+    updatedAt: 0,
+    archivedAt: now - 91 * 86400000,
+    bytes: 1,
+    protected: false,
+  };
+  assert.deepEqual(
+    archivesToPrune([base], now).map((r) => r.id),
+    ["a"],
+  );
+  assert.deepEqual(
+    archivesToPrune([{ ...base, lastReadAt: now - 1 }], now),
+    [],
+  );
+  assert.deepEqual(
+    archivesToPrune(
+      [{ ...base, protected: true, bytes: CONTEXT_POLICY.archiveBytes + 1 }],
+      now,
+    ),
+    [],
+  );
+  const rows = [
+    { ...base, archivedAt: now - 2, bytes: CONTEXT_POLICY.archiveBytes },
+    { ...base, id: "b", archivedAt: now - 1, bytes: 1 },
+  ];
+  assert.deepEqual(
+    archivesToPrune(rows, now).map((r) => r.id),
+    ["a"],
+  );
+});
+
+test("active task references and handoff refs protect other archives", async () => {
+  const f = await fixture();
+  f.owner.activeTurnId = "active";
+  f.owner.record.references = [{ kind: "task", taskId: "old", title: "old" }];
+  assert.deepEqual(await f.host.retentionReasons(f.target), [
+    "referenced_by_active_task",
+  ]);
+  const release = f.history.acquire("old");
+  assert.ok((await f.host.retentionReasons(f.target)).includes("reading"));
+  release();
 });
 
 test("model failure and exhausted allowance never clear originals or grant more retries", async () => {
@@ -373,7 +436,7 @@ test("failed result persistence and memory writes preserve the raw batch", async
   }
 });
 
-test("cleanup resumes after interrupted raw deletion without another model call", async () => {
+test("retention cleanup resumes its tombstone after interrupted deletion without a model call", async () => {
   const f = await fixture();
   const remove = f.fs.deleteFile.bind(f.fs);
   let failed = false;
@@ -384,16 +447,11 @@ test("cleanup resumes after interrupted raw deletion without another model call"
     }
     await remove(path);
   };
-  await assert.rejects(
-    f.host.runContextMaintenance(f.owner, f.job, () => true),
-    /interrupted/,
-  );
-  assert.equal(f.job.maintenanceApplied, true);
+  await assert.rejects(f.host.clearRetiredContext(f.target), /interrupted/);
   assert.equal((await f.history.retentionInfo("old")).cleanupPending, true);
-  await f.host.resumeContextCleanup(f.target);
-  assert.equal(f.calls(), 1);
+  await f.host.clearRetiredContext(f.target);
+  assert.equal(f.calls(), 0);
   assert.doesNotMatch(JSON.stringify(f.fs.snapshot()), /RAW_OLD_CONTEXT/);
-  assert.equal(f.job.pending.length, 0);
 });
 
 test("resuming the source during model distillation cancels deletion and closes loading", async () => {

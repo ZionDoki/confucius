@@ -2,67 +2,122 @@
 
 ## Unreleased
 
+## 0.4.3 - 2026-09-08
+
+Confucius 0.4.3 improves long-task continuity, local evidence recall and recovery,
+and brings the 0.4.3 Beta report, source-navigation and annotation improvements
+to the stable channel.
+
 ### Changed
 
-- Recent conversations, tool results and working notes share bounded context
-  search/read/save tools with long-term work memory. Native, Codex and Kimi can
-  rebuild context while retaining task identity, saved outputs and consumed budgets.
-- Ordinary memory is maintained automatically within 200 entries and approximately
-  16k body tokens. Search no longer renews memory or pins it. Explicit reads renew
-  its 90-day retention period; user-protected content requires confirmation to change.
-- Old completed work is distilled only when retention limits require it. Maintenance
-  has at most two model attempts per user turn, including retries. Validated results
-  precede resumable raw-history, note-version and duplicate-log cleanup. Failed or
-  unprocessed batches retain their originals; user artifacts and knowledge bases remain.
-- Memory lists show protection and last explicit use; the working indicator includes
-  retrieval, distillation, cleanup, context switching and maintenance retries.
-
-### Migration
-
-- Existing memory IDs remain stable. Unknown legacy content is protected, search
-  counts are reset, and migration starts a fresh retention period without inventing
-  a last-read time. An explicitly disabled automatic-memory setting remains disabled.
-- Verified old runtime context copies may be cleared after successful migration.
-  Cleared history cannot be restored by reopening a former engine session. External
-  CLI-owned logs and provider-side retention remain outside the host's storage policy.
+- Native, Codex and Kimi share bounded context search, read, save and handoff
+  tools. Handoffs preserve the current request, sources, next steps, completed
+  write receipts and consumed budgets through recoverable window switches.
+- Local passage BM25 returns exact evidence ranges and versions, including
+  passages deep inside long results. Handoffs prioritize explicit references and
+  pending work; a source coverage view lists observed pages, the next unread
+  page, reported analysis and failures without claiming business verification.
+- Ordinary tasks and complete handoffs add no maintenance model calls. An
+  incomplete handoff may use one supplement per user turn, sharing two persisted
+  maintenance attempts with distillation. Helpers use the current model's lowest
+  supported effort, approximately 8k input tokens, a 1k output target and a
+  60-second timeout. Retries count toward the allowance.
+- History beyond the recent-work targets of 10 tasks, 30 days or 50 MiB moves to
+  a local archive without a model call. Original references remain searchable,
+  readable and exportable. Archives default to 90 days and a 500 MiB target;
+  active dependencies, recovery transactions and in-flight reads are protected.
+- History auto-cleanup and automatic memory maintenance are independent.
+  Distillation samples bounded material across windows and sources and never
+  authorizes deletion. Ordinary memory is bounded to 200 entries and about 16k
+  body tokens; explicit reads renew retention, while searches do not. Protected
+  memory changes still require approval.
+- The conversation follows the focused PDF while preserving manually attached
+  sources. Papers added with @ work after starting without a selected document.
+  The sidebar groups conversations by article and keeps recent conversations
+  accessible; running turns retain their original sources until the next message.
+- Paper reviews deliver one report with annotation explanations and a reading
+  map. Inline citations navigate to Zotero items, physical PDF pages or saved
+  annotations, and remain linked when written to notes or the knowledge base.
+- Annotation batches span follow-ups, retries and Agent changes in the same task.
+  Host write provenance controls cross-task edits and deletion; reader page marks
+  and the annotation sidebar can filter current, historical or existing batches.
+- Request recovery uses bounded retries and preserves checkpoints and write
+  receipts. Diagnostics distinguish execution failures from export errors and
+  include retained model output, public reasoning summaries and missing results.
 
 ### Fixed
 
-- Auto-generated memory titles preserve complete emoji when shortened, avoiding
-  verification failures after UTF-8 file writes. Diagnostic events left on cleared
-  tasks no longer trigger repeated distillation or excessive history retirement.
-- Codex progress text reaches the task chat before Zotero tool calls. Completed
-  messages and public reasoning summaries fill missing stream chunks without
-  replaying text already received; whitespace and message phases are preserved.
-- The working indicator shows retry attempts, backoff and connection recovery,
-  and stays visible through reasoning and tool execution until the turn ends.
-  Silent external runtimes now enter bounded recovery, with approval waits
-  excluded and saved annotations reused when completing a missing report.
-- Restarted tasks close outstanding request states and retain the last provider
-  error. Diagnostic reports separate export errors from execution failures and
-  summarize model output, public reasoning, saved annotations, missing artifacts,
-  repeated pages and available runtime/token details.
-- Paper outlines recognize numbered method headings with custom names. PDF
-  annotation anchors separate table rows, figure labels and adjacent captions.
-  Page reads use bounded batches and identify repeated evidence; deliberate
-  rereads accept a reason. Annotation queries cap oversized page sizes and expose
-  pagination instead of rejecting otherwise valid requests.
+- Context switches validate current intent, source versions and readable evidence
+  before committing. Pending approvals and unknown tool outcomes block switching;
+  failed preparation preserves the old window, and stale callbacks cannot update
+  a newer run. Restart does not restore consumed maintenance allowances.
+- Read budgets are assigned before tools execute, with at most four ordinary
+  parallel reads. Original results are archived before bounded output is supplied;
+  oversized structured results return intact references and exact continuation.
+  Explicit refresh and verification perform real reads; changed PDFs invalidate
+  affected evidence and progress.
+- Changed note versions and stale search cursors are rejected. Different passages
+  from the same original can be retrieved together, while repeated evidence and
+  already-carried request or note text are excluded from automatic handoff fill.
+- Kimi model switches confirm the selected model's actual thinking options before
+  applying an effort. Native reasoning controls cover the supported Kimi Code,
+  K3, GPT and DeepSeek variants without mixing public API and Coding Plan options.
+- Multi-PDF tasks initialize without requiring an attachment choice; recoverable
+  tool results identify available PDFs. Failed submissions and runtime snapshots
+  no longer appear as duplicate replies.
+- The animated C stays mounted through streamed updates, reasoning, tool calls and
+  maintenance, with a 3.2-second cycle and reduced-motion support. Codex progress
+  reaches the conversation before Zotero tool calls without replaying completed text.
+- First-time history migration distinguishes index files from directories, avoiding
+  an upgrade interruption when creating the archive index.
+- Archive cleanup persists tombstones before deleting originals and resumes after
+  interruption. History details distinguish recent, archived and cleared records,
+  explain retention reasons and show observable maintenance usage.
 
-### Known limits
+### Upgrade notes
 
-- Context and memory regression checks and local builds pass. Codex and Kimi
-  passed isolated Zotero retrieval, context switching and restart checks; Native
-  passed the same integration with a deterministic HTTP model and retry injection.
-  Its configured real endpoint lacked an API key. External CLI maintenance output,
-  internal retries and unreported usage cannot be treated as a hard billing limit.
-  See the [acceptance record](.github/maintainers/acceptance/context-memory-refactor-2026-09-08.md).
-- An additional 30 built-XPI checks passed in isolated Zotero, covering real files,
-  approval controls, retention limits, write failures, retry indicators, SIGKILL
-  recovery and real Codex/Kimi distillation. See the
-  [reproducible acceptance suite](.github/maintainers/acceptance/context-memory-stress-2026-09-08.md).
-- Historical text never captured by the host cannot be reconstructed. Public
-  reasoning depends on what the selected engine provides. Complex PDF layout
-  extraction and Windows/Zotero installation still require runtime verification.
+- This is a stable release. Both 0.4.2 and 0.4.3 Beta users can upgrade without
+  enabling prereleases. Restart Zotero after installation. Explicit update-channel
+  and automatic-check settings are preserved; turning prereleases off never downgrades.
+- Back up the Zotero library and Confucius runtime directory before upgrading.
+  Existing tasks, reports, annotation identities, receipts and text-only notes
+  remain supported. Metadata and local indexes are added without deleting originals;
+  the first migration preserves recovery backups. Previously cleared history
+  remains unrecoverable, and downgrading does not reverse the migration.
+- An explicitly disabled legacy automatic-memory preference also keeps history
+  auto-cleanup disabled until changed. Existing ordinary memory and pending review
+  proposals retain their identities; protected or unknown legacy content is not
+  silently made disposable.
+- Global migration backups, old runtime copies, user exports and CLI-owned logs
+  remain outside the archive quota. Active or recoverable dependencies can temporarily
+  exceed the target. Archive retention is not a limit on the entire Zotero profile.
+- Existing report text does not gain source components automatically. Ask for
+  citations to be added in the original task when needed. New precise-reference
+  fields add fixed prompt tokens; local retrieval does not eliminate normal model
+  input and output costs.
+
+### Validation and known limits
+
+- The final stable candidate passed 984 tests, typecheck, lint, build and release
+  consistency checks. Public 0.4.2 and 0.4.3-beta.2 packages each passed 17 isolated
+  upgrade checks, preserving original history, settings, reports and completed
+  write receipts through interruption, installation and restart. A first-migration
+  directory-scan failure found during this acceptance was fixed and regression-tested.
+- One bounded Codex handoff on the final candidate completed with four tool calls,
+  two windows, zero maintenance calls and preserved budgets after restart. A bounded
+  Kimi 2.7 handoff passed during context development; it was not rerun after the
+  version bump and migration-scan fix. See the
+  [release acceptance](https://github.com/ZionDoki/confucius/blob/v0.4.3/.github/maintainers/acceptance/release-0.4.3.md)
+  and [context acceptance](https://github.com/ZionDoki/confucius/blob/v0.4.3/.github/maintainers/acceptance/context-optimization-2026-09-08.md)
+  for exact artifacts, model usage and validation boundaries.
+- The configured real Native endpoint returned HTTP 401 because no API key was
+  configured; deterministic replay is not live-model acceptance. CLI internal
+  retries and unreported tokens remain unknown. Source coverage enumerates bound
+  items, not unenumerated collection members, and reported analysis is not verification.
+- Windows/Linux installation, other Zotero versions, large-library retrieval
+  latency and long real research tasks were not revalidated for this release.
+  PDF layout/OCR limitations, repeated reads and incorrect model conclusions remain
+  possible. Limited smoke tests do not establish general task quality or lower bills.
 
 ## 0.4.3-beta.2 - 2026-09-07
 

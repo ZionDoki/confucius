@@ -720,7 +720,13 @@ export class ArtifactToolProvider implements ToolProvider {
           ok: true,
           toolName: name,
           effect: "none",
-          data: readArtifactPart(artifact, args),
+          data: readArtifactPart(
+            artifact,
+            args,
+            context.outputBudgetTokens
+              ? Math.max(100, context.outputBudgetTokens - 150)
+              : undefined,
+          ),
         };
       } catch (error) {
         return {

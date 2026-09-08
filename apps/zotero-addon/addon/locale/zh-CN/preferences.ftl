@@ -44,3 +44,6 @@ pref-memory-auto = 自动：直接保存
 pref-security-title = 安全能力
 pref-security-help = 任务默认只能访问 Zotero。Shell 和普通文件写入未开放，Zotero 写入会显示差异。
 pref-security-workspace = 选择并确认绝对路径后可启用工作区访问。命令和文件修改仍需单次或任务级审批。
+
+pref-history-auto-cleanup = 自动清理到期的历史归档
+pref-history-retention-help = 近期记录会直接转入本地归档，不调用模型。归档或实际回读后保留 90 天，总容量目标为 500 MiB；活跃任务依赖的材料受保护。记忆提炼单独控制。

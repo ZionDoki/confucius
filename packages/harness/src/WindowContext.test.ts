@@ -1,12 +1,241 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { initialContextWindow } from "@confucius/protocol";
-import { WindowContext, estimateRequestTokens } from "./WindowContext";
+import {
+  WindowContext,
+  estimateRequestTokens,
+  type WindowContextOptions,
+} from "./WindowContext";
 import { createHarness, session } from "./test-kit";
 import type { ModelRequest, ModelMessage } from "./ModelAdapter";
 import { SourceReadIndex } from "./SourceReadIndex";
 
-test("rollover carries source locations and exact archive IDs without copying page text, including restart", async () => {
+test("automatic rollover consumes the just-read report and annotations, then finalizes without rereading", async () => {
+  const c = context();
+  const requests: ModelRequest[] = [];
+  const report = "EXACT_REPORT_TEXT " + "报告正文".repeat(1000);
+  const quote = "SAVED_ANNOTATION_QUOTE " + "evidence ".repeat(500);
+  let writes = 0;
+  const h = createHarness({
+    context: c.manager,
+    model: {
+      async complete(request) {
+        requests.push(structuredClone(request));
+        if (requests.length === 1)
+          return {
+            toolCalls: [
+              { id: "body", name: "artifact_read", args: {} },
+              { id: "quotes", name: "get_annotations", args: {} },
+            ],
+          };
+        if (requests.length === 2) {
+          const input = JSON.stringify(request);
+          assert.match(input, /EXACT_REPORT_TEXT/);
+          assert.match(input, /SAVED_ANNOTATION_QUOTE/);
+          assert.doesNotMatch(input, /OLD_REVIEW/);
+          assert.equal(
+            request.messages.filter((m) => m.role === "tool").length,
+            2,
+          );
+          return {
+            toolCalls: [{ id: "finalize", name: "artifact_patch", args: {} }],
+          };
+        }
+        return { text: "Report ready" };
+      },
+    },
+  });
+  for (const [name, handler] of [
+    ["artifact_read", () => ({ content: report, revision: 1 })],
+    ["get_annotations", () => ({ annotations: [{ quote }] })],
+    [
+      "artifact_patch",
+      () => {
+        writes++;
+        return { status: "ready" };
+      },
+    ],
+  ] as const)
+    h.tools.register(
+      {
+        name,
+        description: name,
+        inputSchema: { type: "object", properties: {} },
+      },
+      {
+        name,
+        catalog: "agent",
+        mutatesState: name === "artifact_patch",
+        concurrency: name === "artifact_patch" ? "serial" : "parallel_safe",
+      },
+      handler,
+    );
+  const result = await h.loop.run({
+    session: session(),
+    turnId: "finalize",
+    userText: "Finish the saved report using its annotations",
+    history: [
+      { role: "assistant", content: "OLD_REVIEW " + "x".repeat(30000) },
+    ],
+  });
+  assert.equal(result.phase, "done", result.failureMessage);
+  assert.equal(c.switches(), 1);
+  assert.equal(requests.length, 3);
+  assert.equal(writes, 1);
+  assert.equal(h.budget.toolCallsUsed, 3);
+});
+
+async function recordMessages(
+  c: ReturnType<typeof context>,
+  messages: ModelMessage[],
+) {
+  const userText = "Continue the review";
+  c.manager.start({ session: session(), turnId: "turn", userText }, messages);
+  await c.manager.record({
+    turnId: "turn",
+    iteration: 1,
+    savedAt: 1,
+    messages,
+    toolExecutions: [],
+  });
+}
+
+test("reported usage corrects an overestimated prefix without undercharging newly appended text", async () => {
+  const c = context();
+  const messages: ModelMessage[] = [
+    { role: "system", content: "Task rules" },
+    { role: "user", content: "Continue the review" },
+    { role: "assistant", content: "x".repeat(28000) },
+  ];
+  await recordMessages(c, messages);
+  await c.manager.prepare(messages, []);
+  c.manager.usage({ promptTokens: 4000 });
+  messages.push({ role: "assistant", content: "新增证据".repeat(1000) });
+  assert.ok(estimateRequestTokens({ messages, tools: [] }) > 12400);
+  await c.manager.prepare(messages, []);
+  assert.equal(c.switches(), 0);
+  // The first measured prefix must not discount later, unmeasured growth.
+  messages.push({ role: "assistant", content: "后续证据".repeat(1000) });
+  await c.manager.prepare(messages, []);
+  assert.equal(c.switches(), 1);
+  await c.manager.prepare(messages, []);
+  assert.equal(
+    c.switches(),
+    1,
+    "a fresh window drops the previous calibration",
+  );
+});
+
+test("reported underestimation triggers rollover before the raw estimate reaches capacity", async () => {
+  const c = context();
+  const messages: ModelMessage[] = [
+    { role: "system", content: "Task rules" },
+    { role: "user", content: "Continue the review" },
+    { role: "assistant", content: "x".repeat(14000) },
+  ];
+  await recordMessages(c, messages);
+  await c.manager.prepare(messages, []);
+  c.manager.usage({ promptTokens: 12000 });
+  messages.push({ role: "assistant", content: "x".repeat(3500) });
+  assert.ok(estimateRequestTokens({ messages, tools: [] }) < 12400);
+  await c.manager.prepare(messages, []);
+  assert.equal(c.switches(), 1);
+});
+
+test("removing transient media invalidates an old downward token correction", async () => {
+  const c = context();
+  const messages: ModelMessage[] = [
+    { role: "system", content: "Task rules" },
+    { role: "user", content: "Continue the review" },
+    {
+      role: "user",
+      content: "Page image",
+      images: [{ mimeType: "image/png", data: "AAAA" }],
+      transient: true,
+    },
+  ];
+  await recordMessages(c, messages);
+  await c.manager.prepare(messages, []);
+  c.manager.usage({ promptTokens: 1000 });
+  messages.splice(2, 1);
+  messages.push({ role: "assistant", content: "后续证据".repeat(2200) });
+  await c.manager.prepare(messages, []);
+  assert.equal(c.switches(), 1);
+});
+
+test("saving progress and requesting a window preserves business evidence and drops old pressure warnings", async () => {
+  const c = context();
+  const messages: ModelMessage[] = [
+    { role: "system", content: "Task rules" },
+    { role: "user", content: "Continue the review" },
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [{ id: "read", name: "artifact_read", args: {} }],
+    },
+    {
+      role: "tool",
+      content: JSON.stringify({
+        ok: true,
+        data: { content: "REPORT_TO_FINISH" },
+      }),
+      toolCallId: "read",
+    },
+    { role: "system", content: "OLD_PRESSURE_WARNING" },
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        {
+          id: "save",
+          name: "context_save",
+          args: { content: "DUPLICATE_SAVE_ARGUMENTS" },
+        },
+        { id: "switch", name: "new_context", args: {} },
+      ],
+    },
+    { role: "tool", content: '{"ok":true}', toolCallId: "save" },
+    { role: "tool", content: '{"ok":true}', toolCallId: "switch" },
+  ];
+  await recordMessages(c, messages);
+  c.manager.request();
+  await c.manager.prepare(messages, []);
+  assert.match(JSON.stringify(messages), /REPORT_TO_FINISH/);
+  assert.doesNotMatch(
+    JSON.stringify(messages),
+    /DUPLICATE_SAVE_ARGUMENTS|OLD_PRESSURE_WARNING/,
+  );
+  assert.equal(c.switches(), 1);
+});
+
+test("rollover keeps provider replay paired with the recent evidence exactly once", async () => {
+  const c = context();
+  const messages: ModelMessage[] = [
+    { role: "system", content: "Task rules" },
+    { role: "user", content: "Continue the review" },
+    {
+      role: "assistant",
+      content: "",
+      replayState: {
+        provider: "fixture",
+        version: 1,
+        data: { reasoning: "replay" },
+      },
+      toolCalls: [{ id: "read", name: "artifact_read", args: {} }],
+    },
+    { role: "tool", content: '{"ok":true}', toolCallId: "read" },
+  ];
+  await recordMessages(c, messages);
+  c.manager.request();
+  await c.manager.prepare(messages, []);
+  assert.equal(messages.filter((message) => message.replayState).length, 1);
+  assert.equal(
+    messages.filter((message) => message.toolCallId === "read").length,
+    1,
+  );
+});
+
+test("rollover carries recent evidence with source locations and exact archive IDs, including restart", async () => {
   const c = context();
   let round = 0;
   const requests: ModelRequest[] = [];
@@ -59,7 +288,7 @@ test("rollover carries source locations and exact archive IDs without copying pa
   const fresh = JSON.stringify(requests[1]);
   assert.match(fresh, /Archived source index/);
   assert.match(fresh, /PDF\?page=4/);
-  assert.doesNotMatch(fresh, /ORIGINAL_PASSAGE_DO_NOT_COPY/);
+  assert.match(fresh, /ORIGINAL_PASSAGE_DO_NOT_COPY/);
   const snapshot = h.checkpoints.latest("turn")!;
   assert.equal(snapshot.sourceReads?.length, 1);
   const ref = snapshot.sourceReads![0];
@@ -95,7 +324,10 @@ test("rollover carries source locations and exact archive IDs without copying pa
   assert.equal(index.hint(1), "");
 });
 
-function context(failSwitch = false) {
+function context(
+  failSwitch = false,
+  options: Partial<WindowContextOptions> = {},
+) {
   const archived: Array<{ message: ModelMessage; windowId: string }> = [];
   let id = 0,
     switches = 0;
@@ -113,6 +345,7 @@ function context(failSwitch = false) {
       switches++;
     },
     hint: async () => "Read progress note; early evidence is in history.",
+    ...options,
   });
   return { manager, archived, switches: () => switches };
 }
@@ -183,7 +416,7 @@ test("multiple model-requested windows keep the task, instructions and budgets",
   );
   assert.equal(
     requests[1].messages.some((m) => m.content.includes("hit:paper_1")),
-    false,
+    true,
   );
 });
 test("complete tool results are archived before model truncation and automatic rollover", async () => {

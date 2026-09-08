@@ -41,7 +41,10 @@ export class ZoteroMemoryFs implements MemoryFileSystem {
 
   async listFiles(dir: string): Promise<string[]> {
     const target = nativePath(dir);
-    if (!(await IOUtils.exists(target))) {
+    if (
+      !(await IOUtils.exists(target)) ||
+      (await IOUtils.stat(target)).type !== "directory"
+    ) {
       return [];
     }
     const children = await IOUtils.getChildren(target);

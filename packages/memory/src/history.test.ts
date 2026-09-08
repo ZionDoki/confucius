@@ -127,3 +127,147 @@ test("failed index commit leaves the previous note and window readable", async (
   assert.equal((await store.windows("task_a")).length, 1);
   await assert.rejects(store.writeNote("task_a", "../outside", "bad"));
 });
+
+test("archive keeps refs stable; only a nonempty explicit read renews retention", async () => {
+  const { store } = await setup();
+  const ref = { taskId: "task_a", windowId: "w", itemId: "read" };
+  await store.append({
+    ...ref,
+    role: "tool",
+    toolName: "get_pages",
+    content: "早期条件 xxxxxxxxx 最终证据",
+    sourceIds: ["1:A"],
+  });
+  await store.archive("task_a", 100);
+  const before = (await store.retentionInfo("task_a")).retention;
+  const hit = (await store.search({ query: "最终证据" })).items[0];
+  assert.equal(
+    (await store.read(ref, hit.offset)).content.includes("最终证据"),
+    true,
+  );
+  await store.sample("task_a");
+  await store.exportTask("task_a");
+  assert.deepEqual((await store.retentionInfo("task_a")).retention, before);
+  await store.read(ref, 99999, 100, undefined, true);
+  assert.equal(
+    (await store.retentionInfo("task_a")).retention.lastReadAt,
+    undefined,
+  );
+  await store.read(ref, 0, 100, undefined, true);
+  assert.ok((await store.retentionInfo("task_a")).retention.lastReadAt! > 100);
+  assert.equal(hit.itemId, ref.itemId);
+});
+
+test("legacy archive migration backs up the index, shards terms and never deletes original files", async () => {
+  const fs = new InMemoryFileSystem();
+  const ref = { taskId: "task_a", windowId: "w", itemId: "i" };
+  const content = "早期关键证据";
+  const index = {
+    version: 1,
+    windows: [],
+    items: [
+      {
+        ...ref,
+        role: "tool",
+        createdAt: 1,
+        characters: content.length,
+        excerpt: content,
+        sourceIds: [],
+      },
+    ],
+    notes: [],
+  };
+  await fs.writeFile("/history/task_a/windows/w/i.txt", content);
+  await fs.writeFile("/history/task_a/index.json", JSON.stringify(index));
+  const store = new HistoryStore(fs, "/history");
+  store.register(task());
+  assert.equal(
+    (await store.retentionInfo("task_a")).rawBytes,
+    new TextEncoder().encode(content).length,
+  );
+  assert.deepEqual(
+    JSON.parse(await fs.readFile("/history/task_a/index.pre-archive.json")),
+    index,
+  );
+  assert.ok(await fs.readFile("/history/task_a/windows/w/terms.json"));
+  const snapshot = fs.snapshot();
+  assert.equal(
+    (await store.retentionInfo("task_a")).bytes,
+    Object.values(snapshot).reduce(
+      (sum, text) => sum + new TextEncoder().encode(text).length,
+      0,
+    ),
+  );
+  let bodyReads = 0;
+  const read = fs.readFile.bind(fs);
+  fs.readFile = async (path) => {
+    if (path.endsWith(".txt")) bodyReads++;
+    return read(path);
+  };
+  for (let i = 0; i < 5; i++) await store.retentionInfo("task_a");
+  assert.equal(bodyReads, 0);
+  assert.equal(snapshot["/history/task_a/windows/w/i.txt"], content);
+});
+
+test("read leases block prune and UTF-16 continuation never splits an emoji", async () => {
+  const { store } = await setup();
+  const ref = { taskId: "task_a", windowId: "w", itemId: "emoji" };
+  const content = "中文🧪".repeat(20);
+  await store.append({ ...ref, role: "user", content, sourceIds: [] });
+  const release = store.acquire("task_a");
+  await assert.rejects(store.prune("task_a"), /in-flight read/);
+  release();
+  let all = "",
+    offset: number | null = 0;
+  do {
+    const part = await store.read(ref, offset, 5);
+    all += part.content;
+    offset = part.nextOffset;
+  } while (offset !== null);
+  assert.equal(all, content);
+  assert.equal((await store.read(ref, 2, 1)).content, "🧪");
+  assert.equal((await store.read(ref, 2, 1)).nextOffset, 4);
+  await store.prune("task_a");
+  await assert.rejects(store.read(ref), /retention policy/);
+});
+
+test("archive delivery is independent of verification and never renews retention", async () => {
+  const { store } = await setup();
+  const ref = { taskId: "task_a", windowId: "w", itemId: "evidence" };
+  await store.append({
+    ...ref,
+    role: "tool",
+    content: "original evidence",
+    sourceIds: [],
+  });
+  await store.archive("task_a", 100);
+  await store.recordDelivery(ref, "host-provided");
+  assert.equal((await store.read(ref)).item.delivery, "host-provided");
+  await store.recordDelivery(ref, "native-request");
+  await store.recordDelivery(ref, "host-provided");
+  const item = (await store.read(ref)).item;
+  assert.equal(item.delivery, "native-request");
+  assert.equal(item.verification, undefined);
+  assert.equal(
+    (await store.retentionInfo("task_a")).retention.lastReadAt,
+    undefined,
+  );
+});
+
+test("distillation sampling stays bounded and spans early and late windows and sources", async () => {
+  const { store } = await setup();
+  for (let n = 0; n < 40; n++)
+    await store.append({
+      taskId: "task_a",
+      windowId: `w${n}`,
+      itemId: `i${n}`,
+      role: "tool",
+      content: `Evidence ${n} `.repeat(500),
+      sourceIds: [`source${n % 3}`],
+    });
+  const sample = await store.sample("task_a", 2000);
+  assert.ok(sample.reduce((n, s) => n + s.content.length, 0) <= 2000);
+  assert.ok(sample.some((s) => s.ref.includes(":w0:")));
+  assert.ok(sample.some((s) => s.ref.includes(":w39:")));
+  assert.equal(new Set(sample.flatMap((s) => s.sourceIds)).size, 3);
+});

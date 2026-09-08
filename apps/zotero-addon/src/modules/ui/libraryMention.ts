@@ -114,7 +114,11 @@ export class LibraryMentionSources {
   }
 
   adoptDraft(taskId: string, saved: LockedContextSnapshot): void {
-    const savedKeys = new Set(saved.items.map(mentionItemKey));
+    const savedKeys = new Set(
+      saved.items
+        .filter((item) => item.source !== "reader")
+        .map(mentionItemKey),
+    );
     for (const item of this.pending.get(null)?.values() ?? []) {
       // A second mention may have been selected while task/new was in flight.
       if (!savedKeys.has(mentionItemKey(item))) this.add(taskId, item);

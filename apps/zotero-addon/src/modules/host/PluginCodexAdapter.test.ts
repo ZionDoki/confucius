@@ -170,6 +170,78 @@ describe("in-plugin Codex adapter", () => {
     );
   });
 
+  it("returns Kimi's confirmed effort after resolving an inherited on alias", async () => {
+    const adapter = new PluginKimiAdapter();
+    const calls: Array<{ method: string; value: unknown }> = [];
+    const modelState = (value: string) => ({
+      configOptions: [
+        {
+          id: "model",
+          currentValue: "k3",
+          options: [{ value: "k3", name: "K3" }],
+        },
+        {
+          id: "thinking",
+          currentValue: value,
+          options: [
+            ...["low", "high", "max"],
+            ...(value === "on" ? ["on"] : []),
+          ].map((value) => ({ value })),
+        },
+      ],
+    });
+    const sink = { emit: () => undefined };
+    const sessions = (adapter as unknown as { sessions: Map<string, unknown> })
+      .sessions;
+    sessions.set("kimi", {
+      taskId: "kimi",
+      profile: "zotero_only",
+      cwd: "/tmp",
+      sessionId: "session",
+      modelState: modelState("on"),
+      sink,
+      toolCalls: new Map(),
+      rpc: {
+        async request(method: string, params: Record<string, unknown>) {
+          calls.push({ method, value: params.value });
+          return method === "session/prompt"
+            ? { stopReason: "end_turn" }
+            : modelState("max");
+        },
+      },
+    });
+    const handle = await adapter.startTurn(
+      {
+        taskId: "kimi",
+        turnId: "turn",
+        prompt: "test",
+        mode: "agent",
+        capabilityProfile: "zotero_only",
+        cwd: "/tmp",
+        runtimeModel: { modelId: "k3", reasoningEffort: "on" },
+        mcp: { url: "http://localhost/mcp", token: "token" },
+        developerInstructions: "test",
+      },
+      sink,
+      {
+        request: async (request) => ({
+          id: request.id,
+          verdict: "deny",
+          scope: "once",
+        }),
+      },
+    );
+    assert.deepEqual(handle.runtimeModel, {
+      modelId: "k3",
+      reasoningEffort: "max",
+    });
+    assert.deepEqual(
+      calls.map((call) => call.value),
+      ["on", "max", undefined],
+    );
+    assert.equal(calls.at(-1)?.method, "session/prompt");
+  });
+
   it("maps ACP completion, limits, refusal and missing markers through the same contract", async () => {
     for (const [stopReason, expected] of [
       ["end_turn", "completed"],

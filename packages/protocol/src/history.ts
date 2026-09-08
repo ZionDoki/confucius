@@ -36,6 +36,22 @@ export interface HistoryItem extends HistoryItemRef {
   legacy?: boolean;
   incomplete?: boolean;
   excerpt: string;
+  /** Search excerpt's UTF-16 offset in the immutable original body. */
+  offset?: number;
+  /** Exclusive UTF-16 end of the returned excerpt, and the indexed parent passage. */
+  endOffset?: number;
+  passageStart?: number;
+  passageEnd?: number;
+  page?: number;
+  section?: string;
+  /** Version of the archived original, not a claim about the live PDF's freshness. */
+  sourceVersion?: string;
+  delivery?: "archived" | "host-provided" | "native-request";
+  verification?: "unknown" | "verified";
+  /** Host-only stamps; a model's text cannot create source read receipts. */
+  binding?: import("./run").ExecutionBinding;
+  sourceVersions?: Record<string, string>;
+  observation?: import("./sourceCoverage").SourceObservation;
 }
 
 export interface HistoryTask {

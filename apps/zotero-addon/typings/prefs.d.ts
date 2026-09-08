@@ -24,6 +24,8 @@ declare namespace _ZoteroTypes {
       "streamResponses": boolean;
       "memoryAutoExtract": boolean;
       "memoryConsent": string;
+      "historyAutoCleanup": boolean;
+      "historyCleanupMigrated": boolean;
       "maxIterations": number;
       "maxToolCalls": number;
       "alwaysAllowedTools": string;

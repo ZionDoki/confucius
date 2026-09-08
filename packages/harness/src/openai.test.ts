@@ -427,12 +427,97 @@ describe("truncateToolResult", () => {
 });
 
 describe("reasoning request parameters", () => {
+  it("preserves Kimi Code thinking through a tool exchange, including provider-prefixed IDs", async () => {
+    for (const model of [
+      "k3",
+      "kimi-code/k3-256k",
+      "moonshot/kimi-k2.7-code-highspeed",
+    ]) {
+      const bodies: Array<{ messages: Record<string, unknown>[] }> = [];
+      const adapter = new OpenAICompatibleAdapter({
+        apiKey: "test",
+        baseUrl: "https://provider.example.test/v1",
+        model,
+        stream: false,
+        fetchImpl: (async (_url: RequestInfo | URL, init?: RequestInit) => {
+          bodies.push(JSON.parse(String(init?.body)));
+          return new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message:
+                    bodies.length === 1
+                      ? {
+                          content: null,
+                          reasoning_content: "Need a source",
+                          tool_calls: [
+                            {
+                              id: "call",
+                              type: "function",
+                              function: { name: "search", arguments: "{}" },
+                            },
+                          ],
+                        }
+                      : { content: "Done" },
+                  finish_reason: bodies.length === 1 ? "tool_calls" : "stop",
+                },
+              ],
+            }),
+          );
+        }) as typeof fetch,
+      });
+      const initial = { role: "user" as const, content: "Read a source" };
+      const turn = await adapter.complete({ messages: [initial] });
+      await adapter.complete({
+        messages: [
+          initial,
+          {
+            role: "assistant",
+            content: turn.text ?? "",
+            toolCalls: turn.toolCalls,
+            replayState: turn.replayState,
+          },
+          {
+            role: "tool",
+            content: "Source text",
+            toolCallId: "call",
+          },
+        ],
+      });
+      assert.equal(
+        bodies[1].messages[1].reasoning_content,
+        "Need a source",
+        model,
+      );
+    }
+  });
+
   for (const [model, effort, expected] of [
     ["gpt-5.5", "off", { reasoning_effort: "none" }],
     ["gpt-6-astra", "max", { reasoning_effort: "max" }],
     ["gpt-6-astra", "off", {}],
+    ["gpt-5.6-luna", "max", { reasoning_effort: "max" }],
+    ["gpt-5.4-mini", "off", { reasoning_effort: "none" }],
+    ["o3-mini", "low", { reasoning_effort: "low" }],
     ["kimi-k2.6", "off", { thinking: { type: "disabled" } }],
     ["kimi-k2.6", "on", { thinking: { type: "enabled" } }],
+    ["kimi-k3", "max", { reasoning_effort: "max" }],
+    ["kimi-k3", "off", {}],
+    ["kimi-k2.7-code", "on", { thinking: { type: "enabled", keep: "all" } }],
+    [
+      "kimi-k2.7-code-highspeed",
+      "on",
+      { thinking: { type: "enabled", keep: "all" } },
+    ],
+    ["kimi-k2.7-code", "off", {}],
+    ["kimi-for-coding-highspeed", "on", { thinking: { type: "enabled" } }],
+    ["kimi-for-coding", "high", {}],
+    [
+      "k3-256k",
+      "low",
+      { thinking: { type: "enabled" }, reasoning_effort: "low" },
+    ],
+    ["k3", "medium", {}],
     [
       "deepseek-v4-pro",
       "max",

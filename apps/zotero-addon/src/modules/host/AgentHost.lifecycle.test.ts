@@ -1,3 +1,4 @@
+import { executionBinding } from "@confucius/protocol";
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, it } from "node:test";
@@ -32,6 +33,7 @@ import { responseLanguageInstruction } from "./ResponseLanguage";
 import { deepReadReviewMessages } from "./DeepReadReviewContext";
 import { ArtifactStore } from "./ArtifactStore";
 import { LibraryMentionSources } from "../ui/libraryMention";
+import { ZoteroToolHost } from "../tools/ZoteroToolHost";
 
 it("opens abstract-only citations in the library without resolving a PDF", async () => {
   const previous = Reflect.get(globalThis, "Zotero");
@@ -381,6 +383,8 @@ function fixture() {
       unknownOperationIds: [],
     }),
     execution,
+    maintenanceQueue: Promise.resolve(),
+    historyCleanupEnabled: () => false,
   });
   return { host, state, backend, starts, execution };
 }
@@ -393,11 +397,119 @@ async function waitFor(predicate: () => boolean) {
   assert.fail("Lifecycle did not reach the expected state");
 }
 
+it("prepared MCP sessions may discover a directory but cannot execute before activation", () => {
+  const { host, state } = fixture();
+  state.record.run = run(state.record);
+  state.activeTurnId = "prepare-turn";
+  const capabilities = new PluginRuntimeCapabilityStore();
+  const lease = capabilities.reserve({
+    taskId: state.record.id,
+    runId: state.record.run.id,
+    turnId: state.activeTurnId,
+    generation: state.record.run.generation,
+  });
+  state.record.contextSwitch = {
+    version: 1,
+    id: "switch",
+    binding: executionBinding(state.record.run)!,
+    handoffId: "handoff",
+    from: state.record.contextWindow!,
+    to: { ...state.record.contextWindow!, id: "next", number: 2 },
+    phase: "prepared",
+    createdAt: 1,
+  };
+  Object.assign(host, {
+    pluginRuntime: {
+      isCurrentLease: capabilities.isCurrent.bind(capabilities),
+      isKnownLease: capabilities.isKnown.bind(capabilities),
+    },
+  });
+  const validate = Reflect.get(host, "validatedRuntimeLease").bind(host);
+  assert.equal(validate(state, lease, true, true), lease);
+  assert.throws(() => validate(state, lease, true), /expired/);
+  state.record.run.generation++;
+  assert.throws(() => validate(state, lease, true, true), /expired/);
+});
+
+it("CLI save echoes and text fragments do not invalidate a complete handoff or add model calls", async () => {
+  const { host, state } = fixture();
+  state.record.run = run(state.record);
+  state.activeTurnId = "handoff-turn";
+  const history = Reflect.get(host, "history") as HistoryStore;
+  await history.append({
+    taskId: state.record.id,
+    windowId: state.record.contextWindow!.id,
+    itemId: "user",
+    role: "user",
+    content: "Continue",
+    sourceIds: [],
+  });
+  await history.writeNote(
+    state.record.id,
+    "progress",
+    "switched=true; current evidence is sufficient",
+    undefined,
+    {
+      version: 1,
+      binding: executionBinding(state.record.run)!,
+      throughItemId: "user",
+      evidenceRefs: [],
+      nextAction: "Output the verified marker",
+    },
+  );
+  Object.assign(host, {
+    queueHistory: async (entry: {
+      items: import("@confucius/memory").HistoryAppend[];
+    }) => {
+      for (const item of entry.items) await history.append(item);
+    },
+    auxiliaryAdapter: () =>
+      assert.fail("complete handoff must not call a model"),
+  });
+  const capture = Reflect.get(host, "captureExternalHistory").bind(host);
+  capture(state, {
+    id: "echo",
+    sessionId: state.record.id,
+    turnId: state.activeTurnId,
+    ts: 2,
+    type: "tool_result",
+    payload: {
+      callId: "save",
+      result: {
+        ok: true,
+        toolName: "runtime.tool",
+        data: JSON.stringify({
+          ok: true,
+          toolName: "context_save",
+          data: { saved: true },
+        }),
+      },
+    },
+  });
+  capture(state, {
+    id: "fragment",
+    sessionId: state.record.id,
+    turnId: state.activeTurnId,
+    ts: 3,
+    type: "text_delta",
+    payload: { text: "Now switching" },
+  });
+  await history.flush();
+  assert.equal(await history.head(state.record.id), "user");
+  await Reflect.get(host, "prepareHandoff").call(host, state);
+  assert.equal(state.record.contextHandoff?.supplemented, false);
+  assert.equal(
+    state.record.contextHandoff?.nextAction,
+    "Output the verified marker",
+  );
+});
+
 for (const backendKind of ["codex", "kimi"] as const) {
   it(`${backendKind} switches the engine session while retaining task notes, outputs and budget`, async () => {
     const { host, state, backend } = fixture();
     state.record.backend = backendKind;
     state.record.run = run(state.record);
+    state.activeTurnId = "switch-turn";
     state.record.externalSessionId = "old-engine-session";
     state.record.externalTurnId = "old-engine-turn";
     state.record.artifactIds = ["saved-report"];
@@ -413,6 +525,11 @@ for (const backendKind of ["codex", "kimi"] as const) {
       "progress",
       "Continue with source 1:PAPER, report saved-report",
       ["1:PAPER"],
+      {
+        version: 1,
+        binding: executionBinding(state.record.run)!,
+        evidenceRefs: [],
+      },
     );
     await direct.history.writeNote(
       state.record.id,
@@ -429,16 +546,24 @@ for (const backendKind of ["codex", "kimi"] as const) {
     backend.dispose = async () => {
       disposed++;
     };
+    Object.assign(backend, {
+      prepareSession: async () => ({ externalSessionId: "prepared-session" }),
+    });
     await direct.switchExternalContext(state);
-    assert.equal(disposed, 1);
-    assert.equal(state.record.externalSessionId, undefined);
+    assert.equal(
+      disposed,
+      0,
+      "old runtime is released only after successful activation",
+    );
+    assert.equal(state.record.externalSessionId, "prepared-session");
+    assert.equal(state.record.contextSwitch?.phase, "committed");
     assert.equal(state.record.externalTurnId, undefined);
     assert.equal(state.record.contextWindow!.number, 2);
     assert.deepEqual(state.record.artifactIds, ["saved-report"]);
     assert.deepEqual(state.record.run.budget, before);
-    assert.match(JSON.stringify(state.messages), /1:PAPER/);
+    assert.match(JSON.stringify(state.record.contextHandoff), /1:PAPER/);
     assert.doesNotMatch(
-      JSON.stringify(state.messages),
+      JSON.stringify(state.record.contextHandoff),
       /OLD_ENGINE_TRANSCRIPT|OUTSIDE_SOURCE_SCOPE|UNSCOPED_LEGACY_NOTE/,
     );
   });
@@ -607,6 +732,130 @@ describe("task sources attached after choosing a research mode", () => {
   }
 });
 
+describe("starting tasks with multiple PDF attachments", () => {
+  let previousZotero: unknown;
+  beforeEach(() => {
+    previousZotero = Reflect.get(globalThis, "Zotero");
+    const paper = {
+      id: 1,
+      libraryID: 1,
+      key: "PAPER",
+      getDisplayTitle: () => "A paper with supplementary information",
+      getAttachments: () => [2, 3],
+    };
+    const pdfs = ["MAINPDF", "SUPPPDF"].map((key, index) => ({
+      id: index + 2,
+      libraryID: 1,
+      key,
+      parentItemID: 1,
+      isAttachment: () => true,
+      attachmentContentType: "application/pdf",
+      attachmentFilename: index ? "supplement.pdf" : "paper.pdf",
+      getDisplayTitle: () =>
+        index ? "Supplementary information" : "Main paper",
+      getAnnotations: () => [],
+    }));
+    const items = [paper, ...pdfs];
+    Reflect.set(globalThis, "Zotero", {
+      locale: "en-US",
+      Prefs: { get: () => "en-US" },
+      Libraries: { userLibraryID: 1 },
+      Items: {
+        getByLibraryAndKey: (libraryID: number, key: string) =>
+          items.find(
+            (item) => item.libraryID === libraryID && item.key === key,
+          ),
+        get: (id: number) => items.find((item) => item.id === id),
+      },
+      Collections: {
+        getByLibraryAndKey: () => ({ getChildItems: () => [paper] }),
+      },
+    });
+  });
+  afterEach(() => Reflect.set(globalThis, "Zotero", previousZotero));
+
+  function multiPdfFixture(backend: ResearchTaskRecord["backend"]) {
+    const test = fixture();
+    const tools = new ZoteroToolHost(memoryJsonStorage());
+    Reflect.deleteProperty(test.host, "freezeBoundAnnotations");
+    Object.assign(test.host, { tools, requireEndpoint: () => ({}) });
+    test.state.record.backend = backend;
+    test.state.record.lockedContext.items = [
+      {
+        id: "paper",
+        libraryID: 1,
+        key: "PAPER",
+        title: "Selected paper",
+        source: "library",
+      },
+    ];
+    return { ...test, tools };
+  }
+
+  for (const backend of ["native", "codex", "kimi"] as const) {
+    it(`${backend} starts ordinary, single-paper and collection tasks without choosing a PDF`, async () => {
+      for (const templateId of [undefined, "deep-read", "synthesis"] as const) {
+        const { host, state, starts, tools } = multiPdfFixture(backend);
+        state.record.templateId = templateId;
+        if (templateId === "synthesis") {
+          state.record.lockedContext.items = [];
+          state.record.lockedContext.collection = {
+            id: "collection",
+            libraryID: 1,
+            key: "COLLECTION",
+            name: "Selected collection",
+          };
+        }
+        await host.sessionPrompt(
+          state.record.id,
+          "Read the main paper and its supplement",
+        );
+        await waitFor(() => state.activeTurnId === null);
+        assert.ok(starts.length, templateId);
+        assert.ok(!state.events.some((event) => event.type === "turn_failed"));
+        if (templateId) {
+          assert.match(starts[0].workflowInstruction!, /attachmentKey=MAINPDF/);
+          assert.match(starts[0].workflowInstruction!, /attachmentKey=SUPPPDF/);
+          assert.match(starts[0].workflowInstruction!, /supplement\.pdf/);
+        }
+        for (const key of ["MAINPDF", "SUPPPDF"])
+          assert.equal(
+            Object.keys((await tools.ownership.read(`1_${key}`)).batches)
+              .length,
+            1,
+          );
+      }
+    });
+
+    it(`${backend} keeps the PDF selected in the locked reader instead of widening to its siblings`, async () => {
+      const { host, state, starts, tools } = multiPdfFixture(backend);
+      state.record.templateId = "deep-read";
+      state.record.lockedContext.reader = {
+        id: "reader",
+        libraryID: 1,
+        parentKey: "PAPER",
+        attachmentKey: "SUPPPDF",
+        title: "Supplementary information",
+        pageLabel: "1",
+        pageIndex: 0,
+      };
+      await host.sessionPrompt(state.record.id, "Read the selected supplement");
+      await waitFor(() => state.activeTurnId === null);
+      assert.ok(starts.length);
+      assert.match(starts[0].workflowInstruction!, /attachmentKey=SUPPPDF/);
+      assert.doesNotMatch(starts[0].workflowInstruction!, /MAINPDF/);
+      assert.equal(
+        Object.keys((await tools.ownership.read("1_MAINPDF")).batches).length,
+        0,
+      );
+      assert.equal(
+        Object.keys((await tools.ownership.read("1_SUPPPDF")).batches).length,
+        1,
+      );
+    });
+  }
+});
+
 describe("AgentHost lifecycle ownership", () => {
   let previousZotero: unknown;
   beforeEach(() => {
@@ -618,6 +867,32 @@ describe("AgentHost lifecycle ownership", () => {
   });
   afterEach(() => {
     Reflect.set(globalThis, "Zotero", previousZotero);
+  });
+
+  it("retains articles from submitted turns when the next message changes sources", async () => {
+    const { host, state } = fixture();
+    for (const key of ["ARTICLE_A", "ARTICLE_B", "ARTICLE_A"]) {
+      state.record.lockedContext = {
+        version: 1,
+        capturedAt: Date.now(),
+        fingerprint: key,
+        items: [
+          {
+            id: `item:1:${key}`,
+            libraryID: 1,
+            key,
+            title: key,
+            source: "reader",
+          },
+        ],
+      };
+      await host.sessionPrompt(state.record.id, `Read ${key}`);
+      await waitFor(() => state.activeTurnId === null);
+    }
+    assert.deepEqual(
+      state.record.articleSources?.map((item) => item.key),
+      ["ARTICLE_A", "ARTICLE_B"],
+    );
   });
 
   it("keeps legacy artifact calls working through the external gateway without write approvals", async () => {
@@ -1031,6 +1306,40 @@ describe("AgentHost lifecycle ownership", () => {
       false,
     );
     assert.ok(state.record.recoverableTurn);
+  });
+
+  it("stores the model effort confirmed by the external runtime for later turns", async () => {
+    const { host, state, backend } = fixture();
+    state.record.backend = "kimi";
+    state.record.runtimeModel = { modelId: "k3", reasoningEffort: "on" };
+    state.record.run = run(state.record);
+    state.activeTurnId = "effort-selection";
+    let callbacks: BackendCallbacks | undefined;
+    backend.startTurn = async (_input, received) => {
+      callbacks = received;
+      return {
+        externalSessionId: "session",
+        runtimeModel: { modelId: "k3", reasoningEffort: "max" },
+      };
+    };
+    const pending = host.executeBackend(
+      state,
+      {
+        task: state.record,
+        turnId: state.activeTurnId,
+        prompt: "Continue",
+        mode: "agent",
+        capabilityProfile: "zotero_only",
+      },
+      new AbortController().signal,
+    );
+    await waitFor(() => state.record.runtimeModel?.reasoningEffort === "max");
+    assert.deepEqual(state.record.runtimeModel, {
+      modelId: "k3",
+      reasoningEffort: "max",
+    });
+    callbacks!.stopped?.({ stopReason: "completed", text: "Done" });
+    await pending;
   });
 
   it("bounds a live but silent external process and ignores output after its lease expires", async () => {
@@ -1667,4 +1976,105 @@ describe("AgentHost lifecycle ownership", () => {
       assert.deepEqual(await execution.listOperations(), []);
     });
   }
+});
+
+for (const phase of [
+  "prepared",
+  "session-ready",
+  "committed",
+  "startup",
+] as const)
+  it(`context handoff recovers from ${phase} failure without losing the old window or receipts`, async () => {
+    const { host, state, backend } = fixture();
+    state.record.run = run(state.record);
+    state.activeTurnId = "handoff-turn";
+    state.record.contextResetRequested = true;
+    state.record.externalSessionId = "old";
+    const oldWindow = state.record.contextWindow!.id;
+    const oldBudget = structuredClone(state.record.run.budget);
+    const direct = host as unknown as {
+      history: HistoryStore;
+      switchExternalContext(state: TestState): Promise<void>;
+    };
+    await direct.history.writeNote(
+      state.record.id,
+      "progress",
+      "Continue the saved report",
+      undefined,
+      {
+        version: 1,
+        binding: executionBinding(state.record.run)!,
+        evidenceRefs: [],
+      },
+    );
+    let failed = false;
+    Object.assign(backend, {
+      prepareSession: async () => {
+        if (phase === "startup" && !failed) {
+          failed = true;
+          throw new Error("injected startup");
+        }
+        return { externalSessionId: "candidate" };
+      },
+    });
+    host.persistNow = async () => {
+      if (
+        phase !== "startup" &&
+        state.record.contextSwitch?.phase === phase &&
+        !failed
+      ) {
+        failed = true;
+        throw new Error(`injected ${phase}`);
+      }
+    };
+    await assert.rejects(direct.switchExternalContext(state), /injected/);
+    assert.equal(state.record.contextWindow!.id, oldWindow);
+    assert.equal(state.record.externalSessionId, "old");
+    assert.deepEqual(state.record.run.budget, oldBudget);
+    assert.ok(state.record.contextSwitch);
+    await direct.switchExternalContext(state);
+    assert.equal(state.record.contextSwitch?.phase, "committed");
+    assert.equal(state.record.externalSessionId, "candidate");
+    assert.deepEqual(state.record.run.budget, oldBudget);
+  });
+
+it("a candidate prepared after user steering cannot overwrite the newer run", async () => {
+  const { host, state, backend } = fixture();
+  state.record.run = run(state.record);
+  state.activeTurnId = "handoff-turn";
+  state.record.externalSessionId = "old";
+  const direct = host as unknown as {
+    history: HistoryStore;
+    switchExternalContext(state: TestState): Promise<void>;
+  };
+  await direct.history.writeNote(
+    state.record.id,
+    "progress",
+    "Continue the saved report",
+    undefined,
+    {
+      version: 1,
+      binding: executionBinding(state.record.run)!,
+      evidenceRefs: [],
+    },
+  );
+  let discarded = false;
+  Object.assign(backend, {
+    prepareSession: async () => {
+      state.record.run = {
+        ...state.record.run!,
+        intentRevision: 2,
+        request: "New user request",
+      };
+      state.record.contextSwitch = undefined;
+      return { externalSessionId: "late-candidate" };
+    },
+    discardSession: async () => {
+      discarded = true;
+    },
+  });
+  await assert.rejects(direct.switchExternalContext(state), /superseded/);
+  assert.equal(state.record.run.request, "New user request");
+  assert.equal(state.record.externalSessionId, "old");
+  assert.equal(discarded, true);
 });

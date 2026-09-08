@@ -1232,11 +1232,13 @@ export function resolveModelProfile(
   model: string,
   overrides: ModelProfile = {},
 ): ModelProfile {
+  const id = model.trim().toLowerCase().split("/").at(-1) ?? "";
   return {
     reasoningReplay:
       style === "ollama"
         ? "thinking"
-        : /^(deepseek|kimi|moonshot)(?:-|$)/i.test(model)
+        : /^(deepseek|kimi|moonshot)(?:-|$)/.test(id) ||
+            /^k3(?:-256k)?$/.test(id)
           ? "reasoning_content"
           : "none",
     ollamaToolCalls: "incremental",

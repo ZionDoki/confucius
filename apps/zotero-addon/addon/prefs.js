@@ -15,6 +15,8 @@ pref("mcpServersJson", "");
 pref("streamResponses", true);
 pref("memoryAutoExtract", false);
 pref("memoryConsent", "review");
+pref("historyAutoCleanup", true);
+pref("historyCleanupMigrated", false);
 pref("maxIterations", 128);
 pref("maxToolCalls", 96);
 pref("alwaysAllowedTools", "[]");

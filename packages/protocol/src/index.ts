@@ -329,3 +329,5 @@ export * from "./annotations";
 export * from "./runtimeFailure";
 export * from "./codexOutput";
 export * from "./contextPolicy";
+export * from "./contextHandoff";
+export * from "./sourceCoverage";

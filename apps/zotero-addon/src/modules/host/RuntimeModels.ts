@@ -138,6 +138,7 @@ export async function selectKimiModel(
   sessionId: string,
   state: unknown,
   selection: RuntimeModelSelection,
+  onState?: (state: unknown) => void,
 ): Promise<unknown> {
   validateRuntimeModel(kimiModels(state), { modelId: selection.modelId });
   const modelConfig = configOptions(state).find(
@@ -155,6 +156,7 @@ export async function selectKimiModel(
           sessionId,
           modelId: selection.modelId,
         });
+    onState?.(next);
   }
   // Legacy set_model may not return a catalog; it cannot expose effort controls.
   if (!modelConfig && !configOptions(next).length) {
@@ -162,13 +164,67 @@ export async function selectKimiModel(
       throw new Error("This Kimi CLI does not report thinking options");
     return state;
   }
-  const model = validateRuntimeModel(kimiModels(next), selection);
-  if (selection.reasoningEffort && model.reasoningConfigId) {
+  const inheritedThinking = configOptions(next).find(
+    (c) => c.category === "thought_level" || c.id === "thinking",
+  );
+  const inheritedOptions = inheritedThinking
+    ? selectOptions(inheritedThinking)
+    : [];
+  // Kimi Code 0.40.1 appends the previous model's current value to the new
+  // catalog, even when its setter rejects that value. Reapplying it resolves
+  // aliases (e.g. K3's "on") and returns the model's canonical options.
+  if (
+    inheritedOptions.some((option) => option.value === "on") &&
+    inheritedOptions.some((option) => !["off", "on"].includes(option.value)) &&
+    typeof inheritedThinking?.currentValue === "string"
+  ) {
+    const setThinking = (value: string) =>
+      rpc.request("session/set_config_option", {
+        sessionId,
+        configId: inheritedThinking.id,
+        value,
+      });
+    try {
+      next = await setThinking(inheritedThinking.currentValue);
+    } catch (error) {
+      // Only this explicit invalid-value response permits a boolean fallback.
+      // Transport/auth/model failures must not change the requested effort.
+      if (
+        record(error).code !== -32602 ||
+        !String(record(error).message).includes("Unknown thinking value:") ||
+        inheritedOptions.some(
+          (option) =>
+            !["off", "on", inheritedThinking.currentValue].includes(
+              option.value,
+            ),
+        )
+      )
+        throw error;
+      next = await setThinking("on");
+    }
+    onState?.(next);
+  }
+  const currentModel = validateRuntimeModel(kimiModels(next), {
+    modelId: selection.modelId,
+  });
+  const effort =
+    selection.reasoningEffort === inheritedThinking?.currentValue &&
+    !currentModel.reasoningOptions?.some(
+      (option) => option.value === selection.reasoningEffort,
+    )
+      ? currentModel.defaultReasoningEffort
+      : selection.reasoningEffort;
+  const model = validateRuntimeModel(kimiModels(next), {
+    ...selection,
+    reasoningEffort: effort,
+  });
+  if (effort && model.reasoningConfigId) {
     next = await rpc.request("session/set_config_option", {
       sessionId,
       configId: model.reasoningConfigId,
-      value: selection.reasoningEffort,
+      value: effort,
     });
+    onState?.(next);
   }
   return next;
 }
@@ -184,4 +240,37 @@ export function codexModelParams(
           : {}),
       }
     : {};
+}
+
+/** Choose only controls actually advertised by the selected runtime model. */
+export function lowestRuntimeSelection(
+  model: RuntimeModelOption,
+): RuntimeModelSelection {
+  const order = [
+    "none",
+    "off",
+    "disabled",
+    "false",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "on",
+    "enabled",
+    "true",
+  ];
+  const options = [...(model.reasoningOptions ?? [])];
+  options.sort((a, b) => {
+    const rank = (v: string) => {
+      const i = order.indexOf(v.toLowerCase());
+      return i < 0 ? 100 : i;
+    };
+    return rank(a.value) - rank(b.value);
+  });
+  return {
+    modelId: model.id,
+    reasoningEffort: options[0]?.value ?? model.defaultReasoningEffort,
+  };
 }

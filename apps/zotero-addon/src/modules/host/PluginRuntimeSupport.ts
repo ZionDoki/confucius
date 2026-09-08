@@ -181,8 +181,13 @@ export class PluginRuntimeCapabilityStore {
   private readonly controllers = new Map<string, AbortController>();
 
   issue(scope: Omit<RuntimeTurnLease, "namespace">): RuntimeCapability {
-    const { taskId } = scope;
-    this.revoke(taskId);
+    const capability = this.reserve(scope);
+    this.activate(capability);
+    return capability;
+  }
+
+  /** Prepared sessions can initialize transport, but cannot dispatch bound tool calls. */
+  reserve(scope: Omit<RuntimeTurnLease, "namespace">): RuntimeCapability {
     const token = randomToken();
     const capability = {
       ...scope,
@@ -191,9 +196,26 @@ export class PluginRuntimeCapabilityStore {
       expiresAt: Date.now() + CAPABILITY_TTL_MS,
     };
     this.capabilities.set(token, capability);
-    this.byTask.set(taskId, token);
+
     this.controllers.set(capability.namespace, createAbortController());
     return { ...capability };
+  }
+
+  activate(capability: RuntimeCapability): void {
+    if (
+      !this.capabilities.has(capability.token) ||
+      capability.expiresAt <= Date.now()
+    )
+      throw new Error("Prepared session lease expired");
+    this.revoke(capability.taskId);
+    this.byTask.set(capability.taskId, capability.token);
+  }
+  discard(capability: RuntimeCapability): void {
+    if (this.byTask.get(capability.taskId) === capability.token)
+      this.revoke(capability.taskId);
+    this.controllers.get(capability.namespace)?.abort();
+    this.controllers.delete(capability.namespace);
+    this.capabilities.delete(capability.token);
   }
 
   isCurrent(lease: RuntimeTurnLease): boolean {
@@ -209,6 +231,19 @@ export class PluginRuntimeCapabilityStore {
     );
   }
 
+  /** Directory discovery only. Reserved leases still cannot execute tools. */
+  isKnown(lease: RuntimeTurnLease): boolean {
+    return [...this.capabilities.values()].some(
+      (capability) =>
+        capability.expiresAt > Date.now() &&
+        ["taskId", "turnId", "runId", "generation", "namespace"].every(
+          (key) =>
+            capability[key as keyof RuntimeTurnLease] ===
+            lease[key as keyof RuntimeTurnLease],
+        ),
+    );
+  }
+
   signal(lease: RuntimeTurnLease): AbortSignal | undefined {
     return this.isCurrent(lease)
       ? this.controllers.get(lease.namespace)?.signal
@@ -219,7 +254,7 @@ export class PluginRuntimeCapabilityStore {
     const capability = this.capabilities.get(token);
     if (!capability) return null;
     if (capability.expiresAt <= Date.now()) {
-      this.revoke(capability.taskId);
+      this.discard(capability);
       return null;
     }
     capability.expiresAt = Date.now() + CAPABILITY_TTL_MS;

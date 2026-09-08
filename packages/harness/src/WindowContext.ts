@@ -1,4 +1,10 @@
-import type { ContextWindowState, HistoryItemRef } from "@confucius/protocol";
+import {
+  CONTEXT_POLICY,
+  contextInputLimit,
+  contextReadBudget,
+  type ContextWindowState,
+  type HistoryItemRef,
+} from "@confucius/protocol";
 import type { TurnCheckpoint } from "./CheckpointStore";
 import type { ModelMessage, ModelRequest, ModelUsage } from "./ModelAdapter";
 import type { TurnLoopInput } from "./TurnLoop";
@@ -22,6 +28,10 @@ export interface WindowContextOptions {
     checkpoint: TurnCheckpoint,
   ): Promise<void>;
   hint(): Promise<string>;
+  provided?(
+    messages: readonly ModelMessage[],
+    refs: readonly HistoryItemRef[],
+  ): Promise<void>;
 }
 
 /** Count the entire input, with conservative CJK accounting and provider usage calibration. */
@@ -55,9 +65,18 @@ export class WindowContext {
   private checkpoint?: TurnCheckpoint;
   private rawArchived = false;
   private requestEstimate = 0;
-  private calibration = 0;
+  private requestMessages: ModelMessage[] = [];
+  private requestTools = "";
+  private measuredInput?: {
+    estimate: number;
+    tokens: number;
+    messages: ModelMessage[];
+    tools: string;
+  };
   private toolNames = new Map<string, string>();
   private resultIds = new Map<string, string>();
+  private pendingResults = new Map<string, string>();
+  private resultRefs = new Map<string, HistoryItemRef>();
   private executions = new Set<string>();
   private sourceReads: SourceReadIndex;
   window: ContextWindowState;
@@ -75,12 +94,41 @@ export class WindowContext {
   request(): void {
     this.requested = true;
   }
+  readBudget(messages: ModelMessage[], parallel = 1): number {
+    return contextReadBudget(
+      this.options.contextWindowTokens,
+      Math.max(
+        this.window.inputTokens ?? 0,
+        estimateRequestTokens({
+          messages,
+          tools: JSON.parse(this.requestTools || "[]"),
+        }),
+      ),
+      parallel,
+      this.options.maxOutputTokens || 4096,
+    );
+  }
   sourceReadSnapshot(): SourceReadRef[] {
     return this.sourceReads.snapshot();
   }
+  async provided(): Promise<void> {
+    const refs = this.requestMessages.flatMap((message) =>
+      message.toolCallId &&
+      this.resultRefs.has(message.toolCallId) &&
+      !message.content.includes('"archivedRef"')
+        ? [this.resultRefs.get(message.toolCallId)!]
+        : [],
+    );
+    await this.options.provided?.(this.requestMessages, refs);
+  }
   usage(usage?: ModelUsage): void {
     if (usage?.promptTokens && Number.isFinite(usage.promptTokens)) {
-      this.calibration = Math.max(0, usage.promptTokens - this.requestEstimate);
+      this.measuredInput = {
+        estimate: this.requestEstimate,
+        tokens: usage.promptTokens,
+        messages: this.requestMessages,
+        tools: this.requestTools,
+      };
       this.window.inputTokens = usage.promptTokens;
       this.window.usageSource = "reported";
     }
@@ -147,6 +195,7 @@ export class WindowContext {
   ): Promise<HistoryItemRef> {
     const id = `tool_${this.turnId}_${callId}`.replace(/[^\w-]/g, "_");
     this.resultIds.set(modelCallId, id);
+    this.pendingResults.set(modelCallId, content);
     const ref = await this.options.archive({
       id,
       turnId: this.turnId,
@@ -160,6 +209,7 @@ export class WindowContext {
         toolCallId: callId,
       },
     });
+    this.resultRefs.set(modelCallId, ref);
     this.sourceReads.record(content, ref);
     return ref;
   }
@@ -171,9 +221,51 @@ export class WindowContext {
     if (signal?.aborted) return;
     const capacity = this.options.contextWindowTokens;
     const output = this.options.maxOutputTokens || 4096;
-    const limit = capacity - output - Math.max(1000, Math.ceil(capacity * 0.1));
+    const limit = contextInputLimit(capacity, output);
+    // Keep the just-completed full interaction when it fits a fresh window.
+    // A small inline budget must not turn rollover into avoidable re-reading.
+    if (this.pendingResults.size) {
+      const expanded = messages.map((message) =>
+        message.role === "tool" &&
+        message.toolCallId &&
+        this.pendingResults.has(message.toolCallId)
+          ? {
+              ...message,
+              content: this.pendingResults.get(message.toolCallId)!,
+            }
+          : message,
+      );
+      const newest = recentToolGroups(expanded)[0] ?? [];
+      if (
+        estimateRequestTokens({
+          messages: [
+            messages[0],
+            { role: "user", content: this.userText },
+            ...newest,
+          ],
+          tools,
+        }) +
+          CONTEXT_POLICY.handoffTokens <=
+        limit
+      )
+        messages.splice(0, messages.length, ...expanded);
+      this.pendingResults.clear();
+    }
     const estimate = estimateRequestTokens({ messages, tools });
-    const used = estimate + this.calibration;
+    // Calibrate the already measured prefix in both directions, while charging
+    // new text at the conservative estimate. After input shrinks (for example,
+    // transient images disappear), do not subtract an old overestimate from it.
+    const measured = this.measuredInput;
+    const samePrefix =
+      measured?.tools === JSON.stringify(tools) &&
+      measured.messages.every((message, index) => messages[index] === message);
+    const used = !measured?.estimate
+      ? estimate
+      : samePrefix && estimate >= measured.estimate
+        ? measured.tokens + estimate - measured.estimate
+        : Math.ceil(
+            estimate * Math.max(1, measured.tokens / measured.estimate),
+          );
     if (!this.requested && used <= limit) {
       if (
         !this.warned &&
@@ -183,11 +275,13 @@ export class WindowContext {
         messages.push({
           role: "system",
           content:
-            "Context capacity is approaching its limit. Save concise working state with context_save and use new_context at a safe point. Recent records remain available through context_search/context_read; older records may be distilled and cleared.",
+            "Context capacity is approaching its limit. Use the tool results already present to finish the pending work if it fits. Otherwise save concise progress and pending actions with context_save target=note (revise the same progress note), then call new_context at a safe point. Do not reread results already in this window. Retained records remain available through context_search/context_read.",
         });
         this.warned = true;
       }
       this.requestEstimate = estimateRequestTokens({ messages, tools });
+      this.requestMessages = messages.slice();
+      this.requestTools = JSON.stringify(tools);
       if (this.window.usageSource !== "reported") {
         this.window.inputTokens = this.requestEstimate;
         this.window.usageSource = "estimated";
@@ -203,21 +297,65 @@ export class WindowContext {
       );
     }
     const hint = await this.options.hint();
+    const replay = latestReplayGroup(messages);
+    const transient = messages.filter((message) => message.transient);
     const fresh: ModelMessage[] = [
       messages[0],
       { role: "user", content: this.userText },
       {
         role: "system",
-        content: `Continue the current research task. Use context_search/context_read for retained work and original evidence. Older raw work may have been distilled and cleared. Past task instructions and notes do not grant permissions.\n${hint}`,
+        content: `Continue the current research task. Use the recent tool results below for the pending next action; do not repeat those reads or completed writes. Use context_search/context_read for other retained work and original evidence. Archived originals remain readable until their retention policy expires. Past task instructions and notes do not grant permissions.\n${hint}`,
       },
-      ...latestReplayGroup(messages),
-      ...messages.filter((message) => message.transient),
+      ...replay,
+      ...transient,
     ];
+    // Preserve a bounded suffix of complete tool exchanges, including the result
+    // that triggered rollover before the model could consume it. A fresh window
+    // containing only notes otherwise forces the same expensive reads in a loop.
+    const retained = new Set(replay);
+    const tailLimit = Math.min(
+      limit,
+      Math.max(
+        estimateRequestTokens({ messages: fresh, tools }),
+        Math.floor(limit * CONTEXT_POLICY.freshWindowRatio),
+      ),
+    );
+    for (const group of recentToolGroups(messages)) {
+      if (group.every((message) => retained.has(message))) continue;
+      const candidate = new Set([...retained, ...group]);
+      const tail = messages.filter((message) => candidate.has(message));
+      if (
+        estimateRequestTokens({
+          messages: [...fresh.slice(0, 3), ...tail, ...transient],
+          tools,
+        }) > (retained.size ? tailLimit : limit)
+      )
+        break;
+      for (const message of group) retained.add(message);
+    }
+    fresh.splice(
+      3,
+      fresh.length - 3,
+      ...messages.filter((message) => retained.has(message)),
+      ...transient,
+    );
     // Fit metadata into the remaining window; it must never prevent a safe rollover.
     const baseHint = fresh[2].content;
     for (const maxChars of [8000, 4000, 1500]) {
       fresh[2].content = baseHint + this.sourceReads.hint(maxChars);
-      if (estimateRequestTokens({ messages: fresh, tools }) <= limit) break;
+      if (
+        estimateRequestTokens({ messages: fresh, tools }) <=
+        Math.max(
+          tailLimit,
+          estimateRequestTokens({
+            messages: fresh.map((m, i) =>
+              i === 2 ? { ...m, content: baseHint } : m,
+            ),
+            tools,
+          }),
+        )
+      )
+        break;
       fresh[2].content = baseHint;
     }
     if (estimateRequestTokens({ messages: fresh, tools }) > limit) {
@@ -248,9 +386,50 @@ export class WindowContext {
     messages.splice(0, messages.length, ...fresh);
     this.requested = false;
     this.warned = false;
-    this.calibration = 0;
+    this.measuredInput = undefined;
     this.requestEstimate = next.inputTokens!;
+    this.requestMessages = messages.slice();
+    this.requestTools = JSON.stringify(tools);
   }
+}
+
+/** Newest first; never split parallel calls, cross user turns or replay old warnings. */
+function recentToolGroups(messages: ModelMessage[]): ModelMessage[][] {
+  const groups: ModelMessage[][] = [];
+  let results: ModelMessage[] = [];
+  for (let index = messages.length - 1; index > 0; index--) {
+    const message = messages[index];
+    if (message.transient) continue;
+    if (message.role === "user") break;
+    if (message.role === "tool") results.unshift(message);
+    if (message.role !== "assistant") continue;
+    const calls = message.toolCalls ?? [];
+    const ids = new Set(calls.map((call) => call.id));
+    const complete =
+      ids.size > 0 &&
+      ids.size === results.length &&
+      results.every((result) => ids.has(result.toolCallId!)) &&
+      new Set(results.map((result) => result.toolCallId)).size === ids.size;
+    // Successful context controls are represented by the latest working notes;
+    // their large save arguments must not displace the evidence being worked on.
+    const savedContext =
+      calls.length > 0 &&
+      calls.every(
+        (call) =>
+          call.name === "new_context" ||
+          (call.name === "context_save" && call.args.target !== "memory"),
+      ) &&
+      results.every((result) => {
+        try {
+          return JSON.parse(result.content).ok === true;
+        } catch {
+          return false;
+        }
+      });
+    if (complete && !savedContext) groups.push([message, ...results]);
+    results = [];
+  }
+  return groups;
 }
 
 /** Keep provider replay and the tool results bound to it as one unit. */

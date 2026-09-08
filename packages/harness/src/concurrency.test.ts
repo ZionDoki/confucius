@@ -4,6 +4,24 @@ import { splitBatches } from "./ConcurrencyScheduler";
 import { MemoryToolProvider, jsonObjectSchema } from "./MemoryToolProvider";
 
 describe("ConcurrencyScheduler", () => {
+  it("keeps an arbitrarily large read batch within four slots without dropping calls", () => {
+    const calls = Array.from({ length: 11 }, (_, i) => ({
+      callId: String(i),
+      toolName: "get_item",
+      args: {},
+    }));
+    const batches = splitBatches(calls, () => ({
+      name: "get_item",
+      catalog: "library.read",
+      concurrency: "parallel_safe",
+      mutatesState: false,
+    }));
+    assert.deepEqual(
+      batches.map((b) => b.length),
+      [4, 4, 3],
+    );
+    assert.deepEqual(batches.flat(), calls);
+  });
   it("batches adjacent parallel_safe reads and isolates writes", () => {
     const batches = splitBatches(
       [
@@ -99,6 +117,9 @@ describe("ConcurrencyScheduler", () => {
     ]);
 
     assert.equal(overlap, 1);
-    assert.equal(results.every((result) => result.ok), true);
+    assert.equal(
+      results.every((result) => result.ok),
+      true,
+    );
   });
 });

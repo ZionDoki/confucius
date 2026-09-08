@@ -136,6 +136,8 @@ export interface PreparedOperation {
 }
 
 export interface ToolExecutionContext {
+  /** Host-only admission budget. Never accepted from model tool arguments. */
+  outputBudgetTokens?: number;
   annotationBatchId?: string;
   taskTitle?: string;
   taskCreatedAt?: number;

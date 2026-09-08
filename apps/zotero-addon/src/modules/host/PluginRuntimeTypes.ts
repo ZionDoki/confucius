@@ -16,6 +16,9 @@ export interface PluginRuntimeMcpConfig {
 
 export interface PluginRuntimeTurnInput {
   taskId: string;
+  /** Internal session identity allows a candidate to coexist with its predecessor. */
+  sessionKey?: string;
+  prepareOnly?: boolean;
   turnId: string;
   prompt: string;
   mode: SessionMode;
@@ -30,6 +33,8 @@ export interface PluginRuntimeTurnInput {
 export interface PluginRuntimeTurnHandle {
   externalSessionId: string;
   externalTurnId?: string;
+  /** Selection confirmed by the runtime after resolving model-specific aliases. */
+  runtimeModel?: RuntimeModelSelection;
 }
 
 export interface PluginRuntimeEventSink {
@@ -55,5 +60,9 @@ export interface PluginRuntimeAdapter {
   ): Promise<PluginRuntimeTurnHandle>;
   interrupt(taskId: string): Promise<void>;
   dispose(taskId: string): Promise<void>;
-  analyze?(prompt: string, cwd: string): Promise<string>;
+  analyze?(
+    prompt: string,
+    cwd: string,
+    selection?: RuntimeModelSelection,
+  ): Promise<string>;
 }

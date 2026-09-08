@@ -7,6 +7,7 @@ import type {
   ConfuciusEvent,
   ResearchTaskRecord,
   RuntimeStatus,
+  RuntimeModelSelection,
   SessionMode,
   PromptContextOptions,
 } from "@confucius/protocol";
@@ -52,6 +53,7 @@ export interface BackendTurnHandle {
   externalTurnId?: string;
   cwd?: string;
   superseded?: boolean;
+  runtimeModel?: ResearchTaskRecord["runtimeModel"];
 }
 
 export interface BackendCallbacks {
@@ -63,13 +65,23 @@ export interface BackendCallbacks {
 
 export interface AgentBackend {
   readonly kind: AgentBackendKind;
+  readonly observability?: {
+    sessionPreparation: boolean;
+    modelInput: "host" | "unknown";
+    internalUsage: "reported" | "unknown";
+  };
+  prepareSession?(
+    input: BackendTurnInput,
+    transactionId: string,
+  ): Promise<BackendTurnHandle>;
+  discardSession?(taskId: string, transactionId: string): Promise<void>;
   probe(): Promise<RuntimeStatus>;
   startTurn(
     input: BackendTurnInput,
     callbacks: BackendCallbacks,
   ): Promise<BackendTurnHandle>;
   interrupt(taskId: string): Promise<void>;
-  analyze(prompt: string): Promise<string>;
+  analyze(prompt: string, selection?: RuntimeModelSelection): Promise<string>;
   dispose(taskId: string): Promise<void>;
   resolveApproval?(resolution: ApprovalResolution): Promise<unknown>;
 }
@@ -115,6 +127,11 @@ export class NativeBackend implements AgentBackend {
 
 /** One provider-specific view over the shared external Runtime host. */
 export class ExternalBackend implements AgentBackend {
+  readonly observability = {
+    sessionPreparation: true,
+    modelInput: "unknown",
+    internalUsage: "unknown",
+  } as const;
   private readonly polls = new Map<string, AbortController>();
 
   constructor(
@@ -153,21 +170,27 @@ export class ExternalBackend implements AgentBackend {
     const cursor = before.events.at(-1)?.id;
     let handle: BackendTurnHandle;
     try {
-      handle = await this.runtime.rpc<BackendTurnHandle>("task/startTurn", {
-        backend: this.kind,
-        taskId: input.task.id,
-        turnId: input.turnId,
-        runId: input.task.run?.id,
-        generation: input.task.run?.generation,
-        prompt: input.prompt,
-        mode: input.mode,
-        capabilityProfile: input.capabilityProfile,
-        workingDirectory: input.workingDirectory,
-        externalSessionId: input.task.externalSessionId,
-        runtimeModel: input.task.runtimeModel,
-        workflowInstruction: input.workflowInstruction,
-        includeArtifactGuidance: input.includeArtifactGuidance,
-      });
+      handle = await this.runtime.rpc<BackendTurnHandle>(
+        input.task.contextSwitch?.phase === "committed"
+          ? "task/activateSession"
+          : "task/startTurn",
+        {
+          transactionId: input.task.contextSwitch?.id,
+          backend: this.kind,
+          taskId: input.task.id,
+          turnId: input.turnId,
+          runId: input.task.run?.id,
+          generation: input.task.run?.generation,
+          prompt: input.prompt,
+          mode: input.mode,
+          capabilityProfile: input.capabilityProfile,
+          workingDirectory: input.workingDirectory,
+          externalSessionId: input.task.externalSessionId,
+          runtimeModel: input.task.runtimeModel,
+          workflowInstruction: input.workflowInstruction,
+          includeArtifactGuidance: input.includeArtifactGuidance,
+        },
+      );
     } catch (error) {
       if (
         controller.signal.aborted ||
@@ -200,6 +223,32 @@ export class ExternalBackend implements AgentBackend {
     return handle;
   }
 
+  async prepareSession(
+    input: BackendTurnInput,
+    transactionId: string,
+  ): Promise<BackendTurnHandle> {
+    return this.runtime.rpc("task/prepareSession", {
+      backend: this.kind,
+      taskId: input.task.id,
+      turnId: input.turnId,
+      runId: input.task.run?.id,
+      generation: input.task.run?.generation,
+      transactionId,
+      mode: input.mode,
+      capabilityProfile: input.capabilityProfile,
+      workingDirectory: input.workingDirectory,
+      externalSessionId: input.task.contextSwitch?.nextExternalSessionId,
+      runtimeModel: input.task.runtimeModel,
+    });
+  }
+  async discardSession(taskId: string, transactionId: string): Promise<void> {
+    await this.runtime.rpc("task/discardSession", {
+      backend: this.kind,
+      taskId,
+      transactionId,
+    });
+  }
+
   async interrupt(taskId: string): Promise<void> {
     this.polls.get(taskId)?.abort();
     this.polls.delete(taskId);
@@ -209,10 +258,13 @@ export class ExternalBackend implements AgentBackend {
     });
   }
 
-  async analyze(prompt: string): Promise<string> {
+  async analyze(
+    prompt: string,
+    selection?: RuntimeModelSelection,
+  ): Promise<string> {
     const result = await this.runtime.rpc<{ text?: string }>(
       "runtime/analyze",
-      { backend: this.kind, prompt },
+      { backend: this.kind, prompt, runtimeModel: selection },
     );
     return result.text ?? "";
   }

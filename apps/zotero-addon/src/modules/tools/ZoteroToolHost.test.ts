@@ -1,7 +1,7 @@
 import { memoryJsonStorage, type JsonStorage } from "../host/RuntimeStorage";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ZoteroToolHost } from "./ZoteroToolHost";
+import { ZoteroToolHost, findPdf } from "./ZoteroToolHost";
 import { layoutQuoteVariants } from "./PdfQuote";
 import { spatialPageText } from "./PdfLayout";
 import {
@@ -59,7 +59,7 @@ describe("native passage annotation contract", () => {
     assert.doesNotMatch(impact.text, /Table 7/);
   });
 
-  it("omits unchanged repeated pages until a concrete reread reason is supplied", async () => {
+  it("returns full repeated pages when their source version is unknown and performs explicit verification", async () => {
     const installed = installHost({ pageTexts: ["Complete evidence."] });
     const args = { libraryID: 1, key: "ITEMKEY1", start: 1, end: 1 };
     const context = { taskId: "read-ledger", turnId: "same-turn" };
@@ -80,7 +80,8 @@ describe("native passage annotation contract", () => {
       };
     };
     assert.equal((await get()).pages[0].text.trim(), "Complete evidence.");
-    assert.equal((await get()).pages[0].omitted, true);
+    assert.equal((await get()).pages[0].text.trim(), "Complete evidence.");
+    assert.equal((await get()).pages[0].omitted, undefined);
     const reread = await get({
       rereadReason: "Verify the denominator before finalizing",
     });
@@ -115,6 +116,60 @@ describe("native passage annotation contract", () => {
       (annotations.data as { requestedLimit: number }).requestedLimit,
       100,
     );
+  });
+  it("reuses an unchanged physical source, really verifies, and rejects a stale reader", async () => {
+    const installed = installHost({
+      pageTexts: ["Complete evidence.", "Next page."],
+    });
+    const oldIO = Reflect.get(globalThis, "IOUtils");
+    const pdf = Zotero.Items.get(200);
+    assert.ok(pdf);
+    Reflect.set(pdf, "getFilePathAsync", async () => "/fixture/source.pdf");
+    let modified = 1;
+    Reflect.set(globalThis, "IOUtils", {
+      stat: async () => ({ size: 100, lastModified: modified }),
+    });
+    let reads = 0;
+    Reflect.set(
+      installed.host,
+      "physicalPageText",
+      async () => `physical read ${++reads}`,
+    );
+    const get = async (extra = {}, budget = 4000) => {
+      const r = await installed.execute(
+        "get_pages",
+        { libraryID: 1, key: "ITEMKEY1", start: 1, end: 1, ...extra },
+        undefined,
+        { taskId: "versioned", outputBudgetTokens: budget },
+      );
+      assert.ok(r.ok, JSON.stringify(r));
+      return r.data as {
+        pages: Array<{ text: string; reused?: boolean }>;
+        nextPage: number | null;
+      };
+    };
+    try {
+      assert.equal((await get()).pages[0].text, "physical read 1");
+      assert.equal((await get()).pages[0].reused, true);
+      assert.equal(reads, 1);
+      assert.equal(
+        (await get({ rereadReason: "Verify after writing" })).pages[0].text,
+        "physical read 2",
+      );
+      assert.equal((await get({ end: 2 }, 128)).nextPage, 2);
+      modified++;
+      const changed = await installed.execute(
+        "get_pages",
+        { libraryID: 1, key: "ITEMKEY1", start: 1, end: 1 },
+        undefined,
+        { taskId: "versioned" },
+      );
+      assert.equal(changed.ok, false);
+      assert.match(!changed.ok ? changed.message : "", /file changed/);
+      assert.equal(reads, 2);
+    } finally {
+      Reflect.set(globalThis, "IOUtils", oldIO);
+    }
   });
   it("keeps page-boundary fragments readable without presenting them as complete selectable evidence", async () => {
     const passages = await pdfPassages(
@@ -1073,6 +1128,7 @@ function installHost(
     nativeMatchPages?: number[];
     failMatchPositions?: boolean;
     nativeChars?: PdfPageChar[][];
+    multiplePdfs?: boolean;
   } = {},
 ): InstalledHost {
   const libraryID = options.libraryID ?? 1;
@@ -1094,7 +1150,7 @@ function installHost(
     key: "ITEMKEY1",
     isAttachment: () => false,
     isNote: () => false,
-    getAttachments: () => [200],
+    getAttachments: () => (options.multiplePdfs ? [200, 201] : [200]),
   };
   const attachment = {
     id: 200,
@@ -1105,7 +1161,17 @@ function installHost(
     isFileAttachment: () => true,
     isNote: () => false,
     attachmentContentType: "application/pdf",
+    getDisplayTitle: () => "Main paper",
+    attachmentFilename: "paper.pdf",
     getAnnotations: () => [...native.values()],
+  };
+  const supplement = {
+    ...attachment,
+    id: 201,
+    key: "PDFKEY02",
+    getDisplayTitle: () => "Supplementary information",
+    attachmentFilename: "supplement.pdf",
+    getAnnotations: () => [],
   };
   const viewport = {
     width: 1000,
@@ -1238,9 +1304,17 @@ function installHost(
             ? parent
             : key === attachment.key
               ? attachment
-              : (native.get(key) ?? null),
+              : options.multiplePdfs && key === supplement.key
+                ? supplement
+                : (native.get(key) ?? null),
       get: (id: number) =>
-        id === attachment.id ? attachment : id === parent.id ? parent : null,
+        id === attachment.id
+          ? attachment
+          : options.multiplePdfs && id === supplement.id
+            ? supplement
+            : id === parent.id
+              ? parent
+              : null,
     },
     Reader: {
       _readers: [reader],
@@ -1314,6 +1388,111 @@ function installHost(
     navigated,
   };
 }
+
+describe("multiple PDF task sources", () => {
+  it("captures every candidate's baseline without reading or choosing a PDF", async () => {
+    const { host, saved } = installHost({ multiplePdfs: true });
+    await host.freezeTaskPdf({ taskId: "multiple" }, 1, "ITEMKEY1");
+    for (const key of ["PDFKEY01", "PDFKEY02"])
+      assert.equal(
+        Object.keys((await host.ownership.read(`1_${key}`)).batches).length,
+        1,
+      );
+    assert.equal(saved.length, 0);
+  });
+
+  it("preserves an explicit attachment and rejects an unrelated one", async () => {
+    const { host } = installHost({ multiplePdfs: true });
+    await host.freezeTaskPdf({ taskId: "selected" }, 1, "ITEMKEY1", "PDFKEY02");
+    assert.equal(
+      Object.keys((await host.ownership.read("1_PDFKEY01")).batches).length,
+      0,
+    );
+    assert.equal(
+      Object.keys((await host.ownership.read("1_PDFKEY02")).batches).length,
+      1,
+    );
+    const parent = Zotero.Items.getByLibraryAndKey(1, "ITEMKEY1")!;
+    assert.ok(parent);
+    assert.equal((await findPdf(parent, "PDFKEY02"))?.key, "PDFKEY02");
+    await assert.rejects(findPdf(parent, "FOREIGN"), /not found/);
+  });
+
+  it("returns named choices as a recoverable tool result and reuses the task attachment", async () => {
+    const { host, execute } = installHost({ multiplePdfs: true });
+    const args = { libraryID: 1, key: "ITEMKEY1", start: 1, end: 1 };
+    const result = await execute("get_pages", { ...args });
+    assert.ok(!result.ok);
+    assert.equal(result.code, "invalid_args");
+    assert.equal(result.effect, "none");
+    assert.doesNotMatch(result.message, /PDFKEY|specify attachmentKey/);
+    const details = result.details as {
+      reason: string;
+      attachments: Array<{
+        attachmentKey: string;
+        title: string;
+        filename: string;
+      }>;
+      nextAction: string;
+    };
+    assert.equal(details.reason, "multiple_pdf_attachments");
+    assert.deepEqual(
+      details.attachments.map(({ attachmentKey, title, filename }) => ({
+        attachmentKey,
+        title,
+        filename,
+      })),
+      [
+        {
+          attachmentKey: "PDFKEY01",
+          title: "Main paper",
+          filename: "paper.pdf",
+        },
+        {
+          attachmentKey: "PDFKEY02",
+          title: "Supplementary information",
+          filename: "supplement.pdf",
+        },
+      ],
+    );
+    assert.match(details.nextAction, /attachmentKey/);
+    const selected: Record<string, unknown> = { ...args };
+    assert.equal(
+      await host.prepare("get_pages", selected, {
+        source: { libraryID: 1, key: "ITEMKEY1", attachmentKey: "PDFKEY02" },
+      }),
+      null,
+    );
+    assert.equal(selected.attachmentKey, "PDFKEY02");
+    const foreign = await host.prepare(
+      "get_pages",
+      { ...args },
+      {
+        source: { libraryID: 2, key: "ITEMKEY1", attachmentKey: "PDFKEY02" },
+      },
+    );
+    assert.equal(foreign?.code, "invalid_args");
+  });
+
+  it("lists PDFs through metadata without first requiring a PDF choice", async () => {
+    const { execute } = installHost({ multiplePdfs: true });
+    for (const name of [
+      "get_item",
+      "get_item_metadata",
+      "get_paper_metadata",
+    ]) {
+      const result = await execute(name, { libraryID: 1, key: "ITEMKEY1" });
+      assert.ok(result.ok, JSON.stringify(result));
+      const data = result.data as {
+        pdfAttachments: Array<{ filename: string }>;
+      };
+      assert.deepEqual(
+        data.pdfAttachments.map((pdf) => pdf.filename),
+        ["paper.pdf", "supplement.pdf"],
+      );
+    }
+  });
+});
 
 describe("ZoteroToolHost PDF annotation commit", () => {
   it("writes highlight, underline, and image notes then refreshes once", async () => {

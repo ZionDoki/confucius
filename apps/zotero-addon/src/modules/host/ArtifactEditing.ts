@@ -1,3 +1,4 @@
+import { contextTextSlice } from "@confucius/protocol";
 import type {
   ArtifactBody,
   ArtifactRecord,
@@ -182,6 +183,7 @@ export function patchArtifactInput(
 export function readArtifactPart(
   artifact: ArtifactRecord,
   args: Record<string, unknown>,
+  outputBudgetTokens?: number,
 ) {
   const part = args.part === "citations" ? "citations" : "body";
   const text =
@@ -196,6 +198,13 @@ export function readArtifactPart(
       `offset exceeds the current ${part} length (${text.length}); read from offset=0.`,
     );
   const end = Math.min(text.length, offset + Number(args.limit ?? 8000));
+  const safeEnd = /[\uD800-\uDBFF]/.test(text[end - 1] ?? "") ? end - 1 : end;
+  const slice = contextTextSlice(
+    text.slice(0, safeEnd),
+    outputBudgetTokens ?? Infinity,
+    offset,
+  );
+  const next = slice.nextOffset ?? safeEnd;
   return {
     artifact: {
       id: artifact.id,
@@ -209,10 +218,10 @@ export function readArtifactPart(
       part === "body" && artifact.body.type === "markdown"
         ? "markdown"
         : "json",
-    content: text.slice(offset, end),
+    content: slice.content,
     offset,
     totalChars: text.length,
-    nextOffset: end < text.length ? end : null,
+    nextOffset: next < text.length ? next : null,
     citationCount: artifact.citations.length,
   };
 }

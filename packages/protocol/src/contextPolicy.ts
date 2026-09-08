@@ -12,6 +12,14 @@ export const CONTEXT_POLICY = Object.freeze({
   maintenanceInputTokens: 8_000,
   maintenanceOutputTokens: 1_000,
   maintenanceAttempts: 2,
+  handoffAttempts: 1,
+  handoffTokens: 2_000,
+  archiveDays: 90,
+  archiveBytes: 500 * 1024 * 1024,
+  parallelReads: 4,
+  freshWindowRatio: 0.6,
+  indexCacheWindows: 16,
+  indexCacheBytes: 16 * 1024 * 1024,
 });
 
 /** Conservative mixed-language estimate; actual provider usage remains separate. */
@@ -52,4 +60,28 @@ export function contextTextSlice(text: string, maxTokens: number, offset = 0) {
     tokens: Math.ceil(weight),
     nextOffset: end < text.length ? end : null,
   };
+}
+
+/** One admission calculation for direct requests and host-visible CLI input. */
+export function contextInputLimit(capacity: number, output = 4096): number {
+  return Math.max(
+    0,
+    capacity - output - Math.max(1000, Math.ceil(capacity * 0.1)),
+  );
+}
+export function contextReadBudget(
+  capacity: number,
+  used: number,
+  parallel = 1,
+  output = 4096,
+): number {
+  const remaining =
+    contextInputLimit(capacity, output) - Math.max(0, used) - 256;
+  return Math.max(
+    128,
+    Math.min(
+      CONTEXT_POLICY.readTokens,
+      Math.floor(remaining / Math.max(1, parallel)),
+    ),
+  );
 }

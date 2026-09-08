@@ -22,7 +22,7 @@ export interface ModelRequestProgress {
   delayMs?: number;
   message?: string;
   partial?: { text?: string; reasoning?: string };
-  purpose?: "title" | "memory";
+  purpose?: "title" | "memory" | "context_handoff";
   scope?: "executor" | "provider";
   parentRequestId?: string;
   maxAttempts?: number;
@@ -79,7 +79,14 @@ export interface PlanStep {
 
 type EventPayloads = {
   context_progress: {
-    stage: "searching" | "reading" | "distilling" | "clearing" | "switching";
+    stage:
+      | "searching"
+      | "reading"
+      | "distilling"
+      | "clearing"
+      | "switching"
+      | "preparing"
+      | "archiving";
     status: "started" | "completed" | "failed";
     message?: string;
   };

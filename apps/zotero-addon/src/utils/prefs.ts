@@ -8,6 +8,13 @@ export function getPref<K extends keyof PluginPrefsMap>(key: K) {
   return Zotero.Prefs.get(`${PREFS_PREFIX}.${key}`, true) as PluginPrefsMap[K];
 }
 
+export function hasUserPref<K extends keyof PluginPrefsMap>(key: K): boolean {
+  return (
+    typeof Services !== "undefined" &&
+    Services.prefs.prefHasUserValue(`${PREFS_PREFIX}.${key}`)
+  );
+}
+
 export function setPref<K extends keyof PluginPrefsMap>(
   key: K,
   value: PluginPrefsMap[K],

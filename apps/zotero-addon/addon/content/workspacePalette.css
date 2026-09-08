@@ -27,6 +27,9 @@
   --confucius-line-strong: #c9b697;
   --confucius-accent: #805f38;
   --confucius-accent-text: #805c37;
+  --confucius-loading-deep: #5a4128;
+  --confucius-loading-bright: #d2ad78;
+  --confucius-loading-shine: #794209;
   --confucius-danger: #a04432;
   --confucius-danger-surface: #f7e9e2;
   --confucius-success: #476d4f;
@@ -75,6 +78,9 @@
     --confucius-line-strong: #75644b;
     --confucius-accent: #d4b17e;
     --confucius-accent-text: #dec196;
+    --confucius-loading-deep: #8f6b43;
+    --confucius-loading-bright: #fff0ca;
+    --confucius-loading-shine: #fff4d6;
     --confucius-danger: #efaa99;
     --confucius-danger-surface: #432d27;
     --confucius-success: #a8c8a5;
@@ -124,6 +130,9 @@
   --confucius-line-strong: #75644b;
   --confucius-accent: #d4b17e;
   --confucius-accent-text: #dec196;
+  --confucius-loading-deep: #8f6b43;
+  --confucius-loading-bright: #fff0ca;
+  --confucius-loading-shine: #fff4d6;
   --confucius-danger: #efaa99;
   --confucius-danger-surface: #432d27;
   --confucius-success: #a8c8a5;
@@ -170,6 +179,9 @@
     --confucius-line-strong: CanvasText;
     --confucius-accent: LinkText;
     --confucius-accent-text: LinkText;
+    --confucius-loading-deep: CanvasText;
+    --confucius-loading-bright: CanvasText;
+    --confucius-loading-shine: CanvasText;
     --confucius-danger: CanvasText;
     --confucius-danger-surface: Canvas;
     --confucius-success: CanvasText;

@@ -5,7 +5,71 @@ import {
   contextActivity,
   retryActivity,
   turnAwaitingReply,
+  waitingTextParts,
+  sendErrorInTimeline,
 } from "./workspaceActivity";
+
+it("shows a failed submission once after its durable error arrives, without hiding older or unrelated errors", () => {
+  const failure = (id: string, message: string): ConfuciusEvent => ({
+    id,
+    sessionId: "s",
+    turnId: id,
+    ts: 1000,
+    type: "turn_failed",
+    payload: { message },
+  });
+  const message =
+    "Multiple PDF attachments are available. Choose the file to use.";
+  const events = [failure("old", message)];
+  assert.equal(sendErrorInTimeline(message, events, "old"), false);
+  assert.equal(sendErrorInTimeline(message, events, undefined), false);
+  events.push(failure("current", message));
+  assert.equal(sendErrorInTimeline(message, events, "old"), true);
+  assert.equal(
+    sendErrorInTimeline("Network unavailable", events, "old"),
+    false,
+  );
+  assert.equal(sendErrorInTimeline(message, events, "missing-cursor"), false);
+  assert.equal(
+    sendErrorInTimeline(message, [failure("first", message)], null),
+    true,
+  );
+  assert.equal(sendErrorInTimeline(message, [], null), false);
+  assert.equal(
+    sendErrorInTimeline(
+      message,
+      [
+        {
+          id: "reply",
+          sessionId: "s",
+          turnId: "new",
+          ts: 1000,
+          type: "text_delta",
+          payload: { text: message },
+        },
+      ],
+      null,
+    ),
+    false,
+  );
+});
+
+it("separates the elapsed clock without losing workflow, tool, or retry details", () => {
+  for (const [message, elapsed] of [
+    ["正在核对证据", "00:18"],
+    ["精读论文 · 正在调用工具 · get_pages", "02:07"],
+    ["连接中断 · 正在重试 · 2/5 · 3 秒后", "00:04"],
+    ["Reading context · Retrying request · 2/5 · in 3s", "100:09"],
+    ["检查片段 00:12\n继续核对 · 方法与实验", "01:20"],
+  ]) {
+    assert.deepEqual(waitingTextParts(`${message} · ${elapsed}`), {
+      message,
+      elapsed,
+    });
+  }
+  for (const message of ["等待模型响应", "读取片段 00:12", "Working · 00:60"])
+    assert.deepEqual(waitingTextParts(message), { message, elapsed: "" });
+});
 
 it("shows context search, post-reply distillation retries and cleanup in loading", () => {
   const events: ConfuciusEvent[] = [];

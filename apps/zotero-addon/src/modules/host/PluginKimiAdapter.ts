@@ -1,6 +1,10 @@
 import { runtimeFailure } from "@confucius/protocol";
 import { runtimePath } from "./RuntimeStorage";
-import { kimiModels, selectKimiModel } from "./RuntimeModels";
+import {
+  kimiModels,
+  selectKimiModel,
+  lowestRuntimeSelection,
+} from "./RuntimeModels";
 import {
   CONFUCIUS_VERSION,
   runtimeOutcome,
@@ -9,6 +13,7 @@ import {
   type ApprovalResolution,
   type PlanStep,
   type RuntimeStatus,
+  type RuntimeModelSelection,
 } from "@confucius/protocol";
 import {
   RuntimeJsonLineProcess,
@@ -103,9 +108,16 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
       opened.sessionId = String(created.sessionId ?? "");
       if (!opened.sessionId)
         throw new Error("Kimi did not return a session id");
-      const modelState = modelId
+      const selectedId =
+        modelId ??
+        (Array.isArray(created.configOptions)
+          ? kimiModels(created).find((model) => model.isDefault)?.id
+          : undefined);
+      const modelState = selectedId
         ? await withTimeout(
-            selectKimiModel(opened.rpc, opened.sessionId, created, { modelId }),
+            selectKimiModel(opened.rpc, opened.sessionId, created, {
+              modelId: selectedId,
+            }),
             8_000,
             "Kimi model selection timed out",
           )
@@ -149,18 +161,19 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
     sink: PluginRuntimeEventSink,
     approvals: PluginApprovalBrokerLike,
   ): Promise<PluginRuntimeTurnHandle> {
-    let session = this.sessions.get(input.taskId);
+    const sessionKey = input.sessionKey ?? input.taskId;
+    let session = this.sessions.get(sessionKey);
     let externalSessionId = input.externalSessionId;
     let usage = session?.usage;
     if (session?.mcpToken && session.mcpToken !== input.mcp.token) {
       externalSessionId = session.sessionId;
-      await this.dispose(input.taskId);
+      await this.dispose(sessionKey);
       session = undefined;
     }
     // ACP updates identify a session, not a turn. Drain cancellation before
     // assigning the next host turn so late output cannot be relabeled.
     if (session?.turnId && session.promptCompletion) {
-      await this.interrupt(input.taskId);
+      await this.interrupt(sessionKey);
       try {
         await withTimeout(
           session.promptCompletion,
@@ -168,7 +181,7 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
           "The previous Kimi request did not stop",
         );
       } catch {
-        await this.dispose(input.taskId);
+        await this.dispose(sessionKey);
         session = undefined;
         externalSessionId = undefined;
         usage = undefined;
@@ -184,12 +197,13 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
         );
       }
       externalSessionId ??= session.sessionId;
-      await this.dispose(input.taskId);
+      await this.dispose(sessionKey);
       session = undefined;
     }
     if (!session) {
       const opened = await this.openConnection({
         taskId: input.taskId,
+        sessionKey,
         profile: input.capabilityProfile,
         sink,
         approvals,
@@ -251,7 +265,7 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
       opened.sessionId = sessionId;
       opened.cwd = input.cwd;
       session = opened;
-      this.sessions.set(input.taskId, session);
+      this.sessions.set(sessionKey, session);
     } else {
       session.profile = input.capabilityProfile;
       session.sink = sink;
@@ -265,6 +279,9 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
           session.sessionId,
           session.modelState,
           input.runtimeModel,
+          (state) => {
+            session.modelState = state;
+          },
         ),
         8_000,
         "Kimi model selection timed out",
@@ -272,6 +289,18 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
     }
     session.usage ??= usage ?? new RuntimeUsageCounter(!externalSessionId);
     session.mcpToken = input.mcp.token;
+    if (input.prepareOnly)
+      return {
+        externalSessionId: session.sessionId,
+        runtimeModel: input.runtimeModel
+          ? {
+              modelId: input.runtimeModel.modelId,
+              reasoningEffort: kimiModels(session.modelState).find(
+                (m) => m.id === input.runtimeModel!.modelId,
+              )?.defaultReasoningEffort,
+            }
+          : undefined,
+      };
     session.turnId = input.turnId;
     const active = session;
     active.promptCompletion = active.rpc
@@ -349,6 +378,16 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
     return {
       externalSessionId: active.sessionId,
       externalTurnId: input.turnId,
+      ...(input.runtimeModel
+        ? {
+            runtimeModel: {
+              modelId: input.runtimeModel.modelId,
+              reasoningEffort: kimiModels(active.modelState).find(
+                (model) => model.id === input.runtimeModel!.modelId,
+              )?.defaultReasoningEffort,
+            },
+          }
+        : {}),
     };
   }
 
@@ -382,7 +421,12 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
     await Promise.all([...this.sessions.keys()].map((id) => this.dispose(id)));
   }
 
-  async analyze(prompt: string, cwd: string): Promise<string> {
+  async analyze(
+    prompt: string,
+    cwd: string,
+    selection?: RuntimeModelSelection,
+  ): Promise<string> {
+    const deadline = Date.now() + 60_000;
     let text = "";
     const opened = await this.openConnection({
       taskId: "analysis",
@@ -395,26 +439,46 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
       approvals: denyApprovals,
     });
     try {
-      const created = await opened.rpc.request<Record<string, unknown>>(
-        "session/new",
-        sessionSetup(cwd),
-      );
-      opened.sessionId = String(created.sessionId ?? "");
-      if (!opened.sessionId)
-        throw new Error("Kimi did not return a session id");
-      await opened.rpc.request("session/set_mode", {
-        sessionId: opened.sessionId,
-        modeId: "plan",
-      });
-      await withTimeout(
-        opened.rpc.request("session/prompt", {
-          sessionId: opened.sessionId,
-          prompt: [{ type: "text", text: prompt }],
-        }),
-        60_000,
+      return await withTimeout(
+        (async () => {
+          const created = await opened.rpc.request<Record<string, unknown>>(
+            "session/new",
+            sessionSetup(cwd),
+          );
+          opened.sessionId = String(created.sessionId ?? "");
+          if (!opened.sessionId)
+            throw new Error("Kimi did not return a session id");
+          await opened.rpc.request("session/set_mode", {
+            sessionId: opened.sessionId,
+            modeId: "plan",
+          });
+          let modelState: unknown = created;
+          if (selection)
+            modelState = await selectKimiModel(
+              opened.rpc,
+              opened.sessionId,
+              modelState,
+              { modelId: selection.modelId },
+            );
+          const selected =
+            kimiModels(modelState).find((m) => m.id === selection?.modelId) ??
+            kimiModels(modelState).find((m) => m.isDefault);
+          if (selected)
+            await selectKimiModel(
+              opened.rpc,
+              opened.sessionId,
+              modelState,
+              lowestRuntimeSelection(selected),
+            );
+          await opened.rpc.request("session/prompt", {
+            sessionId: opened.sessionId,
+            prompt: [{ type: "text", text: prompt }],
+          });
+          return text;
+        })(),
+        Math.max(1, deadline - Date.now()),
         "Kimi analysis timed out",
       );
-      return text;
     } finally {
       await opened.rpc.closeAndWait();
     }
@@ -422,6 +486,7 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
 
   private async openConnection(input: {
     taskId: string;
+    sessionKey?: string;
     profile: PluginRuntimeTurnInput["capabilityProfile"];
     sink: PluginRuntimeEventSink;
     approvals: PluginApprovalBrokerLike;
@@ -445,8 +510,9 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
     rpc.onNotification((message) => this.onNotification(holder, message));
     rpc.onRequest((message) => void this.onRequest(holder, message));
     rpc.onFailure((error) => {
-      if (this.sessions.get(input.taskId) !== holder) return;
-      this.sessions.delete(input.taskId);
+      if (this.sessions.get(input.sessionKey ?? input.taskId) !== holder)
+        return;
+      this.sessions.delete(input.sessionKey ?? input.taskId);
       const turnId = holder.turnId;
       holder.turnId = undefined;
       if (!turnId) return;

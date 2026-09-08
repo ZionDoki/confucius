@@ -151,3 +151,136 @@ describe("in-plugin Runtime support", () => {
     assert.equal((await rejected).verdict, "deny");
   });
 });
+
+describe("recoverable runtime session handoff", () => {
+  for (const backend of ["codex", "kimi"] as const)
+    it(`${backend} prepares without inference or replacing the old lease, then activates and releases it`, async () => {
+      const previous = Reflect.get(globalThis, "Zotero");
+      Reflect.set(globalThis, "Zotero", {
+        Prefs: { get: () => undefined },
+        Server: { port: 55831 },
+      });
+      const host = new PluginRuntimeHost();
+      const internals = host as unknown as {
+        adapters: Map<string, unknown>;
+        resolveCwd(): Promise<string>;
+      };
+      internals.resolveCwd = async () => "/tmp";
+      const calls: PluginRuntimeTurnInput[] = [],
+        disposed: string[] = [];
+      internals.adapters.set(backend, {
+        startTurn: async (input: PluginRuntimeTurnInput) => {
+          calls.push(input);
+          return {
+            externalSessionId: input.sessionKey ? "candidate" : "old",
+            externalTurnId: input.prepareOnly ? undefined : "inference",
+          };
+        },
+        dispose: async (id: string) => {
+          disposed.push(id);
+        },
+        interrupt: async () => {},
+      });
+      const params = {
+        backend,
+        taskId: "task",
+        runId: "run",
+        turnId: "turn",
+        generation: 1,
+      };
+      try {
+        await host.rpc("task/startTurn", params);
+        const old = host.resolveCapability(calls[0].mcp.token)!;
+        const prepared = await host.rpc<{ externalSessionId: string }>(
+          "task/prepareSession",
+          { ...params, generation: 2, transactionId: "switch" },
+        );
+        assert.equal(prepared.externalSessionId, "candidate");
+        assert.equal(calls[1].prepareOnly, true);
+        assert.equal(host.isCurrentLease(old), true);
+        assert.equal(
+          host.isCurrentLease(host.resolveCapability(calls[1].mcp.token)!),
+          false,
+        );
+        assert.deepEqual(disposed, []);
+        await host.rpc("task/activateSession", {
+          ...params,
+          generation: 2,
+          transactionId: "switch",
+          externalSessionId: "candidate",
+          prompt: "continue",
+        });
+        assert.equal(
+          calls.length,
+          3,
+          "prepared session is reused without another preparation",
+        );
+        assert.equal(calls[2].prepareOnly, undefined);
+        assert.equal(calls[2].sessionKey, calls[1].sessionKey);
+        assert.equal(host.isCurrentLease(old), false);
+        assert.deepEqual(disposed, ["task"]);
+      } finally {
+        await host.shutdown();
+        Reflect.set(globalThis, "Zotero", previous);
+      }
+    });
+
+  it("preparation failure leaves the old lease current, while restart activation resumes the persisted candidate identity", async () => {
+    const previous = Reflect.get(globalThis, "Zotero");
+    Reflect.set(globalThis, "Zotero", {
+      Prefs: { get: () => undefined },
+      Server: { port: 55831 },
+    });
+    const host = new PluginRuntimeHost();
+    const internals = host as unknown as {
+      adapters: Map<string, unknown>;
+      resolveCwd(): Promise<string>;
+    };
+    internals.resolveCwd = async () => "/tmp";
+    const inputs: PluginRuntimeTurnInput[] = [];
+    let fail = false;
+    internals.adapters.set("codex", {
+      startTurn: async (input: PluginRuntimeTurnInput) => {
+        inputs.push(input);
+        if (fail) throw new Error("startup offline");
+        return { externalSessionId: input.externalSessionId ?? "old" };
+      },
+      dispose: async () => {},
+      interrupt: async () => {},
+    });
+    const params = {
+      backend: "codex",
+      taskId: "task",
+      runId: "run",
+      turnId: "turn",
+      generation: 1,
+    };
+    try {
+      await host.rpc("task/startTurn", params);
+      const old = host.resolveCapability(inputs[0].mcp.token)!;
+      fail = true;
+      await assert.rejects(
+        host.rpc("task/prepareSession", {
+          ...params,
+          transactionId: "failed",
+          generation: 2,
+        }),
+        /startup offline/,
+      );
+      assert.equal(host.isCurrentLease(old), true);
+      fail = false;
+      await host.rpc("task/activateSession", {
+        ...params,
+        transactionId: "restored",
+        generation: 3,
+        externalSessionId: "persisted-candidate",
+      });
+      assert.equal(inputs.at(-2)?.prepareOnly, true);
+      assert.equal(inputs.at(-2)?.externalSessionId, "persisted-candidate");
+      assert.equal(inputs.at(-1)?.externalSessionId, "persisted-candidate");
+    } finally {
+      await host.shutdown();
+      Reflect.set(globalThis, "Zotero", previous);
+    }
+  });
+});
