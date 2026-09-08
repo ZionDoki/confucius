@@ -37,6 +37,9 @@ export interface RuntimeTokenUsage {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  cachedInputTokens?: number;
+  cacheWriteInputTokens?: number;
+  reasoningOutputTokens?: number;
 }
 
 /** Deduplicate provider cumulative counts without charging restored history. */
@@ -59,6 +62,14 @@ export class RuntimeUsageCounter {
       outputTokens: usage.outputTokens,
       totalTokens: usage.totalTokens,
     };
+    const optional = [
+      "cachedInputTokens",
+      "cacheWriteInputTokens",
+      "reasoningOutputTokens",
+    ] as const;
+    for (const key of optional)
+      if (Number.isSafeInteger(usage[key]) && usage[key]! >= 0)
+        this.previous[key] = usage[key];
     if (!previous && !this.freshSession) return undefined;
     if (
       previous &&
@@ -67,12 +78,24 @@ export class RuntimeUsageCounter {
         usage.totalTokens < previous.totalTokens)
     )
       return undefined;
-    const delta = {
+    const delta: RuntimeTokenUsage = {
       inputTokens: usage.inputTokens - (previous?.inputTokens ?? 0),
       outputTokens: usage.outputTokens - (previous?.outputTokens ?? 0),
       totalTokens: usage.totalTokens - (previous?.totalTokens ?? 0),
     };
-    return delta.inputTokens || delta.outputTokens || delta.totalTokens
+    for (const key of optional) {
+      const next = this.previous[key];
+      const before = previous?.[key];
+      if (
+        next !== undefined &&
+        (!previous || before !== undefined) &&
+        next >= (before ?? 0)
+      )
+        delta[key] = next - (before ?? 0);
+    }
+    return Object.values(delta).some(
+      (value) => value !== undefined && value > 0,
+    )
       ? delta
       : undefined;
   }

@@ -1502,6 +1502,10 @@ export class ZoteroToolHost {
   private readonly findingViews = new WeakMap<PdfPrimaryView, string>();
   private nextFindingView = 0;
   private readonly pageTextCache = new Map<string, string>();
+  private readonly pageReads = new Map<
+    string,
+    { at: number; operationId?: string }
+  >();
   private readonly annotationLocks = new ResourceLocks();
   readonly ownership: AnnotationOwnership;
   private operations?: OperationRepository;
@@ -3708,8 +3712,27 @@ export class ZoteroToolHost {
           `Use physical pages 1-${count}, at most 50 pages per call`,
         );
       const pages = [];
+      let returnedCharacters = 0;
+      let nextPage: number | null = null;
+      const rereadReason = String(args.rereadReason ?? "").trim();
       const fingerprint = await pdfFingerprint(pdf);
       for (let page = start; page <= end; page++) {
+        const readKey =
+          context.taskId && context.turnId
+            ? `${context.taskId}:${context.turnId}:${fingerprint}:${page}`
+            : undefined;
+        const previous = readKey ? this.pageReads.get(readKey) : undefined;
+        if (previous && !rereadReason) {
+          pages.push({
+            page,
+            text: "",
+            omitted: true,
+            previouslyRead: previous,
+            message:
+              "This page was already returned in this turn. Reuse that evidence; if it is unavailable, truncated by the engine, or needs verification, call get_pages for the needed pages with a specific rereadReason.",
+          });
+          continue;
+        }
         const { text, anchored, truncated } = await progress.run(
           `extracting_page_${page}`,
           10_000,
@@ -3733,8 +3756,26 @@ export class ZoteroToolHost {
             };
           },
         );
+        if (returnedCharacters && returnedCharacters + text.length > 24_000) {
+          nextPage = page;
+          break;
+        }
+        returnedCharacters += Math.min(text.length, 50_000);
+        const clipped = truncated || text.length > 50_000;
+        const readAt = Date.now();
+        if (readKey && !clipped) {
+          this.pageReads.delete(readKey);
+          this.pageReads.set(readKey, {
+            at: readAt,
+            operationId: context.operationId,
+          });
+          if (this.pageReads.size > 2000)
+            this.pageReads.delete(this.pageReads.keys().next().value!);
+        }
         pages.push({
           page,
+          readAt,
+          ...(previous ? { previouslyRead: previous, rereadReason } : {}),
           zoteroUri: buildOpenPdfUri(pdf.key, {
             page,
             groupID: groupIDForLibrary(pdf.libraryID),
@@ -3755,6 +3796,10 @@ export class ZoteroToolHost {
         attachmentKey: pdf.key,
         pageCount: count,
         pageSource: "pdf_physical",
+        nextPage,
+        requestedRange: { start, end },
+        textCoverage:
+          "Host text only; downstream engine truncation is not observable. Omitted pages are explicitly labelled.",
         pages,
       });
     } finally {
@@ -3937,18 +3982,18 @@ export class ZoteroToolHost {
             }),
         );
       const offset = Number(args.offset ?? 0);
-      const limit = Number(args.limit ?? 25);
+      const requestedLimit = Number(args.limit ?? 25);
+      const limit = Math.min(requestedLimit, 50);
       if (
         !Number.isInteger(offset) ||
         offset < 0 ||
-        !Number.isInteger(limit) ||
-        limit < 1 ||
-        limit > 50
+        !Number.isSafeInteger(requestedLimit) ||
+        requestedLimit < 1
       )
         return fail(
           "get_annotations",
           "invalid_args",
-          "Use offset >= 0 and limit between 1 and 50",
+          "Use offset >= 0 and a positive integer limit; each page returns at most 50 annotations",
         );
       const data = {
         libraryID: pdf.libraryID,
@@ -3957,6 +4002,8 @@ export class ZoteroToolHost {
         annotationKey: annotations[0]?.key,
         annotations: annotations.slice(offset, offset + limit),
         totalAnnotations: annotations.length,
+        requestedLimit,
+        pageSize: limit,
         nextOffset: offset + limit < annotations.length ? offset + limit : null,
       };
       try {

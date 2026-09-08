@@ -1,4 +1,3 @@
-import { KNOWLEDGE_BASE_TAG, KNOWLEDGE_ENTRY_TAG } from "./knowledge";
 import type { AppliedChange, MemoryEngine } from "./engine";
 import type { ConversationLogEngine, LogSearchHit } from "./logs";
 
@@ -11,8 +10,6 @@ export const PINNED_TAG = "confucius:pinned";
 export const LOG_PROMOTE_HITS = 3;
 /** Distinct memory retrievals before a memory is pinned into the system prompt. */
 export const MEMORY_PIN_HITS = 8;
-const MAX_PROMOTIONS_PER_CALL = 2;
-const MIN_EXCERPT_CHARS = 48;
 
 export interface PromotionOptions {
   logPromoteHits?: number;
@@ -20,105 +17,21 @@ export interface PromotionOptions {
   propose?: (op: import("./types").MemoryOp, sourceId: string) => Promise<void>;
 }
 
-/**
- * Rehearsal-based promotion:
- *
- * - Logs (episodic) stay on disk forever. Repeated retrieval of the same
- *   excerpt proposes it as a durable memory, pending individual approval.
- * - Memories that keep being retrieved are pinned so they always ride in
- *   the system prompt, instead of competing with one-off search hits.
- *
- * The policy is deterministic and model-free: frequency is the signal,
- * Jaccard near-duplicate checks prevent flooding the store.
- */
+/** @deprecated Search frequency no longer creates or pins memories. Kept for old integrations. */
 export class MemoryPromotion {
-  private readonly logPromoteHits: number;
-  private readonly memoryPinHits: number;
-
   constructor(
-    private readonly memory: MemoryEngine,
-    private readonly logs: ConversationLogEngine,
-    private readonly options: PromotionOptions = {},
-  ) {
-    this.logPromoteHits = options.logPromoteHits ?? LOG_PROMOTE_HITS;
-    this.memoryPinHits = options.memoryPinHits ?? MEMORY_PIN_HITS;
-  }
-
+    _memory: MemoryEngine,
+    _logs: ConversationLogEngine,
+    _options: PromotionOptions = {},
+  ) {}
   async considerLogHits(
-    hits: LogSearchHit[],
-    query: string,
+    _hits: LogSearchHit[],
+    _query: string,
   ): Promise<AppliedChange[]> {
-    const recorded = await this.logs.recordHits(hits, query);
-    const changes: AppliedChange[] = [];
-    let promoted = 0;
-    for (const candidate of recorded) {
-      if (promoted >= MAX_PROMOTIONS_PER_CALL) {
-        break;
-      }
-      if (candidate.count < this.logPromoteHits) {
-        continue;
-      }
-      if (candidate.promotedId) {
-        continue;
-      }
-      const excerpt = durableExcerpt(candidate.excerpt);
-      if (excerpt.length < MIN_EXCERPT_CHARS) {
-        continue;
-      }
-      const duplicates = await this.memory.findNearDuplicates(excerpt);
-      if (duplicates.length > 0) {
-        await this.logs.markPromoted(candidate.hash, duplicates[0].id);
-        continue;
-      }
-      if (!this.options.propose) continue;
-      await this.options.propose(
-        {
-          op: "add",
-          type: "note",
-          title: excerpt.slice(0, 64).replace(/\n/g, " "),
-          content: excerpt.slice(0, 800),
-          tags: [PROMOTED_FROM_LOG_TAG, `log:${candidate.sessionId}`],
-          confidence: 0.75,
-        },
-        candidate.hash,
-      );
-      promoted += 1;
-    }
-    return changes;
+    return [];
   }
-
-  async considerMemoryHits(ids: string[]): Promise<string[]> {
-    const pinned: string[] = [];
-    const seen = new Set<string>();
-    for (const id of ids) {
-      if (!id || seen.has(id)) {
-        continue;
-      }
-      seen.add(id);
-      const record = this.memory.get(id);
-      if (!record) {
-        continue;
-      }
-      if (record.accessCount < this.memoryPinHits) {
-        continue;
-      }
-      if (record.tags.includes(PINNED_TAG)) {
-        continue;
-      }
-      if (
-        record.tags.includes(KNOWLEDGE_BASE_TAG) ||
-        record.tags.includes(KNOWLEDGE_ENTRY_TAG)
-      ) {
-        continue;
-      }
-      await this.memory.update({
-        id,
-        tags: [...record.tags, PINNED_TAG],
-        confidence: Math.min(1, record.confidence + 0.1),
-      });
-      pinned.push(id);
-    }
-    return pinned;
+  async considerMemoryHits(_ids: string[]): Promise<string[]> {
+    return [];
   }
 }
 
@@ -209,42 +122,13 @@ export interface AccessHookOutcome {
   pinned: string[];
 }
 
-/**
- * Access hook for every log/memory **tool** read. Repeated log excerpts
- * become durable memories; hot memories are pinned. Callers must wrap the
- * real tool provider so this runs after the shipped tool body.
- */
+/** @deprecated Reads/searches are separated by context_read; this compatibility hook is inert. */
 export async function applyToolAccessHook(
-  promotion: MemoryPromotion,
-  logs: ConversationLogEngine,
-  info: ToolAccessInfo,
+  _promotion: MemoryPromotion,
+  _logs: ConversationLogEngine,
+  _info: ToolAccessInfo,
 ): Promise<AccessHookOutcome> {
-  const promoted: AppliedChange[] = [];
-  const pinned: string[] = [];
-  if (!info.result.ok) {
-    return { promoted, pinned };
-  }
-  if (isConversationLogTool(info.toolName)) {
-    const hits = logHitsFromToolData(info.result.data);
-    if (hits.length > 0) {
-      promoted.push(
-        ...(await promotion.considerLogHits(
-          hits,
-          String(info.args.query ?? ""),
-        )),
-      );
-    } else if (info.toolName === "conversation_log_read") {
-      const sessionId = String(info.args.sessionId ?? "");
-      if (sessionId) {
-        await logs.touch(sessionId);
-      }
-    }
-  }
-  if (isMemoryReadTool(info.toolName)) {
-    const ids = memoryIdsFromToolData(info.result.data);
-    pinned.push(...(await promotion.considerMemoryHits(ids)));
-  }
-  return { promoted, pinned };
+  return { promoted: [], pinned: [] };
 }
 
 /** Strip transcript markup so promoted memories read as facts, not logs. */

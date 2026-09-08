@@ -5,6 +5,7 @@
 
 - [版本与发布规范](releases.md)：版号、Beta 渠道、更新说明、产物与发布验收。
 - [任务执行与恢复](runtime.md)：执行、存储、上下文和诊断的维护契约。
+- [上下文与记忆管理](context-memory-refactor.md)：有限记忆、检索预算、提炼与清理；[基础验收](acceptance/context-memory-refactor-2026-09-08.md)与[专项实测及复现脚本](acceptance/context-memory-stress-2026-09-08.md)。
 - [请求恢复、标注批次与记忆审批验收](acceptance/request-recovery-batches-memory-2026-09-07.md)：未发布改动的自动回归、隔离 Zotero 操作与验证边界。
 - [研究报告修订](research-reports.md)：同一报告的读取、局部修改、复核、恢复与成本验证。
 - [研读 harness 验收](acceptance/research-harness-2026-09-07.md)：单报告、上下文恢复、引用跳转与 M3/K3 挑战。

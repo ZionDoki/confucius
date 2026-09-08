@@ -44,6 +44,7 @@ export async function retryModelRequest(
   options: ModelTimers & {
     signal?: AbortSignal;
     requestId?: string;
+    maxAttempts?: number;
     onProgress?: (progress: ModelRequestProgress) => void | Promise<void>;
   } = {},
 ): Promise<ModelTurn> {
@@ -60,11 +61,16 @@ export async function retryModelRequest(
       if (value?.[key] !== undefined)
         usage[key] = (usage[key] ?? 0) + value[key]!;
   };
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  const maxAttempts = Math.max(
+    1,
+    Math.min(3, Math.trunc(options.maxAttempts ?? 3)),
+  );
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (options.signal?.aborted) throw abortError();
     const progress: ModelRequestProgress = {
       requestId,
       attempt,
+      maxAttempts,
       status: "started",
     };
     await options.onProgress?.(progress);
@@ -100,8 +106,8 @@ export async function retryModelRequest(
               }
             : undefined,
         retryable,
-        exhausted: retryable && attempt === 3,
-        ...(retryable && attempt < 3 ? { delayMs } : {}),
+        exhausted: retryable && attempt === maxAttempts,
+        ...(retryable && attempt < maxAttempts ? { delayMs } : {}),
       });
       if (!retryable) {
         if (error instanceof ModelError) {
@@ -112,7 +118,7 @@ export async function retryModelRequest(
         }
         throw error;
       }
-      if (attempt === 3) {
+      if (attempt === maxAttempts) {
         if (error instanceof ModelError)
           throw new ModelError(error.message, error.code, {
             ...error.options,

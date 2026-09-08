@@ -33,6 +33,13 @@ export interface MemoryRecord {
   createdAt: number;
   updatedAt: number;
   lastAccessedAt: number;
+  /** Only explicit agent reads renew retention. Missing fields are legacy data. */
+  lastUsedAt?: number;
+  /** Grace-period origin; creation/migration is not an actual read. */
+  retentionStartedAt?: number;
+  protection?: "user" | "none";
+  sourceRefs?: string[];
+  retentionVersion?: 1;
   accessCount: number;
   /** 0..1 extraction confidence. */
   confidence: number;
@@ -53,6 +60,7 @@ export type MemoryOp =
     }
   | {
       op: "update";
+      protection?: "user" | "none";
       id: string;
       content: string;
       title?: string;

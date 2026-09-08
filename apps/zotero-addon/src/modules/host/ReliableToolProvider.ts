@@ -134,6 +134,9 @@ export class ToolExecutionService implements OperationRepository {
   importLegacyOperation(operation: OperationRecord) {
     return this.store.importLegacyOperation(operation);
   }
+  retireContext(taskId: string) {
+    return this.store.retireContext(taskId);
+  }
   recoverStorage() {
     return this.store.recover();
   }
@@ -250,6 +253,14 @@ export class ToolExecutionService implements OperationRepository {
               )
             : null;
         if (previous) {
+          if (previous.retiredRequestHash) {
+            scope.dispose();
+            return failure(
+              name,
+              "This operation belongs to cleared history. Its final write receipt is retained; it cannot be executed again",
+              "not_found",
+            );
+          }
           if (
             previous.name !== name ||
             (request !== previous.request &&

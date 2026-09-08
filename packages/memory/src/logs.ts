@@ -70,14 +70,13 @@ interface SessionRecord extends LogSessionMeta {
 }
 
 /**
- * Append-only conversation transcripts as searchable markdown files.
- * Compaction of the in-context working set never deletes these files —
- * they are the episodic record the agent can retrieve later.
+ * Recent conversation transcripts for legacy retrieval. Window switches keep
+ * them; successful retention maintenance removes them with the task's raw history.
  *
  * Layout under `<Zotero data>/confucius/logs/`:
  *
  *     LOGS.md              regenerated index
- *     hits.json            excerpt hit counts for promotion
+ *     hits.json            legacy excerpt statistics (no automatic promotion)
  *     sessions/ses_xxx.md  one file per session
  */
 export class ConversationLogEngine {
@@ -87,6 +86,7 @@ export class ConversationLogEngine {
   private sessions = new Map<string, SessionRecord>();
   private hits: HitStore = { excerpts: {} };
   private loaded = false;
+  private loading?: Promise<void>;
   private writeQueue: Promise<void> = Promise.resolve();
   private hitsDirty = false;
 
@@ -108,10 +108,16 @@ export class ConversationLogEngine {
   }
 
   async ensureLoaded(): Promise<void> {
-    if (!this.loaded) {
-      await this.loadNow();
-      this.loaded = true;
-    }
+    if (this.loaded) return;
+    if (!this.loading)
+      this.loading = this.loadNow()
+        .then(() => {
+          this.loaded = true;
+        })
+        .finally(() => {
+          this.loading = undefined;
+        });
+    await this.loading;
   }
 
   private async loadNow(): Promise<void> {
@@ -205,6 +211,30 @@ export class ConversationLogEngine {
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, Math.max(1, limit))
       .map(toMeta);
+  }
+
+  /** Remove the transcript and excerpt copies, then rebuild the derived index. */
+  async deleteSession(sessionId: string): Promise<void> {
+    await this.ensureLoaded();
+    await this.serialize(async () => {
+      const path = this.sessionPath(sessionId);
+      if ((await this.options.fs.listFiles(this.sessionsDir)).includes(path))
+        await this.options.fs.deleteFile(path);
+      this.sessions.delete(sessionId);
+      for (const [key, entry] of Object.entries(this.hits.excerpts)) {
+        if (entry.sessionId === sessionId) delete this.hits.excerpts[key];
+      }
+      await this.options.fs.writeFile(this.hitsPath, JSON.stringify(this.hits));
+      await this.rebuildIndex();
+      this.reindex();
+    });
+  }
+
+  async retainedBytes(sessionId: string): Promise<number> {
+    await this.ensureLoaded();
+    await this.writeQueue;
+    const session = this.sessions.get(sessionId);
+    return session ? new TextEncoder().encode(serializeLog(session)).length : 0;
   }
 
   async search(query: string, limit = 6): Promise<LogSearchHit[]> {

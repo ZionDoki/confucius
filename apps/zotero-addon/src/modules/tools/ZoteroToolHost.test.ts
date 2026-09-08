@@ -34,6 +34,88 @@ function positionedChars(lines: string[]): PdfPageChar[] {
 }
 
 describe("native passage annotation contract", () => {
+  it("separates table rows, radar labels and the next table caption", async () => {
+    const chars = positionedChars([
+      "web (72) 41.6 34.8 27.5 22.1",
+      "Total (1627) 43.4 30.9 35.8 24.8",
+      "LC",
+      "SC",
+      "0.2",
+      "Figure 5: Semantic evaluation.",
+      "Impact 0.722 0.594 0.650 0.731",
+      "Table 7: Efficiency and cost.",
+    ]);
+    const passages = await pdfPassages(
+      chars,
+      9,
+      "synthetic-layout",
+      runtimeDigest,
+    );
+    const total = passages.find((p) => p.text.startsWith("Total"))!;
+    assert.ok(total.anchor);
+    assert.doesNotMatch(total.text, /web|LC|SC|Figure/);
+    const impact = passages.find((p) => p.text.startsWith("Impact"))!;
+    assert.ok(impact.anchor);
+    assert.doesNotMatch(impact.text, /Table 7/);
+  });
+
+  it("omits unchanged repeated pages until a concrete reread reason is supplied", async () => {
+    const installed = installHost({ pageTexts: ["Complete evidence."] });
+    const args = { libraryID: 1, key: "ITEMKEY1", start: 1, end: 1 };
+    const context = { taskId: "read-ledger", turnId: "same-turn" };
+    const get = async (extra = {}) => {
+      const r = await installed.execute(
+        "get_pages",
+        { ...args, ...extra },
+        undefined,
+        context,
+      );
+      assert.ok(r.ok);
+      return r.data as {
+        pages: Array<{
+          text: string;
+          omitted?: boolean;
+          rereadReason?: string;
+        }>;
+      };
+    };
+    assert.equal((await get()).pages[0].text.trim(), "Complete evidence.");
+    assert.equal((await get()).pages[0].omitted, true);
+    const reread = await get({
+      rereadReason: "Verify the denominator before finalizing",
+    });
+    assert.equal(reread.pages[0].text.trim(), "Complete evidence.");
+    assert.match(reread.pages[0].rereadReason!, /denominator/);
+  });
+
+  it("bounds page batches with nextPage and caps annotation page size without rejecting a larger request", async () => {
+    const installed = installHost({
+      pageTexts: ["First page.", "Second page."],
+    });
+    Reflect.set(installed.host, "physicalPageText", async () =>
+      "Evidence. ".repeat(1400),
+    );
+    const read = await installed.execute("get_pages", {
+      libraryID: 1,
+      key: "ITEMKEY1",
+      start: 1,
+      end: 2,
+    });
+    assert.ok(read.ok, JSON.stringify(read));
+    assert.equal((read.data as { nextPage: number }).nextPage, 2);
+    assert.equal((read.data as { pages: unknown[] }).pages.length, 1);
+    const annotations = await installed.execute("get_annotations", {
+      libraryID: 1,
+      key: "ITEMKEY1",
+      limit: 100,
+    });
+    assert.ok(annotations.ok);
+    assert.equal((annotations.data as { pageSize: number }).pageSize, 50);
+    assert.equal(
+      (annotations.data as { requestedLimit: number }).requestedLimit,
+      100,
+    );
+  });
   it("keeps page-boundary fragments readable without presenting them as complete selectable evidence", async () => {
     const passages = await pdfPassages(
       positionedChars([
@@ -65,6 +147,23 @@ describe("native passage annotation contract", () => {
     const rendered = renderPdfPassages(passages, 15);
     assert.equal(rendered.truncated, true);
     assert.doesNotMatch(rendered.text, /\[anchor:/);
+  });
+  it("keeps an ordinary sentence intact when reading order moves to the next column", async () => {
+    const first = positionedChars(["The claim is"]);
+    const next = positionedChars(["conditional on complete observations."]);
+    for (const char of first)
+      char.rect = char.rect!.map((value, i) => (i % 2 ? value - 600 : value));
+    for (const char of next)
+      char.rect = char.rect!.map((value, i) => (i % 2 ? value : value + 300));
+    const passages = await pdfPassages(
+      [...first, ...next],
+      2,
+      "columns",
+      runtimeDigest,
+    );
+    assert.equal(passages.length, 1);
+    assert.ok(passages[0].anchor);
+    assert.match(passages[0].text, /The claim is\s+conditional/);
   });
   async function readAnchors(installed: InstalledHost) {
     const result = await installed.execute("get_pages", {

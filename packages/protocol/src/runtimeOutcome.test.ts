@@ -2,6 +2,39 @@ import assert from "node:assert/strict";
 import { it } from "node:test";
 import { runtimeOutcome, RuntimeUsageCounter } from "./runtimeOutcome";
 
+it("retains optional cached and reasoning usage without inventing absent counts", () => {
+  const usage = new RuntimeUsageCounter();
+  const first = {
+    inputTokens: 100,
+    outputTokens: 20,
+    totalTokens: 120,
+    cachedInputTokens: 60,
+    reasoningOutputTokens: 10,
+  };
+  assert.deepEqual(usage.observe(first), first);
+  assert.equal(usage.observe(first), undefined);
+  assert.deepEqual(
+    usage.observe({
+      ...first,
+      inputTokens: 140,
+      outputTokens: 30,
+      totalTokens: 170,
+      cachedInputTokens: 90,
+      reasoningOutputTokens: 13,
+    }),
+    {
+      inputTokens: 40,
+      outputTokens: 10,
+      totalTokens: 50,
+      cachedInputTokens: 30,
+      reasoningOutputTokens: 3,
+    },
+  );
+  const resumed = new RuntimeUsageCounter(false);
+  assert.equal(resumed.observe(first), undefined);
+  assert.equal(resumed.observe(first), undefined);
+});
+
 it("requires the explicit success marker and preserves limits and refusals", () => {
   for (const backend of ["codex", "kimi"] as const) {
     assert.equal(

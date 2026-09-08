@@ -19,6 +19,9 @@ export interface RunState {
   status: "running" | "interrupted" | "completed" | "failed";
   stopReason?: string;
   modelRequest?: import("./events").ModelRequestProgress;
+  providerRequest?: import("./events").ModelRequestProgress;
+  lastActivityAt?: number;
+  lastError?: { at: number; request: import("./events").ModelRequestProgress };
   budget: {
     maxIterations: number;
     maxToolCalls: number;
@@ -28,6 +31,9 @@ export interface RunState {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
+    cachedInputTokens?: number;
+    cacheWriteInputTokens?: number;
+    reasoningOutputTokens?: number;
     /** Active host execution time; absent in older v4 records. */
     elapsedMs?: number;
     modelRequestsObservable: boolean;
@@ -120,6 +126,28 @@ export function restoreRun(value: unknown): RunState | undefined {
   if (restored.status === "running") {
     restored.status = "interrupted";
     restored.stopReason = "host_restarted";
+    restored.updatedAt = Date.now();
+  }
+  // Older hosts could already persist an interrupted task with a started request.
+  for (const key of ["modelRequest", "providerRequest"] as const) {
+    const request = restored[key];
+    if (request?.status !== "started") continue;
+    restored[key] =
+      restored.status === "completed"
+        ? { ...request, status: "completed" }
+        : {
+            ...request,
+            status: "failed",
+            code:
+              restored.stopReason === "host_restarted"
+                ? "host_restarted"
+                : "execution_stopped",
+            message:
+              restored.stopReason === "host_restarted"
+                ? "Host restarted; execution interrupted"
+                : "Execution is no longer active",
+            retryable: restored.status === "interrupted",
+          };
   }
   return restored;
 }

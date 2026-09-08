@@ -36,6 +36,7 @@ interface CorpusDoc {
 export class MemoryRetriever {
   private docs: CorpusDoc[] = [];
   private df = new Map<string, number>();
+  private averageLength = 0;
 
   index(records: MemoryRecord[]): void {
     this.docs = records.map((record) => {
@@ -50,6 +51,9 @@ export class MemoryRetriever {
         this.df.set(term, (this.df.get(term) ?? 0) + 1);
       }
     }
+    this.averageLength = this.docs.length
+      ? this.docs.reduce((sum, doc) => sum + doc.length, 0) / this.docs.length
+      : 0;
   }
 
   get size(): number {
@@ -124,9 +128,7 @@ export class MemoryRetriever {
     if (queryTokens.length === 0 || this.docs.length === 0) {
       return 0;
     }
-    const avgLength =
-      this.docs.reduce((sum, entry) => sum + entry.length, 0) /
-      this.docs.length;
+    const avgLength = this.averageLength;
     const queryTf = termFrequency(queryTokens);
     let score = 0;
     for (const [term, queryCount] of queryTf) {

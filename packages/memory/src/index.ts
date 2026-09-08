@@ -1,7 +1,7 @@
 export { InMemoryFileSystem } from "./fs";
 export type { MemoryFileSystem } from "./fs";
 export { buildExtractionMessages, parseExtractionResponse } from "./extract";
-export { MemoryEngine } from "./engine";
+export { MemoryEngine, isKnowledgeRecord } from "./engine";
 export type { AppliedChange, MemoryEngineOptions } from "./engine";
 export { parseMemoryFile, serializeMemory } from "./markdown";
 export { MemoryRetriever } from "./retrieval";

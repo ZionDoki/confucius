@@ -11,6 +11,9 @@ interface Manifest {
   version: 1;
   deleted?: boolean;
   migrated?: boolean;
+  prunedAt?: number;
+  cleanupPending?: boolean;
+  terms?: Record<string, string[]>;
   windows: ContextWindowState[];
   items: HistoryItem[];
   notes: Array<{
@@ -18,6 +21,8 @@ interface Manifest {
     revision: number;
     updatedAt: number;
     characters: number;
+    sourceIds?: string[];
+    terms?: string[];
   }>;
 }
 export interface HistoryAppend extends Omit<
@@ -29,6 +34,7 @@ export interface HistoryAppend extends Omit<
 }
 export interface HistoryQuery {
   taskId?: string;
+  taskIds?: string[];
   windowId?: string;
   query?: string;
   offset?: number;
@@ -121,6 +127,7 @@ export class HistoryStore {
     return Boolean((await this.load(taskId)).deleted);
   }
   async deleteTask(taskId: string): Promise<void> {
+    await this.prune(taskId);
     await this.serial(async () =>
       this.commit(taskId, { ...(await this.load(taskId)), deleted: true }),
     );
@@ -171,6 +178,13 @@ export class HistoryStore {
       await this.commit(ref.taskId, {
         ...index,
         items: [...index.items, item],
+        terms: {
+          ...index.terms,
+          [item.itemId]:
+            item.purpose === "diagnostic"
+              ? []
+              : [...new Set(tokenize(content))],
+        },
       });
       return ref;
     });
@@ -210,8 +224,29 @@ export class HistoryStore {
     const results: Array<HistoryItem & { title: string; score: number }> = [];
     for (const task of this.tasks.values()) {
       if (query.taskId && task.id !== query.taskId) continue;
-      const index = await this.load(task.id);
+      if (query.taskIds && !query.taskIds.includes(task.id)) continue;
+      let index = await this.load(task.id);
       if (index.deleted) continue;
+      if (
+        query.query?.trim() &&
+        index.items.some(
+          (item) =>
+            item.purpose !== "diagnostic" && !index.terms?.[item.itemId],
+        )
+      ) {
+        await this.serial(async () => {
+          const current = await this.load(task.id);
+          const terms = { ...current.terms };
+          for (const item of current.items) {
+            if (item.purpose !== "diagnostic" && !terms[item.itemId])
+              terms[item.itemId] = [
+                ...new Set(tokenize(await this.body(item))),
+              ];
+          }
+          await this.commit(task.id, { ...current, terms });
+        });
+        index = await this.load(task.id);
+      }
       for (const item of index.items) {
         if (item.purpose === "diagnostic") continue;
         if (query.windowId && query.windowId !== item.windowId) continue;
@@ -225,25 +260,13 @@ export class HistoryStore {
         let score = 0;
         let excerpt = item.excerpt;
         if (query.query?.trim()) {
-          const content = await this.body(item);
-          const lower = content.toLocaleLowerCase();
+          const lower = item.excerpt.toLocaleLowerCase();
           const literal = lower.indexOf(query.query.toLocaleLowerCase());
-          const tokens = new Set(tokenize(content));
+          const tokens = new Set(index.terms?.[item.itemId] ?? []);
           score =
             terms.reduce((n, term) => n + Number(tokens.has(term)), 0) +
             (literal >= 0 ? 5 : 0);
           if (!score) continue;
-          const start =
-            literal >= 0
-              ? Math.max(0, literal - 80)
-              : Math.max(
-                  0,
-                  terms.reduce((pos, t) => {
-                    const i = lower.indexOf(t);
-                    return i >= 0 ? Math.min(pos, i) : pos;
-                  }, content.length) - 80,
-                );
-          excerpt = content.slice(start, start + 400);
         }
         score += query.preferredTaskIds?.includes(task.id) ? 10 : 0;
         results.push({ ...item, excerpt, title: task.title, score });
@@ -257,8 +280,25 @@ export class HistoryStore {
     );
     const offset = bound(query.offset, 0, 1e9),
       limit = Math.max(1, bound(query.limit, 20, 50));
+    const selected = results.slice(offset, offset + limit);
+    if (query.query?.trim()) {
+      for (const item of selected) {
+        const content = await this.body(item);
+        const lower = content.toLocaleLowerCase();
+        let pos = lower.indexOf(query.query.toLocaleLowerCase());
+        if (pos < 0)
+          pos = terms.reduce((found, term) => {
+            const at = lower.indexOf(term);
+            return at >= 0 ? Math.min(found, at) : found;
+          }, content.length);
+        item.excerpt = content.slice(
+          Math.max(0, pos - 80),
+          Math.max(0, pos - 80) + 400,
+        );
+      }
+    }
     return {
-      items: results.slice(offset, offset + limit),
+      items: selected,
       total: results.length,
       nextOffset: offset + limit < results.length ? offset + limit : null,
     };
@@ -288,6 +328,10 @@ export class HistoryStore {
       index.items.find(
         (i) => i.itemId === ref.itemId && i.windowId === ref.windowId,
       );
+    if (!item && index.prunedAt)
+      throw new Error(
+        "History was cleared after distillation; use retained memory or original sources",
+      );
     if (
       !item ||
       item.purpose === "diagnostic" ||
@@ -310,11 +354,92 @@ export class HistoryStore {
     const index = await this.load(taskId);
     return index.deleted ? [] : index.notes.map((note) => ({ ...note }));
   }
-  async readNote(taskId: string, name: string, offset = 0, limit = 8000) {
+  async searchNotes(query: HistoryQuery) {
+    await this.queue;
+    const queryTerms = tokenize(query.query ?? "");
+    const matches = [];
+    for (const task of this.tasks.values()) {
+      if (
+        (query.taskId && task.id !== query.taskId) ||
+        (query.taskIds && !query.taskIds.includes(task.id))
+      )
+        continue;
+      let index = await this.load(task.id);
+      if (index.deleted) continue;
+      if (index.notes.some((note) => !note.terms)) {
+        await this.serial(async () => {
+          const current = await this.load(task.id);
+          const notes = [];
+          for (const note of current.notes)
+            notes.push(
+              note.terms
+                ? note
+                : {
+                    ...note,
+                    terms: [
+                      ...new Set(
+                        tokenize(
+                          note.name +
+                            " " +
+                            (await this.fs.readFile(
+                              this.path(
+                                task.id,
+                                `notes/${safeId(note.name)}_${note.revision}.txt`,
+                              ),
+                            )),
+                        ),
+                      ),
+                    ],
+                  },
+            );
+          await this.commit(task.id, { ...current, notes });
+        });
+        index = await this.load(task.id);
+      }
+      for (const note of index.notes) {
+        if (
+          query.sourceIds &&
+          (!note.sourceIds?.length ||
+            note.sourceIds.some((id) => !query.sourceIds!.includes(id)))
+        )
+          continue;
+        const score = queryTerms.reduce(
+          (sum, term) => sum + Number(note.terms?.includes(term)),
+          0,
+        );
+        if (queryTerms.length && !score) continue;
+        matches.push({
+          taskId: task.id,
+          name: note.name,
+          title: task.title,
+          score: score + 5,
+        });
+      }
+    }
+    return matches.sort((a, b) => b.score - a.score).slice(0, query.limit ?? 8);
+  }
+  async readNote(
+    taskId: string,
+    name: string,
+    offset = 0,
+    limit = 8000,
+    sourceIds?: string[],
+  ) {
     await this.queue;
     const index = await this.load(taskId);
     const note = !index.deleted && index.notes.find((n) => n.name === name);
-    if (!note) throw new Error("Working note not found");
+    if (!note)
+      throw new Error(
+        index.prunedAt
+          ? "Working note was cleared after distillation"
+          : "Working note not found",
+      );
+    if (
+      sourceIds &&
+      (!note.sourceIds?.length ||
+        note.sourceIds.some((id) => !sourceIds.includes(id)))
+    )
+      throw new Error("Working note is unavailable in this source scope");
     const content = await this.fs.readFile(
       this.path(taskId, `notes/${safeId(name)}_${note.revision}.txt`),
     );
@@ -326,7 +451,12 @@ export class HistoryStore {
       nextOffset: start + size < content.length ? start + size : null,
     };
   }
-  async writeNote(taskId: string, name: string, content: string) {
+  async writeNote(
+    taskId: string,
+    name: string,
+    content: string,
+    sourceIds?: string[],
+  ) {
     safeId(name);
     if (content.length > 250000)
       throw new Error("Working note is too large; create another note");
@@ -339,6 +469,8 @@ export class HistoryStore {
         revision: (previous?.revision ?? 0) + 1,
         updatedAt: Date.now(),
         characters: content.length,
+        sourceIds,
+        terms: [...new Set(tokenize(name + " " + content))],
       };
       await this.fs.makeDirectory(this.path(taskId, "notes"));
       await this.fs.writeFile(
@@ -354,6 +486,69 @@ export class HistoryStore {
   }
   async isMigrated(taskId: string): Promise<boolean> {
     return Boolean((await this.load(taskId)).migrated);
+  }
+
+  async retentionInfo(taskId: string) {
+    await this.queue;
+    const index = await this.load(taskId);
+    let bytes = 0;
+    const visit = async (dir: string): Promise<void> => {
+      const prefix = dir.replace(/\/+$/, "") + "/";
+      for (const path of await this.fs.listFiles(dir)) {
+        if (!path.startsWith(prefix)) continue;
+        if (path.endsWith(".txt"))
+          bytes += this.fs.fileSize
+            ? await this.fs.fileSize(path)
+            : new TextEncoder().encode(await this.fs.readFile(path)).length;
+        else if (!path.slice(prefix.length).includes("/")) await visit(path);
+      }
+    };
+    await visit(this.path(taskId, "windows"));
+    await visit(this.path(taskId, "notes"));
+    return {
+      bytes,
+      characters:
+        index.items.reduce((sum, item) => sum + item.characters, 0) +
+        index.notes.reduce((sum, note) => sum + note.characters, 0),
+      prunedAt: index.prunedAt,
+      cleanupPending: index.cleanupPending === true,
+      items: index.items.length,
+      retrievableItems: index.items.filter(
+        (item) => item.purpose !== "diagnostic",
+      ).length,
+      notes: index.notes.length,
+    };
+  }
+
+  /** Caller has already durably committed distillation and its cleanup intent.
+   * Publish the tombstone first so a crash never exposes partially deleted history. */
+  async prune(taskId: string, now = Date.now()): Promise<void> {
+    await this.serial(async () => {
+      const index = await this.load(taskId);
+      const cleared: Manifest = {
+        ...index,
+        items: [],
+        notes: [],
+        windows: [],
+        terms: {},
+        migrated: true,
+        prunedAt: index.prunedAt ?? now,
+        cleanupPending: true,
+      };
+      await this.commit(taskId, cleared);
+      const removeText = async (dir: string): Promise<void> => {
+        const prefix = dir.replace(/\/+$/, "") + "/";
+        for (const path of await this.fs.listFiles(dir)) {
+          if (!path.startsWith(prefix)) continue;
+          if (path.endsWith(".txt")) await this.fs.deleteFile(path);
+          else if (!path.slice(prefix.length).includes("/"))
+            await removeText(path);
+        }
+      };
+      await removeText(this.path(taskId, "windows"));
+      await removeText(this.path(taskId, "notes"));
+      await this.commit(taskId, { ...cleared, cleanupPending: false });
+    });
   }
   async markMigrated(taskId: string): Promise<void> {
     await this.serial(async () =>
@@ -385,6 +580,10 @@ export class HistoryStore {
       result.issues.push(`History index: ${String(error)}`);
     }
     if (manifest?.deleted) throw new Error("History task was deleted");
+    if (manifest?.prunedAt && !manifest.items.length) {
+      result.issues.push("Original history was cleared after distillation.");
+      return result;
+    }
     result.windows = manifest?.windows ?? [];
     const read = async (path: string) => {
       try {

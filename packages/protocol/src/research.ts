@@ -363,6 +363,7 @@ export interface MemoryProposal {
   taskId: string;
   op: "add" | "update" | "delete";
   memoryId?: string;
+  protection?: "user" | "none";
   type?: string;
   title?: string;
   content?: string;

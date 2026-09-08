@@ -1,3 +1,4 @@
+import { analyzeTaskTrace } from "@confucius/protocol";
 import type { TaskTraceReport } from "@confucius/protocol";
 
 const escapeHtml = (text: string) =>
@@ -15,6 +16,7 @@ export function taskTraceFilename(taskId: string, now = Date.now()): string {
 
 /** One offline file: lazy-rendered details and the entire sanitized JSON payload. */
 export function renderTaskTraceHtml(report: TaskTraceReport): string {
+  report = { ...report, analysis: analyzeTaskTrace(report) };
   const data = JSON.stringify(report)
     .replace(/</g, "\\u003c")
     .replace(/\u2028/g, "\\u2028")
@@ -31,7 +33,10 @@ export function renderTaskTraceHtml(report: TaskTraceReport): string {
 <div class="muted">${escapeHtml(report.task.id)} · ${escapeHtml(new Date(report.capture.startedAt).toISOString())}</div>
 <div class="meta"><span>${escapeHtml(report.task.backend)}</span><span>${escapeHtml(report.task.status)}</span><span>${report.events.length} events</span><span>${report.capture.running ? "运行中快照" : "任务快照"}</span></div>
 <div class="toolbar"><button id="download" type="button">下载完整 JSON</button><span class="muted">已移除凭据；任务文本与引用材料保留，分享前请检查内容。</span></div>
-<div id="issues" class="issues" role="status"></div>
+<h2>任务结果与异常</h2><div id="diagnosis" role="status"></div>
+<h2>模型输出</h2><div id="model-output"></div>
+<h2>公开推理文本 / 摘要</h2><div id="reasoning-output"></div>
+<h2>导出问题</h2><div id="issues" class="issues" role="status"></div>
 <h2>记录范围</h2><ul id="coverage"></ul>
 <h2>事件时间线</h2><div class="toolbar"><input id="filter" type="search" placeholder="搜索事件、工具、错误或内容" aria-label="搜索事件"><span id="count" class="muted"></span></div><div id="events"></div>
 <div class="toolbar" id="pager"><button id="previous" type="button">上一页</button><span id="page"></span><button id="next" type="button">下一页</button></div>
@@ -44,13 +49,25 @@ const add=(tag,parent,text)=>{const node=document.createElement(tag);if(text!==u
 const pretty=value=>JSON.stringify(value,null,2);
 const detail=(parent,label,value)=>{const d=add('details',parent);add('summary',d,label);d.addEventListener('toggle',()=>{if(d.open&&!d.querySelector('pre'))add('pre',d,pretty(value))});return d};
 const labels={state:'任务、预算与恢复检查点',history:'跨窗口历史与工作笔记',pendingHistory:'待持久化历史',operations:'操作 intent 与 receipt',annotationProposals:'批注候选',artifacts:'成果与版本',environment:'运行环境与配置'};
+const analysis=report.analysis;
+const diagnosis=document.getElementById('diagnosis');
+add('p',diagnosis,'成果 '+analysis.work.artifacts+' · 保存回执中的批注 '+analysis.work.savedAnnotations+' · 未完成 '+(analysis.work.missing.join('、')||'无已知缺项'));
+for(const incident of analysis.incidents){const line=add('p',diagnosis,incident.message);line.className=incident.severity==='error'?'fail':'issues'}
+if(!analysis.incidents.length)add('p',diagnosis,'未发现已记录的运行异常。记录范围见下方说明。');
+if(analysis.repeatedPages.length)detail(diagnosis,'重复读页与原因',analysis.repeatedPages);
+if(analysis.runtime)detail(diagnosis,'任务运行时的引擎与模型',analysis.runtime);
+if(analysis.usage)detail(diagnosis,'累计用量（缺失字段表示未提供；不能直接换算费用）',analysis.usage);
+const prose=(target,rows)=>{for(const row of rows){const article=add('details',target);article.open=true;add('summary',article,new Date(row.ts).toISOString()+' · '+(row.phase==='final_answer'?'最终回复':row.phase==='commentary'?'进度说明':row.source||'模型文本（旧记录未区分阶段）'));add('pre',article,row.text)}};
+const output=document.getElementById('model-output');
+if(analysis.output.length)prose(output,analysis.output);else add('p',output,'未记录到模型回复文本。');
+const reasoning=document.getElementById('reasoning-output');add('p',reasoning,analysis.reasoningCoverage);prose(reasoning,analysis.reasoning);
 for(const text of report.coverage)add('li',document.getElementById('coverage'),text);
 const issues=[...report.issues];if(report.capture.changedDuringExport)issues.unshift('任务在导出期间发生了变化，各部分采集时间见 capturedAt。');
-for(const text of issues)add('p',document.getElementById('issues'),text);
+for(const text of issues)add('p',document.getElementById('issues'),text);if(!issues.length)add('p',document.getElementById('issues'),'未发现导出读取错误；任务运行异常见上方。');
 for(const [key,value] of Object.entries(report.sections))detail(document.getElementById('sections'),labels[key]||key,value);
 detail(document.getElementById('sections'),'脱敏统计',report.redactions);
 let page=0,filtered=report.events;const size=100;
-const render=()=>{const target=document.getElementById('events');target.replaceChildren();for(const event of filtered.slice(page*size,(page+1)*size)){const payload=event.payload||{};const summary=payload.toolName||payload.name||payload.stopReason||payload.reason||payload.message||payload.text||payload.result?.message||'';const d=detail(target,new Date(event.ts).toISOString()+' · '+event.type+' · '+String(summary).replace(/\\s+/g,' ').slice(0,160),event);if(event.type.includes('fail')||payload.result?.ok===false)d.classList.add('fail')}document.getElementById('count').textContent=filtered.length+' / '+report.events.length;document.getElementById('page').textContent=(page+1)+' / '+Math.max(1,Math.ceil(filtered.length/size));document.getElementById('previous').disabled=page===0;document.getElementById('next').disabled=(page+1)*size>=filtered.length};
+const render=()=>{const target=document.getElementById('events');target.replaceChildren();for(const event of filtered.slice(page*size,(page+1)*size)){const payload=event.payload||{};const summary=payload.toolName||payload.name||payload.stopReason||payload.reason||payload.statusText||payload.message||payload.text||payload.result?.toolName||payload.result?.message||payload.status||'';const d=detail(target,new Date(event.ts).toISOString()+' · '+event.type+' · '+String(summary).replace(/\\s+/g,' ').slice(0,160),event);if(event.type.includes('fail')||event.type==='turn_aborted'||payload.status==='failed'||payload.result?.ok===false)d.classList.add('fail')}document.getElementById('count').textContent=filtered.length+' / '+report.events.length;document.getElementById('page').textContent=(page+1)+' / '+Math.max(1,Math.ceil(filtered.length/size));document.getElementById('previous').disabled=page===0;document.getElementById('next').disabled=(page+1)*size>=filtered.length};
 document.getElementById('filter').addEventListener('input',event=>{const query=event.target.value.toLocaleLowerCase();filtered=report.events.filter(item=>pretty(item).toLocaleLowerCase().includes(query));page=0;render()});
 document.getElementById('previous').onclick=()=>{page--;render()};document.getElementById('next').onclick=()=>{page++;render()};
 document.getElementById('download').onclick=()=>{const url=URL.createObjectURL(new Blob([pretty(report)],{type:'application/json'}));const a=add('a',document.body);a.href=url;a.download='confucius-trace-'+report.task.id.replace(/[^\\w-]/g,'_')+'.json';a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)};

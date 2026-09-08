@@ -192,8 +192,9 @@ async function reconcileHistory(
   const taskId = String(
     operation.intent?.recovery.taskId ?? operation.context.taskId ?? "",
   );
-  if (operation.name !== "notes_write" || !taskId) return null;
-  const name = String(operation.args.name);
+  if (!["notes_write", "context_save"].includes(operation.name) || !taskId)
+    return null;
+  const name = String(operation.args.name ?? "progress");
   const previousRevision = Number(operation.intent?.recovery.previousRevision);
   const notes = await history.listNotes(taskId);
   const current = notes.find((entry) => entry.name === name);

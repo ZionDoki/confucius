@@ -200,6 +200,7 @@ export interface MigrationFs {
   write(path: string, text: string): Promise<void>;
   join(...parts: string[]): string;
   basename(path: string): string;
+  remove?(path: string): Promise<void>;
 }
 const migrationFs: MigrationFs = {
   exists: (path) => IOUtils.exists(runtimeIoPath(path)),
@@ -219,6 +220,7 @@ const migrationFs: MigrationFs = {
   write: writeRuntimeText,
   join: (...parts) => PathUtils.join(...parts),
   basename: (path) => PathUtils.filename(path),
+  remove: (path) => IOUtils.remove(runtimeIoPath(path), { ignoreAbsent: true }),
 };
 interface MigrationManifest {
   version: 1;
@@ -350,6 +352,84 @@ export async function migrateRuntimeStorage(
     if (await fs.exists(fs.join(source, name))) await walk(name);
   manifest.state = "active";
   await fs.write(manifestPath, JSON.stringify(manifest));
+}
+
+/** Call only after the migrated host state has been successfully restored and
+ * persisted. Remove unchanged, verified old context copies, never user artifacts. */
+export async function clearMigratedContextCopies(
+  destination = runtimePath(),
+  fs: MigrationFs = migrationFs,
+): Promise<void> {
+  const path = fs.join(destination, "migration.json");
+  if (!fs.remove || !(await fs.exists(path))) return;
+  const manifest = JSON.parse(await fs.read(path)) as MigrationManifest;
+  if (
+    manifest.version !== 1 ||
+    manifest.state !== "active" ||
+    !manifest.source ||
+    manifest.source === destination ||
+    !manifest.files ||
+    typeof manifest.files !== "object" ||
+    Array.isArray(manifest.files)
+  )
+    throw new Error("Invalid migration cleanup manifest");
+  const copies: Array<{ relative: string; original: string }> = [];
+  for (const [relative, digest] of Object.entries(manifest.files)) {
+    if (!(
+      relative === "state.json" ||
+      relative.startsWith("history/") ||
+      relative.startsWith("logs/")
+    ))
+      continue;
+    if (
+      relative
+        .split("/")
+        .some(
+          (part) =>
+            !part || part === "." || part === ".." || part.includes("\\"),
+        )
+    )
+      throw new Error("Unsafe migration cleanup path");
+    const original = fs.join(manifest.source, ...relative.split("/"));
+    if (await fs.exists(original)) {
+      if ((await fs.digest(original)) !== digest)
+        throw new Error(
+          "An old context copy changed after migration; cleanup was deferred",
+        );
+      const replacement = fs.join(destination, ...relative.split("/"));
+      if (!(await fs.exists(replacement)))
+        throw new Error("Migrated context copy is missing; originals retained");
+      // History bodies are immutable. Mutable indexes/state may have advanced,
+      // but must still parse before their old copies can be removed.
+      if (relative.startsWith("history/") && relative.endsWith(".txt")) {
+        if ((await fs.digest(replacement)) !== digest)
+          throw new Error("Migrated context body changed; originals retained");
+      } else if (relative.endsWith(".json")) {
+        const value = JSON.parse(await fs.read(replacement));
+        if (
+          relative === "state.json" &&
+          !Array.isArray(value?.tasks ?? value?.sessions)
+        )
+          throw new Error("Invalid migrated task index; originals retained");
+        if (
+          relative.startsWith("history/") &&
+          fs.basename(replacement) === "index.json" &&
+          (!Array.isArray(value?.items) ||
+            !Array.isArray(value?.notes) ||
+            !Array.isArray(value?.windows))
+        )
+          throw new Error("Invalid migrated history index; originals retained");
+      }
+    }
+    copies.push({ relative, original });
+  }
+  // Preflight the entire batch before deleting any old copy. On interruption,
+  // absent originals are safe to acknowledge when the manifest is retried.
+  for (const { relative, original } of copies) {
+    await fs.remove(original);
+    delete manifest.files[relative];
+    await fs.write(path, JSON.stringify(manifest));
+  }
 }
 
 export async function runtimeDigest(value: string): Promise<string> {

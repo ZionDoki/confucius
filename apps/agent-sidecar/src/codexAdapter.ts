@@ -6,6 +6,7 @@ import {
   CONFUCIUS_VERSION,
   runtimeOutcome,
   RuntimeUsageCounter,
+  CodexOutputTracker,
   type ApprovalRequest,
   type ApprovalResolution,
   type CapabilityProfile,
@@ -36,6 +37,9 @@ const require = createRequire(import.meta.url);
 
 interface CodexSession {
   retryAttempt?: number;
+  maxRetryAttempts?: number;
+  output?: CodexOutputTracker;
+  retrying?: boolean;
   taskId: string;
   profile: RuntimeTurnInput["capabilityProfile"];
   rpc: JsonLineProcess;
@@ -248,22 +252,38 @@ export class CodexAdapter implements RuntimeAdapter {
         );
         this.sessions.delete(input.taskId);
       });
-      const params = await this.threadParams(input, rpc);
-      const response = input.externalSessionId
-        ? await rpc.request<ThreadResumeResponse>("thread/resume", {
-            threadId: input.externalSessionId,
-            ...params,
-            excludeTurns: true,
-          } satisfies ThreadResumeParams)
-        : await rpc.request<ThreadStartResponse>("thread/start", params);
-      const threadId = response.thread?.id || input.externalSessionId;
-      if (!threadId) {
-        rpc.close();
-        throw new Error("Codex did not return a thread id");
+      this.sessions.set(input.taskId, provisional);
+      try {
+        const response = await withTimeout(
+          (async () => {
+            const params = await this.threadParams(input, rpc);
+            return input.externalSessionId
+              ? await rpc.request<ThreadResumeResponse>("thread/resume", {
+                  threadId: input.externalSessionId,
+                  ...params,
+                  excludeTurns: true,
+                } satisfies ThreadResumeParams)
+              : await rpc.request<ThreadStartResponse>("thread/start", params);
+          })(),
+          30_000,
+          "Codex thread startup timed out",
+        );
+        if (this.sessions.get(input.taskId) !== provisional)
+          throw new Error("Codex startup was cancelled");
+        const threadId = response.thread?.id || input.externalSessionId;
+        if (!threadId) {
+          rpc.close();
+          throw new Error("Codex did not return a thread id");
+        }
+        provisional.threadId = threadId;
+        session = provisional;
+      } catch (error) {
+        if (this.sessions.get(input.taskId) === provisional)
+          this.sessions.delete(input.taskId);
+        if (rpc.closeAndWait) await rpc.closeAndWait();
+        else rpc.close();
+        throw error;
       }
-      provisional.threadId = threadId;
-      session = provisional;
-      this.sessions.set(input.taskId, session);
     } else {
       session.sink = sink;
       session.approvals = approvals;
@@ -274,8 +294,12 @@ export class CodexAdapter implements RuntimeAdapter {
     session.mcpToken = input.mcp.token;
     session.hostTurnId = input.turnId;
     session.retryAttempt = 1;
+    session.maxRetryAttempts = undefined;
+    session.retrying = false;
+    session.output = undefined;
 
     const turnParams = {
+      summary: "auto",
       threadId: session.threadId,
       input: [{ type: "text", text: input.prompt, text_elements: [] }],
       cwd: input.cwd,
@@ -337,6 +361,13 @@ export class CodexAdapter implements RuntimeAdapter {
   async analyze(prompt: string, cwd: string): Promise<string> {
     const rpc = await this.openRpc("zotero_only");
     let text = "";
+    const output = new CodexOutputTracker((type, payload) => {
+      if (
+        type === "text_delta" &&
+        !("phase" in payload && payload.phase === "commentary")
+      )
+        text += payload.text;
+    });
     let failure: Error | undefined;
     let complete!: () => void;
     const done = new Promise<void>((resolve) => {
@@ -344,9 +375,11 @@ export class CodexAdapter implements RuntimeAdapter {
     });
     rpc.onNotification((message) => {
       const params = asRecord(message.params);
-      if (message.method === "item/agentMessage/delta") {
-        text += String(params.delta ?? "");
+      if (message.method === "error" && params.willRetry === true) {
+        text = "";
+        output.discardIncomplete();
       }
+      output.observe(message.method ?? "", params);
       if (message.method === "error" && params.willRetry !== true) {
         failure = Object.assign(
           new Error(runtimeFailure(params.error ?? params).message),
@@ -371,25 +404,34 @@ export class CodexAdapter implements RuntimeAdapter {
       complete();
     });
     try {
-      const configuredMcpServers = await this.configuredMcpServers(rpc);
-      const started = await rpc.request<ThreadStartResponse>("thread/start", {
-        cwd,
-        ephemeral: true,
-        approvalPolicy: "never",
-        sandbox: "read-only",
-        baseInstructions:
-          "Answer only the requested analysis. Do not use tools.",
-        config: codexRuntimeConfig("zotero_only", configuredMcpServers),
-      } satisfies ThreadStartParams);
-      const threadId = started.thread?.id;
-      if (!threadId) throw new Error("Codex did not return a thread id");
-      await rpc.request("turn/start", {
-        threadId,
-        input: [{ type: "text", text: prompt, text_elements: [] }],
-      } satisfies TurnStartParams);
-      await withTimeout(done, 60_000, "Codex analysis timed out");
-      if (failure) throw failure;
-      return text;
+      return await withTimeout(
+        (async () => {
+          const configuredMcpServers = await this.configuredMcpServers(rpc);
+          const started = await rpc.request<ThreadStartResponse>(
+            "thread/start",
+            {
+              cwd,
+              ephemeral: true,
+              approvalPolicy: "never",
+              sandbox: "read-only",
+              baseInstructions:
+                "Answer only the requested analysis. Do not use tools.",
+              config: codexRuntimeConfig("zotero_only", configuredMcpServers),
+            } satisfies ThreadStartParams,
+          );
+          const threadId = started.thread?.id;
+          if (!threadId) throw new Error("Codex did not return a thread id");
+          await rpc.request("turn/start", {
+            threadId,
+            input: [{ type: "text", text: prompt, text_elements: [] }],
+          } satisfies TurnStartParams);
+          await done;
+          if (failure) throw failure;
+          return text;
+        })(),
+        60_000,
+        "Codex analysis timed out",
+      );
     } finally {
       await rpc.closeAndWait();
     }
@@ -468,6 +510,32 @@ export class CodexAdapter implements RuntimeAdapter {
     if (providerTurnId && session.terminalTurnIds?.has(providerTurnId)) return;
     const turnId = session.hostTurnId;
     if (params.threadId && params.threadId !== session.threadId) return;
+    session.output ??= new CodexOutputTracker((type, payload) =>
+      session.sink.emit(type, payload, turnId),
+    );
+    if (
+      session.retrying &&
+      [
+        "item/agentMessage/delta",
+        "item/reasoning/textDelta",
+        "item/reasoning/summaryTextDelta",
+        "item/started",
+        "item/completed",
+      ].includes(message.method ?? "")
+    ) {
+      session.retrying = false;
+      session.sink.emit(
+        "model_request_progress",
+        {
+          requestId: `codex_${providerTurnId || turnId}`,
+          scope: "provider",
+          attempt: session.retryAttempt ?? 1,
+          maxAttempts: session.maxRetryAttempts,
+          status: "started",
+        },
+        turnId,
+      );
+    }
     switch (message.method) {
       case "thread/tokenUsage/updated": {
         const usage = asRecord(params.tokenUsage);
@@ -493,19 +561,9 @@ export class CodexAdapter implements RuntimeAdapter {
         return;
       }
       case "item/agentMessage/delta":
-        session.sink.emit(
-          "text_delta",
-          { text: String(params.delta ?? "") },
-          turnId,
-        );
-        return;
       case "item/reasoning/textDelta":
       case "item/reasoning/summaryTextDelta":
-        session.sink.emit(
-          "reasoning_delta",
-          { text: String(params.delta ?? "") },
-          turnId,
-        );
+        session.output!.observe(message.method, params);
         return;
       case "turn/plan/updated": {
         const plan = Array.isArray(params.plan) ? params.plan : [];
@@ -527,6 +585,7 @@ export class CodexAdapter implements RuntimeAdapter {
         return;
       case "item/started":
       case "item/completed":
+        session.output.observe(message.method, params);
         this.onItem(
           session,
           asRecord(params.item),
@@ -544,6 +603,27 @@ export class CodexAdapter implements RuntimeAdapter {
         }
         const turn = asRecord(params.turn);
         const outcome = runtimeOutcome("codex", turn.status);
+        if (
+          session.retrying ||
+          (session.retryAttempt ?? 1) > 1 ||
+          session.maxRetryAttempts
+        ) {
+          session.sink.emit(
+            "model_request_progress",
+            {
+              requestId: `codex_${providerTurnId || turnId}`,
+              scope: "provider",
+              attempt: session.retryAttempt ?? 1,
+              maxAttempts: session.maxRetryAttempts,
+              status: outcome.phase === "done" ? "completed" : "failed",
+              ...(outcome.phase !== "done"
+                ? { ...runtimeFailure(turn.error), exhausted: true }
+                : {}),
+            },
+            turnId,
+          );
+          session.retrying = false;
+        }
         if (session.policyViolationTurnId === turnId) {
           session.sink.emit(
             "task_status_changed",
@@ -592,28 +672,50 @@ export class CodexAdapter implements RuntimeAdapter {
       }
       case "error":
         if (params.willRetry === true) {
+          session.retrying = true;
+          session.output?.discardIncomplete();
+          const retry = /(?:Reconnecting|Retrying).*?(\d+)\s*\/\s*(\d+)/i.exec(
+            runtimeFailure(params).message,
+          );
+          session.maxRetryAttempts = retry
+            ? Number(retry[2])
+            : session.maxRetryAttempts;
           session.sink.emit(
             "model_request_progress",
             {
-              requestId: `cli_${turnId}`,
-              attempt: session.retryAttempt ?? 1,
+              requestId: `codex_${providerTurnId || turnId}`,
+              scope: "provider",
+              stage: "retrying",
+              maxAttempts: session.maxRetryAttempts,
+              attempt: retry ? Number(retry[1]) : (session.retryAttempt ?? 1),
               status: "failed",
               ...runtimeFailure(params),
+              retryable: true,
               exhausted: false,
             },
             turnId,
           );
-          session.retryAttempt = (session.retryAttempt ?? 1) + 1;
-          session.sink.emit(
-            "reasoning_delta",
-            { text: "", statusText: "连接暂时中断，运行方式正在重试" },
-            turnId,
-          );
+          session.retryAttempt = retry
+            ? Number(retry[1])
+            : (session.retryAttempt ?? 1) + 1;
           return;
         }
         session.sink.emit(
+          "model_request_progress",
+          {
+            requestId: `codex_${providerTurnId || turnId}`,
+            scope: "provider",
+            attempt: session.retryAttempt ?? 1,
+            maxAttempts: session.maxRetryAttempts,
+            status: "failed",
+            ...runtimeFailure(params),
+            exhausted: true,
+          },
+          turnId,
+        );
+        session.sink.emit(
           "task_status_changed",
-          { status: "failed", reason: String(params.message ?? "") },
+          { status: "failed", reason: runtimeFailure(params).message },
           turnId,
         );
         session.sink.emit(

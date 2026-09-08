@@ -73,7 +73,7 @@ export class SourceReadIndex {
     return (
       "\nArchived source index (metadata only, not proof of reading or review):\n" +
       JSON.stringify(selected) +
-      "\nThese are 1-based physical PDF pages and tool-returned source URIs. Reuse this mapping; do not reread page 1 just to rediscover page numbering. Use the exact history_read IDs for an evidence gap, with history_search or offset/limit for a specific passage. A required post-draft source check still uses get_pages or inspect_pdf_page, only for decisive evidence; do not reread the full paper. Older entries may be omitted from this bounded index and remain searchable in history."
+      "\nThese are 1-based physical PDF pages and tool-returned source URIs. Reuse this mapping; do not reread page 1 just to rediscover page numbering. Use context_read with ref=h:<taskId>:<windowId>:<itemId> from each history reference for an evidence gap, or context_search for a specific passage. A required post-draft source check still uses get_pages or inspect_pdf_page, only for decisive evidence; do not reread the full paper. Older entries may be omitted from this bounded index or cleared by retention; use surviving original sources when necessary."
     );
   }
 }

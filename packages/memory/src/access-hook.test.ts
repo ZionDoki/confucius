@@ -18,11 +18,8 @@ import {
   LOG_PROMOTE_HITS,
   MEMORY_PIN_HITS,
   MemoryPromotion,
-  PINNED_TAG,
-  PROMOTED_FROM_LOG_TAG,
   applyToolAccessHook,
   isPinned,
-  isPromotedFromLog,
   logHitsFromToolData,
   memoryIdsFromToolData,
 } from "./promote";
@@ -121,8 +118,8 @@ describe("historyBudgetChars + compactHistory + searchable logs", () => {
   });
 });
 
-describe("tool access hook promotion", () => {
-  it("routes conversation_log_* and memory reads through the hook and promotes", async () => {
+describe("legacy tool access hook", () => {
+  it("keeps legacy searches readable without promotion, pinning or renewal", async () => {
     const { hooked, memory, logs, tick, proposals } = makeStack();
     await logs.appendTurn({
       sessionId: "ses_hook",
@@ -162,13 +159,13 @@ describe("tool access hook promotion", () => {
     assert.match(log.excerpt, /survey papers/i);
 
     assert.equal(memory.stats().total, 0);
-    assert.equal(proposals.size, 1);
-    // Simulate the separate explicit approval before exercising memory-read pinning.
-    await memory.applyOps([...proposals.values()], "ses_hook");
-    const promoted = await memory.list({ tags: [PROMOTED_FROM_LOG_TAG] });
-    assert.equal(promoted.length, 1);
-    assert.equal(isPromotedFromLog(promoted[0].tags), true);
-    assert.match(promoted[0].content, /survey papers/i);
+    assert.equal(proposals.size, 0);
+    const saved = await memory.save({
+      content: "Survey papers are useful for entering a field",
+      protection: "none",
+    });
+    const promoted = [saved];
+    const usedAt = saved.lastUsedAt;
 
     const query = promoted[0].content.slice(0, 40);
     let lastMemory;
@@ -188,8 +185,8 @@ describe("tool access hook promotion", () => {
     assert.equal(listed.ok, true);
     const listedIds = memoryIdsFromToolData(listed.ok ? listed.data : null);
     assert.ok(listedIds.includes(promoted[0].id));
-    assert.equal(isPinned(memory.get(promoted[0].id)?.tags), true);
-    assert.ok(memory.get(promoted[0].id)?.tags.includes(PINNED_TAG));
+    assert.equal(isPinned(memory.get(promoted[0].id)?.tags), false);
+    assert.equal(memory.get(saved.id)?.lastUsedAt, usedAt);
   });
 
   it("does not fail the tool when the access hook throws", async () => {

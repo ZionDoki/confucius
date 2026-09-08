@@ -8,7 +8,7 @@ import {
 } from "@confucius/memory";
 import { ConfuciusMemoryToolProvider } from "./MemoryTools";
 
-it("exposes conversation-log tools and searches and reads persisted task history", async () => {
+it("retains hidden conversation-log aliases for existing calls", async () => {
   const fs = new InMemoryFileSystem();
   const memory = new MemoryEngine({ fs, root: "/memory" });
   const logs = new ConversationLogEngine({ fs, root: "/logs" });
@@ -22,7 +22,7 @@ it("exposes conversation-log tools and searches and reads persisted task history
   const provider = new ConfuciusMemoryToolProvider(memory, logs);
   const names = provider.listTools().map((tool) => tool.name);
   for (const name of ["conversation_log_search", "conversation_log_read"]) {
-    assert.equal(names.filter((candidate) => candidate === name).length, 1);
+    assert.equal(names.filter((candidate) => candidate === name).length, 0);
     assert.equal(provider.getMeta(name)?.mutatesState, false);
     assert.equal(provider.getMeta(name)?.catalog, "memory.read");
     assert.equal(provider.getSchema(name)?.type, "object");

@@ -87,6 +87,8 @@ export interface ModelMessage {
 }
 
 export interface ModelRequest {
+  /** Transport attempts including retries; maintenance may use a smaller quota. */
+  maxAttempts?: number;
   requestId?: string;
   onRequestProgress?: (progress: ModelRequestProgress) => void | Promise<void>;
   /** Host accounting/checkpoint hook, awaited before each transport attempt. */

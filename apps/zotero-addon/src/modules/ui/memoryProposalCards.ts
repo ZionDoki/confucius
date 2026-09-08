@@ -14,8 +14,15 @@ export function renderMemoryProposal(
   const details = doc.createElement("details");
   details.style.flex = "1";
   const summary = doc.createElement("summary");
-  const action =
-    proposal.op === "delete"
+  const action = proposal.protection
+    ? proposal.protection === "user"
+      ? zh
+        ? "保护"
+        : "Protect"
+      : zh
+        ? "取消保护（允许自动清退）"
+        : "Unprotect (allow eviction)"
+    : proposal.op === "delete"
       ? zh
         ? "删除"
         : "Delete"

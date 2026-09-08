@@ -9,6 +9,23 @@ import {
 import { TOOL_DEFINITIONS, WRITE_TOOL_NAMES } from "./catalog";
 
 describe("paperText", () => {
+  it("retains named numbered methods and their subsections without treating prose or table rows as headings", () => {
+    const sections = parseSections(
+      "2 Background and Motivation\nThe context.\n3 RulePilot: Methodology\n3.1 Workflow Design\nThe central method.\n4 Evaluation\nResults indicate a conditional improvement.\n1.000 0.750 0.416\n5 Limitations\nOnly one vendor was tested.",
+    );
+    assert.deepEqual(
+      sections.map((s) => s.normalizedName),
+      ["background", "methodology", "experiments", "limitations"],
+    );
+    assert.match(
+      findSection(sections, "methodology")!.content,
+      /3.1 Workflow Design\nThe central method/,
+    );
+    assert.match(
+      findSection(sections, "experiments")!.content,
+      /Results indicate/,
+    );
+  });
   it("splits form-feed pages", () => {
     const pages = splitPages("page one\fpage two");
     assert.equal(pages.pageCount, 2);

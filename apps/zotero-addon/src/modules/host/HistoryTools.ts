@@ -187,6 +187,7 @@ export class TaskHistoryToolProvider implements ToolProvider {
             String(args.name ?? ""),
             historyQuery.offset,
             historyQuery.limit,
+            this.options.sourceIds?.(),
           );
           break;
         case "notes_write":
@@ -194,6 +195,7 @@ export class TaskHistoryToolProvider implements ToolProvider {
             taskId,
             String(args.name ?? ""),
             String(args.content ?? ""),
+            this.options.sourceIds?.(),
           );
           break;
         case "new_context":

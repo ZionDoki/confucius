@@ -28,6 +28,34 @@ export interface PaperSection {
   content: string;
 }
 
+function sectionHeading(text: string): { name: string } | undefined {
+  if (
+    !text ||
+    text.length > 100 ||
+    /[.!?;。！？]$/.test(text) ||
+    text.split(/\s+/).length > 12
+  )
+    return;
+  // Keep subsection text in its parent, so reading Methodology includes 3.1 etc.
+  if (/^\d+\.\d+\s/.test(text)) return;
+  const numbered = /^\d{1,2}\.?\s+(\p{L}.*)$/u.exec(text);
+  const title = numbered?.[1] ?? text;
+  const known = SECTION_PATTERNS.find((entry) => entry.pattern.test(title));
+  if (known)
+    return { name: /^background\b/i.test(title) ? "background" : known.name };
+  if (!numbered) return;
+  if (
+    /\b(method(?:ology)?|methods|approach|workflow|architecture)\b/i.test(title)
+  )
+    return { name: "methodology" };
+  return {
+    name: title
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, "_")
+      .replace(/_$/, ""),
+  };
+}
+
 export interface PaperPages {
   pageCount: number | null;
   pagination: "form_feed" | "unpaged";
@@ -61,7 +89,7 @@ export function parseSections(text: string): PaperSection[] {
 
   for (const line of lines) {
     const trimmed = line.trim();
-    const match = SECTION_PATTERNS.find((entry) => entry.pattern.test(trimmed));
+    const match = sectionHeading(trimmed);
     if (match) {
       if (current) {
         current.content = current.content.trim();

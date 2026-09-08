@@ -182,6 +182,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         ...this.config,
         signal,
         requestId: request.requestId,
+        maxAttempts: request.maxAttempts,
         onProgress: async (progress) => {
           await request.onRequestProgress?.(progress);
           await this.config.onRequestProgress?.(progress);

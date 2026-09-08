@@ -311,12 +311,16 @@ it("CLI willRetry is progress only; a terminal transient error remains structure
     events.some((e) => e.type === "turn_failed"),
     false,
   );
-  assert.equal(events.at(-1)?.type, "reasoning_delta");
+  assert.equal(events.at(-1)?.type, "model_request_progress");
+  assert.equal(
+    events.some((event) => event.type === "reasoning_delta"),
+    false,
+  );
   adapter.onNotification(session, {
     method: "error",
     params: { ...params, willRetry: false, turnId: "old" },
   });
-  assert.equal(events.length, 2);
+  assert.equal(events.length, 1);
   adapter.onNotification(session, {
     method: "error",
     params: { ...params, willRetry: false },
@@ -325,4 +329,119 @@ it("CLI willRetry is progress only; a terminal transient error remains structure
     events.find((e) => e.type === "turn_failed")?.payload.failure?.retryable,
     true,
   );
+});
+
+it("recovers completed-only messages and public summaries, and closes a recovered provider request", () => {
+  const adapter = new PluginCodexAdapter() as unknown as {
+    onNotification(session: unknown, message: unknown): void;
+  };
+  const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+  const session = {
+    threadId: "thread",
+    turnId: "turn",
+    hostTurnId: "host",
+    sink: {
+      emit: (type: string, payload: Record<string, unknown>) =>
+        events.push({ type, payload }),
+    },
+  };
+  const notify = (method: string, payload: Record<string, unknown>) =>
+    adapter.onNotification(session, {
+      method,
+      params: { threadId: "thread", turnId: "turn", ...payload },
+    });
+  notify("error", {
+    willRetry: true,
+    error: {
+      message: "Reconnecting... 1/5",
+      codexErrorInfo: "responseStreamDisconnected",
+    },
+  });
+  assert.equal(events.at(-1)?.payload.maxAttempts, 5);
+  for (let i = 0; i < 2; i++) {
+    notify("item/completed", {
+      item: {
+        id: "r",
+        type: "reasoning",
+        summary: ["Public summary"],
+        content: [],
+      },
+    });
+    notify("item/completed", {
+      item: {
+        id: "f",
+        type: "agentMessage",
+        text: "Complete answer",
+        phase: "final_answer",
+      },
+    });
+  }
+  assert.deepEqual(
+    events.filter((e) => e.type === "text_delta").map((e) => e.payload.text),
+    ["Complete answer"],
+  );
+  assert.deepEqual(
+    events
+      .filter((e) => e.type === "reasoning_delta")
+      .map((e) => e.payload.text),
+    ["Public summary"],
+  );
+  notify("turn/completed", { turn: { id: "turn", status: "completed" } });
+  assert.equal(
+    events.filter((e) => e.type === "model_request_progress").at(-1)?.payload
+      .status,
+    "completed",
+  );
+});
+
+it("auxiliary analysis fills completed-only output after a retry and always closes its process", async () => {
+  const adapter = new PluginCodexAdapter();
+  let notify: (message: unknown) => void = () => {};
+  let closed = false;
+  const rpc = {
+    onNotification: (handler: typeof notify) => {
+      notify = handler;
+    },
+    onFailure: () => {},
+    request: async (method: string) => {
+      if (method === "config/read") return { config: {} };
+      if (method === "thread/start") return { thread: { id: "analysis" } };
+      if (method === "turn/start") {
+        notify({
+          method: "item/agentMessage/delta",
+          params: { itemId: "answer", delta: "failed fragment" },
+        });
+        notify({
+          method: "error",
+          params: {
+            willRetry: true,
+            error: { message: "Reconnecting... 1/5" },
+          },
+        });
+        for (let i = 0; i < 2; i++)
+          notify({
+            method: "item/completed",
+            params: {
+              item: {
+                id: "answer",
+                type: "agentMessage",
+                phase: "final_answer",
+                text: "Ready title",
+              },
+            },
+          });
+        notify({
+          method: "turn/completed",
+          params: { turn: { status: "completed" } },
+        });
+      }
+      return {};
+    },
+    closeAndWait: async () => {
+      closed = true;
+    },
+  };
+  Reflect.set(adapter, "openRpc", async () => rpc);
+  assert.equal(await adapter.analyze("Title", "/tmp"), "Ready title");
+  assert.equal(closed, true);
 });

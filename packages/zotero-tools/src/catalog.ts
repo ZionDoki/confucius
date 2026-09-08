@@ -397,11 +397,16 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   ),
   def(
     "get_pages",
-    "Read real physical PDF pages (1-based), preserving blank pages. Text includes [anchor:ID] before selectable passages: use that ID with commit_annotations to mark the exact native text without copying quotes or guessing pages. Markers are metadata, not paper text. If nextPage is not null, continue there; use non-overlapping ranges and do not treat a truncated result as fully read. Indexed text without reliable pages is never assigned invented page numbers.",
+    "Read real physical PDF pages (1-based), preserving blank pages. Text includes [anchor:ID] before selectable passages: use that ID with commit_annotations to mark the exact native text without copying quotes or guessing pages. Markers are metadata, not paper text. Repeated pages in the same turn are omitted unless rereadReason explains the evidence gap or missing engine output. If nextPage is not null, continue there; use non-overlapping ranges and do not treat a truncated result as fully read. Indexed text without reliable pages is never assigned invented page numbers.",
     {
       ...itemRef,
       start: { type: "integer", minimum: 1 },
       end: { type: "integer", minimum: 1 },
+      rereadReason: {
+        type: "string",
+        description:
+          "Specific evidence gap, verification purpose, or unavailable/truncated earlier output requiring this reread.",
+      },
     },
     ["libraryID", "key"],
   ),
@@ -438,13 +443,18 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   ),
   def(
     "get_annotations",
-    "Read actual Zotero annotation text/comments and this task's proposal outcomes. Each saved annotation includes its Zotero URI. Follow nextOffset until null when reviewing all saved comments; submission reconciles native state automatically.",
+    "Read actual Zotero annotation text/comments and this task's proposal outcomes. Omit limit for 25 results; page size is capped at 50 even if a larger limit is requested. Each saved annotation includes its Zotero URI. Follow nextOffset until null when reviewing all saved comments; submission reconciles native state automatically.",
     {
       ...itemRef,
       batchIds: { type: "array", items: { type: "string" } },
       includeExisting: { type: "boolean" },
       offset: { type: "integer", minimum: 0 },
-      limit: { type: "integer", minimum: 1, maximum: 50 },
+      limit: {
+        type: "integer",
+        minimum: 1,
+        description:
+          "Requested page size; defaults to 25 and is capped at 50. Follow nextOffset.",
+      },
     },
     ["libraryID", "key"],
   ),

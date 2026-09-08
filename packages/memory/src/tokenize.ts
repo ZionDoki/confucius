@@ -17,21 +17,20 @@ export function tokenize(text: string): string[] {
 }
 
 function cjkBigrams(text: string): string[] {
-  const chars: string[] = [];
-  for (const char of text) {
-    if (CJK.test(char)) {
-      chars.push(char);
-    }
-  }
   const bigrams: string[] = [];
-  for (let i = 0; i < chars.length; i++) {
-    if (i + 1 < chars.length) {
-      bigrams.push(chars[i] + chars[i + 1]);
-    }
-    if (chars.length === 1) {
-      bigrams.push(chars[i]);
+  let run: string[] = [];
+  const flush = () => {
+    if (run.length === 1) bigrams.push(run[0]);
+    for (let i = 0; i + 1 < run.length; i++) bigrams.push(run[i] + run[i + 1]);
+    run = [];
+  };
+  for (const char of text) {
+    if (CJK.test(char)) run.push(char);
+    else {
+      flush();
     }
   }
+  flush();
   return bigrams;
 }
 

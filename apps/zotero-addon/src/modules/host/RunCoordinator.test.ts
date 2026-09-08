@@ -47,6 +47,193 @@ const gap = () => ({
     { id: "report", kind: "artifact" as const, description: "Save report" },
   ],
 });
+
+it("external context switches keep the run, receipts and cumulative budget with distinct requests", async () => {
+  const state = run();
+  state.budget.modelRequestsObservable = false;
+  state.budget.toolCallsUsed = 2;
+  state.budget.promptTokens = 123;
+  let starts = 0,
+    switches = 0;
+  const ids = new Set<string>();
+  const completed = [{ id: "saved-write", description: "Already saved" }];
+  const coordinator = new RunCoordinator({
+    run: state,
+    current: () => true,
+    persist: async () => {},
+    progress: () => {},
+    snapshot: async () => ({ ...empty(), completed }),
+    requestProgress: (progress) => {
+      if (progress.status === "started") ids.add(progress.requestId);
+    },
+    switchContext: async () => {
+      switches++;
+      state.generation++;
+    },
+    executor: {
+      run: async (input) => {
+        starts++;
+        if (starts === 1) return { stopReason: "context_switch", text: "" };
+        assert.equal(input.continuation, true);
+        assert.match(input.prompt, /saved-write/);
+        return { stopReason: "completed", text: "Done" };
+      },
+    },
+  });
+  const result = await coordinator.execute(
+    "Read",
+    new AbortController().signal,
+  );
+  assert.equal(result.stopReason, "completed");
+  assert.equal(switches, 1);
+  assert.equal(state.id, "run_1");
+  assert.equal(state.budget.executorStarts, 2);
+  assert.equal(state.budget.toolCallsUsed, 2);
+  assert.equal(state.budget.promptTokens, 123);
+  assert.equal(ids.size, 2);
+  assert.deepEqual(result.work.completed, completed);
+});
+
+it("unknown writes block context switching", async () => {
+  const state = run();
+  let calls = 0;
+  const coordinator = new RunCoordinator({
+    run: state,
+    current: () => true,
+    persist: async () => {},
+    progress: () => {},
+    snapshot: async () => ({
+      ...empty(),
+      unknownOperationIds: calls ? ["uncertain-write"] : [],
+    }),
+    switchContext: async () =>
+      assert.fail("an unresolved write cannot cross the boundary"),
+    executor: {
+      run: async () => {
+        calls++;
+        return { stopReason: "context_switch", text: "" };
+      },
+    },
+  });
+  assert.equal(
+    (await coordinator.execute("Read", new AbortController().signal))
+      .stopReason,
+    "outcome_unknown",
+  );
+});
+
+it("restoring an interrupted host closes in-flight requests and preserves the last provider error", () => {
+  const state = run();
+  state.modelRequest = {
+    requestId: "executor",
+    scope: "executor",
+    status: "started",
+    attempt: 1,
+  };
+  state.providerRequest = {
+    requestId: "provider",
+    scope: "provider",
+    parentRequestId: "executor",
+    status: "started",
+    attempt: 2,
+  };
+  state.lastError = {
+    at: 2,
+    request: {
+      ...state.providerRequest,
+      status: "failed",
+      code: "responseStreamDisconnected",
+    },
+  };
+  const restored = restoreRun(state)!;
+  assert.equal(restored.status, "interrupted");
+  assert.equal(restored.modelRequest?.code, "host_restarted");
+  assert.equal(restored.providerRequest?.status, "failed");
+  assert.equal(restored.lastError?.request.code, "responseStreamDisconnected");
+  assert.equal(state.modelRequest.status, "started");
+  state.status = "interrupted";
+  state.stopReason = "host_restarted";
+  assert.equal(restoreRun(state)?.modelRequest?.code, "host_restarted");
+  state.status = "completed";
+  assert.equal(restoreRun(state)?.providerRequest?.status, "completed");
+});
+
+it("a silent external executor recovers saved annotations and completes its missing report", async () => {
+  const state = run();
+  state.budget.modelRequestsObservable = false;
+  state.requiredArtifactKinds = ["deep_read"];
+  const store = fixtureStore();
+  const ids: string[] = [];
+  const annotations = Array.from({ length: 8 }, (_, i) => ({
+    id: `annotation-${i}`,
+    description: "saved annotation",
+  }));
+  let starts = 0,
+    stops = 0;
+  const coordinator = new RunCoordinator({
+    run: state,
+    current: () => true,
+    persist: async () => {},
+    progress: () => {},
+    snapshot: async () =>
+      projectWork(
+        state,
+        await store.list(ids),
+        { completed: starts ? annotations : [], missing: [] },
+        [],
+      ),
+    recover: async () => {
+      stops++;
+    },
+    wait: async () => {},
+    executor: {
+      run: async (input) => {
+        if (++starts === 1)
+          return {
+            stopReason: "incomplete",
+            text: "",
+            failure: {
+              code: "runtime_idle_timeout",
+              message: "Runtime stopped responding",
+              retryable: true,
+            },
+          };
+        assert.equal(stops, 1);
+        assert.equal(input.continuation, true);
+        assert.match(input.prompt, /annotation-7/);
+        assert.match(input.prompt, /artifact:deep_read/);
+        assert.match(input.prompt, /preserve completed writes/);
+        const report = await store.upsert(
+          {
+            taskId: "task",
+            kind: "deep_read",
+            title: "Report",
+            body: { type: "markdown", markdown: "Evidence reviewed." },
+            status: "ready",
+          },
+          "codex",
+          [],
+          undefined,
+          executionBinding(state),
+        );
+        ids.push(report.id);
+        return {
+          stopReason: "completed",
+          text: "Saved the report and preserved eight annotations.",
+        };
+      },
+    },
+  });
+  const outcome = await coordinator.execute(
+    "Read the paper",
+    new AbortController().signal,
+  );
+  assert.equal(outcome.stopReason, "completed");
+  assert.equal(outcome.work.completed.length, 9);
+  assert.deepEqual(outcome.work.missing, []);
+  assert.equal(state.modelRequest?.status, "completed");
+  assert.equal(starts, 2);
+});
 function fixtureStore() {
   const files = new Map<string, string>();
   let count = 0;

@@ -23,10 +23,15 @@ export interface ModelRequestProgress {
   message?: string;
   partial?: { text?: string; reasoning?: string };
   purpose?: "title" | "memory";
+  scope?: "executor" | "provider";
+  parentRequestId?: string;
+  maxAttempts?: number;
+  stage?: "retrying" | "recovering";
 }
 
 export type ConfuciusEventType =
   | "model_request_progress"
+  | "context_progress"
   | "session_created"
   | "session_updated"
   | "turn_started"
@@ -63,6 +68,7 @@ export interface ConfuciusEventBase {
   turnId?: string;
   type: ConfuciusEventType;
   ts: number;
+  origin?: "executor" | "host";
 }
 
 export interface PlanStep {
@@ -72,12 +78,20 @@ export interface PlanStep {
 }
 
 type EventPayloads = {
+  context_progress: {
+    stage: "searching" | "reading" | "distilling" | "clearing" | "switching";
+    status: "started" | "completed" | "failed";
+    message?: string;
+  };
   model_request_progress: ModelRequestProgress;
   context_usage_updated: { inputTokens: number; capacityTokens?: number };
   model_usage_updated: {
     inputTokens: number;
     outputTokens: number;
     totalTokens: number;
+    cachedInputTokens?: number;
+    cacheWriteInputTokens?: number;
+    reasoningOutputTokens?: number;
   };
   context_window_changed: { window: ContextWindowState };
   history_recalled: { ref: HistoryItemRef; title: string; sourceIds: string[] };
@@ -103,6 +117,7 @@ type EventPayloads = {
     phase?: "commentary" | "final_answer";
     requestId?: string;
     attempt?: number;
+    itemId?: string;
   };
   reasoning_delta: {
     requestId?: string;
@@ -110,6 +125,8 @@ type EventPayloads = {
     text: string;
     /** Host-authored workflow phase shown while a long turn is running. */
     statusText?: string;
+    itemId?: string;
+    source?: "summary" | "content" | "host";
   };
   citation: { citation: Citation };
   context_updated: { context: SessionContext };
@@ -127,7 +144,11 @@ type EventPayloads = {
   };
   turn_aborted: { reason: string; stopReason?: string };
   task_status_changed: { status: TaskStatus; reason?: string };
-  runtime_status: { runtime: RuntimeStatus };
+  runtime_status: {
+    runtime: RuntimeStatus;
+    selection?: import("./modelReasoning").RuntimeModelSelection;
+    reasoningSummary?: "auto" | "provider_default";
+  };
   command_execution: {
     callId: string;
     command: string;

@@ -4,6 +4,7 @@ import { posix, win32 } from "node:path";
 import { createHash } from "node:crypto";
 import {
   migrateRuntimeStorage,
+  clearMigratedContextCopies,
   ResourceLocks,
   writeRuntimeText,
   runtimeIoPath,
@@ -199,6 +200,9 @@ function migrationFixture(windows = false) {
     },
     digest: async (path) =>
       createHash("sha256").update(files.get(path)!).digest("hex"),
+    remove: async (path) => {
+      files.delete(path);
+    },
   };
   put(
     paths.join(source, "state.json"),
@@ -234,6 +238,72 @@ function migrationFixture(windows = false) {
   };
 }
 describe("recoverable migration", () => {
+  it("keeps all originals when a migrated body is missing or damaged", async () => {
+    for (const damaged of [false, true]) {
+      const f = migrationFixture();
+      await migrateRuntimeStorage(f.source, f.destination, f.fs);
+      const body = f.paths.join(
+        f.destination,
+        "history",
+        "task",
+        "notes",
+        "working_1.txt",
+      );
+      if (damaged) f.files.set(body, "damaged");
+      else f.files.delete(body);
+      await assert.rejects(
+        clearMigratedContextCopies(f.destination, f.fs),
+        /originals retained/,
+      );
+      assert.ok(f.files.has(f.paths.join(f.source, "state.json")));
+      assert.equal(
+        f.files.get(
+          f.paths.join(f.source, "history", "task", "notes", "working_1.txt"),
+        ),
+        "working notes",
+      );
+    }
+  });
+  it("retries old-copy cleanup after interruption without touching user knowledge or artifacts", async () => {
+    const f = migrationFixture();
+    const artifact = f.paths.join(f.source, "artifacts", "report.md");
+    f.files.set(artifact, "saved report");
+    await migrateRuntimeStorage(f.source, f.destination, f.fs);
+    const remove = f.fs.remove!;
+    let count = 0;
+    f.fs.remove = async (path) => {
+      await remove(path);
+      if (++count === 2) throw new Error("interrupted cleanup");
+    };
+    await assert.rejects(
+      clearMigratedContextCopies(f.destination, f.fs),
+      /interrupted cleanup/,
+    );
+    f.fs.remove = remove;
+    await clearMigratedContextCopies(f.destination, f.fs);
+    await clearMigratedContextCopies(f.destination, f.fs);
+    assert.equal(f.files.has(f.paths.join(f.source, "state.json")), false);
+    assert.equal(
+      f.files.has(
+        f.paths.join(f.source, "history", "task", "notes", "working_1.txt"),
+      ),
+      false,
+    );
+    assert.equal(
+      f.files.get(
+        f.paths.join(
+          f.destination,
+          "history",
+          "task",
+          "notes",
+          "working_1.txt",
+        ),
+      ),
+      "working notes",
+    );
+    assert.equal(f.files.get(artifact), "saved report");
+    assert.ok(f.files.has(f.paths.join(f.source, "memory", "user.md")));
+  });
   for (const windows of [false, true])
     it(`resumes a verified copy without moving user knowledge (${windows ? "Windows" : "POSIX"})`, async () => {
       const f = migrationFixture(windows);

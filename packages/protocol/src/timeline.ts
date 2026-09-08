@@ -72,7 +72,7 @@ function flushPending(
   blocks: TimelineBlock[],
   reasoning: { text: string },
   tools: { calls: TimelineToolCall[] },
-  commentary: { text: string },
+  commentary: { text: string; itemId?: string },
 ): void {
   if (reasoning.text) {
     blocks.push({ kind: "reasoning", text: reasoning.text });
@@ -81,6 +81,7 @@ function flushPending(
   if (commentary.text) {
     blocks.push({ kind: "commentary", text: commentary.text });
     commentary.text = "";
+    commentary.itemId = undefined;
   }
   if (tools.calls.length) {
     blocks.push({ kind: "tools", calls: tools.calls });
@@ -124,7 +125,7 @@ export function visibleModelEvents(events: ConfuciusEvent[]): ConfuciusEvent[] {
 export function coalesceTimeline(events: ConfuciusEvent[]): TimelineBlock[] {
   const blocks: TimelineBlock[] = [];
   const reasoning = { text: "" };
-  const commentary = { text: "" };
+  const commentary: { text: string; itemId?: string } = { text: "" };
   const text: { value: string; turnId?: string } = { value: "" };
   const tools: { calls: TimelineToolCall[] } = { calls: [] };
 
@@ -137,7 +138,11 @@ export function coalesceTimeline(events: ConfuciusEvent[]): TimelineBlock[] {
     if (event.type === "text_delta") {
       if (event.payload.phase === "commentary") {
         flushText(blocks, text);
-        commentary.text += (commentary.text ? "\n\n" : "") + event.payload.text;
+        const continuation =
+          event.payload.itemId && event.payload.itemId === commentary.itemId;
+        commentary.text +=
+          (commentary.text && !continuation ? "\n\n" : "") + event.payload.text;
+        commentary.itemId = event.payload.itemId;
         continue;
       }
       flushPending(blocks, reasoning, tools, commentary);

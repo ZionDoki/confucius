@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, it } from "node:test";
+import {
+  HistoryStore,
+  InMemoryFileSystem,
+  MemoryEngine,
+} from "@confucius/memory";
 import type { ModelMessage } from "@confucius/harness";
 import { BudgetAccountant } from "@confucius/harness";
 import {
@@ -315,6 +320,7 @@ function fixture() {
   };
   const starts: BackendTurnInput[] = [];
   const backend = {
+    dispose: async (_id: string): Promise<void> => undefined,
     interrupt: async (_id: string): Promise<void> => undefined,
     startTurn: async (input: BackendTurnInput, callbacks: BackendCallbacks) => {
       starts.push(input);
@@ -323,6 +329,9 @@ function fixture() {
     },
   };
   const execution = new ToolExecutionService(memoryJsonStorage());
+  const fs = new InMemoryFileSystem();
+  const history = new HistoryStore(fs, "/history");
+  history.register(record);
   const host = Object.create(AgentHost.prototype) as LifecycleHost;
   let sequence = 0;
   Object.assign(host, {
@@ -339,7 +348,13 @@ function fixture() {
     maxIterations: () => 8,
     maxToolCalls: () => 20,
     rejectPendingApprovals: () => undefined,
-    history: { register: () => undefined, append: async () => undefined },
+    history,
+    memory: new MemoryEngine({ fs, root: "/memory" }),
+    memoryProposals: new Map(),
+    pendingApprovals: new Map(),
+    memoryConsent: () => "off",
+    contextWindowTokens: () => 32768,
+    memoryContextHints: async () => "",
     queueHistory: async () => undefined,
     persistNow: async () => undefined,
     persistSoon: () => undefined,
@@ -376,6 +391,57 @@ async function waitFor(predicate: () => boolean) {
     await setImmediate();
   }
   assert.fail("Lifecycle did not reach the expected state");
+}
+
+for (const backendKind of ["codex", "kimi"] as const) {
+  it(`${backendKind} switches the engine session while retaining task notes, outputs and budget`, async () => {
+    const { host, state, backend } = fixture();
+    state.record.backend = backendKind;
+    state.record.run = run(state.record);
+    state.record.externalSessionId = "old-engine-session";
+    state.record.externalTurnId = "old-engine-turn";
+    state.record.artifactIds = ["saved-report"];
+    state.externalSourceScope = { itemRefs: new Set(["1:PAPER"]) };
+    state.messages = [{ role: "user", content: "OLD_ENGINE_TRANSCRIPT" }];
+    const before = { ...state.record.run.budget };
+    const direct = host as unknown as {
+      history: HistoryStore;
+      switchExternalContext(state: TestState): Promise<void>;
+    };
+    await direct.history.writeNote(
+      state.record.id,
+      "progress",
+      "Continue with source 1:PAPER, report saved-report",
+      ["1:PAPER"],
+    );
+    await direct.history.writeNote(
+      state.record.id,
+      "other",
+      "OUTSIDE_SOURCE_SCOPE",
+      ["1:OTHER"],
+    );
+    await direct.history.writeNote(
+      state.record.id,
+      "legacy",
+      "UNSCOPED_LEGACY_NOTE",
+    );
+    let disposed = 0;
+    backend.dispose = async () => {
+      disposed++;
+    };
+    await direct.switchExternalContext(state);
+    assert.equal(disposed, 1);
+    assert.equal(state.record.externalSessionId, undefined);
+    assert.equal(state.record.externalTurnId, undefined);
+    assert.equal(state.record.contextWindow!.number, 2);
+    assert.deepEqual(state.record.artifactIds, ["saved-report"]);
+    assert.deepEqual(state.record.run.budget, before);
+    assert.match(JSON.stringify(state.messages), /1:PAPER/);
+    assert.doesNotMatch(
+      JSON.stringify(state.messages),
+      /OLD_ENGINE_TRANSCRIPT|OUTSIDE_SOURCE_SCOPE|UNSCOPED_LEGACY_NOTE/,
+    );
+  });
 }
 
 function toolResult(response: McpToolCallResult): ToolResult {
@@ -815,6 +881,78 @@ describe("AgentHost lifecycle ownership", () => {
     });
   }
 
+  it("shows a Codex preamble before a host MCP tool and keeps it through stream retry", async () => {
+    const { host, state, backend } = fixture();
+    Reflect.deleteProperty(host, "emitSessionEvent");
+    state.record.run = run(state.record);
+    state.activeTurnId = "host-tool-route";
+    const direct = host as unknown as {
+      emitSessionEvent(
+        state: TestState,
+        turnId: string,
+        type: string,
+        payload: unknown,
+      ): void;
+    };
+    backend.startTurn = async (input, callbacks) => {
+      callbacks.event({
+        id: "preamble",
+        sessionId: state.record.id,
+        turnId: input.turnId,
+        ts: 10,
+        type: "text_delta",
+        payload: { text: "I will read the paper." },
+      });
+      assert.equal(
+        state.events.filter((e) => e.type === "text_delta").length,
+        0,
+      );
+      direct.emitSessionEvent(state, input.turnId, "tool_requested", {
+        callId: "read",
+        toolName: "get_pages",
+        args: {},
+      });
+      assert.equal(
+        state.events.filter((e) => e.type === "text_delta").length,
+        1,
+      );
+      callbacks.event({
+        id: "retry",
+        sessionId: state.record.id,
+        turnId: input.turnId,
+        ts: 20,
+        type: "model_request_progress",
+        payload: {
+          requestId: "provider",
+          scope: "provider",
+          attempt: 1,
+          status: "failed",
+          retryable: true,
+        },
+      });
+      callbacks.stopped?.({ stopReason: "incomplete", text: "" });
+      return {};
+    };
+    const result = await host.executeBackend(
+      state,
+      {
+        task: state.record,
+        turnId: state.activeTurnId,
+        prompt: "Read",
+        mode: "agent",
+        capabilityProfile: "zotero_only",
+      },
+      new AbortController().signal,
+    );
+    assert.equal(result.text, "");
+    assert.deepEqual(
+      state.events.filter((e) => e.type === "text_delta").map((e) => e.payload),
+      [{ text: "I will read the paper.", phase: "commentary" }],
+    );
+    assert.equal(state.record.run.providerRequest?.status, "failed");
+    assert.equal(state.record.run.lastError?.request.requestId, "provider");
+  });
+
   it("CLI stream retries replace unfinished text and exhausted output stays diagnostic", async () => {
     const { host, state, backend } = fixture();
     state.record.backend = "codex";
@@ -893,6 +1031,113 @@ describe("AgentHost lifecycle ownership", () => {
       false,
     );
     assert.ok(state.record.recoverableTurn);
+  });
+
+  it("bounds a live but silent external process and ignores output after its lease expires", async () => {
+    const { host, state, backend } = fixture();
+    state.record.run = run(state.record);
+    state.activeTurnId = "silent-runtime";
+    const previous = Reflect.get(Zotero, "getMainWindow");
+    let tick: (() => void) | undefined;
+    let delay = 0;
+    Reflect.set(Zotero, "getMainWindow", () => ({
+      setTimeout: (callback: () => void, ms: number) => {
+        tick = callback;
+        delay = ms;
+        return 1;
+      },
+      clearTimeout: () => {
+        tick = undefined;
+      },
+    }));
+    try {
+      let callbacks: BackendCallbacks | undefined;
+      backend.startTurn = async (_input, received) => {
+        callbacks = received;
+        return {};
+      };
+      const pending = host.executeBackend(
+        state,
+        {
+          task: state.record,
+          turnId: state.activeTurnId,
+          prompt: "Read",
+          mode: "agent",
+          capabilityProfile: "zotero_only",
+        },
+        new AbortController().signal,
+      );
+      await waitFor(() => !!callbacks);
+      callbacks!.event({
+        id: "retry",
+        sessionId: state.record.id,
+        turnId: state.activeTurnId,
+        type: "model_request_progress",
+        payload: {
+          requestId: "r",
+          attempt: 1,
+          status: "failed",
+          retryable: true,
+        },
+        ts: 1,
+      });
+      assert.equal(delay, 120_000);
+      tick!();
+      const result = await pending;
+      assert.equal(result.stopReason, "incomplete");
+      assert.equal(result.failure?.code, "runtime_idle_timeout");
+      assert.equal(result.failure?.retryable, true);
+      const count = state.events.length;
+      callbacks!.event({
+        id: "late",
+        sessionId: state.record.id,
+        turnId: state.activeTurnId,
+        type: "text_delta",
+        payload: { text: "Late text", phase: "commentary" },
+        ts: 2,
+      });
+      assert.equal(state.events.length, count);
+      assert.equal(tick, undefined);
+    } finally {
+      Reflect.set(Zotero, "getMainWindow", previous);
+    }
+  });
+
+  it("joins a completed commentary suffix to its unphased streamed prefix", async () => {
+    const { host, state, backend } = fixture();
+    state.record.run = run(state.record);
+    state.activeTurnId = "late-phase";
+    backend.startTurn = async (input, callbacks) => {
+      for (const [index, payload] of [
+        { text: "I will", itemId: "a" },
+        { text: " read.", phase: "commentary", itemId: "a" },
+      ].entries())
+        callbacks.event({
+          id: String(index),
+          sessionId: state.record.id,
+          turnId: input.turnId,
+          ts: index,
+          type: "text_delta",
+          payload,
+        } as ConfuciusEvent);
+      callbacks.stopped?.({ stopReason: "completed", text: "Done." });
+      return {};
+    };
+    const result = await host.executeBackend(
+      state,
+      {
+        task: state.record,
+        turnId: state.activeTurnId,
+        prompt: "Read",
+        mode: "agent",
+        capabilityProfile: "zotero_only",
+      },
+      new AbortController().signal,
+    );
+    assert.deepEqual(coalesceTimeline(state.events), [
+      { kind: "commentary", text: "I will read." },
+    ]);
+    assert.equal(result.text, "Done.");
   });
 
   it("finishes a revised read-only request without reviving the prior annotation obligation", async () => {

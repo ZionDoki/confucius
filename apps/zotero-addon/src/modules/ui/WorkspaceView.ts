@@ -31,7 +31,13 @@ import {
 } from "./workspaceScrollbars";
 import { createTaskList } from "./workspaceTasks";
 import { exportTaskTrace } from "./taskTraceExport";
-import { keyedTimeline, reconcileActivity } from "./workspaceActivity";
+import {
+  keyedTimeline,
+  reconcileActivity,
+  retryActivity,
+  contextActivity,
+  turnAwaitingReply,
+} from "./workspaceActivity";
 import {
   composerKeyAction,
   taskMentionChoice,
@@ -221,6 +227,8 @@ type ApprovalRow = {
 };
 
 type MemoryRow = {
+  lastUsedAt?: number;
+  protection?: "user" | "none";
   id: string;
   type: string;
   title: string;
@@ -2419,7 +2427,7 @@ function bindWorkspace(
         fontWeight: "700",
       });
       const tags = memory.tags ?? [];
-      const pinned = tags.includes("confucius:pinned");
+      const pinned = memory.protection === "user";
       const fromLog = tags.includes("promoted-from-log");
       memoryTitle.textContent = `${pinned ? "★ " : ""}[${memory.type}] ${durableExcerpt(memory.title)}${
         fromLog ? ` · ${getString("workspace-memory-from-log")}` : ""
@@ -2444,6 +2452,7 @@ function bindWorkspace(
       del.addEventListener("click", () => {
         void (async () => {
           await rpc("memory/delete", { id: memory.id });
+          await refreshMemoryProposals();
           await refreshMemories();
           renderKnowledgeWindow();
           renderLists();
@@ -2451,6 +2460,34 @@ function bindWorkspace(
       });
       card.appendChild(memoryTitle);
       card.appendChild(memoryBody);
+      const english = getPref("uiLanguage") === "en-US";
+      card.appendChild(
+        muted(
+          doc,
+          `${english ? "Last active read" : "最后主动读取"}: ${memory.lastUsedAt ? new Date(memory.lastUsedAt).toLocaleString() : english ? "Never read" : "从未主动读取"} · ${pinned ? (english ? "Protected" : "受保护") : english ? "May expire after 90 days" : "90 天未读取后可清退"}`,
+        ),
+      );
+      const protect = button(
+        doc,
+        "",
+        pinned
+          ? english
+            ? "Unprotect"
+            : "取消保护"
+          : english
+            ? "Protect"
+            : "保护",
+      );
+      protect.addEventListener("click", async () => {
+        try {
+          await rpc("memory/protect", { id: memory.id, protected: !pinned });
+          await refreshMemoryProposals();
+          renderKnowledgeWindow();
+        } catch (error) {
+          card.appendChild(muted(doc, String(error)));
+        }
+      });
+      card.appendChild(protect);
       card.appendChild(del);
       memories.appendChild(card);
     }
@@ -3311,6 +3348,7 @@ function bindWorkspace(
     const wrap = tuiBlock(targetDoc, { margin: "10px 0 4px" });
     const label = el(targetDoc, "div");
     label.className = "tui-waiting";
+    label.setAttribute("role", "status");
     const mark = targetDoc.createElementNS(SVG_NS, "svg");
     mark.setAttribute("viewBox", "0 0 256 256");
     mark.setAttribute("aria-hidden", "true");
@@ -4812,7 +4850,7 @@ function bindWorkspace(
       row.appendChild(
         muted(
           doc,
-          `${getPref("uiLanguage") !== "en-US" ? "任务成果已保留，结束步骤待重试" : "Results saved; final steps need retry"}: ${job.pending.map((step) => (step === "title" ? "标题 / Title" : "记忆提取 / Memory")).join("、")}`,
+          `${getPref("uiLanguage") !== "en-US" ? "任务成果已保留，结束步骤待重试" : "Results saved; final steps need retry"}: ${job.pending.map((step) => (step === "title" ? "标题 / Title" : "记忆维护 / Memory maintenance")).join("、")}`,
         ),
       );
       const retry = button(
@@ -4859,8 +4897,22 @@ function bindWorkspace(
       card.dataset.entryId = `approval:${item.id}`;
       activityStream.appendChild(card);
     }
-    if (state.sending || turnAwaitingReply(state.events)) {
+    if (
+      state.sending ||
+      turnAwaitingReply(state.events) ||
+      contextActivity(state.events, getPref("uiLanguage") === "en-US")
+    ) {
       activityStream.appendChild(renderWaiting(doc, state.events));
+    }
+    if (currentTask()?.historyClearedAt) {
+      const banner = muted(
+        doc,
+        getPref("uiLanguage") === "en-US"
+          ? "Older raw work was distilled and cleared. Saved artifacts and original sources remain available."
+          : "旧工作原文已提炼并清理，已保存成果和原始资料仍可使用。",
+      );
+      banner.dataset.entryId = "history-cleared";
+      activityStream.appendChild(banner);
     }
     const sources = renderHistorySources();
     if (sources) activityStream.appendChild(sources);
@@ -6960,7 +7012,7 @@ function bindWorkspace(
 
   async function refreshMemories(): Promise<void> {
     try {
-      const listed = (await rpc("memory/list", { limit: 8 })) as {
+      const listed = (await rpc("memory/list", { limit: 200 })) as {
         memories?: MemoryRow[];
       };
       state.memories = listed.memories ?? [];
@@ -7390,7 +7442,7 @@ function bindWorkspace(
       : "";
     if (stats.usageSource === "unknown") return `${label}${window}`;
     if (stats.window?.control === "runtime")
-      return `${getString("workspace-context-runtime")}${window} · ${label}${stats.usageSource === "reported" ? ` · ${fmtTokens(stats.tokensEstimate)} tokens` : ""}`;
+      return `${getString("workspace-context-runtime")}${window} · ${label}${stats.usageSource === "reported" ? ` · ${fmtTokens(stats.tokensEstimate)} tokens` : ` · ${fmtTokens(stats.tokensEstimate)} ${getPref("uiLanguage") === "en-US" ? "host-visible tokens" : "主机可见 tokens"}`}`;
     return `${label} · ${fmtTokens(stats.tokensEstimate)} / ${fmtTokens(stats.contextWindowTokens)} tokens${window}`;
   }
   function toggleContextDetails(): void {
@@ -7418,7 +7470,7 @@ function bindWorkspace(
     panel.append(info, hint);
     const footer = el(doc, "div");
     footer.className = "confucius-menu-footer";
-    if (currentTask()?.backend === "native") {
+    if (currentTask()) {
       const reset = el(doc, "button", undefined, { type: "button" });
       reset.className = "confucius-menu-row";
       reset.textContent = getString("workspace-context-new-window");
@@ -8240,40 +8292,11 @@ function bindWorkspace(
     placeMenu(plusBtn, menu, 300);
   }
 
-  function turnAwaitingReply(events: ConfuciusEvent[]): boolean {
-    let awaiting = false;
-    let latestTurnId: string | undefined;
-    for (const event of events) {
-      if (event.type === "turn_started") {
-        latestTurnId = event.turnId;
-        awaiting = true;
-      } else if (event.turnId === latestTurnId) {
-        if (
-          event.type === "tool_requested" ||
-          event.type === "tool_progress" ||
-          event.type === "approval_required" ||
-          event.type === "approval_resolved" ||
-          event.type === "tool_result" ||
-          (event.type === "text_delta" && event.payload.phase === "commentary")
-        ) {
-          // Keep the activity indicator alongside tool progress, through
-          // approval and execution, and while waiting for the next model round.
-          awaiting = true;
-        } else if (
-          event.type === "text_delta" ||
-          event.type === "reasoning_delta" ||
-          event.type === "turn_completed" ||
-          event.type === "turn_failed" ||
-          event.type === "turn_aborted"
-        ) {
-          awaiting = false;
-        }
-      }
-    }
-    return awaiting;
-  }
-
   function runningStageText(events: ConfuciusEvent[]): string {
+    const retry = retryActivity(events, getPref("uiLanguage") === "en-US");
+    if (retry) return retry;
+    const context = contextActivity(events, getPref("uiLanguage") === "en-US");
+    if (context) return context;
     let activeTurnId: string | undefined;
     let startedAt = Date.now();
     let workflowStatus = "";

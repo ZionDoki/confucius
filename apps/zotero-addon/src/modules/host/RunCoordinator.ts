@@ -137,6 +137,7 @@ export class RunCoordinator {
         progress: import("@confucius/protocol").ModelRequestProgress,
       ): void;
       recover?(): Promise<void>;
+      switchContext?(): Promise<void>;
       wait?: (ms: number, signal: AbortSignal) => Promise<void>;
       language?: UiLanguage;
     },
@@ -159,6 +160,11 @@ export class RunCoordinator {
       if (run.budget.modelRequestsObservable) return;
       run.modelRequest = {
         requestId,
+        scope: "executor",
+        maxAttempts: 3,
+        ...(recoveries > 0 && status === "started"
+          ? { stage: "recovering" as const }
+          : {}),
         attempt: recoveries + 1,
         status,
         ...(status === "failed"
@@ -230,11 +236,29 @@ export class RunCoordinator {
       }
       if (!this.options.current()) return { ...result, work, superseded: true };
       requestProgress(
-        result.stopReason === "completed" ? "completed" : "failed",
+        result.stopReason === "completed" ||
+          result.stopReason === "context_switch"
+          ? "completed"
+          : "failed",
       );
       work = await this.options.snapshot();
       if (signal.aborted) return finish("aborted");
       if (work.unknownOperationIds.length) return finish("outcome_unknown");
+      if (
+        result.stopReason === "context_switch" &&
+        this.options.switchContext
+      ) {
+        try {
+          await this.options.switchContext();
+        } catch (error) {
+          result.failureMessage =
+            error instanceof Error ? error.message : String(error);
+          return finish("incomplete");
+        }
+        continuation = true;
+        requestId = `runtime_${run.id}_${run.budget.executorStarts + 1}`;
+        continue;
+      }
       if (result.stopReason !== "completed") {
         if (
           !run.budget.modelRequestsObservable &&
@@ -243,8 +267,16 @@ export class RunCoordinator {
         ) {
           if (recoveries >= 2) return finish("model_retries_exhausted");
           recoveries++;
+          this.options.requestProgress?.({
+            ...run.modelRequest!,
+            stage: "recovering",
+            exhausted: false,
+            delayMs: 1000 * 2 ** (recoveries - 1),
+          });
           this.options.progress(
-            `连接暂时中断，自动恢复 ${recoveries}/2；已保存的成果将保留。`,
+            this.options.language === "en-US"
+              ? `Connection interrupted; recovery ${recoveries}/2. Saved results will be preserved.`
+              : `连接暂时中断，自动恢复 ${recoveries}/2；已保存的成果将保留。`,
           );
           try {
             await this.options.recover();

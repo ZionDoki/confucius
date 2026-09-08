@@ -1,4 +1,5 @@
 import type { MemoryRecord } from "./types";
+import { contextTextHead } from "@confucius/protocol";
 import { isMemoryType, MEMORY_TYPES, type MemoryType } from "./types";
 
 /**
@@ -40,6 +41,16 @@ export function serializeMemory(record: MemoryRecord): string {
   lines.push(`updated: ${record.updatedAt}`);
   lines.push(`last-accessed: ${record.lastAccessedAt}`);
   lines.push(`access-count: ${record.accessCount}`);
+  if (record.retentionVersion === 1) {
+    lines.push("retention-version: 1");
+    if (record.lastUsedAt !== undefined)
+      lines.push(`last-used: ${record.lastUsedAt}`);
+    lines.push(
+      `retention-started: ${record.retentionStartedAt ?? record.createdAt}`,
+    );
+    lines.push(`protection: ${record.protection ?? "user"}`);
+    lines.push(`source-refs: ${JSON.stringify(record.sourceRefs ?? [])}`);
+  }
   lines.push(`confidence: ${round2(record.confidence)}`);
   if (record.sourceSessionId) {
     lines.push(`source-session: ${record.sourceSessionId}`);
@@ -81,7 +92,8 @@ export function parseMemoryFile(
     return null;
   }
   const { body: content, history } = splitHistory(body);
-  const title = map.get("title") ?? content.split("\n")[0]?.slice(0, 80) ?? id;
+  const title =
+    map.get("title") ?? contextTextHead(content.split("\n")[0] ?? id, 80);
   const now = Number(map.get("updated")) || 0;
   return {
     id,
@@ -94,10 +106,43 @@ export function parseMemoryFile(
     updatedAt: now,
     lastAccessedAt: Number(map.get("last-accessed")) || now,
     accessCount: Number(map.get("access-count")) || 0,
+    ...(map.get("retention-version") === "1"
+      ? {
+          retentionVersion: 1 as const,
+          lastUsedAt:
+            map.has("last-used") &&
+            Number.isFinite(Number(map.get("last-used")))
+              ? Number(map.get("last-used"))
+              : undefined,
+          retentionStartedAt:
+            map.has("retention-started") &&
+            Number.isFinite(Number(map.get("retention-started")))
+              ? Number(map.get("retention-started"))
+              : now,
+          protection:
+            map.get("protection") === "none"
+              ? ("none" as const)
+              : ("user" as const),
+          sourceRefs: parseSourceRefs(map.get("source-refs")),
+        }
+      : {}),
     confidence: clamp01(Number(map.get("confidence"))),
     supersedes: map.get("supersedes") || undefined,
     history,
   };
+}
+
+function parseSourceRefs(raw?: string): string[] {
+  try {
+    const value: unknown = JSON.parse(raw ?? "[]");
+    return Array.isArray(value)
+      ? value
+          .filter((ref): ref is string => typeof ref === "string")
+          .slice(0, 20)
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 function parseFrontmatter(text: string): Map<string, string> {
@@ -139,7 +184,9 @@ function splitHistory(body: string): {
     return { body: body.slice(0, open).trim(), history: [] };
   }
   const history: MemoryRecord["history"] = [];
-  for (const line of body.slice(open + HISTORY_OPEN.length, close).split("\n")) {
+  for (const line of body
+    .slice(open + HISTORY_OPEN.length, close)
+    .split("\n")) {
     const separator = line.indexOf("|");
     if (separator <= 0) {
       continue;

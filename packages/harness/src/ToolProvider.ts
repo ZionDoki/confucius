@@ -224,7 +224,7 @@ export class CompositeToolProvider implements ToolProvider {
     context?: ToolExecutionContext,
   ): Promise<ToolResult> {
     for (const provider of this.providers) {
-      if (provider.listTools().some((tool) => tool.name === name)) {
+      if (provider.getMeta(name)) {
         return provider.call(name, args, signal, context);
       }
     }

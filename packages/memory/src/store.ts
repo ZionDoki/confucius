@@ -21,6 +21,7 @@ export class FileMemoryStore {
   private records = new Map<string, MemoryRecord>();
   private accessDirty = new Set<string>();
   private loadPromise: Promise<void> | null = null;
+  private indexDirty = true;
 
   constructor(
     private readonly fs: MemoryFileSystem,
@@ -75,11 +76,14 @@ export class FileMemoryStore {
   }
 
   /** Reconcile a preallocated creation whose filesystem receipt was lost. */
-  async recover(id: string): Promise<MemoryRecord | undefined> {
+  async recover(id: string, fresh = false): Promise<MemoryRecord | undefined> {
     const cached = this.records.get(id);
-    if (cached) return cached;
+    if (cached && !fresh) return cached;
     const path = this.memoryPath(id);
-    if (!(await this.containsFile(path))) return undefined;
+    if (!(await this.containsFile(path))) {
+      if (fresh && this.records.delete(id)) this.indexDirty = true;
+      return undefined;
+    }
     const record = parseMemoryFile(
       fileName(path),
       await this.fs.readFile(path),
@@ -88,6 +92,7 @@ export class FileMemoryStore {
       throw new Error(`Cannot reconcile existing memory ${id}`);
     }
     this.records.set(id, record);
+    this.indexDirty = true;
     return record;
   }
 
@@ -107,11 +112,15 @@ export class FileMemoryStore {
 
   async put(record: MemoryRecord): Promise<void> {
     await this.fs.makeDirectory(this.memoriesDir);
-    await this.fs.writeFile(
-      this.memoryPath(record.id),
-      serializeMemory(record),
-    );
+    const text = serializeMemory(record);
+    const path = this.memoryPath(record.id);
+    await this.fs.writeFile(path, text);
+    if ((await this.fs.readFile(path)) !== text)
+      throw new Error(
+        "Memory write verification failed; originals must be retained",
+      );
     this.records.set(record.id, record);
+    this.indexDirty = true;
     this.accessDirty.delete(record.id);
   }
 
@@ -126,35 +135,38 @@ export class FileMemoryStore {
         if (await this.containsFile(path)) throw error;
       }
       this.records.delete(id);
+      this.indexDirty = true;
       this.accessDirty.delete(id);
     }
     return existed;
   }
 
-  /** Record a retrieval hit in memory; persisted by flushAccess() later. */
+  /** Record a successful explicit read; searches never call this method. */
   touch(id: string, now: number): void {
     const record = this.records.get(id);
     if (!record) {
       return;
     }
     record.lastAccessedAt = now;
+    record.lastUsedAt = now;
     record.accessCount += 1;
     this.accessDirty.add(id);
   }
 
   async flushAccess(): Promise<void> {
     const dirty = [...this.accessDirty];
-    this.accessDirty.clear();
     for (const id of dirty) {
       const record = this.records.get(id);
       if (record) {
         await this.fs.writeFile(this.memoryPath(id), serializeMemory(record));
+        this.accessDirty.delete(id);
       }
     }
   }
 
   /** Regenerate the MEMORY.md overview from the current records. */
   async rebuildIndex(): Promise<void> {
+    this.indexDirty = true;
     const records = this.all();
     const lines: string[] = [
       "# Confucius memory",
@@ -183,9 +195,15 @@ export class FileMemoryStore {
     }
     await this.fs.makeDirectory(this.root);
     await this.fs.writeFile(this.indexPath, lines.join("\n") + "\n");
+    this.indexDirty = false;
+  }
+
+  async flushIndex(): Promise<void> {
+    if (this.indexDirty) await this.rebuildIndex();
   }
 
   private memoryPath(id: string): string {
+    if (!/^[\w-]+$/.test(id)) throw new Error("Invalid memory identifier");
     return joinPath(this.memoriesDir, `${id}.md`);
   }
 }

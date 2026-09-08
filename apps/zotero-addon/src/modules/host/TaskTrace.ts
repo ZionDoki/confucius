@@ -51,6 +51,10 @@ export class TaskTraceBuffer {
         };
       });
   }
+  clear(taskId: string): void {
+    for (const [key, batch] of this.batches)
+      if (batch.events[0]?.sessionId === taskId) this.batches.delete(key);
+  }
   drain(): TraceBatch[] {
     const batches = this.snapshot();
     this.batches.clear();

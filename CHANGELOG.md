@@ -2,6 +2,68 @@
 
 ## Unreleased
 
+### Changed
+
+- Recent conversations, tool results and working notes share bounded context
+  search/read/save tools with long-term work memory. Native, Codex and Kimi can
+  rebuild context while retaining task identity, saved outputs and consumed budgets.
+- Ordinary memory is maintained automatically within 200 entries and approximately
+  16k body tokens. Search no longer renews memory or pins it. Explicit reads renew
+  its 90-day retention period; user-protected content requires confirmation to change.
+- Old completed work is distilled only when retention limits require it. Maintenance
+  has at most two model attempts per user turn, including retries. Validated results
+  precede resumable raw-history, note-version and duplicate-log cleanup. Failed or
+  unprocessed batches retain their originals; user artifacts and knowledge bases remain.
+- Memory lists show protection and last explicit use; the working indicator includes
+  retrieval, distillation, cleanup, context switching and maintenance retries.
+
+### Migration
+
+- Existing memory IDs remain stable. Unknown legacy content is protected, search
+  counts are reset, and migration starts a fresh retention period without inventing
+  a last-read time. An explicitly disabled automatic-memory setting remains disabled.
+- Verified old runtime context copies may be cleared after successful migration.
+  Cleared history cannot be restored by reopening a former engine session. External
+  CLI-owned logs and provider-side retention remain outside the host's storage policy.
+
+### Fixed
+
+- Auto-generated memory titles preserve complete emoji when shortened, avoiding
+  verification failures after UTF-8 file writes. Diagnostic events left on cleared
+  tasks no longer trigger repeated distillation or excessive history retirement.
+- Codex progress text reaches the task chat before Zotero tool calls. Completed
+  messages and public reasoning summaries fill missing stream chunks without
+  replaying text already received; whitespace and message phases are preserved.
+- The working indicator shows retry attempts, backoff and connection recovery,
+  and stays visible through reasoning and tool execution until the turn ends.
+  Silent external runtimes now enter bounded recovery, with approval waits
+  excluded and saved annotations reused when completing a missing report.
+- Restarted tasks close outstanding request states and retain the last provider
+  error. Diagnostic reports separate export errors from execution failures and
+  summarize model output, public reasoning, saved annotations, missing artifacts,
+  repeated pages and available runtime/token details.
+- Paper outlines recognize numbered method headings with custom names. PDF
+  annotation anchors separate table rows, figure labels and adjacent captions.
+  Page reads use bounded batches and identify repeated evidence; deliberate
+  rereads accept a reason. Annotation queries cap oversized page sizes and expose
+  pagination instead of rejecting otherwise valid requests.
+
+### Known limits
+
+- Context and memory regression checks and local builds pass. Codex and Kimi
+  passed isolated Zotero retrieval, context switching and restart checks; Native
+  passed the same integration with a deterministic HTTP model and retry injection.
+  Its configured real endpoint lacked an API key. External CLI maintenance output,
+  internal retries and unreported usage cannot be treated as a hard billing limit.
+  See the [acceptance record](.github/maintainers/acceptance/context-memory-refactor-2026-09-08.md).
+- An additional 30 built-XPI checks passed in isolated Zotero, covering real files,
+  approval controls, retention limits, write failures, retry indicators, SIGKILL
+  recovery and real Codex/Kimi distillation. See the
+  [reproducible acceptance suite](.github/maintainers/acceptance/context-memory-stress-2026-09-08.md).
+- Historical text never captured by the host cannot be reconstructed. Public
+  reasoning depends on what the selected engine provides. Complex PDF layout
+  extraction and Windows/Zotero installation still require runtime verification.
+
 ## 0.4.3-beta.2 - 2026-09-07
 
 This Beta improves request recovery, annotation ownership and batch filtering,

@@ -1,12 +1,12 @@
 import type { ModelMessage } from "@confucius/harness";
+import { contextTextHead } from "@confucius/protocol";
 import type { MemoryOp, MemoryRecord } from "./types";
 import { isMemoryType } from "./types";
 
 /**
- * Mem0-style consolidation: after each turn an extraction prompt sees the
- * transcript plus the most similar existing memories, and answers with a
- * strict JSON array of add/update/delete operations. Unlike Mem0 the host
- * runs the model call, so this module stays deterministic and testable.
+ * Legacy extraction helpers kept for compatibility. The host no longer calls
+ * this per-turn pipeline; retention maintenance uses a bounded batch and strict
+ * parsing before deleting raw work.
  */
 
 const SYSTEM_PROMPT = [
@@ -103,7 +103,8 @@ function coerceOp(entry: unknown): MemoryOp | null {
       return null;
     }
     const type = isMemoryType(record.type) ? record.type : "fact";
-    const title = String(record.title ?? "").trim() || content.slice(0, 64);
+    const title =
+      String(record.title ?? "").trim() || contextTextHead(content, 64);
     return {
       op: "add",
       type,
@@ -124,9 +125,7 @@ function coerceOp(entry: unknown): MemoryOp | null {
       id,
       content,
       title: String(record.title ?? "").trim() || undefined,
-      tags: Array.isArray(record.tags)
-        ? toStringArray(record.tags)
-        : undefined,
+      tags: Array.isArray(record.tags) ? toStringArray(record.tags) : undefined,
       confidence: clamp01(record.confidence),
     };
   }

@@ -334,6 +334,19 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
     );
     this.activeTasks.set(taskId, backend);
     this.activeTurnIds.set(taskId, input.turnId);
+    const runtime = this.cachedStatuses?.find(
+      (status) => status.backend === backend,
+    );
+    if (runtime)
+      sink.emit(
+        "runtime_status",
+        {
+          runtime,
+          selection: input.runtimeModel,
+          reasoningSummary: backend === "codex" ? "auto" : "provider_default",
+        },
+        input.turnId,
+      );
     sink.emit("task_status_changed", { status: "running" }, input.turnId);
     try {
       const handle = await adapter.startTurn(input, sink, this.approvals);
@@ -448,6 +461,8 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
     taskId: string,
     backend: ExternalKind,
   ): Promise<void> {
+    this.capabilities.revoke(taskId);
+    this.approvals.rejectTask(taskId);
     await this.adapter(backend)
       .dispose(taskId)
       .catch(() => undefined);

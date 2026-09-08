@@ -63,6 +63,7 @@ export const RPC_METHODS = {
   memorySearch: "memory/search",
   memorySave: "memory/save",
   memoryDelete: "memory/delete",
+  memoryProtect: "memory/protect",
   knowledgeList: "knowledge/list",
   knowledgeGet: "knowledge/get",
   knowledgeSearch: "knowledge/search",

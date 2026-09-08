@@ -14,6 +14,7 @@ export interface OperationRecord {
   name: string;
   /** Normalized public request, before domain defaults and targets are resolved. */
   request?: string;
+  retiredRequestHash?: string;
   /** The sole durable intent. Legacy fields below remain readable during migration. */
   intent?: PreparedOperation;
   args: Record<string, unknown>;
@@ -318,6 +319,75 @@ export class OperationStore implements OperationRepository {
           version: 1,
           ids: [...this.entries.keys()],
         });
+    });
+  }
+
+  /** Discard duplicate context bodies, retaining identities and final receipts. */
+  async retireContext(taskId: string): Promise<void> {
+    await this.recover();
+    await this.locks.run(["operations"], async () => {
+      for (const record of this.entries.values()) {
+        if (
+          record.context.taskId !== taskId ||
+          record.retiredRequestHash ||
+          !record.finishedAt ||
+          !record.result ||
+          record.result.effect === "unknown"
+        )
+          continue;
+        if (
+          ![
+            "context_save",
+            "notes_write",
+            "memory_save",
+            "memory_update",
+            "memory_delete",
+          ].includes(record.name)
+        )
+          continue;
+        const args = { retired: true };
+        const result: ToolResult = record.result.ok
+          ? {
+              ok: true,
+              toolName: record.name,
+              operationId: record.id,
+              effect: record.result.effect,
+              data: {
+                retired: true,
+                message:
+                  "Saved work was distilled and its raw context cleared. This receipt prevents repeating the write.",
+              },
+            }
+          : {
+              ok: false,
+              toolName: record.name,
+              operationId: record.id,
+              effect: record.result.effect,
+              code: record.result.code,
+              message: "Retired context operation",
+            };
+        await this.saveUnlocked({
+          ...record,
+          retiredRequestHash: await runtimeDigest(
+            record.request ?? JSON.stringify(record.args),
+          ),
+          request: undefined,
+          args,
+          intent: record.intent
+            ? { ...record.intent, args, recovery: { retired: true } }
+            : undefined,
+          context: {
+            taskId,
+            runId: record.context.runId,
+            turnId: record.context.turnId,
+            operationId: record.id,
+          },
+          result,
+        });
+      }
+      // load() has copied and validated every legacy record; the split journal
+      // now owns them. Leaving the aggregate would retain cleared body copies.
+      await this.storage.write("operations", { version: 1, operations: {} });
     });
   }
 

@@ -31,6 +31,68 @@ function hasGeometry(char: PdfPageChar): boolean {
   );
 }
 
+/** Table rows and figure labels are layout units, not sentences ending at the next caption. */
+function layoutBoundaries(chars: PdfPageChar[]): Set<number> {
+  const boundaries = new Set<number>();
+  let start = 0;
+  let previous: { end: number; rect: number[] } | undefined;
+  for (let end = 0; end < chars.length; end++) {
+    if (
+      !chars[end].lineBreakAfter &&
+      !chars[end].paragraphBreakAfter &&
+      end !== chars.length - 1
+    )
+      continue;
+    const line = chars.slice(start, end + 1);
+    const text = line.map(charText).join("").trim();
+    const positioned = line.filter(
+      (c) => String(c.u ?? c.char ?? "").trim() && hasGeometry(c),
+    );
+    const rect = positioned.length
+      ? [
+          Math.min(...positioned.map((c) => c.rect![0])),
+          Math.min(...positioned.map((c) => c.rect![1])),
+          Math.max(...positioned.map((c) => c.rect![2])),
+          Math.max(...positioned.map((c) => c.rect![3])),
+        ]
+      : undefined;
+    const height = rect ? Math.max(1, rect[3] - rect[1]) : 10;
+    const gaps = positioned.filter(
+      (c, i) =>
+        i > 0 &&
+        c.rect![0] - positioned[i - 1].rect![2] > Math.max(12, height * 1.5),
+    ).length;
+    const numbers = text.match(/\b\d+(?:[.,]\d+)*%?/g)?.length ?? 0;
+    const table =
+      gaps >= 2 || (numbers >= 3 && numbers * 2 >= text.split(/\s+/).length);
+    const label =
+      /^(?:[A-Z]{1,8}|\d+(?:\.\d+)?|\([a-z]\)\s+[^.!?]{1,24})$/.test(text);
+    const caption = /^(?:Figure|Fig\.|Table|Listing|Algorithm)\s+\d+\b/i.test(
+      text,
+    );
+    if (table || label) {
+      if (start) boundaries.add(start - 1);
+      boundaries.add(end);
+    }
+    if (caption && start) boundaries.add(start - 1);
+    if (previous && rect) {
+      const verticalGap = Math.max(
+        rect[1] - previous.rect[3],
+        previous.rect[1] - rect[3],
+      );
+      const columnJump =
+        Math.abs(rect[0] - previous.rect[0]) > height * 8 &&
+        Math.abs(rect[1] - previous.rect[1]) > height * 3;
+      // Reading order may continue one sentence at the top of the next column.
+      if (verticalGap > height * 2.5 && !columnJump)
+        boundaries.add(previous.end);
+    }
+    if (rect) previous = { end, rect };
+    start = end + 1;
+  }
+  return boundaries;
+}
+
 /** Sentence spans keep original ligatures, line breaks and offsets. Native
  * paragraph flags can occur mid-sentence at a font/column change; they are
  * preserved as whitespace, not treated as a complete evidence boundary. */
@@ -59,9 +121,10 @@ export async function pdfPassages(
     )
   ).slice(0, 16);
   const passages: PdfPassage[] = [];
+  const boundaries = layoutBoundaries(chars);
   let start = 0,
     text = "";
-  const flush = (end: number) => {
+  const flush = (end: number, layout = false) => {
     let first = start,
       last = end;
     while (
@@ -79,7 +142,9 @@ export async function pdfPassages(
       // bottom, cannot stand alone as evidence. Keep it readable without an ID.
       const pageFragment =
         (passages.length === 0 && /^\p{Ll}/u.test(text.trim())) ||
-        (end === chars.length - 1 && !/[.!?。！？][”’"')\]]*\s*$/.test(text));
+        (end === chars.length - 1 &&
+          !layout &&
+          !/[.!?。！？][”’"')\]]*\s*$/.test(text));
       const positioned =
         !pageFragment &&
         text.trim().length >= 12 &&
@@ -115,11 +180,12 @@ export async function pdfPassages(
         ));
     if (
       sentence ||
+      boundaries.has(index) ||
       (text.length >= 700 && char.lineBreakAfter) ||
       (text.length >= 1000 && separated) ||
       index === chars.length - 1
     )
-      flush(index);
+      flush(index, boundaries.has(index));
   }
   // One opaque token avoids asking the model to understand/reassemble page,
   // offsets and checksum fields. Keep all source validation inside the tool.

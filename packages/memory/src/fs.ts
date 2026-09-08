@@ -8,6 +8,7 @@ export interface MemoryFileSystem {
   deleteFile(path: string): Promise<void>;
   listFiles(dir: string): Promise<string[]>;
   makeDirectory(dir: string): Promise<void>;
+  fileSize?(path: string): Promise<number>;
 }
 
 export class InMemoryFileSystem implements MemoryFileSystem {
@@ -40,6 +41,10 @@ export class InMemoryFileSystem implements MemoryFileSystem {
     return [...this.files.keys()]
       .filter((path) => path.startsWith(prefix))
       .sort();
+  }
+
+  async fileSize(path: string): Promise<number> {
+    return new TextEncoder().encode(await this.readFile(path)).length;
   }
 
   async makeDirectory(): Promise<void> {

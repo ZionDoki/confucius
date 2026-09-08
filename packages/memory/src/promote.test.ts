@@ -14,7 +14,6 @@ import {
   durableExcerpt,
   isConversationLogTool,
   isPinned,
-  isPromotedFromLog,
   logHitsFromToolData,
 } from "./promote";
 
@@ -52,7 +51,7 @@ function makePair() {
 }
 
 describe("MemoryPromotion", () => {
-  it("proposes a repeatedly retrieved log excerpt without writing memory", async () => {
+  it("does not propose memories from repeated log searches", async () => {
     const { logs, memory, proposals, promotion, tick } = makePair();
     await logs.appendTurn({
       sessionId: "ses_promo",
@@ -73,14 +72,7 @@ describe("MemoryPromotion", () => {
     const promoted = await promotion.considerLogHits(hits, "survey papers");
     assert.equal(promoted.length, 0);
     assert.equal(memory.stats().total, 0);
-    assert.equal(proposals.size, 1);
-    const proposal = [...proposals.values()][0];
-    assert.equal(proposal.op, "add");
-    if (proposal.op !== "add") return;
-    assert.equal(isPromotedFromLog(proposal.tags), true);
-    assert.ok(proposal.tags?.includes("log:ses_promo"));
-    assert.match(proposal.content, /survey papers/i);
-    assert.doesNotMatch(proposal.content, /\*\*user:\*\*/);
+    assert.equal(proposals.size, 0);
 
     tick();
     const again = await promotion.considerLogHits(hits, "survey papers");
@@ -91,7 +83,7 @@ describe("MemoryPromotion", () => {
     );
   });
 
-  it("pins a memory after repeated retrievals and skips knowledge bases", async () => {
+  it("never pins ordinary memory from search frequency", async () => {
     const { memory, promotion } = makePair();
     const fact = await memory.save({
       content: "User works on retrieval-augmented generation.",
@@ -107,10 +99,10 @@ describe("MemoryPromotion", () => {
       await memory.search({ query: "retrieval-augmented", limit: 4 });
     }
     const pinned = await promotion.considerMemoryHits([fact.id, kb.id]);
-    assert.deepEqual(pinned, [fact.id]);
-    assert.equal(isPinned(memory.get(fact.id)?.tags), true);
+    assert.deepEqual(pinned, []);
+    assert.equal(isPinned(memory.get(fact.id)?.tags), false);
     assert.equal(memory.get(kb.id)?.tags.includes(PINNED_TAG), false);
-    assert.ok((memory.get(fact.id)?.confidence ?? 0) > 0.9);
+    assert.equal(memory.get(fact.id)?.confidence, 0.9);
   });
 
   it("folds a log excerpt into an existing near-duplicate instead of adding", async () => {

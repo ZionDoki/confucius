@@ -50,6 +50,11 @@ export class ZoteroMemoryFs implements MemoryFileSystem {
       .sort() as string[];
   }
 
+  async fileSize(path: string): Promise<number> {
+    const size = (await IOUtils.stat(nativePath(path))).size;
+    return size ?? new TextEncoder().encode(await this.readFile(path)).length;
+  }
+
   async makeDirectory(dir: string): Promise<void> {
     await IOUtils.makeDirectory(nativePath(dir), { ignoreExisting: true });
   }
@@ -107,7 +112,11 @@ export class ConfuciusMemoryToolProvider implements ToolProvider {
   ) {}
 
   listTools(): ToolDefinition[] {
-    return TOOL_DEFINITIONS.filter((tool) => MEMORY_TOOL_NAMES.has(tool.name));
+    return TOOL_DEFINITIONS.filter(
+      (tool) =>
+        MEMORY_TOOL_NAMES.has(tool.name) &&
+        tool.name.startsWith("knowledge_base_"),
+    );
   }
 
   getMeta(name: string): ToolRuntimeMeta | null {

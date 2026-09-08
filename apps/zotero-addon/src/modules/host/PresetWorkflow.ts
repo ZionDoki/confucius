@@ -1,5 +1,6 @@
 import type { ToolExecutionContext } from "@confucius/protocol";
 import { HISTORY_TOOL_NAMES } from "./HistoryTools";
+import { CONTEXT_TOOL_NAMES } from "./ContextTools";
 import { ARTIFACT_TOOL_NAMES } from "./ArtifactToolProvider";
 import type {
   ArtifactKind,
@@ -67,6 +68,7 @@ export function presetToolNames(workflow: PresetWorkflow): ReadonlySet<string> {
   return new Set([
     ...PRESET_READ_TOOLS,
     ...HISTORY_TOOL_NAMES,
+    ...CONTEXT_TOOL_NAMES,
     ...ARTIFACT_TOOL_NAMES,
     "load_skill",
     ...(workflow.annotationFirst

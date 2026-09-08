@@ -1,3 +1,4 @@
+import { analyzeTaskTrace } from "@confucius/protocol";
 import type { ConfuciusEvent, TaskTraceReport } from "@confucius/protocol";
 
 const CREDENTIAL =
@@ -196,6 +197,8 @@ export async function collectTaskTrace(input: {
       "Older tasks may predate event archiving; missing historical events cannot be reconstructed. UI event retention is not proof of a complete trace.",
       `Recovered ${journalCount} events from diagnostic history batches.`,
       "External engine private context, internal model requests and raw transport packets are not recorded. PDF files and binary image payloads are not bundled.",
+      "Model output includes received stream deltas and completed-item recovery. Reasoning contains only provider-exposed text or summaries; an empty section does not imply that the model did not reason. Host retry messages are execution status, not reasoning.",
+      "Runtime provenance comes from captured runtime_status events. Token usage is cumulative work, not current context size; absent cache/reasoning fields mean unavailable, not zero. Downstream engine truncation cannot be verified by the host.",
       "Sections are read during the capture interval without pausing the task or reconciling writes; an active operation can change while exporting.",
       "Task text and referenced material remain in the report. Credentials are redacted; review content before sharing.",
     ],
@@ -207,5 +210,6 @@ export async function collectTaskTrace(input: {
   const redacted = redactTrace(report, input.secrets);
   const result = redacted.value as TaskTraceReport;
   result.redactions = redacted.counts;
+  result.analysis = analyzeTaskTrace(result);
   return result;
 }

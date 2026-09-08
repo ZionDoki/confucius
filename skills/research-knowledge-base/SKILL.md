@@ -8,7 +8,8 @@ allowed-tools:
   - knowledge_base_create
   - knowledge_base_update
   - knowledge_base_save_entry
-  - memory_search
+  - context_search
+  - context_read
   - search_items
   - search_fulltext
   - search_notes

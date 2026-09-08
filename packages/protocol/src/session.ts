@@ -86,6 +86,13 @@ export interface ResearchTaskRecord extends SessionRecord {
     error?: string;
     requests?: import("./events").ModelRequestProgress[];
     attempts?: number;
+    maintenanceTarget?: string;
+    maintenanceSourceUpdatedAt?: number;
+    maintenanceBatchId?: string;
+    /** Durable model result, saved before applying any memory or deleting originals. */
+    maintenanceOps?: unknown[];
+    maintenanceAllowedIds?: string[];
+    maintenanceApplied?: boolean;
     usage?: {
       promptTokens?: number;
       completionTokens?: number;
@@ -100,6 +107,10 @@ export interface ResearchTaskRecord extends SessionRecord {
   runtimeModel?: RuntimeModelSelection;
   externalSessionId?: string;
   externalTurnId?: string;
+  contextResetRequested?: boolean;
+  historyClearedAt?: number;
+  historyCleanupBatch?: string;
+  maintenanceBudget?: { turnId: string; attempts: number };
   status: TaskStatus;
   activeKnowledgeBaseId?: string;
   lockedContext: LockedContextSnapshot;
@@ -189,6 +200,19 @@ export function migrateSessionRecord(
       externalSessionId:
         backend !== "native" && typeof candidate.externalSessionId === "string"
           ? candidate.externalSessionId
+          : undefined,
+      contextResetRequested:
+        candidate.contextResetRequested === true || undefined,
+      historyClearedAt:
+        typeof candidate.historyClearedAt === "number"
+          ? candidate.historyClearedAt
+          : undefined,
+      maintenanceBudget:
+        candidate.maintenanceBudget &&
+        typeof candidate.maintenanceBudget.turnId === "string" &&
+        Number.isSafeInteger(candidate.maintenanceBudget.attempts) &&
+        candidate.maintenanceBudget.attempts >= 0
+          ? candidate.maintenanceBudget
           : undefined,
       externalTurnId:
         backend !== "native" && typeof candidate.externalTurnId === "string"

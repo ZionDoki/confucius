@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import {
-  buildExtractionMessages,
-  parseExtractionResponse,
-} from "./extract";
+import { buildExtractionMessages, parseExtractionResponse } from "./extract";
 import { MemoryEngine } from "./engine";
 import { InMemoryFileSystem } from "./fs";
 import { serializeMemory } from "./markdown";
@@ -104,7 +101,7 @@ describe("MemoryEngine", () => {
     history: [],
   };
 
-  it("saves, searches, and reinforces access", async () => {
+  it("saves and searches without treating a search as an explicit read", async () => {
     const { engine } = makeEngine([seedRecord]);
     const saved = await engine.save({
       content: "User works on retrieval-augmented generation.",
@@ -116,7 +113,9 @@ describe("MemoryEngine", () => {
     const hits = await engine.search({ query: "retrieval augmented" });
     assert.ok(hits.some((hit) => hit.record.id === saved.id));
     const after = engine.get(saved.id);
-    assert.equal(after?.accessCount, 1);
+    assert.equal(after?.accessCount, 0);
+    await engine.read(saved.id);
+    assert.equal(engine.get(saved.id)?.accessCount, 1);
   });
 
   it("applies add/update/delete ops and keeps revision history", async () => {
