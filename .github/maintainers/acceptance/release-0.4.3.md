@@ -17,6 +17,7 @@
 ## 候选检查
 
 - `npm test`：984 项通过，零失败、零跳过。typecheck、lint、build 全部通过。
+  release:check、版本一致性、技能同步和 `git diff --check` 也通过。
   分项为根脚本 8、harness 162、mcp-client 2、memory 66、protocol 111、
   skill-format 10、zotero-tools 17、agent-sidecar 31、zotero-addon 577。
 - 根包、全部 workspace、锁文件、`CONFUCIUS_VERSION`、XPI manifest 与更新记录
@@ -75,6 +76,8 @@
 `low`，只运行一个精确证据样例。约 60.9 秒完成，search/read/save/new_context
 各一次；从长原文后部带入准确位置与版本，换窗后直接回答，无重复读取。
 两个执行器、两个窗口、零维护调用；重启保留已消耗运行与维护额度。
+Codex 公开报告输入 53,902、输出 334、合计 54,236 tokens，其中缓存输入为
+34,432；缓存为输入子集，不重复相加，CLI 内部请求数量仍未知。
 
 开发期已完成一次受限 Kimi 2.7 实测：K2.7 Coding、Thinking On，约 44.5 秒，
 search/read/save/new_context 各一次，两个窗口，零宿主维护调用，重启后额度保持。
@@ -87,8 +90,38 @@ Kimi 推理额度，不把旧包摘要写成当前候选包。
 
 ## 公开发布核验
 
-此节在推送 tag、CI 发布和公开更新实测后补充。候选安装通过不代表公开下载资产
-或用户更新链路已经通过。正式版应设置 `prerelease=false`、`draft=false`，并成为
-Latest；已发布 tag 与资产不覆盖。
+`v0.4.3` 指向提交 `cf99cff8fc31b1fb77b75fb03048f302bf0bb817`。
+[GitHub Release](https://github.com/ZionDoki/confucius/releases/tag/v0.4.3)
+于 2026-09-08 13:54:54 UTC 发布，`draft=false`、`prerelease=false`，Latest 为
+`v0.4.3`。未移动已发布 tag，也未替换公开资产。
+
+- [tag CI](https://github.com/ZionDoki/confucius/actions/runs/34234655438) 的
+  Node.js 22、24 验证与发布任务均成功；对应
+  [master CI](https://github.com/ZionDoki/confucius/actions/runs/34234655103) 成功。
+- 发布正文与 CHANGELOG 的提取结果一致，Full Changelog 从上一稳定版
+  `v0.4.2` 比较到 `v0.4.3`。
+- 仅有 `confucius.xpi`、`update.json`、`update-beta.json` 三个资产，均为 uploaded，
+  下载大小和 GitHub SHA-256 一致。两份更新文件的版本、下载链接、兼容范围和
+  SHA-512 均与公开 XPI 对应。
+- 公开 XPI 为 606,792 bytes，SHA-256：
+  `817244b0f1019d6b77cee2065f83646ef15bab8390e285678a3904c18a9c7016`。
+  两份更新文件各为 573 bytes，SHA-256 均为
+  `b3a6e87ac9744906f40495f168fada41a4390208ed657f87716137ad4e6c88ea`。
+
+## 公开更新器端到端验收
+
+再次从公开 0.4.2 与 0.4.3-beta.2 分别新建隔离安装，使用真实 Confucius 更新器
+发现、下载、校验和安装公开 0.4.3；每条路径 **25 项通过**。两条路径均验证：
+
+- stable 与 beta 渠道都发现相同的正式版 0.4.3；关闭 Zotero 全局自动更新不影响
+  Confucius 的手动检查、下载与安装。
+- 下载后重启，实际运行普通安装的 0.4.3；安装文件摘要与 GitHub 公开资产一致。
+- 候选升级的 17 项检查在公开包上重新通过，包含原文逐文件一致、来源与草稿、
+  记忆和待审批提案、关闭自动清理的迁移、写入回执复用和预算持续累计。
+- 再次检查显示已是最新版本，不提供重复安装；关闭 Beta 渠道不降级，再次重启
+  后仍为正式版，显式 stable 选择持久保留。
+
+验收进程均已退出。此次没有向用户日常 profile 安装插件，没有修改个人文库。
+公开升级结果不扩大上述模型、平台或长任务的验证范围。
 
 隔离脚本、原始日志、机器路径及样例文库只保存在已忽略的 `output/release-0.4.3/`。
