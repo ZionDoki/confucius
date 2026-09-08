@@ -17,6 +17,7 @@
   zotero-tools 17、agent-sidecar 31、zotero-addon 582。
 - 版本一致性和技能同步通过。根包、全部 workspace、锁文件、CONFUCIUS_VERSION、
   XPI manifest 与两份更新记录均为 0.4.4；插件 ID 为 `confucius@zotero.plugin`。
+- `npm run release:check -- v0.4.4` 与 `git diff --check` 通过。
 - `update.json` 与 `update-beta.json` 都指向 `v0.4.4/confucius.xpi`，SHA-512
   与候选包一致。manifest 与更新记录均声明 Zotero 6.999–10.*。
 - 本地候选 XPI：609,632 bytes，SHA-256 为
@@ -93,4 +94,42 @@
 测试仅启动和关闭脚本自己的隔离进程，没有安装到日常 Zotero profile，未修改
 个人文库。原始日志、截图、测试脚本和配置留在已忽略的 `output/release-0.4.4/`。
 
-本文以上为发布前候选包验收，公开发布资产和更新器验收在发布完成后补充。
+## 公开发布核验
+
+`v0.4.4` 指向提交 `29a4ec9c0244d02f412a28e9ac86cb86d264a0d4`。
+[GitHub Release](https://github.com/ZionDoki/confucius/releases/tag/v0.4.4)
+于 2026-09-08 15:52:30 UTC 发布，`draft=false`、`prerelease=false`，Latest 为
+`v0.4.4`。没有移动 tag 或替换公开资产。
+
+- [tag CI](https://github.com/ZionDoki/confucius/actions/runs/34247254962) 的
+  Node.js 22、24 验证和发布任务全部成功；对应
+  [master CI](https://github.com/ZionDoki/confucius/actions/runs/34247255212) 成功。
+- 发布正文与 CHANGELOG 提取结果一致，Full Changelog 从上一稳定版 v0.4.3
+  比较到 v0.4.4。
+- 仅有 `confucius.xpi`、`update.json`、`update-beta.json` 三个资产，均为 uploaded。
+  下载大小和 GitHub SHA-256 一致，两份更新文件的版本、链接、兼容范围和
+  SHA-512 均与公开 XPI 对应。
+- 公开 XPI 为 610,077 bytes，SHA-256：
+  `334ed323ee49b726246f60c697b0aa63740f40a4add62081b559e6278e710e8f`。
+  两份更新文件各 573 bytes，SHA-256 均为
+  `3494da45b1d9c79d6e45053ac8ccf5286fe0670ff4212a8f364d96b36f4f2b9b`。
+
+## 公开安装包与更新器验收
+
+下载公开 CI XPI 后，重新使用独立 profile 运行完整界面测试，**28 项通过、615 次
+计数点击**。文章和时间模式、异步加载、搜索、删除、折叠、新建焦点、编码和
+loading 检查全部重跑通过。公开包的浅色旧变量场景、深色正常场景截图再次检查，
+C 图标、状态正文与时钟均可见，流式事件下动画连续。
+
+另从公开 0.4.3、0.4.3-beta.2 分别建立独立安装，通过真实 Confucius 更新器检查、
+下载、校验并安装公开 0.4.4，分别 **28 项和 29 项通过**。
+
+- 关闭 Zotero 全局自动更新时，Confucius 的手动检查和安装仍正常。stable 与
+  beta 渠道都发现当前最新稳定版 0.4.4。
+- 重启后确认普通安装的实际版本为 0.4.4，安装文件摘要与公开资产一致。
+- 候选升级的 20／21 项检查在公开包上重新通过，包括原文逐文件一致、未发送
+  中文草稿、文章与未关联分组迁移、任务模式、更新设置和完成写入回执复用。
+- 已是 0.4.4 时不重复提供安装；关闭 Beta 不降级；再重启后 stable 选择仍保留。
+
+所有隔离验收进程已退出。此次发布没有向日常 Zotero profile 安装插件，公开包
+验收不扩大上述平台、文库规模或真实模型的验证范围。
