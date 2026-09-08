@@ -978,6 +978,12 @@ export class AgentHost {
           entry.loadedSkills ?? (entry.skillSlug ? [entry.skillSlug] : []),
         );
         const record = migrateSessionRecord(entry.record);
+        if (!record.articleSources) {
+          record.articleSources = contextArticles(
+            record.run?.sources ?? record.lockedContext,
+          );
+          repaired = true;
+        }
         if (
           parsed.runtimeStorageVersion !== 1 &&
           record.capabilityProfile === "zotero_only"
@@ -2488,6 +2494,7 @@ export class AgentHost {
           ? params.activeKnowledgeBaseId
           : undefined,
       lockedContext,
+      articleSources: contextArticles(lockedContext),
       artifactIds: [],
       capabilityProfile: capabilities.capabilityProfile,
       workingDirectory: capabilities.workingDirectory,
@@ -2592,6 +2599,12 @@ export class AgentHost {
       branch.record.status = "ready";
       branch.record.recoverableTurn = undefined;
       branch.record.run = undefined;
+      branch.record.articleSources = (
+        source.record.articleSources ??
+        contextArticles(
+          source.record.run?.sources ?? source.record.lockedContext,
+        )
+      ).map((item) => ({ ...item }));
       branch.record.externalSessionId = undefined;
       branch.record.externalTurnId = undefined;
       await this.persistNow();
@@ -2688,6 +2701,10 @@ export class AgentHost {
     const taskId = String(params.taskId ?? params.sessionId ?? "");
     const state = this.requireSession(taskId);
     const follow = params.mode === "follow_reader";
+    // Preserve the original association of legacy tasks before the reader moves.
+    state.record.articleSources ??= contextArticles(
+      state.record.run?.sources ?? state.record.lockedContext,
+    );
     // A running turn keeps its source/approval boundary. The UI can preview the
     // next attachment; the next idle poll or Send applies it to the task.
     if (follow && state.activeTurnId) return state.record;

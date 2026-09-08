@@ -50,7 +50,7 @@ export const TUI_CSS = `
   line-height: 1.6;
   font-weight: 500;
   letter-spacing: 0.04em;
-  color: var(--confucius-muted);
+  color: var(--confucius-muted, #6d665c);
 }
 .tui-waiting-mark {
   position: relative;
@@ -59,23 +59,33 @@ export const TUI_CSS = `
   height: 19px;
   margin-top: 1px;
   flex: none;
+  color: var(--confucius-loading-deep, var(--confucius-accent, #805f38));
+}
+.tui-waiting-mark > svg { display: block; width: 100%; height: 100%; }
+.tui-waiting-metal {
+  display: none;
+  position: absolute;
+  inset: 0;
   overflow: hidden;
-  background: var(--confucius-loading-deep);
+  background: var(--confucius-loading-deep, var(--confucius-accent, #805f38));
   mask: url("chrome://confucius/content/icons/favicon.svg") center / contain no-repeat;
   -webkit-mask: url("chrome://confucius/content/icons/favicon.svg") center / contain no-repeat;
 }
-.tui-waiting-mark::before {
+@supports (mask-image: url("")) or (-webkit-mask-image: url("")) {
+  .tui-waiting-metal { display: block; }
+}
+.tui-waiting-metal::before {
   content: "";
   position: absolute;
   inset: -40%;
-  background: conic-gradient(from -45deg, var(--confucius-loading-deep) 0deg, var(--confucius-accent) 80deg, var(--confucius-loading-bright) 140deg, var(--confucius-accent) 190deg, var(--confucius-loading-deep) 250deg, var(--confucius-loading-bright) 325deg, var(--confucius-loading-deep) 360deg);
+  background: conic-gradient(from -45deg, var(--confucius-loading-deep, var(--confucius-accent, #805f38)) 0deg, var(--confucius-accent, #805f38) 80deg, var(--confucius-loading-bright, #d2ad78) 140deg, var(--confucius-accent, #805f38) 190deg, var(--confucius-loading-deep, var(--confucius-accent, #805f38)) 250deg, var(--confucius-loading-bright, #d2ad78) 325deg, var(--confucius-loading-deep, var(--confucius-accent, #805f38)) 360deg);
   animation: confucius-waiting-turn var(--confucius-waiting-period) linear infinite;
 }
-.tui-waiting-mark::after {
+.tui-waiting-metal::after {
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(110deg, transparent 28%, var(--confucius-loading-bright) 48%, transparent 68%);
+  background: linear-gradient(110deg, transparent 28%, var(--confucius-loading-bright, #d2ad78) 48%, transparent 68%);
   background-size: 250% 100%;
   animation: confucius-waiting-glaze calc(var(--confucius-waiting-period) * 1.5) ease-in-out infinite;
 }
@@ -85,14 +95,20 @@ export const TUI_CSS = `
   gap: 8px;
   min-width: 0;
 }
-.tui-waiting-text {
+.tui-waiting-message {
+  position: relative;
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.tui-waiting-text { display: block; color: var(--confucius-muted, #6d665c); }
+.tui-waiting-shine { display: none; pointer-events: none; user-select: none; }
 @supports (background-clip: text) or (-webkit-background-clip: text) {
-  .tui-waiting-text {
+  .tui-waiting-shine {
+    display: block;
+    position: absolute;
+    inset: 0;
     color: transparent;
-    background: linear-gradient(105deg, var(--confucius-muted) 0%, var(--confucius-muted) 40%, var(--confucius-loading-shine) 48%, var(--confucius-loading-shine) 52%, var(--confucius-muted) 60%, var(--confucius-muted) 100%);
+    background: linear-gradient(105deg, transparent 40%, var(--confucius-loading-shine, var(--confucius-accent, #805f38)) 48%, var(--confucius-loading-shine, var(--confucius-accent, #805f38)) 52%, transparent 60%);
     background-size: 250% 100%;
     background-clip: text;
     -webkit-background-clip: text;
@@ -102,20 +118,16 @@ export const TUI_CSS = `
 .tui-waiting-elapsed {
   flex: none;
   white-space: nowrap;
-  color: var(--confucius-muted);
+  color: var(--confucius-muted, #6d665c);
   font-variant-numeric: tabular-nums;
   letter-spacing: .02em;
 }
 .tui-waiting-elapsed[hidden] { display: none; }
 @media (prefers-reduced-motion: reduce), (forced-colors: active) {
-  .tui-waiting-mark { background: var(--confucius-accent); }
-  .tui-waiting-mark::before, .tui-waiting-mark::after {
+  .tui-waiting-metal, .tui-waiting-shine {
     display: none;
-    animation: none;
   }
-  .tui-waiting-text {
-    background: none;
-    color: var(--confucius-muted);
+  .tui-waiting-metal::before, .tui-waiting-metal::after, .tui-waiting-shine {
     animation: none;
   }
 }
@@ -1132,11 +1144,17 @@ export const TUI_CSS = `
 .confucius-workspace-root :is(button, input, select, summary) { min-height: 28px; }
 .confucius-workspace-root textarea::placeholder { color: var(--confucius-muted); opacity: 1; }
 .confucius-workspace-root .confucius-task-search { width: 100%; height: 32px; max-height: none; min-height: 32px; box-sizing: border-box; padding: 6px 9px; margin-bottom: 8px; border: 0; border-radius: 7px; background: var(--confucius-surface); font: inherit; }
-.confucius-session-pane { scroll-padding-block: 12px; }
-.confucius-task-section-toggle { display: block; margin: 16px 0 4px; padding: 4px 8px; border: 0; background: transparent; color: var(--confucius-muted); font: inherit; font-size: .85em; font-weight: 600; text-align: left; cursor: pointer; }
-.confucius-task-section-toggle:first-child { margin-top: 4px; }
+.confucius-session-pane { scroll-padding: 104px 0 12px; }
+.confucius-task-navigation { position: sticky; top: 0; z-index: 2; padding-bottom: 1px; background: var(--confucius-canvas); }
+.confucius-task-navigation .confucius-task-search { position: static; }
+.confucius-task-organization { display: flex; gap: 2px; padding: 3px; margin-bottom: 10px; border-radius: 8px; background: var(--confucius-surface); }
+.confucius-task-organization [role=tab] { flex: 1; min-width: 0; padding: 4px 6px; border: 0; border-radius: 6px; font: inherit; font-size: .9em; color: var(--confucius-muted); background: transparent; }
+.confucius-task-organization [aria-selected=true] { color: var(--confucius-ink); background: var(--confucius-selected); }
+.confucius-task-period { margin: 14px 0 4px; padding: 4px 8px; color: var(--confucius-muted); font: inherit; font-size: .85em; font-weight: 600; }
+.confucius-task-group:first-child .confucius-task-period { margin-top: 4px; }
+.confucius-task-group-body[hidden] { display: none; }
 .confucius-session-pane .confucius-task-row { position: relative; display: flex; align-items: center; gap: 2px; margin-bottom: 2px; padding: 0 3px; border-radius: 6px; }
-.confucius-session-pane .confucius-task-row:not([data-task-group=recent]) { margin-left: 17px; }
+.confucius-session-pane[data-organization=articles] .confucius-task-row { margin-left: 17px; }
 .confucius-task-row[data-active=true] { background: var(--confucius-selected); }
 .confucius-task-row:hover { background: var(--confucius-hover); }
 .confucius-task-open { appearance: none; display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; height: 32px; max-height: none; min-height: 32px; margin: 0; padding: 5px 6px; border: 0; border-radius: 6px; box-sizing: border-box; background: transparent; color: var(--confucius-ink); text-align: left; cursor: pointer; font: inherit; }

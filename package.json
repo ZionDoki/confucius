@@ -1,6 +1,6 @@
 {
   "name": "confucius",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "private": true,
   "description": "Research workspace for Zotero",
   "license": "AGPL-3.0-or-later",
@@ -18,6 +18,7 @@
     "test:live": "node --import tsx scripts/live-e2e.mjs",
     "test:live:approval": "node scripts/live-approval.mjs",
     "test:live:zotero-tools": "node --import tsx scripts/live-zotero-tools.mjs",
+    "test:live:sidebar": "node scripts/live-sidebar-navigation.mjs",
     "sync-skills": "node scripts/sync-skills.mjs",
     "sync-skills:check": "node scripts/sync-skills.mjs --check",
     "versions:check": "node scripts/check-versions.mjs",

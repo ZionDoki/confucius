@@ -2,6 +2,67 @@
 
 ## Unreleased
 
+## 0.4.4 - 2026-09-08
+
+Confucius 0.4.4 fixes conversation navigation and restores the gold working
+indicator, including when older windows still have a cached palette.
+
+### Changed
+
+- The conversation sidebar switches between article folders and time groups,
+  remembers the selected mode, and includes conversations without an article.
+  Browsing a PDF no longer changes existing article associations.
+
+### Fixed
+
+- The working logo and status text stay visible when an older cached palette
+  lacks the shimmer colors or a decorative effect cannot render. The gold sweep
+  keeps a visible base underneath, and open Zotero windows refresh the palette
+  when the add-on version changes.
+- Rapid conversation selection keeps the last requested task selected. Background
+  updates retain click targets while navigating the sidebar, and outdated loads
+  cannot dismiss a newer selection or overwrite it.
+- Creating an article conversation attaches its article without opening or
+  focusing Zotero's reader. Repeated clicks during creation create one task,
+  and creation failures are reported in the workspace.
+- Text encoding and decoding use a native add-on sandbox independent of the
+  main Zotero window, preventing `TextEncoder is not a constructor` during
+  history operations when that window is unavailable. The UTF-8 fallback also
+  preserves Chinese text, emoji, and partial output buffers.
+
+### Upgrade notes
+
+- This is a stable release. 0.4.3 and earlier 0.4.3 Beta installations can update
+  without enabling prereleases. Restart Zotero after installation; explicit
+  channel and automatic-check settings are preserved.
+- Existing conversations, drafts and article sources are retained. Older tasks
+  gain article associations from their saved sources; browsing a different PDF
+  does not change those groups. The automatic PDF attachment still follows the
+  current reader while preserving manual attachments.
+- No new library or history conversion is introduced for 0.4.3 users. Upgrading
+  from an earlier Beta also applies the history migration described in 0.4.3;
+  downgrading does not reverse that migration.
+
+### Validation and known limits
+
+- The final candidate passed 989 tests, typecheck, lint, build and release
+  consistency checks. On macOS with Zotero 10.0.1, the installed package passed
+  28 interface checks with 615 counted clicks, including rapid and reordered
+  conversation loads, duplicate titles, search, keyboard navigation, deletion,
+  new-task races and folding at 1200, 400 and 220 pixels.
+- The installed gold logo, status and clock remained visible in light and dark
+  themes, with missing cached colors, disabled decorative effects and reduced
+  motion. Streamed updates preserved running animations. Native history retained
+  Chinese and emoji while the main-window API was unavailable.
+- Public 0.4.3 and 0.4.3-beta.2 packages passed 20 and 21 isolated candidate
+  upgrade checks respectively, preserving drafts, article associations, settings,
+  history, reports and completed writes through interruption and restart. See the
+  [release acceptance](https://github.com/ZionDoki/confucius/blob/v0.4.4/.github/maintainers/acceptance/release-0.4.4.md).
+- Live interface and installation checks covered macOS and Zotero 10.0.1 only.
+  Windows/Linux, other Zotero versions and large real libraries were not retested.
+  Synthetic conversations and deterministic local responses exercise interface
+  and persistence behavior; they do not establish live-model task quality.
+
 ## 0.4.3 - 2026-09-08
 
 Confucius 0.4.3 improves long-task continuity, local evidence recall and recovery,

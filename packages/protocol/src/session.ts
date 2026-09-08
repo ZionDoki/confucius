@@ -134,7 +134,7 @@ export interface ResearchTaskRecord extends SessionRecord {
   status: TaskStatus;
   activeKnowledgeBaseId?: string;
   lockedContext: LockedContextSnapshot;
-  /** Articles used by submitted turns, retained when the focused reader changes. */
+  /** Articles selected at creation or used by submitted turns; independent of the live reader. */
   articleSources?: LockedItemContext[];
   artifactIds: string[];
   recoverableTurn?: RecoverableTurn;

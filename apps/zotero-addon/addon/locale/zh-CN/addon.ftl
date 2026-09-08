@@ -415,8 +415,15 @@ confucius-workspace-security-normalized-changed = 路径已规范化。请检查
 # Durable research context
 confucius-workspace-task-search = 搜索任务
 confucius-workspace-tasks-running = 进行中
-confucius-workspace-tasks-recent = 最近对话
-confucius-workspace-task-articles = 文章
+confucius-workspace-task-organization = 对话组织方式
+confucius-workspace-tasks-by-articles = 按文章
+confucius-workspace-tasks-by-time = 按时间
+confucius-workspace-tasks-unfiled = 未关联文章
+confucius-workspace-tasks-time-today = 今天
+confucius-workspace-tasks-time-yesterday = 昨天
+confucius-workspace-tasks-time-week = 过去 7 天
+confucius-workspace-tasks-time-month = 过去 30 天
+confucius-workspace-tasks-time-older = 更早
 confucius-workspace-article-new-chat = 新建此文章的对话
 confucius-workspace-sidebar-collapse = 折叠对话栏
 confucius-workspace-sidebar-expand = 展开对话栏

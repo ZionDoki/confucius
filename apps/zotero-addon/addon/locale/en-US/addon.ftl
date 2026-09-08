@@ -415,8 +415,15 @@ confucius-workspace-security-normalized-changed = The path was normalized. Revie
 # Durable research context
 confucius-workspace-task-search = Search tasks
 confucius-workspace-tasks-running = In progress
-confucius-workspace-tasks-recent = Recent conversations
-confucius-workspace-task-articles = Articles
+confucius-workspace-task-organization = Organize conversations
+confucius-workspace-tasks-by-articles = By article
+confucius-workspace-tasks-by-time = By time
+confucius-workspace-tasks-unfiled = No article
+confucius-workspace-tasks-time-today = Today
+confucius-workspace-tasks-time-yesterday = Yesterday
+confucius-workspace-tasks-time-week = Previous 7 days
+confucius-workspace-tasks-time-month = Previous 30 days
+confucius-workspace-tasks-time-older = Older
 confucius-workspace-article-new-chat = New conversation about this article
 confucius-workspace-sidebar-collapse = Collapse conversations
 confucius-workspace-sidebar-expand = Expand conversations

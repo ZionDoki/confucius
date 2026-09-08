@@ -2,6 +2,7 @@ import {
   withLockedContextFingerprint,
   type LockedContextSnapshot,
   type LockedItemContext,
+  type ResearchTaskRecord,
 } from "@confucius/protocol";
 
 /** Page/selection changes are captured on Send, without rebinding on every scroll. */
@@ -35,6 +36,14 @@ export function contextArticles(
     });
   }
   return [...articles.values()];
+}
+
+/** Navigation uses committed article associations, never the live PDF preview. */
+export function taskArticles(task: ResearchTaskRecord): LockedItemContext[] {
+  return (
+    task.articleSources ??
+    contextArticles(task.run?.sources ?? task.lockedContext)
+  );
 }
 
 /** Replace only the reader's automatic source; explicit library sources survive. */

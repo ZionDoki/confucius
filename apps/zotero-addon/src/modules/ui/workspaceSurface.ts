@@ -1,4 +1,4 @@
-import { config } from "../../../package.json";
+import { config, version } from "../../../package.json";
 import { bindAppearance } from "./workspaceAppearance";
 
 const focusDocuments = new WeakSet<Document>();
@@ -38,15 +38,18 @@ function bindFocusModality(doc: Document): void {
 export function ensurePaletteStyles(doc: Document): void {
   bindFocusModality(doc);
   bindAppearance(doc);
-  if (doc.getElementById("confucius-palette-css")) return;
-  const link = doc.createElementNS("http://www.w3.org/1999/xhtml", "link");
-  link.id = "confucius-palette-css";
-  link.setAttribute("rel", "stylesheet");
-  link.setAttribute(
-    "href",
-    `chrome://${config.addonRef}/content/workspacePalette.css`,
-  );
-  (doc.head ?? doc.documentElement)?.appendChild(link);
+  const href = `chrome://${config.addonRef}/content/workspacePalette.css?v=${version}`;
+  const existing = doc.getElementById("confucius-palette-css");
+  const link =
+    existing ?? doc.createElementNS("http://www.w3.org/1999/xhtml", "link");
+  if (!existing) {
+    link.id = "confucius-palette-css";
+    link.setAttribute("rel", "stylesheet");
+  }
+  // A Zotero window can survive an add-on update with the old palette loaded.
+  // Refresh that link once per product version, without reloading on each mount.
+  if (link.getAttribute("href") !== href) link.setAttribute("href", href);
+  if (!existing) (doc.head ?? doc.documentElement)?.appendChild(link);
 }
 
 /** Shared product primitives. Also installed in Zotero's preferences document. */

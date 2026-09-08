@@ -4,6 +4,7 @@ pref("updateChannel", "auto");
 pref("workspaceWidth", 1100);
 pref("workspaceHeight", 760);
 pref("workspaceLayout", "sidebar");
+pref("workspaceTaskOrganization", "articles");
 pref("workspaceSidebarWidth", 400);
 pref("apiKey", "");
 pref("baseUrl", "https://api.openai.com/v1");

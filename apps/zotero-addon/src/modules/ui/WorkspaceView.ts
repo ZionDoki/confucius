@@ -2,7 +2,7 @@ import { renderMemoryProposal } from "./memoryProposalCards";
 import { setAnnotationFilterTask } from "./annotationBatchFilter";
 import { artifactWindows } from "./artifactWindow";
 import { UI_FONT_STACKS } from "./workspaceTypography";
-import { getPref } from "../../utils/prefs";
+import { getPref, setPref } from "../../utils/prefs";
 import { WorkspaceFormDrafts } from "./workspaceDrafts";
 import {
   createComposerStatusChip,
@@ -1194,6 +1194,8 @@ function bindWorkspace(
   let renderedTimelineTaskId: string | null = null;
   let loadedComposerTaskId: string | null = null;
   let taskLoadGeneration = 0;
+  let pendingTaskId: string | null = null;
+  let sessionListGeneration = 0;
   let pendingPermissionUpdate: Promise<void> = Promise.resolve();
   let pendingReaderUpdate: Promise<void> = Promise.resolve();
   let presetUpdatePending = false;
@@ -1852,6 +1854,8 @@ function bindWorkspace(
   resizeObserver?.observe(root);
   win?.addEventListener("resize", onWindowResize);
   layoutCleanups.set(root, () => {
+    taskLoadGeneration += 1;
+    sessionListGeneration += 1;
     rememberComposerDraft();
     rememberTimelineViewport();
     workspaceViewState = {
@@ -3846,6 +3850,7 @@ function bindWorkspace(
   }
 
   async function refreshArtifacts(taskId = state.sessionId): Promise<void> {
+    const selection = taskLoadGeneration;
     if (!taskId) {
       state.artifacts = [];
       return;
@@ -3854,10 +3859,12 @@ function bindWorkspace(
       const listed = (await rpc("artifact/list", { taskId })) as {
         artifacts?: ArtifactRecord[];
       };
-      if (state.sessionId !== taskId) return;
+      if (state.sessionId !== taskId || selection !== taskLoadGeneration)
+        return;
       state.artifacts = listed.artifacts ?? [];
     } catch {
-      if (state.sessionId === taskId) state.artifacts = [];
+      if (state.sessionId === taskId && selection === taskLoadGeneration)
+        state.artifacts = [];
     }
   }
 
@@ -3928,67 +3935,78 @@ function bindWorkspace(
   async function loadTask(
     taskId: string,
     preserveModelMenu = false,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const generation = ++taskLoadGeneration;
-    const previousTaskId = state.sessionId;
-    const switching = previousTaskId !== taskId;
-    if (switching) {
-      if (!preserveModelMenu) closeEndpointMenu();
-      closePlusMenu();
-      doc.getElementById("confucius-source-menu")?.remove();
-      rememberComposerDraft(previousTaskId);
-      rememberTimelineViewport();
-      clearPendingAttachments();
+    pendingTaskId = taskId;
+    updateTaskList(state.sessions, taskId);
+    try {
+      const previousTaskId = state.sessionId;
+      const switching = previousTaskId !== taskId;
+      if (switching) {
+        if (!preserveModelMenu) closeEndpointMenu();
+        closePlusMenu();
+        doc.getElementById("confucius-source-menu")?.remove();
+        rememberComposerDraft(previousTaskId);
+        rememberTimelineViewport();
+        clearPendingAttachments();
+      }
+      const [loaded, bundle] = (await Promise.all([
+        rpc("task/load", { taskId }),
+        rpc("task/events", { taskId }),
+      ])) as [ResearchTaskRecord, { events?: ConfuciusEvent[] }];
+      if (generation !== taskLoadGeneration) return false;
+      if (switching && state.sessionId === previousTaskId) {
+        // The user may have kept typing or scrolling while the task loaded.
+        rememberComposerDraft(previousTaskId);
+        rememberTimelineViewport();
+      }
+      if (!composerDrafts.has(taskId))
+        composerDrafts.set(taskId, loaded.draft?.text ?? "");
+      if (!referenceDrafts.has(taskId))
+        referenceDrafts.set(
+          taskId,
+          loaded.draft?.references ?? loaded.references ?? [],
+        );
+      state.sessionId = taskId;
+      setAnnotationFilterTask(taskId);
+      state.lastEventId = null;
+      state.running = false;
+      state.pendingUserText = "";
+      state.sendError = "";
+      if (switching || loadedComposerTaskId !== taskId) {
+        loadedComposerTaskId = taskId;
+        prompt.value = composerDrafts.get(taskId) ?? "";
+        closeSlashMenu();
+        closeMentionMenu();
+      }
+      const index = state.sessions.findIndex((item) => item.id === taskId);
+      if (index >= 0) state.sessions[index] = loaded;
+      else state.sessions.unshift(loaded);
+      state.mode = loaded.mode === "plan" ? "plan" : "agent";
+      state.permission =
+        loaded.permissionMode === "auto_allow"
+          ? "auto_allow"
+          : loaded.permissionMode === "deny"
+            ? "deny"
+            : "ask";
+      state.events = mergeEvents([], bundle.events ?? [], true);
+      state.lastEventId = state.events.at(-1)?.id ?? null;
+      state.running =
+        loaded.status === "running" || loaded.status === "awaiting_approval";
+      collectApprovals();
+      await refreshArtifacts(taskId);
+      if (generation !== taskLoadGeneration || state.sessionId !== taskId)
+        return false;
+      syncModeButton();
+      updateRunningUI();
+      await syncFocusedReader();
+      return generation === taskLoadGeneration && state.sessionId === taskId;
+    } catch (error) {
+      if (generation !== taskLoadGeneration) return false;
+      throw error;
+    } finally {
+      if (generation === taskLoadGeneration) pendingTaskId = null;
     }
-    const [loaded, bundle] = (await Promise.all([
-      rpc("task/load", { taskId }),
-      rpc("task/events", { taskId }),
-    ])) as [ResearchTaskRecord, { events?: ConfuciusEvent[] }];
-    if (generation !== taskLoadGeneration) return;
-    if (switching && state.sessionId === previousTaskId) {
-      // The user may have kept typing or scrolling while the task loaded.
-      rememberComposerDraft(previousTaskId);
-      rememberTimelineViewport();
-    }
-    if (!composerDrafts.has(taskId))
-      composerDrafts.set(taskId, loaded.draft?.text ?? "");
-    if (!referenceDrafts.has(taskId))
-      referenceDrafts.set(
-        taskId,
-        loaded.draft?.references ?? loaded.references ?? [],
-      );
-    state.sessionId = taskId;
-    setAnnotationFilterTask(taskId);
-    state.lastEventId = null;
-    state.running = false;
-    state.pendingUserText = "";
-    state.sendError = "";
-    if (switching || loadedComposerTaskId !== taskId) {
-      loadedComposerTaskId = taskId;
-      prompt.value = composerDrafts.get(taskId) ?? "";
-      closeSlashMenu();
-      closeMentionMenu();
-    }
-    const index = state.sessions.findIndex((item) => item.id === taskId);
-    if (index >= 0) state.sessions[index] = loaded;
-    else state.sessions.unshift(loaded);
-    state.mode = loaded.mode === "plan" ? "plan" : "agent";
-    state.permission =
-      loaded.permissionMode === "auto_allow"
-        ? "auto_allow"
-        : loaded.permissionMode === "deny"
-          ? "deny"
-          : "ask";
-    state.events = mergeEvents([], bundle.events ?? [], true);
-    state.lastEventId = state.events.at(-1)?.id ?? null;
-    state.running =
-      loaded.status === "running" || loaded.status === "awaiting_approval";
-    collectApprovals();
-    await refreshArtifacts(taskId);
-    if (generation !== taskLoadGeneration || state.sessionId !== taskId) return;
-    syncModeButton();
-    updateRunningUI();
-    await syncFocusedReader();
   }
 
   function syncFocusedReader(
@@ -4034,6 +4052,8 @@ function bindWorkspace(
       preserveModelMenu?: boolean;
     } = {},
   ): Promise<ResearchTaskRecord> {
+    const generation = ++taskLoadGeneration;
+    pendingTaskId = null;
     const current = currentTask();
     const initialContext = mentionSources.context()
       ? mentionSources.context(options.context ?? state.live?.lockedSnapshot)
@@ -4064,7 +4084,9 @@ function bindWorkspace(
       referenceDrafts.set(created.id, currentReferences());
       referenceDrafts.delete("new");
     }
-    await loadTask(created.id, options.preserveModelMenu);
+    // A slower New request must not select its result after another click.
+    if (generation === taskLoadGeneration)
+      await loadTask(created.id, options.preserveModelMenu);
     await mentionSources.flush(created.id);
     if (options.skillSlug) {
       await rpc("skill/activate", {
@@ -4821,22 +4843,22 @@ function bindWorkspace(
   const updateTaskList = createTaskList(doc, sessionPane, {
     text: (key) => getString(key),
     status: taskStatusLabel,
+    organization: getPref("workspaceTaskOrganization"),
+    onOrganizationChange: (mode) => setPref("workspaceTaskOrganization", mode),
     exportTrace: (taskId) => void saveTaskTrace(taskId),
     isExporting: (taskId) => traceExports.has(taskId),
     newForArticle: (article) => {
-      void (async () => {
-        await rpc("reader/open", {
-          libraryID: article.libraryID,
-          key: article.attachmentKey ?? article.key,
-          selectItem: !article.attachmentKey,
-        });
-        await createTask({
+      return (async () => {
+        // Creating a conversation attaches the article without navigating or
+        // focusing Zotero's reader/library window.
+        const created = await createTask({
           title: getString("workspace-untitled-task"),
           context: withLockedContextFingerprint({
             ...emptyLockedContext(),
             items: [{ ...article, source: "library" }],
           }),
         });
+        if (state.sessionId !== created.id) return;
         if (auxiliaryOverlay) {
           showSessions = false;
           syncAuxiliaryPanes();
@@ -4848,13 +4870,30 @@ function bindWorkspace(
       });
     },
     open: (taskId) => {
-      void loadTask(taskId).then(() => {
+      if (pendingTaskId === taskId) return;
+      if (state.sessionId === taskId) {
+        taskLoadGeneration += 1;
+        pendingTaskId = null;
         if (auxiliaryOverlay) {
           showSessions = false;
           syncAuxiliaryPanes();
         }
         renderLists();
-      });
+        return;
+      }
+      void loadTask(taskId)
+        .then((selected) => {
+          if (!selected) return;
+          if (auxiliaryOverlay) {
+            showSessions = false;
+            syncAuxiliaryPanes();
+          }
+          renderLists();
+        })
+        .catch((error) => {
+          state.sendError = String(error);
+          renderLists();
+        });
     },
     remove: (taskId) => {
       void (async () => {
@@ -4862,8 +4901,12 @@ function bindWorkspace(
         artifactWindows.closeTask(taskId);
         composerDrafts.delete(taskId);
         timelineViewports.delete(taskId);
-        if (state.sessionId === taskId) {
+        if (pendingTaskId === taskId) {
           taskLoadGeneration += 1;
+          pendingTaskId = null;
+        }
+        if (state.sessionId === taskId) {
+          if (!pendingTaskId) taskLoadGeneration += 1;
           state.sessionId = null;
           setAnnotationFilterTask(null);
           state.events = [];
@@ -4905,7 +4948,7 @@ function bindWorkspace(
       state.sessions
         .map(
           (item) =>
-            `${item.id}:${item.title ?? ""}:${item.status}:${item.backend}:${item.templateId ?? ""}:${item.lockedContext.fingerprint}`,
+            `${item.id}:${item.title ?? ""}:${item.status}:${item.backend}:${item.templateId ?? ""}:${item.lockedContext.fingerprint}:${item.updatedAt}:${JSON.stringify(item.articleSources)}`,
         )
         .join("|"),
       state.artifacts
@@ -4923,7 +4966,7 @@ function bindWorkspace(
     syncHeaderSources();
     lastListSignature = listSignature();
     if (initialViewReady || state.sessions.length) {
-      updateTaskList(state.sessions, state.sessionId);
+      updateTaskList(state.sessions, pendingTaskId ?? state.sessionId);
     }
     renderSourceTags();
 
@@ -5393,19 +5436,24 @@ function bindWorkspace(
   }
 
   async function refreshSessions(): Promise<void> {
+    const request = ++sessionListGeneration;
+    const selection = taskLoadGeneration;
     const listed = (await rpc("task/list", {})) as {
       tasks?: SessionRow[];
     };
+    if (request !== sessionListGeneration || selection !== taskLoadGeneration)
+      return;
     state.sessions = listed.tasks || [];
     if (
+      !pendingTaskId &&
       state.sessionId &&
       !state.sessions.some((task) => task.id === state.sessionId)
     )
       state.sessionId = null;
-    setAnnotationFilterTask(null);
+    setAnnotationFilterTask(state.sessionId);
     if (!state.sessionId && !state.sessions.length)
       prompt.value = composerDrafts.get("new") ?? "";
-    if (!state.sessionId && state.sessions[0]) {
+    if (!state.sessionId && !pendingTaskId && state.sessions[0]) {
       state.sessionId = state.sessions[0].id;
       setAnnotationFilterTask(state.sessionId);
     }
@@ -8760,12 +8808,16 @@ function bindWorkspace(
       }
       if (state.sessionId) {
         const polledSessionId = state.sessionId;
+        const selection = taskLoadGeneration;
         const requestedCursor = state.lastEventId;
         const bundle = (await rpc("task/events", {
           taskId: polledSessionId,
           afterId: requestedCursor,
         })) as { events?: ConfuciusEvent[]; cursorFound?: boolean };
-        if (state.sessionId !== polledSessionId) {
+        if (
+          state.sessionId !== polledSessionId ||
+          selection !== taskLoadGeneration
+        ) {
           return;
         }
         const incoming = bundle.events || [];
@@ -8793,6 +8845,11 @@ function bindWorkspace(
         ) {
           await refreshArtifacts(polledSessionId);
         }
+        if (
+          state.sessionId !== polledSessionId ||
+          selection !== taskLoadGeneration
+        )
+          return;
         const wasRunning = state.running;
         state.running = isRunningFromEvents(state.events);
         if (wasRunning !== state.running) {
@@ -8802,6 +8859,11 @@ function bindWorkspace(
           const stats = (await rpc("task/context", {
             taskId: state.sessionId,
           })) as SessionContextStats;
+          if (
+            state.sessionId !== polledSessionId ||
+            selection !== taskLoadGeneration
+          )
+            return;
           state.contextStats = stats;
           contextRing.update(
             stats.usageSource === "unknown" ||
@@ -8856,14 +8918,23 @@ function bindWorkspace(
     }
   }
 
-  newSessionBtn.addEventListener("click", () => {
+  newSessionBtn.addEventListener("click", (event) => {
+    if (newSessionBtn.disabled || (event as MouseEvent).detail > 1) return;
+    newSessionBtn.disabled = true;
     void (async () => {
       await createTask({
         title: getString("workspace-untitled-task"),
       });
       await refreshSessions();
       renderLists();
-    })();
+    })()
+      .catch((error) => {
+        state.sendError = String(error);
+        renderLists();
+      })
+      .finally(() => {
+        newSessionBtn.disabled = false;
+      });
   });
   settingsBtn.addEventListener("click", () => {
     void refreshConfig().then(() => openSettings());

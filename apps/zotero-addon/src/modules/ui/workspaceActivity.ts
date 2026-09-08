@@ -46,14 +46,37 @@ export function createWaitingIndicator(
   const mark = create("span");
   mark.className = "tui-waiting-mark";
   mark.setAttribute("aria-hidden", "true");
+  // Keep an actual glyph below the decorative mask. A stale palette or a
+  // failed chrome image must never erase the working indicator.
+  const svg = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 256 256");
+  svg.setAttribute("width", "19");
+  svg.setAttribute("height", "19");
+  svg.setAttribute("focusable", "false");
+  const path = doc.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute(
+    "d",
+    "M200 76 A 90 90 0 1 0 200 180 Q 187 178 173 164 A 58 58 0 1 1 173 92 Q 187 80 200 76 Z",
+  );
+  path.setAttribute("fill", "currentColor");
+  svg.appendChild(path);
+  const metal = create("span");
+  metal.className = "tui-waiting-metal";
+  mark.append(svg, metal);
   const content = create("span");
   content.className = "tui-waiting-content";
+  const message = create("span");
+  message.className = "tui-waiting-message";
   const text = create("span");
   text.className = "tui-waiting-text";
   text.setAttribute("role", "status");
+  const shine = create("span");
+  shine.className = "tui-waiting-shine";
+  shine.setAttribute("aria-hidden", "true");
+  message.append(text, shine);
   const elapsed = create("span");
   elapsed.className = "tui-waiting-elapsed";
-  content.append(text, elapsed);
+  content.append(message, elapsed);
   label.append(mark, content);
   updateWaitingIndicator(label, workText);
   return label;
@@ -70,6 +93,9 @@ export function updateWaitingIndicator(
   const text = label.querySelector(".tui-waiting-text");
   if (text && text.textContent !== parts.message)
     text.textContent = parts.message;
+  const shine = label.querySelector(".tui-waiting-shine");
+  if (shine && shine.textContent !== parts.message)
+    shine.textContent = parts.message;
   const elapsed = label.querySelector<HTMLElement>(".tui-waiting-elapsed");
   if (elapsed) {
     const clock = parts.elapsed ? ` · ${parts.elapsed}` : "";

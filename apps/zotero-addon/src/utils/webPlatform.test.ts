@@ -280,6 +280,77 @@ test("sandbox AbortController works without window APIs and only notifies once",
   assert.equal(installed.fetch, hostFetch);
 });
 
+test("sandbox codecs survive an unavailable main window and invalid borrowed constructors", (t) => {
+  const NativeEncoder = TextEncoder,
+    NativeDecoder = TextDecoder;
+  let created = 0;
+  replaceGlobal(t, "Components", {
+    utils: {
+      Sandbox: function (
+        _principal: unknown,
+        options: { wantGlobalProperties: string[] },
+      ) {
+        assert.deepEqual(options.wantGlobalProperties, [
+          "TextEncoder",
+          "TextDecoder",
+        ]);
+        created++;
+        return { TextEncoder: NativeEncoder, TextDecoder: NativeDecoder };
+      },
+    },
+  });
+  replaceGlobal(t, "Services", {
+    scriptSecurityManager: { getSystemPrincipal: () => ({}) },
+  });
+  replaceGlobal(t, "Zotero", {
+    getMainWindow: () => {
+      throw new Error("No main window");
+    },
+  });
+  const target = { TextEncoder: null, TextDecoder: {} } as unknown as {
+    TextEncoder: typeof TextEncoder;
+    TextDecoder: typeof TextDecoder;
+  };
+  installWebPlatform(target);
+  assert.equal(created, 1);
+  const bytes = new target.TextEncoder().encode("论文与证据 😀");
+  assert.equal(
+    new target.TextDecoder("utf-8", { fatal: true }).decode(bytes),
+    "论文与证据 😀",
+  );
+  const stream = new target.TextDecoder();
+  assert.equal(
+    stream.decode(bytes.slice(0, 2), { stream: true }) +
+      stream.decode(bytes.slice(2)),
+    "论文与证据 😀",
+  );
+});
+
+test("UTF-8 fallback encodes Unicode and never writes a partial code point", (t) => {
+  const NativeEncoder = TextEncoder;
+  replaceGlobal(t, "TextEncoder", undefined);
+  replaceGlobal(t, "Components", undefined);
+  replaceGlobal(t, "Zotero", undefined);
+  const target = { TextEncoder: () => undefined } as unknown as {
+    TextEncoder: typeof TextEncoder;
+  };
+  installWebPlatform(target);
+  const encoder = new target.TextEncoder();
+  assert.equal(encoder.encoding, "utf-8");
+  for (const text of ["", "ASCII", "中文😀é𝄞", "\ud800broken\udfff", "a\0b"]) {
+    assert.deepEqual(encoder.encode(text), new NativeEncoder().encode(text));
+    for (let size = 0; size < 18; size++) {
+      const actual = new Uint8Array(size),
+        expected = new Uint8Array(size);
+      assert.deepEqual(
+        encoder.encodeInto(text, actual),
+        new NativeEncoder().encodeInto(text, expected),
+      );
+      assert.deepEqual(actual, expected);
+    }
+  }
+});
+
 test("buffered Zotero fallback cancels even when its canceller arrives after abort", async (t) => {
   replaceGlobal(t, "XMLHttpRequest", undefined);
   let receiveCancel!: (cancel: () => void) => void;

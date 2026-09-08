@@ -13,7 +13,7 @@ import {
   followReaderContext,
   readerAttachmentIdentity,
 } from "./TaskSources";
-import { articleTaskGroups } from "../ui/workspaceTasks";
+import { articleTaskGroups, timeTaskGroups } from "../ui/workspaceTasks";
 
 function pdf(key: string, libraryID = 1, pageIndex = 0): LockedContextSnapshot {
   return withLockedContextFingerprint({
@@ -140,6 +140,8 @@ it("host follows idle tasks without changing recency, refreshes on Send, and pre
     host.taskSetContext({ taskId: record.id, mode: "follow_reader", refresh });
   await follow();
   assert.equal(record.lockedContext.reader?.attachmentKey, "PDFA");
+  assert.deepEqual(record.articleSources, []);
+  assert.deepEqual(articleTaskGroups([record]), []);
   assert.equal(record.updatedAt, 1);
   live = pdf("A", 1, 4);
   host.detectContextDrift(state);
@@ -170,8 +172,8 @@ it("host follows idle tasks without changing recency, refreshes on Send, and pre
 });
 
 it("groups all related conversations by article and keeps previously used papers after switching", () => {
-  const first = task("first", pdf("B"));
-  first.articleSources = pdf("A").items;
+  const first = task("first", pdf("C"));
+  first.articleSources = [...pdf("A").items, ...pdf("B").items];
   const second = task("second", pdf("A"));
   second.updatedAt = 2;
   const otherLibrary = task("other-library", pdf("A", 2));
@@ -183,7 +185,7 @@ it("groups all related conversations by article and keeps previously used papers
   ]);
   assert.deepEqual(
     groups.map((group) => group.id),
-    ["1:A", "1:B", "2:A"],
+    ["1:A", "2:A", "1:B"],
   );
   assert.deepEqual(
     groups[0].tasks.map((entry) => entry.id),
@@ -191,7 +193,7 @@ it("groups all related conversations by article and keeps previously used papers
   );
   assert.equal(groups[0].article.attachmentKey, "PDFA");
   assert.deepEqual(
-    groups[2].tasks.map((entry) => entry.id),
+    groups[1].tasks.map((entry) => entry.id),
     ["other-library"],
   );
   assert.deepEqual(
@@ -203,4 +205,81 @@ it("groups all related conversations by article and keeps previously used papers
     articleSources: [{ key: "bad" }],
   } as unknown as ResearchTaskRecord;
   assert.equal(migrateSessionRecord(invalid).articleSources, undefined);
+});
+
+it("reader preview changes cannot move submitted or explicitly unfiled conversations", () => {
+  const submitted = task("submitted", pdf("A"));
+  submitted.articleSources = pdf("B").items;
+  const unfiled = task("unfiled", pdf("A"));
+  unfiled.articleSources = [];
+  for (const key of ["C", "A", "B", "D", "C"]) {
+    submitted.lockedContext = pdf(key);
+    unfiled.lockedContext = pdf(key);
+    assert.deepEqual(
+      articleTaskGroups([submitted, unfiled]).map((group) => [
+        group.id,
+        group.tasks.map((row) => row.id),
+      ]),
+      [["1:B", ["submitted"]]],
+    );
+  }
+});
+
+it("article and task ordering has deterministic ties and does not depend on list response order", () => {
+  const records = [
+    task("b", pdf("B")),
+    task("a", pdf("A")),
+    task("c", pdf("A")),
+  ];
+  const snapshot = (rows: ResearchTaskRecord[]) =>
+    articleTaskGroups(rows).map((group) => [
+      group.id,
+      group.tasks.map((task) => task.id),
+    ]);
+  const expected = snapshot(records);
+  for (let n = 0; n < 20; n++) {
+    records.reverse();
+    records.push(records.shift()!);
+    assert.deepEqual(snapshot(records), expected);
+  }
+  records.find((record) => record.id === "b")!.updatedAt += 10;
+  assert.deepEqual(
+    articleTaskGroups(records).map((group) => group.id),
+    ["1:A", "1:B"],
+  );
+});
+
+it("time groups cover every task once at local midnight boundaries including old and future tasks", () => {
+  const now = new Date(2026, 8, 8, 12);
+  const timestamp = (days: number) => new Date(2026, 8, 8 - days).getTime();
+  const entries = [
+    ["future", timestamp(-1)],
+    ["today", timestamp(0)],
+    ["yesterday", timestamp(1)],
+    ["week", timestamp(7)],
+    ["month", timestamp(30)],
+    ["old", timestamp(31)],
+    ["before-midnight", timestamp(1) - 1],
+  ] as const;
+  const records = entries.map(([id, updatedAt]) => ({
+    ...task(id),
+    updatedAt,
+  }));
+  const grouped = timeTaskGroups(records, now);
+  assert.deepEqual(
+    grouped.map((group) => [group.id, group.tasks.map((task) => task.id)]),
+    [
+      ["today", ["future", "today"]],
+      ["yesterday", ["yesterday"]],
+      ["week", ["before-midnight", "week"]],
+      ["month", ["month"]],
+      ["older", ["old"]],
+    ],
+  );
+  assert.equal(
+    new Set(grouped.flatMap((group) => group.tasks.map((task) => task.id)))
+      .size,
+    records.length,
+  );
+  assert.deepEqual(timeTaskGroups([], now), []);
 });

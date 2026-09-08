@@ -165,6 +165,87 @@ type ChunkWaiter = {
   reject: (error: Error) => void;
 };
 
+/** UTF-8 remains available before Zotero has a main window, and after it closes. */
+class SandboxTextEncoder {
+  readonly encoding = "utf-8";
+  encode(input = ""): Uint8Array {
+    const text = String(input);
+    const bytes = new Uint8Array(text.length * 3);
+    const { written } = this.encodeInto(text, bytes);
+    return bytes.slice(0, written);
+  }
+  encodeInto(
+    input: string,
+    destination: Uint8Array,
+  ): TextEncoderEncodeIntoResult {
+    let read = 0,
+      written = 0;
+    for (const character of String(input)) {
+      let code = character.codePointAt(0)!;
+      if (code >= 0xd800 && code <= 0xdfff) code = 0xfffd;
+      const length =
+        code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+      if (written + length > destination.length) break;
+      if (length === 1) destination[written++] = code;
+      else {
+        if (length === 2) destination[written++] = 0xc0 | (code >> 6);
+        else {
+          if (length === 3) destination[written++] = 0xe0 | (code >> 12);
+          else {
+            destination[written++] = 0xf0 | (code >> 18);
+            destination[written++] = 0x80 | ((code >> 12) & 0x3f);
+          }
+          destination[written++] = 0x80 | ((code >> 6) & 0x3f);
+        }
+        destination[written++] = 0x80 | (code & 0x3f);
+      }
+      read += character.length;
+    }
+    return { read, written };
+  }
+}
+
+function installTextCodecs(record: Record<string, unknown>): void {
+  let codecs: Record<string, unknown> | undefined;
+  try {
+    // DOM constructors borrowed from a Window die with that Window. Give the
+    // add-on its own native codec realm, which needs no UI or main-window focus.
+    const Sandbox = Components.utils.Sandbox as unknown as new (
+      principal: unknown,
+      options: { wantGlobalProperties: string[] },
+    ) => Record<string, unknown>;
+    codecs = new Sandbox(Services.scriptSecurityManager.getSystemPrincipal(), {
+      wantGlobalProperties: ["TextEncoder", "TextDecoder"],
+    });
+  } catch {
+    // Node tests / older hosts can still encode UTF-8 without a DOM window.
+  }
+  for (const name of ["TextEncoder", "TextDecoder"] as const) {
+    let constructor: unknown = codecs?.[name];
+    if (!constructor) {
+      try {
+        constructor =
+          record[name] ??
+          (globalThis as unknown as Record<string, unknown>)[name] ??
+          fromWindow(name);
+      } catch {
+        /* Dead wrapper. */
+      }
+    }
+    try {
+      Reflect.construct(Object, [], constructor as typeof Object);
+    } catch {
+      constructor = name === "TextEncoder" ? SandboxTextEncoder : undefined;
+    }
+    if (constructor)
+      Object.defineProperty(record, name, {
+        configurable: true,
+        value: constructor,
+      });
+    else defineGetter(record, name, () => fromWindow(name));
+  }
+}
+
 function utf8Bytes(text: string): Uint8Array {
   const Local = (globalThis as unknown as { TextEncoder?: typeof TextEncoder })
     .TextEncoder;
@@ -175,11 +256,7 @@ function utf8Bytes(text: string): Uint8Array {
   if (typeof fromWin === "function") {
     return new fromWin().encode(text);
   }
-  const bytes = new Uint8Array(text.length);
-  for (let i = 0; i < text.length; i += 1) {
-    bytes[i] = text.charCodeAt(i) & 0xff;
-  }
-  return bytes;
+  return new SandboxTextEncoder().encode(text);
 }
 
 function xmlHttpRequestCtor(): (new () => XMLHttpRequest) | undefined {
@@ -595,6 +672,7 @@ export function createAbortController(): AbortController {
 /** Copy Window web APIs onto the loadSubScript sandbox, lazily. */
 export function installWebPlatform(target: object = globalThis): void {
   const record = target as Record<string, unknown>;
+  installTextCodecs(record);
   defineGetter(
     record,
     "AbortController",
@@ -608,8 +686,6 @@ export function installWebPlatform(target: object = globalThis): void {
     "ReadableStream",
     "Request",
     "Response",
-    "TextDecoder",
-    "TextEncoder",
     "URL",
     "URLSearchParams",
     "XMLHttpRequest",

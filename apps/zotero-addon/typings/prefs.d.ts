@@ -13,6 +13,7 @@ declare namespace _ZoteroTypes {
       "workspaceWidth": number;
       "workspaceHeight": number;
       "workspaceLayout": string;
+      "workspaceTaskOrganization": string;
       "workspaceSidebarWidth": number;
       "apiKey": string;
       "baseUrl": string;
