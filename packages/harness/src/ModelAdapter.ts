@@ -84,6 +84,8 @@ export interface ModelMessage {
   }>;
   /** Entire message is valid for only the immediately following model call. */
   transient?: boolean;
+  /** Origin of transient media; distinct from a role=tool result's call id. */
+  sourceToolCallId?: string;
 }
 
 export interface ModelRequest {

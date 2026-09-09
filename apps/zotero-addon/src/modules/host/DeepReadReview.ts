@@ -2,13 +2,16 @@ import type {
   ArtifactRecord,
   ConfuciusEvent,
   ExecutionBinding,
+  SourceReadEvidence,
 } from "@confucius/protocol";
+import { savedArtifactIndex, sourceReadEvidence } from "./SourceReadEvidence";
 
 export const DEEP_READ_REVIEW_INSTRUCTION = [
-  "The deep_read report is saved as a draft. Review its evidence before setting status=ready under the same artifact id.",
+  "The deep_read artifact is saved as a draft. Review both readingGuide and any requested report; an absent report is not missing work. Review its evidence before setting status=ready under the same artifact id.",
   "Retrieve only the source pages for decisive empirical claims with get_pages or inspect_pdf_page, and use get_annotations to audit saved comments. These reads must occur AFTER saving the draft; sourcePages/pageInspections already supplied in review inputs count as retrieved evidence and should not be fetched again without a concrete gap. A notes/history summary is not source evidence. Follow nextOffset for unread saved comments.",
   "Check each reported number with its exact metric, denominator, experiment population, interval, baseline and scope. An observed maximum is not a configured limit. Separate author-stated results from your deductions; remove unsupported claims and redundant numbers.",
   "Audit method details and critical comments too. Do not expand a broad source term into specific mechanisms or procedures that were not reported. Missing details in the available material are uncertainty, not evidence that the authors ignored a metric or used a flawed baseline. Do not invent limitations to fill a quota. Preserve the meaning of actual saved comments in the appendix.",
+  "Check the guide route against original order and ensure both reading/writing lenses describe the actual passage. Keep quotations in the original language; separate explanatory examples and inference from source statements. Replace readingGuide only when corrections are needed; preserve existing report markdown. Report-only requests must preserve the guide and annotation writes are unavailable.",
   "Use the page image or spatial text to resolve table headers. If extraction is uncertain, keep only unambiguous prose aggregates and state the uncertainty; do not infer an author error.",
   "Correct saved comments with update_annotation_comment and preserve their keys. Use artifact_patch with the current expectedRevision to correct the report's overview and detailed evidence together, sending only changed passages with status=ready. If the report is already correct, send status=ready without resending its body or citations. Use artifact_read only when the current draft or revision is absent or stale; reading the artifact is not a source-evidence read. Keep all user-facing prose in the configured response language.",
 ].join("\n");
@@ -35,7 +38,7 @@ export function deepReadReviewNextAction(
       ? "Read the source pages supporting the report with get_pages (or inspect_pdf_page)."
       : "The source-page read is already satisfied for this revision; do not repeat it unless you have an evidence gap.",
     review.missingReads.includes("get_annotations")
-      ? "Call get_annotations for this paper's PDF attachment to review its saved comments. Updating a comment does not replace this read."
+      ? `Call get_annotations for this paper's PDF attachment to review its saved comments. ${review.annotationHint ?? "Start at offset=0 without batchIds, and follow nextOffset until all saved comments have been delivered."} Updating a comment does not replace this read. An archivedRef alone is not delivered evidence; use a smaller get_annotations limit so the comments fit in the model input.`
       : "The saved-comment read is already satisfied for this revision.",
     "Keep the current draft. After the missing source reads, use ONE artifact_patch call with this id, expectedRevision and all needed edits plus status=ready. If no correction is needed, omit edits and just set status=ready. Do not resubmit the whole report. Saving another draft creates a new revision that needs another evidence pass.",
   ].join("\n");
@@ -48,6 +51,7 @@ function deepReadReviewStatus(
 ): {
   state: "draft_required" | "evidence_required" | "reviewed";
   missingReads: ("get_pages" | "get_annotations")[];
+  annotationHint?: string;
 } {
   if (
     !artifact ||
@@ -57,90 +61,95 @@ function deepReadReviewStatus(
     artifact.execution.sourceFingerprint !== execution.sourceFingerprint
   )
     return { state: "draft_required", missingReads: [] };
-  // A completed report may be edited without restarting its evidence pass.
   if (artifact.status !== "draft")
     return { state: "reviewed", missingReads: [] };
-  // Runtime tool events and host artifact events can use different clocks.
-  // Their durable arrival order, not timestamp subtraction, establishes reads
-  // after the exact saved revision (and survives checkpoint restoration).
-  const savedIndex = events.findLastIndex((event) => {
-    const saved =
-      event.type === "artifact_upserted"
-        ? event.payload.artifact
-        : event.type === "tool_result" &&
-            event.payload.result.ok &&
-            ["artifact_upsert", "artifact_patch"].includes(
-              event.payload.result.toolName,
-            )
-          ? (
-              event.payload.result.data as
-                { artifact?: { id: string; revision: number } } | undefined
-            )?.artifact
-          : undefined;
-    return saved?.id === artifact.id && saved.revision === artifact.revision;
-  });
-  if (savedIndex < 0)
-    return {
-      state: "evidence_required",
-      missingReads: ["get_pages", "get_annotations"],
-    };
-  // Tools accept either a bibliographic item or its PDF attachment key. Learn
-  // that relationship from actual tool results, not from model-authored text.
+  const savedIndex = savedArtifactIndex(artifact, events);
+  const reads: SourceReadEvidence[] = [];
   const sourceRefs = new Set(artifact.sourceContextIds);
   for (const citation of artifact.citations)
     sourceRefs.add(`item:${citation.itemLibraryID}:${citation.itemKey}`);
-  for (const event of events) {
-    if (
-      event.type !== "tool_result" ||
-      !event.payload.result.ok ||
-      !["get_pages", "inspect_pdf_page", "get_annotations"].includes(
-        event.payload.result.toolName,
+  // Relationship evidence may precede the draft; content evidence may not.
+  const relationships: SourceReadEvidence[] = [];
+  for (const [index, event] of events.entries()) {
+    if (event.type === "source_read_delivered") {
+      relationships.push(event.payload.evidence);
+      if (
+        index > savedIndex &&
+        event.payload.review?.artifactId === artifact.id &&
+        event.payload.review.revision === artifact.revision
       )
-    )
-      continue;
-    const data = event.payload.result.data as
-      Record<string, unknown> | undefined;
-    if (!data) continue;
-    const refs = [data.itemKey, data.key, data.attachmentKey]
-      .filter((key) => typeof key === "string")
-      .map((key) => `item:${Number(data.libraryID)}:${key}`);
+        reads.push(event.payload.evidence);
+    } else if (event.type === "tool_result") {
+      const request = events.find(
+        (candidate) =>
+          candidate.type === "tool_requested" &&
+          candidate.payload.callId === event.payload.callId,
+      );
+      const evidence = sourceReadEvidence(
+        event.payload.result,
+        request?.type === "tool_requested" ? request.payload.args : undefined,
+      );
+      if (!evidence) continue;
+      relationships.push(evidence);
+    }
+  }
+  for (const evidence of relationships) {
+    const refs = evidence.keys.map(
+      (key) => `item:${evidence.libraryID}:${key}`,
+    );
     if (refs.some((ref) => sourceRefs.has(ref)))
       for (const ref of refs) sourceRefs.add(ref);
   }
   let sourceRead = false;
-  let annotationsRead = false;
-  for (const event of events.slice(savedIndex + 1)) {
-    if (event.type !== "tool_result") continue;
-    const result = event.payload.result;
-    if (!result.ok || !result.data || typeof result.data !== "object") continue;
-    const data = result.data as Record<string, unknown>;
-    const libraryID = Number(data.libraryID);
-    const keys = [data.itemKey, data.key, data.attachmentKey].filter(
-      (x) => typeof x === "string",
-    );
-    const sameSource = keys.some((key) =>
-      sourceRefs.has(`item:${libraryID}:${key}`),
-    );
-    if (!sameSource) continue;
-    if (result.toolName === "get_annotations") annotationsRead = true;
+  const comments = new Map<
+    string,
+    {
+      total: number;
+      snapshot?: string;
+      ranges: Array<[number, number]>;
+      terminal: boolean;
+    }
+  >();
+  for (const evidence of reads) {
     if (
-      result.toolName === "get_pages" &&
-      Array.isArray(data.pages) &&
-      data.pages.some(
-        (page) =>
-          page &&
-          typeof page === "object" &&
-          typeof page.text === "string" &&
-          page.text.trim(),
+      !evidence.keys.some((key) =>
+        sourceRefs.has(`item:${evidence.libraryID}:${key}`),
       )
     )
-      sourceRead = true;
+      continue;
+    if (evidence.sourceContent) sourceRead = true;
+    const page = evidence.annotations;
+    if (!page || page.filtered) continue;
+    const ref = `${evidence.libraryID}:${evidence.attachmentKey ?? evidence.keys[0]}`;
+    let coverage = comments.get(ref);
     if (
-      result.toolName === "inspect_pdf_page" &&
-      (data.visualAvailable === true ||
-        (Array.isArray(data.lineAnchors) && data.lineAnchors.length > 0))
-    )
-      sourceRead = true;
+      !coverage ||
+      coverage.total !== page.total ||
+      coverage.snapshot !== page.snapshot
+    ) {
+      coverage = {
+        total: page.total,
+        snapshot: page.snapshot,
+        ranges: [],
+        terminal: false,
+      };
+      comments.set(ref, coverage);
+    }
+    coverage.ranges.push([page.offset, page.offset + page.count]);
+    coverage.terminal ||=
+      page.nextOffset === null && page.offset + page.count === page.total;
+  }
+  let annotationsRead = false;
+  let annotationHint: string | undefined;
+  for (const [ref, coverage] of comments) {
+    let offset = 0;
+    for (const [start, end] of coverage.ranges.sort((a, b) => a[0] - b[0])) {
+      if (start > offset) break;
+      offset = Math.max(offset, end);
+    }
+    if (offset === coverage.total && coverage.terminal) annotationsRead = true;
+    else
+      annotationHint = `Saved comments for ${ref}: ${offset}/${coverage.total} delivered contiguously. Continue with offset=${offset}, without batchIds; follow nextOffset. If the snapshot changed, restart at offset=0.`;
   }
   const missingReads: ("get_pages" | "get_annotations")[] = [];
   if (!sourceRead) missingReads.push("get_pages");
@@ -148,5 +157,6 @@ function deepReadReviewStatus(
   return {
     state: missingReads.length ? "evidence_required" : "reviewed",
     missingReads,
+    annotationHint,
   };
 }

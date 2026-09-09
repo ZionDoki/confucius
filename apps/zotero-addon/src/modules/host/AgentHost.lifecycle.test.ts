@@ -7,8 +7,16 @@ import {
   InMemoryFileSystem,
   MemoryEngine,
 } from "@confucius/memory";
-import type { ModelMessage } from "@confucius/harness";
-import { BudgetAccountant } from "@confucius/harness";
+import type {
+  ModelMessage,
+  ModelRequest,
+  TurnCheckpoint,
+} from "@confucius/harness";
+import {
+  BudgetAccountant,
+  MemoryToolProvider,
+  WindowContext,
+} from "@confucius/harness";
 import {
   coalesceTimeline,
   initialContextWindow,
@@ -219,6 +227,7 @@ interface TestState {
   sessionGrants: Set<string>;
   abort: AbortController | null;
   activeTurnId: string | null;
+  latestCheckpoint?: TurnCheckpoint;
   runBudget?: BudgetAccountant;
   externalToolNames?: Set<string>;
   externalSourceScope?: { itemRefs: Set<string> };
@@ -351,6 +360,7 @@ function fixture() {
     maxToolCalls: () => 20,
     rejectPendingApprovals: () => undefined,
     history,
+    artifacts: { list: async () => [] },
     memory: new MemoryEngine({ fs, root: "/memory" }),
     memoryProposals: new Map(),
     pendingApprovals: new Map(),
@@ -388,6 +398,263 @@ function fixture() {
   });
   return { host, state, backend, starts, execution };
 }
+
+it("native review consumes restored annotation pages, retains five pending edits, and checkpoints elapsed wall time", async (t) => {
+  const previousZotero = Reflect.get(globalThis, "Zotero");
+  Reflect.set(globalThis, "Zotero", {
+    Prefs: { get: () => undefined },
+    getMainWindow: () => ({ setTimeout, clearTimeout }),
+  });
+  const startedAt = 1800000000000;
+  let clock = startedAt;
+  t.mock.method(Date, "now", () => clock);
+  try {
+    const { host, state } = fixture();
+    state.record.backend = "native";
+    state.record.templateId = "deep-read";
+    state.record.run = { ...run(state.record), templateId: "deep-read" };
+    state.abort = new AbortController();
+    state.activeTurnId = "native-review";
+    state.runBudget = new BudgetAccountant({
+      maxIterations: 12,
+      maxToolCalls: 20,
+    });
+    const fs = new InMemoryFileSystem();
+    const artifacts = new ArtifactStore("/artifacts", {
+      read: (path) => fs.readFile(path),
+      writeAtomic: (path, text) => fs.writeFile(path, text),
+      exists: async (path) => Object.hasOwn(fs.snapshot(), path),
+      makeDirectory: () => fs.makeDirectory(),
+    });
+    let id = 0,
+      round = 0;
+    const edits = Array.from({ length: 5 }, (_, i) => ({
+      oldText: `original-${i}`,
+      newText: `corrected-${i}`,
+    }));
+    const patch = { id: "report", expectedRevision: 1, status: "ready", edits };
+    const calls = (name: string, args: Record<string, unknown>) => ({
+      toolCalls: [{ id: `model-${++id}`, name, args }],
+    });
+    Reflect.deleteProperty(host, "emitSessionEvent");
+    Object.assign(host, {
+      artifacts,
+      skills: { list: () => [] },
+      mcpProviders: [],
+      historyTools: () => new MemoryToolProvider(),
+      memoryProvider: () => new MemoryToolProvider(),
+      buildSystemPrompt: async () => "Review the paper",
+      alwaysAllowedTools: () => new Set(),
+      onToolAccess: () => undefined,
+      nativeWindowContext: () =>
+        new WindowContext({
+          window: initialContextWindow(state.record.id, "native"),
+          contextWindowTokens: 200000,
+          maxOutputTokens: 4096,
+          nextId: () => `history-${++id}`,
+          archive: async ({ id, windowId }) => ({
+            taskId: state.record.id,
+            windowId,
+            itemId: id,
+          }),
+          switchWindow: async () => assert.fail("evidence fits this window"),
+          hint: async () => "",
+        }),
+      saveCheckpoint: async (_state: TestState, checkpoint: TurnCheckpoint) => {
+        state.latestCheckpoint = checkpoint;
+      },
+      tools: {
+        prepare: async () => null,
+        execute: async (name: string, args: Record<string, unknown>) => ({
+          ok: true,
+          toolName: name,
+          data:
+            name === "get_pages"
+              ? {
+                  libraryID: 1,
+                  key: "PAPER",
+                  attachmentKey: "PDF",
+                  pages: [{ page: 2, text: "Source evidence" }],
+                }
+              : {
+                  libraryID: 1,
+                  key: "PDF",
+                  attachmentKey: "PDF",
+                  offset: Number(args.offset ?? 0),
+                  totalAnnotations: 41,
+                  snapshot: "unchanged-comments",
+                  annotations: Array.from(
+                    { length: Number(args.offset) === 32 ? 9 : 16 },
+                    (_, i) => ({
+                      key: `mark-${Number(args.offset ?? 0) + i}`,
+                      comment: "Detailed saved comment. ".repeat(100),
+                    }),
+                  ),
+                  nextOffset:
+                    Number(args.offset) === 32
+                      ? null
+                      : Number(args.offset ?? 0) + 16,
+                },
+        }),
+      },
+      openaiAdapter: () => ({
+        complete: async (request: ModelRequest) => {
+          round++;
+          clock += 20000;
+          if (round === 1)
+            return calls("artifact_upsert", {
+              id: "report",
+              kind: "deep_read",
+              title: "Report",
+              status: "draft",
+              body: {
+                type: "markdown",
+                markdown: edits.map((edit) => edit.oldText).join("\n"),
+              },
+              sourceContextIds: ["item:1:PAPER"],
+            });
+          if (round === 2) return calls("artifact_patch", patch);
+          if (round === 3)
+            return {
+              toolCalls: [
+                ...calls("get_pages", {
+                  libraryID: 1,
+                  key: "PAPER",
+                  start: 2,
+                  end: 2,
+                }).toolCalls,
+                ...calls("get_annotations", {
+                  libraryID: 1,
+                  key: "PDF",
+                  offset: 0,
+                  limit: 16,
+                }).toolCalls,
+              ],
+            };
+          if (round === 4) {
+            const review = request.messages.find((message) =>
+              message.content.startsWith("Review inputs"),
+            );
+            assert.ok(review);
+            const inputs = JSON.parse(
+              review.content.split("\n").slice(1).join("\n"),
+            );
+            assert.equal(inputs.savedAnnotations[0].annotations.length, 16);
+            assert.equal(inputs.pendingCorrections[0].args.edits.length, 5);
+            return calls("artifact_patch", patch);
+          }
+          if (round === 5) {
+            const receipt = request.messages.findLast(
+              (message) =>
+                message.role === "tool" &&
+                JSON.parse(message.content).toolName === "artifact_patch",
+            );
+            assert.ok(receipt);
+            assert.match(
+              JSON.parse(receipt.content).message,
+              /16\/41.*offset=16/,
+            );
+            return calls("get_annotations", {
+              libraryID: 1,
+              key: "PDF",
+              offset: 16,
+              limit: 16,
+            });
+          }
+          if (round === 6)
+            return calls("get_annotations", {
+              libraryID: 1,
+              key: "PDF",
+              offset: 32,
+              limit: 16,
+            });
+          if (round === 7) return calls("artifact_patch", patch);
+          return { text: "Five verified corrections saved." };
+        },
+      }),
+    });
+    const stopped =
+      deferred<Parameters<NonNullable<BackendCallbacks["stopped"]>>[0]>();
+    const native = Reflect.get(host, "nativeExecution").bind(host);
+    await native(
+      {
+        task: state.record,
+        turnId: state.activeTurnId,
+        prompt: "Review",
+        mode: "agent",
+        capabilityProfile: "zotero_only",
+      },
+      {
+        event: (event: ConfuciusEvent) => {
+          Reflect.get(host, "recordTaskTrace").call(host, state, event);
+          state.events.push(event);
+        },
+        stopped: stopped.resolve,
+        disconnected: (error: Error) => {
+          throw error;
+        },
+      },
+    );
+    const outcome = await stopped.promise;
+    assert.equal(outcome.stopReason, "completed", JSON.stringify(outcome));
+    const saved = (await artifacts.get("report"))!;
+    assert.equal(saved.revision, 2);
+    assert.equal(saved.status, "ready");
+    assert.deepEqual(saved.body, {
+      type: "markdown",
+      markdown: edits.map((edit) => edit.newText).join("\n"),
+    });
+    assert.equal(
+      state.events.filter((event) => event.type === "source_read_delivered")
+        .length,
+      4,
+    );
+    assert.ok(
+      state.events.some(
+        (event) =>
+          event.type === "tool_result" &&
+          event.payload.result.ok &&
+          event.payload.result.toolName === "get_annotations" &&
+          (event.payload.result.data as { archivedRef?: unknown }).archivedRef,
+      ),
+    );
+    assert.equal(state.latestCheckpoint?.savedAt, startedAt + round * 20000);
+    const savedEvent = state.events.find(
+      (event) =>
+        event.type === "artifact_upserted" &&
+        event.payload.artifact.revision === 2,
+    )!;
+    const receipt = state.events.findLast(
+      (event) =>
+        event.type === "tool_result" &&
+        event.payload.result.ok &&
+        event.payload.result.toolName === "artifact_patch",
+    )!;
+    assert.ok(receipt.ts >= savedEvent.ts);
+    assert.ok(receipt.sequence! > savedEvent.sequence!);
+    assert.equal(
+      receipt.type === "tool_result" &&
+        receipt.payload.result.ok &&
+        (receipt.payload.result.data as { appliedEditCount: number })
+          .appliedEditCount,
+      5,
+    );
+    const lastSequence = state.record.eventSequence!;
+    // Restart the event producer with persisted state and a clock moving back.
+    const restarted = fixture().host;
+    clock -= 10000;
+    Reflect.get(restarted, "recordTaskTrace").call(restarted, state, {
+      id: "after-restart",
+      sessionId: state.record.id,
+      type: "text_delta",
+      ts: clock,
+      payload: { text: "continued" },
+    });
+    assert.equal(state.record.eventSequence, lastSequence + 1);
+  } finally {
+    Reflect.set(globalThis, "Zotero", previousZotero);
+  }
+});
 
 async function waitFor(predicate: () => boolean) {
   for (let attempt = 0; attempt < 100; attempt++) {

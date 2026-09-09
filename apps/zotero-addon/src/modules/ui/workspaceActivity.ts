@@ -265,22 +265,19 @@ function formatRetry(
   english: boolean,
   now: number,
 ): string {
+  const cause = retryCause(progress, english);
   let label: string;
   if (
     progress.exhausted ||
     (progress.status === "failed" && !progress.retryable)
   )
-    label = english
-      ? "Retry failed · Saving progress"
-      : "重试失败 · 正在保留进度";
+    label = `${cause} · ${english ? "Request failed · Saving progress" : "请求失败 · 正在保留进度"}`;
   else if (progress.stage === "recovering")
     label = english
-      ? "Restoring connection · Keeping saved results"
-      : "正在恢复连接 · 保留已保存成果";
+      ? "Restoring task · Keeping saved results"
+      : "正在恢复任务 · 保留已保存成果";
   else if (progress.status === "failed")
-    label = english
-      ? "Connection interrupted · Retrying"
-      : "连接中断 · 正在重试";
+    label = `${cause} · ${english ? "Retrying" : "正在重试"}`;
   else label = english ? "Retrying request" : "正在重试请求";
   const attempts = progress.maxAttempts
     ? `${progress.attempt}/${progress.maxAttempts}`
@@ -291,6 +288,28 @@ function formatRetry(
       : Math.max(0, Math.ceil((since + progress.delayMs - now) / 1000));
   const elapsed = Math.max(0, Math.floor((now - since) / 1000));
   return `${label} · ${attempts}${delay ? (english ? ` · in ${delay}s` : ` · ${delay} 秒后`) : ""} · ${String(Math.floor(elapsed / 60)).padStart(2, "0")}:${String(elapsed % 60).padStart(2, "0")}`;
+}
+
+function retryCause(progress: ModelRequestProgress, english: boolean): string {
+  if (progress.code === "server")
+    return /HTTP\s+504\b/i.test(progress.message ?? "")
+      ? english
+        ? "Gateway timeout"
+        : "网关超时"
+      : english
+        ? "Model service error"
+        : "模型服务异常";
+  if (progress.code === "rate_limit")
+    return english ? "Rate limited" : "请求受到限流";
+  if (progress.code === "timeout")
+    return english ? "Request timed out" : "请求超时";
+  if (progress.code === "transport")
+    return english ? "Connection interrupted" : "连接中断";
+  if (progress.code === "auth")
+    return english ? "Authentication failed" : "身份验证失败";
+  if (progress.code === "invalid_request")
+    return english ? "Invalid model request" : "模型请求无效";
+  return english ? "Request error" : "请求异常";
 }
 
 /** Context maintenance can continue after the reply; keep it in the same loading area. */

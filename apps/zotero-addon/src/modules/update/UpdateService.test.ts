@@ -54,6 +54,7 @@ function fixture(options: Partial<UpdateServiceOptions> = {}) {
       assert.equal(id, "confucius@zotero.plugin");
       assert.equal(update.version, "0.3.8");
       installs++;
+      return { restartRequired: false };
     },
     now: () => 1234,
     ...options,
@@ -152,11 +153,34 @@ describe("UpdateService", () => {
     assert.equal(installs(), 0);
     const ready = await service.install();
     assert.equal(ready.state, "ready");
-    assert.equal(ready.restartRequired, true);
+    assert.equal(ready.restartRequired, false);
+    assert.equal(ready.currentVersion, "0.3.8");
     await service.check();
     await service.install();
-    assert.equal(requests(), 1);
+    assert.equal(requests(), 3);
     assert.equal(installs(), 1);
+  });
+  it("a new hot-updated host reports the applied version and can check for the next update or change channel", async () => {
+    const { service } = fixture();
+    service.start(true);
+    const applied = await service.status();
+    assert.equal(applied.state, "ready");
+    assert.equal(applied.currentVersion, "0.3.6");
+    assert.equal(applied.availableVersion, "0.3.6");
+    assert.equal(applied.restartRequired, false);
+    assert.equal((await service.setPrerelease(true)).includePrerelease, true);
+    assert.equal((await service.check()).canInstall, true);
+    service.dispose();
+  });
+  it("keeps the running version when Zotero stages an update for restart", async () => {
+    const { service } = fixture({
+      installRelease: async () => ({ restartRequired: true }),
+    });
+    const ready = await service.install();
+    assert.equal(ready.state, "ready");
+    assert.equal(ready.restartRequired, true);
+    assert.equal(ready.currentVersion, "0.3.6");
+    assert.equal(ready.availableVersion, "0.3.8");
   });
   it("checks before installing when no prior check exists", async () => {
     const { service, requests, installs } = fixture();
@@ -319,13 +343,25 @@ function installerFixture() {
     cancelTimeout: (id) => clearTimeout(id as ReturnType<typeof setTimeout>),
   };
   const update = selectUpdate([release()], "0.3.6", false) as ReleaseUpdate;
-  return { calls, install, runtime, update };
+  return {
+    calls,
+    install,
+    runtime,
+    update,
+    ended: () => listener.onInstallEnded(),
+    postponed: () => listener.onInstallPostponed(),
+  };
 }
 
 describe("release installation", () => {
   it("downloads, verifies and installs the intended package, then removes the temporary file", async () => {
     const { calls, runtime, update } = installerFixture();
-    await installRelease(update, "confucius@zotero.plugin", runtime);
+    assert.deepEqual(
+      await installRelease(update, "confucius@zotero.plugin", runtime),
+      {
+        restartRequired: false,
+      },
+    );
     assert.deepEqual(calls, [
       "download",
       "write",
@@ -334,6 +370,53 @@ describe("release installation", () => {
       "unlisten",
       "remove",
     ]);
+  });
+  it("waits for bootstrap completion after the install-ended event", async () => {
+    const { install, runtime, update, ended } = installerFixture();
+    let complete!: () => void;
+    install.install = () => {
+      ended();
+      return new Promise<void>((resolve) => {
+        complete = resolve;
+      });
+    };
+    let settled = false;
+    const pending = installRelease(
+      update,
+      "confucius@zotero.plugin",
+      runtime,
+    ).then((result) => {
+      settled = true;
+      return result;
+    });
+    await setImmediate();
+    assert.equal(settled, false);
+    complete();
+    assert.deepEqual(await pending, { restartRequired: false });
+  });
+  it("does not report a successful hot update when bootstrap rejects", async () => {
+    const { install, runtime, update, ended } = installerFixture();
+    install.install = () => {
+      ended();
+      return Promise.reject(new Error("bootstrap failed"));
+    };
+    await assert.rejects(
+      installRelease(update, "confucius@zotero.plugin", runtime),
+      /bootstrap failed/,
+    );
+  });
+  it("reports staged updates without waiting for the deferred install promise", async () => {
+    const { install, runtime, update, postponed } = installerFixture();
+    install.install = () => {
+      postponed();
+      return new Promise(() => {});
+    };
+    assert.deepEqual(
+      await installRelease(update, "confucius@zotero.plugin", runtime),
+      {
+        restartRequired: true,
+      },
+    );
   });
   it("rejects truncated downloads and checksum mismatches before installation", async () => {
     for (const mismatch of ["size", "digest"]) {

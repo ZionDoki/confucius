@@ -11,6 +11,13 @@ import {
   isWorkspaceSidebarVisible,
   workspaceIconAction,
 } from "./workspaceToggle";
+import {
+  captureWorkspaceSnapshot,
+  saveWorkspaceReload,
+  takeWorkspaceReload,
+  type WorkspaceReload,
+  type WorkspaceViewSnapshot,
+} from "./workspaceReload";
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 const SIDEBAR_ID = "confucius-sidebar";
@@ -19,6 +26,7 @@ const ROOT_ID = "confucius-root";
 const DEFAULT_SIDEBAR_WIDTH = 400;
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 720;
+const WORKSPACE_URL = `chrome://${config.addonRef}/content/workspace.xhtml`;
 
 const sidebarCleanups = new WeakMap<HTMLElement, () => void>();
 
@@ -41,6 +49,7 @@ export function bootWorkspace(
   win: Window,
   root?: HTMLElement | null,
   layout: WorkspaceLayout = "window",
+  restore?: WorkspaceViewSnapshot,
 ): void {
   if (!isWindowAlive(win)) {
     return;
@@ -61,6 +70,7 @@ export function bootWorkspace(
   mountWorkspace(win, getHost(), {
     root: mountRoot,
     layout,
+    restore,
     onLayoutChange: (nextLayout) => setWorkspaceLayout(nextLayout, win),
   });
   mountRoot.setAttribute("data-confucius-booted", "1");
@@ -101,6 +111,49 @@ function mainWindows(): Window[] {
   }
 }
 
+function captureOpenWorkspace(): WorkspaceReload | null {
+  for (const win of Services.wm.getEnumerator("")) {
+    if (!isWindowAlive(win) || win.location.href !== WORKSPACE_URL) continue;
+    const root = win.document.getElementById(ROOT_ID) as HTMLElement | null;
+    if (root)
+      return {
+        layout: "window",
+        view: captureWorkspaceSnapshot(root),
+        width: win.outerWidth,
+        height: win.outerHeight,
+      };
+  }
+  for (const win of mainWindows()) {
+    if (!isWorkspaceSidebarVisible(win.document)) continue;
+    const root = win.document.getElementById(ROOT_ID) as HTMLElement | null;
+    if (root)
+      return { layout: "sidebar", view: captureWorkspaceSnapshot(root) };
+  }
+  return null;
+}
+
+const reloadCarrier = () =>
+  Zotero as typeof Zotero & { confuciusWorkspaceReload?: string };
+
+export function rememberWorkspaceForReload(isUpdate: boolean): void {
+  if (isUpdate) saveWorkspaceReload(reloadCarrier(), captureOpenWorkspace());
+  else takeWorkspaceReload(reloadCarrier());
+}
+
+export function consumeWorkspaceReload(
+  isUpdate: boolean,
+): WorkspaceReload | null | undefined {
+  const saved = takeWorkspaceReload(reloadCarrier());
+  if (!isUpdate) return undefined;
+  // Older releases did not create a handoff but may have left an open window.
+  return saved === undefined ? (captureOpenWorkspace() ?? undefined) : saved;
+}
+
+export function restoreWorkspaceAfterReload(saved: WorkspaceReload): void {
+  if (saved.layout === "sidebar") openWorkspaceSidebar(undefined, saved.view);
+  else openWorkspaceWindow(saved);
+}
+
 function closeWorkspaceDialog(source?: Window): void {
   const mainWindowSet = new Set(mainWindows());
   const candidates = new Set<Window>();
@@ -110,10 +163,19 @@ function closeWorkspaceDialog(source?: Window): void {
   if (addon.data.workspaceWindow) {
     candidates.add(addon.data.workspaceWindow);
   }
+  // Older versions could lose this reference on the initial about:blank unload.
+  // Include surviving windows so an add-on update never leaves an old host UI.
+  for (const win of Services.wm.getEnumerator("")) {
+    if (isWindowAlive(win) && win.location.href === WORKSPACE_URL)
+      candidates.add(win);
+  }
   for (const candidate of candidates) {
     if (mainWindowSet.has(candidate) || !isWindowAlive(candidate)) {
       continue;
     }
+    unmountWorkspace(
+      candidate.document.getElementById(ROOT_ID) as HTMLElement | null,
+    );
     candidate.close();
   }
   addon.data.workspaceWindow = undefined;
@@ -143,21 +205,28 @@ export function setWorkspaceLayout(
   openWorkspaceWindow();
 }
 
-export function openWorkspaceWindow(): Window | undefined {
+export function openWorkspaceWindow(
+  restore?: WorkspaceReload,
+): Window | undefined {
   closeOtherWorkspaceSidebars();
   if (isWindowAlive(addon.data.workspaceWindow)) {
     addon.data.workspaceWindow?.focus();
-    bootWorkspace(addon.data.workspaceWindow as Window, undefined, "window");
+    bootWorkspace(
+      addon.data.workspaceWindow as Window,
+      undefined,
+      "window",
+      restore?.view,
+    );
     return addon.data.workspaceWindow;
   }
 
-  const width = getPref("workspaceWidth") || 1100;
-  const height = getPref("workspaceHeight") || 760;
+  const width = restore?.width || getPref("workspaceWidth") || 1100;
+  const height = restore?.height || getPref("workspaceHeight") || 760;
   const mainWindow = Zotero.getMainWindow() as Window & {
     openDialog: (url: string, name: string, features: string) => Window | null;
   };
   const win = mainWindow.openDialog(
-    `chrome://${config.addonRef}/content/workspace.xhtml`,
+    WORKSPACE_URL,
     `${config.addonRef}-workspace`,
     `chrome,dialog=no,centerscreen,resizable=yes,width=${width},height=${height}`,
   );
@@ -167,8 +236,10 @@ export function openWorkspaceWindow(): Window | undefined {
   }
 
   const start = () => {
+    if (!isWindowAlive(win) || win.location.href !== WORKSPACE_URL) return;
     try {
-      bootWorkspace(win, undefined, "window");
+      addon.data.workspaceWindow = win;
+      bootWorkspace(win, undefined, "window", restore?.view);
     } catch (error) {
       ztoolkit.log("[Confucius] workspace mount failed", error);
     }
@@ -180,7 +251,12 @@ export function openWorkspaceWindow(): Window | undefined {
   mainWindow.setTimeout(start, 200);
   mainWindow.setTimeout(start, 500);
 
-  win.addEventListener("unload", () => {
+  win.addEventListener("unload", (event) => {
+    if ((event.target as Document | null)?.documentURI !== WORKSPACE_URL)
+      return;
+    unmountWorkspace(
+      win.document.getElementById(ROOT_ID) as HTMLElement | null,
+    );
     if (addon.data.workspaceWindow === win) {
       addon.data.workspaceWindow = undefined;
     }
@@ -288,7 +364,10 @@ function bindSidebarSizing(win: Window, pane: HTMLElement): () => void {
   return cleanup;
 }
 
-export function openWorkspaceSidebar(win?: Window): Window | undefined {
+export function openWorkspaceSidebar(
+  win?: Window,
+  restore?: WorkspaceViewSnapshot,
+): Window | undefined {
   const main = win ?? Zotero.getMainWindow();
   if (!isWindowAlive(main)) {
     return undefined;
@@ -305,7 +384,7 @@ export function openWorkspaceSidebar(win?: Window): Window | undefined {
     }
     const root = existing.querySelector(`#${ROOT_ID}`) as HTMLElement | null;
     try {
-      bootWorkspace(main, root, "sidebar");
+      bootWorkspace(main, root, "sidebar", restore);
     } catch (error) {
       ztoolkit.log("[Confucius] sidebar remount failed", error);
     }
@@ -315,7 +394,9 @@ export function openWorkspaceSidebar(win?: Window): Window | undefined {
   const host = sidebarHost(doc);
   if (!host) {
     ztoolkit.log("[Confucius] no host for sidebar; opening a window");
-    return openWorkspaceWindow();
+    return openWorkspaceWindow(
+      restore ? { layout: "window", view: restore } : undefined,
+    );
   }
 
   const width = clampSidebarWidth(
@@ -380,7 +461,7 @@ export function openWorkspaceSidebar(win?: Window): Window | undefined {
   });
 
   try {
-    bootWorkspace(main, root, "sidebar");
+    bootWorkspace(main, root, "sidebar", restore);
   } catch (error) {
     ztoolkit.log("[Confucius] sidebar mount failed", error);
   }

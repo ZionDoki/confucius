@@ -80,7 +80,7 @@ async function reconcileArtifact(
       canonical(revision.body) === canonical(intended.body)
     ) {
       const result = applied(operation, {
-        ...(patch ? artifactPatchReceipt(artifact) : { artifact }),
+        ...(patch ? artifactPatchReceipt(artifact, args) : { artifact }),
         reconciledRevision: revision.revision,
       });
       try {

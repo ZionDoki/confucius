@@ -29,6 +29,23 @@ export interface ModelRequestProgress {
   stage?: "retrying" | "recovering";
 }
 
+/** Compact evidence receipt: content was delivered, not merely archived. */
+export interface SourceReadEvidence {
+  toolName: "get_pages" | "inspect_pdf_page" | "get_annotations";
+  libraryID: number;
+  keys: string[];
+  attachmentKey?: string;
+  sourceContent?: boolean;
+  annotations?: {
+    offset: number;
+    count: number;
+    total: number;
+    nextOffset: number | null;
+    snapshot?: string;
+    filtered: boolean;
+  };
+}
+
 export type ConfuciusEventType =
   | "model_request_progress"
   | "context_progress"
@@ -39,6 +56,7 @@ export type ConfuciusEventType =
   | "tool_requested"
   | "tool_progress"
   | "tool_result"
+  | "source_read_delivered"
   | "approval_required"
   | "approval_resolved"
   | "artifact_upserted"
@@ -68,6 +86,8 @@ export interface ConfuciusEventBase {
   turnId?: string;
   type: ConfuciusEventType;
   ts: number;
+  /** Host arrival order within this task; independent of wall-clock changes. */
+  sequence?: number;
   origin?: "executor" | "host";
 }
 
@@ -115,6 +135,13 @@ type EventPayloads = {
   tool_result: {
     callId: string;
     result: ToolSuccess | ToolFailure;
+  };
+  source_read_delivered: {
+    callId: string;
+    evidence: SourceReadEvidence;
+    delivery: "native-request" | "host-provided";
+    /** Bound only when the original read occurred after this saved revision. */
+    review?: { artifactId: string; revision: number };
   };
   approval_required: { request: ApprovalRequest };
   approval_resolved: { resolution: ApprovalResolution };

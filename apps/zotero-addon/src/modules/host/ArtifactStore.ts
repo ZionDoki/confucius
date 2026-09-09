@@ -4,6 +4,7 @@ import {
   isCitation,
   isArtifactKind,
   isArtifactRecord,
+  readingCitationErrors,
   type AgentBackendKind,
   type ArtifactRecord,
   type ArtifactUpsertInput,
@@ -15,6 +16,9 @@ export interface ArtifactFileSystem {
   exists(path: string): Promise<boolean>;
   makeDirectory(path: string): Promise<void>;
 }
+
+/** A pre-write fence failed; no atomic write has been dispatched. */
+export class ArtifactWriteCancelled extends Error {}
 
 class ZoteroArtifactFileSystem implements ArtifactFileSystem {
   async read(path: string): Promise<string> {
@@ -87,12 +91,20 @@ export class ArtifactStore {
     expectedRevision?: number,
     execution?: import("@confucius/protocol").ExecutionBinding,
     operationId?: string,
+    beforeWrite?: () => void,
   ): Promise<ArtifactRecord> {
     if (!isArtifactKind(input.kind)) {
       throw new Error("Unknown artifact kind");
     }
     if (!artifactBodyMatchesKind(input.kind, input.body)) {
       throw new Error(`Artifact body does not match kind ${input.kind}`);
+    }
+    if (input.body.type === "markdown" && input.body.readingGuide) {
+      const errors = readingCitationErrors(input.body, input.citations ?? []);
+      if (errors.length)
+        throw new Error(
+          `Unresolved or duplicate citation IDs: ${errors.join(", ")}`,
+        );
     }
     const title = String(input.title ?? "").trim();
     if (!title) throw new Error("Artifact title is required");
@@ -119,7 +131,9 @@ export class ArtifactStore {
 
     const id = input.id ? safeId(input.id) : safeId(this.createId());
     return this.withArtifactLock(id, async () => {
+      beforeWrite?.();
       const existing = input.id ? await this.getUnlocked(id) : null;
+      beforeWrite?.();
       if (
         expectedRevision !== undefined &&
         (existing?.revision ?? 0) !== expectedRevision
@@ -177,7 +191,7 @@ export class ArtifactStore {
         createdAt: existing?.createdAt ?? at,
         updatedAt: at,
       };
-      return this.writeUnlocked(artifact);
+      return this.writeUnlocked(artifact, beforeWrite);
     });
   }
 
@@ -209,9 +223,13 @@ export class ArtifactStore {
 
   private async writeUnlocked(
     artifact: ArtifactRecord,
+    beforeWrite?: () => void,
   ): Promise<ArtifactRecord> {
     const id = safeId(artifact.id);
     await this.fs.makeDirectory(this.root);
+    // Once writeAtomic starts, retain its actual result even if cancellation
+    // arrives during the native IO. Cancellation cannot undo a dispatched write.
+    beforeWrite?.();
     await this.fs.writeAtomic(this.path(id), JSON.stringify(artifact, null, 2));
     this.cache.set(id, clone(artifact));
     return clone(artifact);

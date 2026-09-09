@@ -480,11 +480,6 @@ export class TurnLoop {
     ) => {
       this.modelRequest = progress;
       this.emit(input, "model_request_progress", progress);
-      if (progress.status === "failed" && progress.delayMs !== undefined)
-        this.emit(input, "reasoning_delta", {
-          text: "",
-          statusText: `请求暂时失败，自动重试 ${progress.attempt}/2`,
-        });
     };
     const makeRequest = () => ({
       ...(this.deps.model.handlesRetries ? { onRequestProgress } : {}),
@@ -994,7 +989,7 @@ export class TurnLoop {
           toolCallId: call.modelCallId ?? call.callId,
         });
       }
-      for (const { transientMedia } of results) {
+      for (const { call, transientMedia } of results) {
         for (const media of transientMedia) {
           messages.push({
             role: "user",
@@ -1002,6 +997,7 @@ export class TurnLoop {
               media.description ??
               "Transient tool image. Ground visual claims in this image.",
             images: [media],
+            sourceToolCallId: call.modelCallId ?? call.callId,
             transient: true,
           });
         }

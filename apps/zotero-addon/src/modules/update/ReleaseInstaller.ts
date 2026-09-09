@@ -17,6 +17,10 @@ export interface PackageInstall {
   removeListener(listener: InstallListener): void;
 }
 
+export interface ReleaseInstallResult {
+  restartRequired: boolean;
+}
+
 export interface InstallerRuntime {
   download(url: string): Promise<Uint8Array>;
   createTempFile(): Promise<string>;
@@ -33,7 +37,7 @@ export async function installRelease(
   release: ReleaseUpdate,
   addonId: string,
   runtime: InstallerRuntime = zoteroRuntime,
-): Promise<void> {
+): Promise<ReleaseInstallResult> {
   const bytes = await runtime.download(release.downloadURL);
   if (bytes.byteLength !== release.size)
     throw new Error("The downloaded update is incomplete. Please try again.");
@@ -57,9 +61,10 @@ export async function installRelease(
         "The update package has the wrong identity, version, or Zotero compatibility.",
       );
     }
-    await new Promise<void>((resolve, reject) => {
+    return await new Promise<ReleaseInstallResult>((resolve, reject) => {
       let settled = false;
-      const finish = (error?: Error): void => {
+      let installation: Promise<unknown>;
+      const finish = (result?: ReleaseInstallResult, error?: Error): void => {
         if (settled) return;
         settled = true;
         runtime.cancelTimeout(timer);
@@ -71,32 +76,42 @@ export async function installRelease(
             /* Already failed/cancelled. */
           }
           reject(error);
-        } else resolve();
+        } else resolve(result!);
       };
+      const fail = (error: unknown) =>
+        finish(
+          undefined,
+          error instanceof Error ? error : new Error(String(error)),
+        );
       const listener: InstallListener = {
-        onInstallEnded: () => finish(),
-        onInstallPostponed: () => finish(),
+        // Gecko's install promise also waits for the new bootstrap startup.
+        // The event alone can arrive before that startup has completed.
+        onInstallEnded: () => {
+          void Promise.resolve()
+            .then(() => installation)
+            .then(() => finish({ restartRequired: false }), fail);
+        },
+        onInstallPostponed: () => finish({ restartRequired: true }),
         onInstallFailed: () =>
-          finish(
+          fail(
             new Error(
               `Zotero could not install the update (${install.error ?? "unknown error"}).`,
             ),
           ),
         onInstallCancelled: () =>
-          finish(new Error("Update installation was cancelled.")),
+          fail(new Error("Update installation was cancelled.")),
       };
       const timer = runtime.scheduleTimeout(
         () =>
-          finish(new Error("Update installation timed out. Please try again.")),
+          fail(new Error("Update installation timed out. Please try again.")),
         60_000,
       );
       install.addListener(listener);
       try {
-        void Promise.resolve(install.install()).catch((error) =>
-          finish(error instanceof Error ? error : new Error(String(error))),
-        );
+        installation = Promise.resolve(install.install());
+        void installation.catch(fail);
       } catch (error) {
-        finish(error instanceof Error ? error : new Error(String(error)));
+        fail(error);
       }
     });
   } finally {

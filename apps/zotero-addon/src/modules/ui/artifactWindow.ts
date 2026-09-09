@@ -99,6 +99,13 @@ export class ArtifactWindows {
       if (entry.taskId === taskId && !entry.win.closed) entry.win.close();
   }
 
+  async closeArtifact(artifactId: string): Promise<void> {
+    const entry = this.windows.get(artifactId);
+    if (!entry || entry.win.closed) return;
+    await entry.view?.dispose();
+    if (!entry.win.closed) entry.win.close();
+  }
+
   closeAll(): void {
     for (const entry of [...this.windows.values()])
       if (!entry.win.closed) entry.win.close();

@@ -42,6 +42,23 @@ const collect = (overrides) =>
     ...overrides,
   });
 
+test("trace export follows durable arrival sequence across clock reversals and retained/journal overlap", async () => {
+  const saved = { ...event(2), ts: 420000, sequence: 41 };
+  const receipt = { ...event(3), ts: 1000, sequence: 42 };
+  const report = await collect({
+    retainedEvents: [receipt, saved, { ...event(1), ts: 900000 }],
+  });
+  assert.deepEqual(
+    report.events.map((event) => event.id),
+    ["e_1", "e_2", "e_3"],
+  );
+  assert.equal(
+    report.events[2].ts,
+    1000,
+    "retain recorded wall time; never invent a corrected timestamp",
+  );
+});
+
 test("trace export keeps full bodies across windows, previous notes, missing files and orphan bodies", async () => {
   const fs = new InMemoryFileSystem();
   const store = new HistoryStore(fs, "/history");

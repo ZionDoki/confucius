@@ -117,6 +117,13 @@ export const RPC_METHODS = {
   taskToolCall: "task/toolCall",
   artifactList: "artifact/list",
   artifactGet: "artifact/get",
+  artifactGenerateReport: "artifact/generateReport",
+  artifactReadingState: "artifact/readingState",
+  readingDiscussionOpen: "readingDiscussion/open",
+  readingDiscussionPrompt: "readingDiscussion/prompt",
+  readingDiscussionEvents: "readingDiscussion/events",
+  readingDiscussionAbort: "readingDiscussion/abort",
+  readingDiscussionContinue: "readingDiscussion/continue",
   artifactUpsert: "artifact/upsert",
   artifactWritebackPreview: "artifact/writebackPreview",
   artifactWritebackCommit: "artifact/writebackCommit",
@@ -257,6 +264,7 @@ export interface ArtifactGetParams {
 export interface ArtifactWritebackParams {
   id: string;
   revision?: number;
+  view?: "guide" | "report";
   target?:
     | "zotero_note"
     | "zotero_annotations"

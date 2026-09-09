@@ -167,6 +167,7 @@ export type {
 
 export type {
   ModelRequestProgress,
+  SourceReadEvidence,
   ConfuciusEvent,
   ConfuciusEventBase,
   ConfuciusEventType,
@@ -331,3 +332,5 @@ export * from "./codexOutput";
 export * from "./contextPolicy";
 export * from "./contextHandoff";
 export * from "./sourceCoverage";
+export * from "./readingGuide";
+export * from "./readingDiscussion";

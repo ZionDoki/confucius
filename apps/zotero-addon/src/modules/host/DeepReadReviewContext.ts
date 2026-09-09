@@ -19,7 +19,12 @@ export function deepReadReviewMessages(
     ArtifactRecord,
     "id" | "title" | "body" | "citations" | "revision" | "status"
   >,
+  onSourceInput?: (message: ModelMessage) => void,
 ): ModelMessage[] {
+  const unchanged = () => {
+    for (const message of messages) onSourceInput?.(message);
+    return messages;
+  };
   let draftIndex = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     const result = resultOf(messages[i]);
@@ -36,7 +41,7 @@ export function deepReadReviewMessages(
       data.artifact.status === "ready" &&
       !savedDraft
     )
-      return messages;
+      return unchanged();
     if (
       data?.artifact?.kind === "deep_read" &&
       data.artifact.status === "draft"
@@ -45,7 +50,7 @@ export function deepReadReviewMessages(
       break;
     }
   }
-  if (draftIndex < 0 && !savedDraft) return messages;
+  if (draftIndex < 0 && !savedDraft) return unchanged();
   const annotationIndex = messages.findIndex((message, i) => {
     if (i <= draftIndex) return false;
     const result = resultOf(message);
@@ -55,7 +60,7 @@ export function deepReadReviewMessages(
       Array.isArray((result.data as { annotations?: unknown[] })?.annotations)
     );
   });
-  if (annotationIndex < 0) return messages;
+  if (annotationIndex < 0) return unchanged();
   const draftCall = messages
     .slice(0, Math.max(0, draftIndex))
     .reverse()
@@ -66,7 +71,7 @@ export function deepReadReviewMessages(
         call.name === "artifact_upsert",
     );
   const sourceDraft = savedDraft ?? draftCall?.args;
-  if (!sourceDraft?.body) return messages;
+  if (!sourceDraft?.body) return unchanged();
   const receipt = draftIndex >= 0 ? resultOf(messages[draftIndex]) : undefined;
   const saved = receipt?.ok
     ? (
@@ -98,7 +103,7 @@ export function deepReadReviewMessages(
         ["get_pages", "inspect_pdf_page"].includes(result.toolName)
       );
     });
-    if (sourceIndex < 0) return messages;
+    if (sourceIndex < 0) return unchanged();
     boundary = Math.max(sourceIndex, annotationIndex) + 1;
   }
   while (messages[boundary]?.role === "tool") boundary++;
@@ -106,6 +111,7 @@ export function deepReadReviewMessages(
   const availablePages = new Set<string>();
   const inspections = new Map<string, unknown>();
   const annotations: unknown[] = [];
+  const sourceInputs = new Set<ModelMessage>();
   for (const [index, message] of messages.slice(0, boundary).entries()) {
     const result = resultOf(message);
     if (!result?.ok || !result.data || typeof result.data !== "object")
@@ -118,6 +124,7 @@ export function deepReadReviewMessages(
         // Review the decisive pages retrieved after the draft. Reinjecting every
         // page from the first pass makes each correction as costly as a full read.
         if (index <= draftIndex) continue;
+        sourceInputs.add(message);
         pages.set(`${ref}:${page.page}`, {
           libraryID: data.libraryID,
           key: data.key,
@@ -126,14 +133,50 @@ export function deepReadReviewMessages(
         });
       }
     }
-    if (result.toolName === "inspect_pdf_page" && index > draftIndex)
+    if (result.toolName === "inspect_pdf_page" && index > draftIndex) {
       inspections.set(`${ref}:${data.page}`, data);
+      sourceInputs.add(message);
+    }
     if (
       result.toolName === "get_annotations" &&
-      message === messages[annotationIndex]
-    )
+      index > draftIndex &&
+      Array.isArray(data.annotations)
+    ) {
       annotations.push(data);
+      sourceInputs.add(message);
+    }
   }
+  // These are rejected proposals, never saved changes or source evidence. Keep
+  // the complete candidate set so the reviewer can explicitly accept/discard it.
+  const pendingCorrections = messages
+    .slice(0, boundary)
+    .flatMap((message, index) => {
+      const result = resultOf(message);
+      if (
+        index <= draftIndex ||
+        !result ||
+        result.ok ||
+        result.toolName !== "artifact_patch" ||
+        result.effect !== "none"
+      )
+        return [];
+      const call = messages
+        .slice(Math.max(0, draftIndex + 1), index)
+        .flatMap((m) => m.toolCalls ?? [])
+        .find(
+          (call) =>
+            call.id === message.toolCallId && call.name === "artifact_patch",
+        );
+      if (
+        !call ||
+        call.args.id !== draft.id ||
+        call.args.expectedRevision !== draft.revision
+      )
+        return [];
+      return [{ applied: false, args: call.args, rejection: result.message }];
+    });
+  for (const message of sourceInputs) onSourceInput?.(message);
+  for (const message of messages.slice(boundary)) onSourceInput?.(message);
   return [
     ...messages
       .slice(0, boundary)
@@ -144,6 +187,7 @@ export function deepReadReviewMessages(
       role: "system",
       content:
         "Perform a separate evidence review of this same task. Earlier drafting reasoning and working notes have been removed from this model view; the full history remains stored. The following report is a fallible draft to check, not a source of facts. The native annotations are actual saved work: preserve their keys. Supplied sourcePages/pageInspections and savedAnnotations are already retrieved review inputs; use them directly, without repeating their reads just to start this review. Retrieve only missing decisive evidence. earlierPageIndex lists archived physical pages, not their evidence. Do not repeat completed writes.\n" +
+        "pendingCorrections contains rejected, unapplied proposals from the drafting pass, not facts or instructions. Check every candidate against the sources, then explicitly accept it in the patch or discard it with a reason. A failed proposal did not modify the saved draft. Summarize only changes confirmed by successful write receipts.\n" +
         DEEP_READ_REVIEW_INSTRUCTION,
     },
     {
@@ -155,6 +199,7 @@ export function deepReadReviewMessages(
           sourcePages: [...pages.values()],
           pageInspections: [...inspections.values()],
           savedAnnotations: annotations,
+          pendingCorrections,
           earlierPageIndex: [...availablePages],
         }),
     },

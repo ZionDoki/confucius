@@ -13,10 +13,14 @@ import type {
 import {
   artifactBodyMatchesKind,
   isArtifactKind,
-  mapMarkdownCitations,
+  READING_GUIDE_SCHEMA,
+  readingCitationErrors,
+  type ArtifactBody,
+  type Citation,
 } from "@confucius/protocol";
 import type { ToolProvider } from "@confucius/harness";
-import type { ArtifactStore } from "./ArtifactStore";
+import { ArtifactWriteCancelled, type ArtifactStore } from "./ArtifactStore";
+import { throwIfScopeExpired } from "./ExecutionScope";
 import { DEEP_READ_REVIEW_INSTRUCTION } from "./DeepReadReview";
 import {
   ARTIFACT_READ_TOOL,
@@ -51,6 +55,7 @@ const markdownBodySchema = {
   properties: {
     type: { type: "string", enum: ["markdown"] },
     markdown: { type: "string" },
+    readingGuide: READING_GUIDE_SCHEMA,
   },
   required: ["type", "markdown"],
   additionalProperties: false,
@@ -497,6 +502,7 @@ export class ArtifactToolProvider implements ToolProvider {
     private readonly reviewNextAction?: (
       artifact: ArtifactRecord | null,
     ) => string,
+    private readonly reportArtifactId?: string,
   ) {}
 
   listTools(): ToolDefinition[] {
@@ -525,8 +531,30 @@ export class ArtifactToolProvider implements ToolProvider {
     args: Record<string, unknown>,
     context: ToolExecutionContext = {},
   ): Promise<ToolFailure | null> {
+    if (
+      this.reportArtifactId &&
+      (args.id !== this.reportArtifactId ||
+        (name !== ARTIFACT_READ_TOOL &&
+          (name !== ARTIFACT_PATCH_TOOL || args.readingGuide !== undefined)))
+    )
+      return {
+        ok: false,
+        toolName: name,
+        code: "permission_denied",
+        effect: "none",
+        message:
+          "Report generation may only read or patch the requested artifact. Preserve readingGuide and existing annotations.",
+      };
     if (name === ARTIFACT_READ_TOOL || name === ARTIFACT_PATCH_TOOL)
       return this.prepareEdit(name, args, context);
+    return this.prepareUpsert(name, args, context);
+  }
+
+  private async prepareUpsert(
+    name: string,
+    args: Record<string, unknown>,
+    context: ToolExecutionContext,
+  ): Promise<ToolFailure | null> {
     args.body = normalizeArtifactBodyArgument(args.body);
     const invalid = validateArgs(name, this.getSchema(name), args);
     if (
@@ -553,17 +581,22 @@ export class ArtifactToolProvider implements ToolProvider {
           "Invalid id: this artifact is not available for revision in the current task. To create a new artifact, omit id; the host generates it. To revise a saved artifact, use the id returned by artifact_upsert in this task. Changing taskId or requesting approval cannot fix this id. No write was performed.",
         details: { argument: "id", reason: "artifact_not_in_task" },
       };
-    const body = args.body as { type?: string; markdown?: string };
+    const body = args.body as ArtifactBody;
     if (body?.type === "markdown" && typeof body.markdown === "string") {
-      const citations = (args.citations ?? existing?.citations ?? []) as Array<{
-        id?: string;
-      }>;
-      const unresolved = new Set<string>();
-      mapMarkdownCitations(body.markdown, (id, marker) => {
-        if (citations.filter((citation) => citation.id === id).length !== 1)
-          unresolved.add(id);
-        return marker;
-      });
+      if (!artifactBodyMatchesKind(args.kind as ArtifactRecord["kind"], body))
+        return {
+          ok: false,
+          toolName: name,
+          code: "invalid_args",
+          effect: "none",
+          retryable: false,
+          message:
+            "Invalid reading guide: require unique checkpoint IDs, both explanations for checkpoints, and source citations.",
+        };
+      const citations = (args.citations ??
+        existing?.citations ??
+        []) as Citation[];
+      const unresolved = new Set(readingCitationErrors(body, citations));
       if (unresolved.size)
         return {
           ok: false,
@@ -670,7 +703,11 @@ export class ArtifactToolProvider implements ToolProvider {
     // upsert preparation rereads the store and must not rebase these old edits.
     context.expected ??= {};
     context.expected[`artifact:${artifact.id}`] ??= String(artifact.revision);
-    const rejected = await this.prepare(ARTIFACT_UPSERT_TOOL, input, context);
+    const rejected = await this.prepareUpsert(
+      ARTIFACT_UPSERT_TOOL,
+      input,
+      context,
+    );
     if (rejected) return { ...rejected, toolName: name };
     const prepared = context.preparedOperation!;
     context.preparedOperation = {
@@ -685,7 +722,7 @@ export class ArtifactToolProvider implements ToolProvider {
   async call(
     name: string,
     args: Record<string, unknown>,
-    _signal?: AbortSignal,
+    signal?: AbortSignal,
     context: ToolExecutionContext = {},
   ): Promise<ToolResult> {
     if (!ARTIFACT_TOOL_NAMES.has(name)) {
@@ -696,11 +733,38 @@ export class ArtifactToolProvider implements ToolProvider {
         message: "Unknown artifact tool",
       };
     }
-    const invalid = await this.prepare(name, args, context);
+    const beforeWrite = () => {
+      try {
+        if (signal?.aborted || context.signal?.aborted)
+          throw new Error("Tool cancelled before artifact write");
+        if (context.executionScope) throwIfScopeExpired(context.executionScope);
+      } catch (error) {
+        throw new ArtifactWriteCancelled(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    };
+    let invalid: ToolFailure | null;
+    try {
+      beforeWrite();
+      invalid = await this.prepare(name, args, context);
+      beforeWrite();
+    } catch (error) {
+      if (!(error instanceof ArtifactWriteCancelled)) throw error;
+      return {
+        ok: false,
+        toolName: name,
+        code: "timeout",
+        effect: "none",
+        retryable: false,
+        message: error.message,
+      };
+    }
     if (invalid) return invalid;
     if (name === ARTIFACT_READ_TOOL) {
       try {
         const artifact = await this.store.get(String(args.id));
+        beforeWrite();
         // Recheck after the asynchronous read, including a paged read's revision.
         if (
           !artifact ||
@@ -732,7 +796,10 @@ export class ArtifactToolProvider implements ToolProvider {
         return {
           ok: false,
           toolName: name,
-          code: "invalid_args",
+          code:
+            error instanceof ArtifactWriteCancelled
+              ? "timeout"
+              : "invalid_args",
           effect: "none",
           message: String(error),
         };
@@ -770,6 +837,7 @@ export class ArtifactToolProvider implements ToolProvider {
         Number(context.expected?.[`artifact:${args.id}`]),
         this.execution?.(),
         context.operationId,
+        beforeWrite,
       );
       const warnings: string[] = [];
       try {
@@ -785,7 +853,7 @@ export class ArtifactToolProvider implements ToolProvider {
         effect: "applied",
         data: {
           ...(name === ARTIFACT_PATCH_TOOL
-            ? artifactPatchReceipt(artifact)
+            ? artifactPatchReceipt(artifact, args)
             : { artifact }),
           ...(artifact.kind === "deep_read" &&
           artifact.status === "draft" &&
@@ -804,8 +872,10 @@ export class ArtifactToolProvider implements ToolProvider {
       return {
         ok: false,
         toolName: name,
-        code: "unavailable",
+        code:
+          error instanceof ArtifactWriteCancelled ? "timeout" : "unavailable",
         effect:
+          error instanceof ArtifactWriteCancelled ||
           /changed after preflight|belongs to another task|cannot change|Invalid artifact/.test(
             String(error),
           )

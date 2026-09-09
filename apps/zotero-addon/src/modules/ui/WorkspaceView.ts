@@ -1,6 +1,7 @@
 import { renderMemoryProposal } from "./memoryProposalCards";
 import { setAnnotationFilterTask } from "./annotationBatchFilter";
 import { artifactWindows } from "./artifactWindow";
+import { mountWorkspaceArtifact } from "./artifactWorkspace";
 import { UI_FONT_STACKS } from "./workspaceTypography";
 import { getPref, setPref } from "../../utils/prefs";
 import { WorkspaceFormDrafts } from "./workspaceDrafts";
@@ -123,6 +124,12 @@ import {
   type LibraryMentionToken,
 } from "./libraryMention";
 import { pickRuntimeExecutable } from "./runtimeExecutablePicker";
+import {
+  openWorkspaceSettingsTab,
+  registerWorkspaceSnapshot,
+  type WorkspaceSettingsTab,
+  type WorkspaceViewSnapshot,
+} from "./workspaceReload";
 
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 const MAX_COMPOSER_ATTACHMENTS = 5;
@@ -220,6 +227,7 @@ export type WorkspaceLayout = "window" | "sidebar";
 export interface MountOptions {
   root?: HTMLElement;
   layout?: WorkspaceLayout;
+  restore?: WorkspaceViewSnapshot;
   onLayoutChange?: (layout: WorkspaceLayout) => void;
 }
 
@@ -615,9 +623,7 @@ function muted(doc: Document, text: string): HTMLElement {
 }
 
 const button = createWorkspaceButton;
-let lastSettingsTab:
-  "model" | "runtime" | "memory" | "security" | "appearance" | "update" =
-  "model";
+let lastSettingsTab: WorkspaceSettingsTab = "model";
 
 function brandMark(doc: Document): Element {
   const svg = doc.createElementNS(SVG_NS, "svg");
@@ -1146,7 +1152,18 @@ function bindWorkspace(
     root.addEventListener("click", onWorkspaceLink, true);
   }
 
-  const cachedView = workspaceViewState;
+  const restored = options.restore;
+  const cachedView = restored
+    ? {
+        taskId: restored.taskId,
+        drafts: new Map(restored.drafts),
+        references: new Map(restored.references),
+        viewports: new Map(restored.viewports),
+        showSessions: restored.showSessions,
+      }
+    : workspaceViewState;
+  let restoreSettings = restored?.settingsTab;
+  let restoreDraft = Boolean(restored);
   // Appearance is local: use it for the first paint while model config loads.
   const initialAppearance = {
     uiFont: getPref("uiFont"),
@@ -1192,6 +1209,8 @@ function bindWorkspace(
     cachedView?.viewports ??
     new Map<string, { scrollTop: number; followsBottom: boolean }>();
   let renderedTimelineTaskId: string | null = null;
+  let workspaceArtifact: ReturnType<typeof mountWorkspaceArtifact> | undefined;
+  let artifactOpenGeneration = 0;
   let loadedComposerTaskId: string | null = null;
   let taskLoadGeneration = 0;
   let pendingTaskId: string | null = null;
@@ -1853,7 +1872,22 @@ function bindWorkspace(
     : null;
   resizeObserver?.observe(root);
   win?.addEventListener("resize", onWindowResize);
+  const unregisterSnapshot = registerWorkspaceSnapshot(root, () => {
+    rememberComposerDraft();
+    rememberTimelineViewport();
+    return {
+      taskId: state.sessionId,
+      drafts: [...composerDrafts],
+      references: [...referenceDrafts],
+      viewports: [...timelineViewports],
+      showSessions,
+      settingsTab: openWorkspaceSettingsTab(doc),
+    };
+  });
   layoutCleanups.set(root, () => {
+    artifactOpenGeneration++;
+    void workspaceArtifact?.dispose();
+    unregisterSnapshot();
     taskLoadGeneration += 1;
     sessionListGeneration += 1;
     rememberComposerDraft();
@@ -3921,7 +3955,7 @@ function bindWorkspace(
   }
 
   function rememberTimelineViewport(taskId = renderedTimelineTaskId): void {
-    if (!taskId) return;
+    if (!taskId || !initialViewReady) return;
     timelineViewports.set(taskId, {
       scrollTop: timelinePane.scrollTop,
       followsBottom:
@@ -4796,16 +4830,32 @@ function bindWorkspace(
   function openArtifactViewer(
     artifactId: string,
     revision?: number,
-    _returnFocus?: HTMLElement,
+    returnFocus?: HTMLElement,
   ): void {
     const artifact = state.artifacts.find((item) => item.id === artifactId);
     if (!artifact || !host) return;
-    try {
-      artifactWindows.open(host, artifact, revision, fillAnswerHtml);
-    } catch (error) {
+    const generation = ++artifactOpenGeneration;
+    const fail = (error: unknown) => {
       state.sendError = String(error);
       renderLists();
-    }
+    };
+    void (async () => {
+      await workspaceArtifact?.dispose();
+      await artifactWindows.closeArtifact(artifact.id);
+      if (generation !== artifactOpenGeneration) return;
+      workspaceArtifact = mountWorkspaceArtifact(
+        root,
+        host,
+        artifact,
+        revision,
+        fillAnswerHtml,
+        () =>
+          (returnFocus?.isConnected ? returnFocus : timelinePane).focus({
+            preventScroll: true,
+          }),
+        fail,
+      );
+    })().catch(fail);
   }
 
   function syncTraceExportButton(): void {
@@ -4899,6 +4949,10 @@ function bindWorkspace(
       void (async () => {
         await rpc("task/delete", { taskId: taskId });
         artifactWindows.closeTask(taskId);
+        if (workspaceArtifact?.taskId === taskId) {
+          artifactOpenGeneration++;
+          await workspaceArtifact.dispose();
+        }
         composerDrafts.delete(taskId);
         timelineViewports.delete(taskId);
         if (pendingTaskId === taskId) {
@@ -5222,7 +5276,7 @@ function bindWorkspace(
       reconcileActivity(initialStream, activityStream);
       timelinePane.appendChild(initialStream);
     }
-    renderedTimelineTaskId = timelineTaskId;
+    if (initialViewReady) renderedTimelineTaskId = timelineTaskId;
     timelinePane.scrollTop =
       followTimeline && (state.events.length > 0 || state.pendingUserText)
         ? timelinePane.scrollHeight
@@ -6924,16 +6978,22 @@ function bindWorkspace(
       autoUpdateToggle.disabled = updateBusy || !updateView;
       prereleaseToggle.checked = updateView?.includePrerelease === true;
       prereleaseToggle.disabled =
-        updateBusy || !updateView || updateView.state === "ready";
+        updateBusy ||
+        !updateView ||
+        (updateView.state === "ready" && updateView.restartRequired === true);
       (checkUpdate as HTMLButtonElement).disabled = updateBusy;
       (installUpdate as HTMLButtonElement).disabled =
         updateBusy || !updateView?.canInstall;
       const stateName = updateView?.state ?? "idle";
+      const stateLabel =
+        stateName === "ready" && updateView?.restartRequired
+          ? "restart-required"
+          : stateName;
       const version = updateView?.availableVersion
         ? ` · v${updateView.availableVersion}`
         : "";
       updateStateLine.textContent = `${getString(
-        `workspace-update-state-${stateName}`,
+        `workspace-update-state-${stateLabel}`,
       )}${version}${updateView?.message ? ` · ${updateView.message}` : ""}`;
       updateStateLine.style.color =
         stateName === "error"
@@ -6962,7 +7022,7 @@ function bindWorkspace(
         };
       } finally {
         updateBusy = false;
-        paintUpdate();
+        if (overlay.isConnected) paintUpdate();
       }
     };
     checkUpdate.addEventListener("click", () => {
@@ -8881,11 +8941,20 @@ function bindWorkspace(
       // Runtime discovery and other auxiliary data can take seconds on a cold
       // start; they must not leave a temporary welcome page on screen.
       initialViewReady = true;
+      if (restoreDraft) {
+        restoreDraft = false;
+        rememberComposerDraft();
+      }
       if (listSignature() !== lastListSignature) {
         renderLists();
       } else {
         applyAppearance();
         syncEndpointButton();
+      }
+      if (restoreSettings && root.isConnected) {
+        lastSettingsTab = restoreSettings;
+        restoreSettings = undefined;
+        if (!doc.getElementById("confucius-settings-overlay")) openSettings();
       }
       if (state.sending) {
         status.style.color = "var(--confucius-accent)";

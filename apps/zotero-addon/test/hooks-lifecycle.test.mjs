@@ -81,6 +81,19 @@ function fixture({ failShutdown = false, failToolbar = false } = {}) {
       },
     },
     "./modules/ui/workspaceWindow": {
+      consumeWorkspaceReload(isUpdate) {
+        calls.push(`workspace.consume.${isUpdate}`);
+        return isUpdate
+          ? { layout: "window", view: { taskId: "selected" } }
+          : undefined;
+      },
+      rememberWorkspaceForReload(isUpdate) {
+        calls.push(`workspace.remember.${isUpdate}`);
+      },
+      restoreWorkspaceAfterReload() {
+        assert.equal(addon.data.initialized, true);
+        calls.push("workspace.restore");
+      },
       closeWorkspaceSidebar(win) {
         calls.push(`sidebar.dispose.${win.id}`);
       },
@@ -106,8 +119,8 @@ function fixture({ failShutdown = false, failToolbar = false } = {}) {
     },
     "./modules/host/AgentHost": {
       AgentHost: class {
-        start() {
-          return hostStart();
+        start(afterUpdate) {
+          return hostStart(afterUpdate);
         }
         async shutdown() {
           calls.push("host.dispose");
@@ -226,4 +239,47 @@ it("a startup that returns after shutdown cannot register old window handlers", 
     [...f.registered.values()].every((value) => value.size === 0),
     true,
   );
+});
+
+it("an update captures the workspace before disposal and restores it after the new host is ready", async () => {
+  const f = fixture();
+  await f.hooks.onStartup(true);
+  assert.ok(
+    f.calls.indexOf("workspace.consume.true") <
+      f.calls.indexOf("workspace.dispose"),
+  );
+  assert.ok(
+    f.calls.indexOf("http.register") < f.calls.indexOf("workspace.restore"),
+  );
+  f.calls.splice(0);
+  await f.hooks.onShutdown(true);
+  assert.ok(
+    f.calls.indexOf("workspace.remember.true") <
+      f.calls.indexOf("sidebar.dispose.first"),
+  );
+  assert.ok(
+    f.calls.indexOf("workspace.remember.true") <
+      f.calls.indexOf("host.dispose"),
+  );
+});
+
+it("ordinary plugin enable and disable do not restore an update workspace", async () => {
+  const f = fixture();
+  await f.hooks.onStartup();
+  await f.hooks.onShutdown();
+  assert.ok(f.calls.includes("workspace.consume.false"));
+  assert.ok(f.calls.includes("workspace.remember.false"));
+  assert.equal(f.calls.includes("workspace.restore"), false);
+});
+
+it("an ADDON_INSTALL startup consumes the preceding update handoff too", async () => {
+  const f = fixture();
+  let updated;
+  f.setStart(async (afterUpdate) => {
+    updated = afterUpdate;
+  });
+  await f.hooks.onStartup(false, true);
+  assert.equal(updated, true);
+  assert.ok(f.calls.includes("workspace.consume.true"));
+  assert.ok(f.calls.includes("workspace.restore"));
 });

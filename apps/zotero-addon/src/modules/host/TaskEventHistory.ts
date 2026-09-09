@@ -45,7 +45,28 @@ export function compactTaskEvents(
     }
     compacted.push(event);
   }
-  return limit > 0 && compacted.length > limit
-    ? compacted.slice(-limit)
-    : compacted;
+  if (limit <= 0 || compacted.length <= limit) return compacted;
+  // A pending evidence pass must retain its saved-revision boundary through a
+  // stop/restart. Losing that marker would make even fresh reads unreviewable.
+  const latestArtifacts = new Map<string, ConfuciusEvent>();
+  for (const event of compacted)
+    if (event.type === "artifact_upserted")
+      latestArtifacts.set(event.payload.artifact.id, event);
+  const markers =
+    limit > 1
+      ? compacted
+          .filter(
+            (event) =>
+              event.type === "artifact_upserted" &&
+              event.payload.artifact.status === "draft" &&
+              latestArtifacts.get(event.payload.artifact.id) === event,
+          )
+          .slice(1 - limit)
+      : [];
+  const retained = new Set(markers);
+  const tail = compacted
+    .filter((event) => !retained.has(event))
+    .slice(-(limit - markers.length));
+  for (const event of tail) retained.add(event);
+  return compacted.filter((event) => retained.has(event));
 }

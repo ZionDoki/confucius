@@ -21,6 +21,9 @@ import { registerItemMenu, unregisterItemMenu } from "./modules/ui/itemMenu";
 import {
   closeWorkspaceSidebar,
   closeWorkspaceWindow,
+  consumeWorkspaceReload,
+  rememberWorkspaceForReload,
+  restoreWorkspaceAfterReload,
 } from "./modules/ui/workspaceWindow";
 import { AgentHost } from "./modules/host/AgentHost";
 import { disposeAppearanceBindings } from "./modules/ui/workspaceAppearance";
@@ -32,7 +35,7 @@ import {
 
 const host = new AgentHost();
 
-async function onStartup() {
+async function onStartup(isUpdate = false, isInstall = false) {
   await Promise.all([
     Zotero.initializationPromise,
     Zotero.unlockPromise,
@@ -40,9 +43,13 @@ async function onStartup() {
   ]);
   if (!addon.data.alive) return;
 
+  // Zotero can notify startup as ADDON_INSTALL after an update shutdown.
+  const workspaceReload = consumeWorkspaceReload(isUpdate || isInstall);
+  // An older add-on may have left a window bound to its disposed host.
+  cleanup(closeWorkspaceWindow, "previous workspace windows");
   initLocale();
   ensurePairingToken();
-  await host.start();
+  await host.start(isUpdate || workspaceReload !== undefined);
   if (!addon.data.alive) return;
   registerHttpBridge(host);
   try {
@@ -70,6 +77,11 @@ async function onStartup() {
   }
 
   addon.data.initialized = true;
+  if (workspaceReload)
+    cleanup(
+      () => restoreWorkspaceAfterReload(workspaceReload),
+      "workspace update restoration",
+    );
   ztoolkit.log(`[${config.addonName}] started`);
 }
 
@@ -93,8 +105,12 @@ async function onMainWindowUnload(win: Window): Promise<void> {
   cleanup(() => closeWorkspaceSidebar(win), "sidebar");
 }
 
-async function onShutdown(): Promise<void> {
+async function onShutdown(isUpdate = false): Promise<void> {
   if (!addon.data.alive) return;
+  cleanup(
+    () => rememberWorkspaceForReload(isUpdate),
+    "workspace update handoff",
+  );
   addon.data.alive = false;
   cleanup(unregisterHttpBridge, "HTTP bridge");
   for (const win of Zotero.getMainWindows()) await onMainWindowUnload(win);

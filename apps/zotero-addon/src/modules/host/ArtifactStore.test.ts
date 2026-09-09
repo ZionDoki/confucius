@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { setImmediate } from "node:timers/promises";
 import { ArtifactStore, type ArtifactFileSystem } from "./ArtifactStore";
 import {
   createHarness,
@@ -14,6 +15,33 @@ import {
   deepReadReviewNextAction,
   deepReadReviewState,
 } from "./DeepReadReview";
+import { sourceReadEvidence } from "./SourceReadEvidence";
+
+/** These provider-level tests simulate the model consuming complete read results. */
+function deliveredReviewEvents(events: ConfuciusEvent[]): ConfuciusEvent[] {
+  let saved: { id: string; revision: number } | undefined;
+  return events.flatMap((event): ConfuciusEvent[] => {
+    if (event.type === "artifact_upserted") saved = event.payload.artifact;
+    if (event.type !== "tool_result" || !saved) return [event];
+    const evidence = sourceReadEvidence(event.payload.result);
+    return evidence
+      ? [
+          event,
+          {
+            ...event,
+            id: `${event.id}-delivered`,
+            type: "source_read_delivered",
+            payload: {
+              callId: event.payload.callId,
+              evidence,
+              delivery: "native-request",
+              review: { artifactId: saved.id, revision: saved.revision },
+            },
+          },
+        ]
+      : [event];
+  });
+}
 import {
   ARTIFACT_UPSERT_DEFINITION,
   ArtifactToolProvider,
@@ -72,6 +100,156 @@ class BlockingFileSystem extends MemoryFileSystem {
   }
 }
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+it("fences a wrapped artifact patch cancelled after dispatch but before preparation finishes", async () => {
+  const { provider, store } = await editableReport();
+  const controller = new AbortController();
+  const paused = deferred(),
+    release = deferred(),
+    finished = deferred();
+  const originalGet = store.get.bind(store);
+  let dispatched = false,
+    pauseOnce = true;
+  store.get = async (...args) => {
+    const artifact = await originalGet(...args);
+    if (dispatched && pauseOnce) {
+      pauseOnce = false;
+      paused.resolve();
+      await release.promise;
+    }
+    return artifact;
+  };
+  const originalCall = provider.call.bind(provider);
+  provider.call = async (...args) => {
+    dispatched = true;
+    try {
+      return await originalCall(...args);
+    } finally {
+      finished.resolve();
+    }
+  };
+  const service = new ToolExecutionService(memoryJsonStorage());
+  const pending = service.wrap(provider).call(
+    "artifact_patch",
+    {
+      id: "report",
+      expectedRevision: 1,
+      title: "Must not be saved",
+    },
+    controller.signal,
+    { taskId: "task", operationId: "cancelled-patch" },
+  );
+  await paused.promise;
+  controller.abort();
+  const response = await pending;
+  assert.equal(response.ok, false);
+  assert.equal(
+    response.effect,
+    "unknown",
+    "the caller cannot yet know whether the dispatched work stopped",
+  );
+  release.resolve();
+  await finished.promise;
+  await setImmediate();
+  assert.equal((await store.get("report"))!.revision, 1);
+  assert.equal(
+    (await service.getOperation("cancelled-patch"))?.result?.effect,
+    "none",
+  );
+});
+
+for (const reason of ["abort", "deadline"] as const) {
+  it(`checks ${reason} after asynchronous directory creation, immediately before the atomic write`, async () => {
+    const fs = new MemoryFileSystem();
+    const { provider, store } = await editableReport(false, fs);
+    const controller = new AbortController();
+    const scope = { signal: controller.signal, deadlineAt: Date.now() + 60000 };
+    const paused = deferred(),
+      release = deferred();
+    fs.makeDirectory = async () => {
+      paused.resolve();
+      await release.promise;
+    };
+    const pending = provider.call(
+      "artifact_patch",
+      {
+        id: "report",
+        expectedRevision: 1,
+        title: "Must not be saved",
+      },
+      controller.signal,
+      { executionScope: scope },
+    );
+    await paused.promise;
+    if (reason === "abort") controller.abort();
+    else scope.deadlineAt = Date.now() - 1;
+    release.resolve();
+    const response = await pending;
+    assert.equal(response.ok, false);
+    assert.equal(response.effect, "none");
+    assert.equal(!response.ok && response.code, "timeout");
+    assert.equal((await store.get("report"))!.revision, 1);
+    assert.equal(JSON.parse([...fs.files.values()][0]).revision, 1);
+  });
+}
+
+it("does not undo an already-dispatched atomic write, and fences the next cancelled waiter", async () => {
+  const fs = new BlockingFileSystem();
+  const { provider, store } = await editableReport(false, fs);
+  const controller = new AbortController();
+  const blocked = fs.blockNextWrite();
+  const pending = provider.call(
+    "artifact_patch",
+    {
+      id: "report",
+      expectedRevision: 1,
+      title: "Actually saved",
+    },
+    controller.signal,
+  );
+  await blocked.started;
+  const waiter = provider.call(
+    "artifact_patch",
+    {
+      id: "report",
+      expectedRevision: 2,
+      title: "Cancelled while waiting",
+    },
+    controller.signal,
+  );
+  controller.abort();
+  blocked.release();
+  assert.equal((await pending).effect, "applied");
+  assert.equal((await waiter).effect, "none");
+  assert.equal((await store.get("report"))!.revision, 2);
+  assert.equal((await store.get("report"))!.title, "Actually saved");
+});
+
+it("does not prepare or save an artifact when its signal is already cancelled", async () => {
+  const { provider, store } = await editableReport();
+  provider.prepare = async () => assert.fail("cancelled before preparation");
+  const controller = new AbortController();
+  controller.abort();
+  const result = await provider.call(
+    "artifact_patch",
+    {
+      id: "report",
+      expectedRevision: 1,
+      title: "Cancelled",
+    },
+    controller.signal,
+  );
+  assert.equal(result.effect, "none");
+  assert.equal((await store.get("report"))!.revision, 1);
+});
+
 const reportMarkdown =
   "# 示例论文研究报告\n\n## 一分钟速读\n方法在全部任务上成功。\n\n## 方法\n先检索候选，再检查证据。\n\n## 关键证据\n| 指标 | 结果 | 来源 |\n|---|---|---|\n| 完成任务 | 100/100 | [p.2](zotero://open-pdf/library/items/PAPER?page=2) |\n\n## 局限\n尚未验证新领域。\n";
 async function editableReport(
@@ -108,7 +286,8 @@ async function editableReport(
     },
     () => binding,
     review
-      ? (artifact) => deepReadReviewState(artifact, binding, events)
+      ? (artifact) =>
+          deepReadReviewState(artifact, binding, deliveredReviewEvents(events))
       : undefined,
   );
   assert.equal(
@@ -1198,8 +1377,18 @@ describe("artifact_upsert contract", () => {
             payload: { artifact },
           }),
         () => execution,
-        (artifact) => deepReadReviewState(artifact, execution, events),
-        (artifact) => deepReadReviewNextAction(artifact, execution, events),
+        (artifact) =>
+          deepReadReviewState(
+            artifact,
+            execution,
+            deliveredReviewEvents(events),
+          ),
+        (artifact) =>
+          deepReadReviewNextAction(
+            artifact,
+            execution,
+            deliveredReviewEvents(events),
+          ),
       );
     const save = () => ({
       id: "review",

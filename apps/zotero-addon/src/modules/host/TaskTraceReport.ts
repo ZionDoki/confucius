@@ -203,7 +203,15 @@ export async function collectTaskTrace(input: {
       "Task text and referenced material remain in the report. Credentials are redacted; review content before sharing.",
     ],
     sections,
-    events: [...events.values()].sort((a, b) => a.ts - b.ts),
+    events: [...events.values()].sort((a, b) => {
+      // Legacy events predate sequencing. Keep them before sequenced events;
+      // mixing timestamps and sequences pairwise would not be transitive.
+      if (a.sequence !== undefined && b.sequence !== undefined)
+        return a.sequence - b.sequence;
+      if (a.sequence !== undefined) return 1;
+      if (b.sequence !== undefined) return -1;
+      return a.ts - b.ts;
+    }),
     issues,
     redactions: { credentials: 0, binaryPayloads: 0 },
   };

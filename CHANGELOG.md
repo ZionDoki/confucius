@@ -2,6 +2,107 @@
 
 ## Unreleased
 
+## 0.4.5 - 2026-09-09
+
+Confucius 0.4.5 adds an article-centered reading companion, private passage
+questions and formatted Zotero notes, and restores the workspace after hot updates.
+
+### Added
+
+- Deep-read artifacts offer a reading companion alongside the research report.
+  Ordered signposts and checkpoints pair original-language excerpts with content
+  and writing explanations, source navigation, optional worked steps and self-checks.
+  The continuous article uses concise rounded summary blocks, clickable excerpts,
+  and a single bottom composer with selection quoting and answer bubbles.
+  Artifacts fill the workspace by default, with Back and Separate window controls
+  that preserve the current view and drafts. View tabs have roomier selected states.
+  Summary blocks float without covering source links; the current PDF section stays
+  lit with a warm background and soft glow. PDF page changes follow the matching
+  passage, double-clicks focus it, and summaries link back to their starting page.
+  Reading position, expanded sections, quotations and drafts persist locally.
+- New deep reads deliver a reviewed companion first. Readers can generate a
+  research report on demand in the same artifact, with version-bound writeback
+  for either view. Existing reports and older task workflows remain compatible.
+- Checkpoint questions run in private reading branches with independent model
+  sessions, events, recovery and read-only paper tools. They are excluded from
+  main-task history, global retrieval, memory extraction and report generation.
+  Source revisions retain earlier discussions; adding a report keeps the branch.
+
+### Fixed
+
+- Collapsing a passage conversation keeps its bubbles closed while focusing the
+  composer. Questions retain their submitted text, and text typed while a request
+  is pending remains in the draft. Successful answers no longer display their
+  completion reason as an error.
+- Artifact actions now say “Save Zotero note”. The save dialog uses clear view
+  buttons and a full formatted note preview, with existing content folded away.
+  Saved notes preserve headings, quotations, tables, equations and source links
+  instead of displaying raw Markdown; confirmation remains bound to its version
+  and selected view, excluding private reading discussions.
+- New annotation archives identify their source PDF without treating each mark
+  as a separate paper, so source-scoped tasks can reread their saved annotations
+  while access to other papers remains restricted.
+- Deep-read review tracks source content actually delivered to the model,
+  including large annotation results restored from history. All annotation
+  pages from the same snapshot must be read before the artifact can become ready;
+  incomplete reviews identify the next unread offset and survive task recovery.
+- Rejected artifact patches remain available as unapplied review candidates,
+  preserving all proposed corrections when evidence review begins. Successful
+  patch receipts report the number of applied text edits.
+- Cancelling or timing out an artifact edit before its atomic write starts no
+  longer saves another revision in the background. Writes already dispatched
+  retain their actual outcome for recovery.
+- Retry status distinguishes gateway timeouts, model service failures, rate
+  limits and transport interruptions. Native event and checkpoint timestamps
+  follow elapsed wall time, and trace export uses durable event sequence order.
+- Hot updates automatically reopen the workspace on the new plugin, restoring
+  the selected conversation, unsent text, conversation-list visibility and open
+  settings tab. Both the separate window and sidebar support the handoff; a
+  closed workspace stays closed. Older untracked windows are recovered and
+  replaced instead of retaining a stale host and version label.
+- Update status distinguishes a completed hot update from an installation staged
+  for restart. A completed install waits for add-on startup and reports the new
+  version without asking for a Zotero restart. Further update checks and channel
+  changes remain available after a hot update.
+
+### Upgrade notes
+
+- This is a stable release; prereleases do not need to be enabled. Successful
+  hot updates restore open workspaces automatically. Restart only when the
+  installer explicitly reports that the update is staged for restart.
+- Existing reports, artifact revisions, task histories, drafts, annotation
+  permissions and explicit update settings are retained. Older deep-read tasks
+  keep their original completion requirements; upgrades do not automatically
+  generate companions or rewrite existing content. New reading branches use
+  separate local storage and do not migrate the main task history.
+- See the [reading companion guide](https://github.com/ZionDoki/confucius/blob/v0.4.5/docs/reading-companion.md)
+  for PDF following, private questions and saving either view as a Zotero note.
+
+### Validation and known limits
+
+- The candidate passed 1,025 tests with no failures or skips, typecheck, lint,
+  build, workspace version checks and skill synchronization.
+- On macOS with Zotero 10.0.1, the installed candidate passed 20 companion/note
+  checks, 28 navigation checks with 615 counted clicks, and seven hot-update
+  checks. Upgrade and restart checks passed from public 0.4.4 (20) and
+  0.4.3-beta.2 (21), preserving original history, drafts, sources, notes and receipts.
+- Native model isolation and Codex/Kimi session contracts are covered by controlled
+  executors. Real Codex tests delivered a reviewed companion after restart and
+  answered in a private session; the final candidate also retained that session
+  through an update and answered a follow-up. On-demand report generation
+  completed in the same artifact, preserving the guide and private branch and
+  excluding private questions. Kimi authenticated, read the paper
+  and saved 14 highlights, but did not finish the companion within a 12-minute
+  initial wait and a 15-minute resumed wait. Its full question/report flow remains
+  unverified. A real Native service was not tested because no API key was configured.
+- PDF following uses physical pages; same-page checkpoints retain the current
+  selection. The companion must be open for PDF double-click navigation. No PDF
+  margin overlay is included. Live coverage is macOS with Zotero 10.0.1;
+  Windows/Linux and other declared Zotero versions have not been revalidated.
+- The [release acceptance record](https://github.com/ZionDoki/confucius/blob/v0.4.5/.github/maintainers/acceptance/release-0.4.5.md)
+  separates candidate installation checks from earlier
+  [companion engine and content checks](https://github.com/ZionDoki/confucius/blob/v0.4.5/.github/maintainers/acceptance/reading-companion.md).
+
 ## 0.4.4 - 2026-09-08
 
 Confucius 0.4.4 fixes conversation navigation and restores the gold working

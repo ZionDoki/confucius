@@ -47,7 +47,10 @@ async function startup({ id, version, resourceURI, rootURI }, reason) {
     if (!instance?.hooks?.onStartup) {
       throw new Error("Confucius plugin instance missing hooks.onStartup");
     }
-    await instance.hooks.onStartup();
+    await instance.hooks.onStartup(
+      reason === ADDON_UPGRADE || reason === ADDON_DOWNGRADE,
+      reason === ADDON_INSTALL,
+    );
   } catch (error) {
     logBootstrapError("startup failed", error);
   }
@@ -80,7 +83,9 @@ async function shutdown({ id, version, resourceURI, rootURI }, reason) {
   }
 
   try {
-    await Zotero.__addonInstance__?.hooks?.onShutdown?.();
+    await Zotero.__addonInstance__?.hooks?.onShutdown?.(
+      reason === ADDON_UPGRADE || reason === ADDON_DOWNGRADE,
+    );
   } catch (error) {
     logBootstrapError("shutdown failed", error);
   }

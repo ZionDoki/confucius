@@ -35,7 +35,7 @@ export const TASK_TEMPLATES: readonly TaskTemplate[] = [
     skillSlug: "paper-deep-reading",
     source: "single",
     prompt:
-      "Review the paper attached to this task. Put a one-minute overview at the start of the report, then explain its question, method, evidence, assumptions, and limitations. Include the annotations in this report and finish with a plain-language problem → method → evidence → limits reading map, with source links. Keep corrections in the same report. Use the default annotation settings unless I specify changes here.",
+      "Guide me through the paper attached to this task. Follow its original order with short signposts and detailed checkpoints explaining both the content and how the authors build the argument. Preserve original-language excerpts and source links. Save the reading companion first and review its evidence before delivery. Generate a research report only when I request it. Use selected native highlights with brief comments and the default annotation settings unless I specify changes here.",
   },
   {
     id: "evidence-audit",

@@ -2,6 +2,7 @@ import {
   CONTEXT_POLICY,
   contextTextSlice,
   contextTextTokens,
+  renderMarkdownHtml,
 } from "@confucius/protocol";
 import {
   AnnotationOwnership,
@@ -1277,7 +1278,8 @@ function annotationPosition(item: Zotero.Item): unknown {
   }
 }
 
-function noteHtml(content: string): string {
+function noteHtml(content: string, format?: unknown): string {
+  if (format === "markdown") return markdownToNoteHtml(content);
   const escaped = content
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -1285,78 +1287,19 @@ function noteHtml(content: string): string {
   return `<div>${escaped.replace(/\n/g, "<br/>")}</div>`;
 }
 
-/**
- * Minimal Markdown to note HTML: headings, bullet/numbered lists, bold,
- * inline code, fenced code blocks and plain paragraphs. Deliberately not a
- * full Markdown engine -- the note preview only needs structure.
- */
+/** Safe Markdown structure with Zotero's native, editable math representation. */
 export function markdownToNoteHtml(markdown: string): string {
-  const escape = (text: string) =>
-    text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const inline = (text: string) =>
-    escape(text)
-      .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
-      .replace(/`([^`]+)`/g, "<code>$1</code>");
-  const lines = String(markdown ?? "")
-    .replace(/\r\n/g, "\n")
-    .split("\n");
-  const out: string[] = [];
-  let list: "ul" | "ol" | null = null;
-  let code: string[] | null = null;
-  const closeList = () => {
-    if (list) {
-      out.push(`</${list}>`);
-      list = null;
-    }
-  };
-  for (const line of lines) {
-    if (code) {
-      if (line.trimStart().startsWith("```")) {
-        out.push(`<pre>${escape(code.join("\n"))}</pre>`);
-        code = null;
-      } else {
-        code.push(line);
-      }
-      continue;
-    }
-    const trimmed = line.trim();
-    if (!trimmed) {
-      closeList();
-      continue;
-    }
-    if (trimmed.startsWith("```")) {
-      closeList();
-      code = [];
-      continue;
-    }
-    const heading = /^(#{1,6})\s+(.*)$/.exec(trimmed);
-    if (heading) {
-      closeList();
-      const level = Math.min(heading[1].length, 6);
-      out.push(`<h${level}>${inline(heading[2])}</h${level}>`);
-      continue;
-    }
-    const bullet = /^[-*]\s+(.*)$/.exec(trimmed);
-    const ordered = /^\d+[.)]\s+(.*)$/.exec(trimmed);
-    const item = bullet ?? ordered;
-    if (item) {
-      const wanted: "ul" | "ol" = bullet ? "ul" : "ol";
-      if (list !== wanted) {
-        closeList();
-        list = wanted;
-        out.push(`<${list}>`);
-      }
-      out.push(`<li>${inline(item[1])}</li>`);
-      continue;
-    }
-    closeList();
-    out.push(`<p>${inline(trimmed)}</p>`);
-  }
-  if (code) {
-    out.push(`<pre>${escape(code.join("\n"))}</pre>`);
-  }
-  closeList();
-  return `<div>${out.join("")}</div>`;
+  const html = renderMarkdownHtml(markdown)
+    .replace(
+      /<p><span class="tui-math" data-display="1" data-tex="[^"]*">([\s\S]*?)<\/span><\/p>/g,
+      (_match, tex: string) => `<pre class="math">$$${tex}$$</pre>`,
+    )
+    .replace(
+      /<span class="tui-math" data-display="[01]" data-tex="[^"]*">([\s\S]*?)<\/span>/g,
+      (_match, tex: string) => `<span class="math">$${tex}$</span>`,
+    )
+    .replace(/ data-href="[^"]*"| rel="noreferrer"| data-lang="[^"]*"/g, "");
+  return `<div>${html}</div>`;
 }
 
 class RolledBackWrite extends Error {}
@@ -1942,8 +1885,8 @@ export class ZoteroToolHost {
         name === "propose_note"
           ? markdownToNoteHtml(`# ${args.title}\n\n${args.markdown}`)
           : name === "append_to_note"
-            ? `${current?.getNote?.() ?? ""}${noteHtml(String(args.content ?? ""))}`
-            : noteHtml(String(args.content ?? ""));
+            ? `${current?.getNote?.() ?? ""}${noteHtml(String(args.content ?? ""), args.format)}`
+            : noteHtml(String(args.content ?? ""), args.format);
       context.expectedAfter ??= {};
       context.expectedAfter[key] ??= html;
     }
@@ -3468,7 +3411,7 @@ export class ZoteroToolHost {
       note.key = context.plannedKeys.item;
       await note.loadPrimaryData(false);
     }
-    note.setNote(noteHtml(content));
+    note.setNote(noteHtml(content, args.format));
     if (args.parentKey) {
       const parent = getItem(note.libraryID, String(args.parentKey));
       if (!parent)
@@ -3541,7 +3484,9 @@ export class ZoteroToolHost {
     if (!note?.isNote?.()) {
       return fail("append_to_note", "not_found", "Note not found");
     }
-    note.setNote(`${note.getNote()}${noteHtml(String(args.content ?? ""))}`);
+    note.setNote(
+      `${note.getNote()}${noteHtml(String(args.content ?? ""), args.format)}`,
+    );
     await note.saveTx();
     return ok("append_to_note", { libraryID: note.libraryID, key: note.key });
   }
@@ -3558,7 +3503,7 @@ export class ZoteroToolHost {
     if (!note?.isNote?.()) {
       return fail("update_note", "not_found", "Note not found");
     }
-    note.setNote(noteHtml(String(args.content ?? "")));
+    note.setNote(noteHtml(String(args.content ?? ""), args.format));
     await note.saveTx();
     return ok("update_note", { libraryID: note.libraryID, key: note.key });
   }
@@ -4112,6 +4057,10 @@ export class ZoteroToolHost {
         key: item.key,
         attachmentKey: pdf.key,
         annotationKey: annotations[0]?.key,
+        offset,
+        // A stable snapshot prevents combining pages from different comment sets.
+        snapshot: await runtimeDigest(JSON.stringify(annotations)),
+        filtered: Array.isArray(args.batchIds),
         annotations: annotations.slice(offset, offset + limit),
         totalAnnotations: annotations.length,
         requestedLimit,

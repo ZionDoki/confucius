@@ -764,6 +764,13 @@ describe("TurnLoop", () => {
             images.map((image) => image.data),
             ["PAGE-1"],
           );
+          assert.deepEqual(
+            request.messages
+              .filter((message) => message.images?.length)
+              .map((message) => message.sourceToolCallId),
+            ["inspect-1"],
+            "only the tool whose image was delivered receives visual read credit",
+          );
           visualMessages = request.messages
             .filter((message) => message.role === "tool")
             .map((message) => {

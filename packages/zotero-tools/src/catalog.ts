@@ -325,9 +325,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   ),
   def(
     "create_note",
-    "Create a note, optionally under an item.",
+    "Create a note, optionally under an item. Content is plain text unless format is markdown.",
     {
       content: { type: "string" },
+      format: { type: "string", enum: ["text", "markdown"] },
       libraryID: { type: "integer" },
       parentKey: { type: "string" },
     },
@@ -355,10 +356,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   ),
   def(
     "update_note",
-    "Replace note content.",
+    "Replace note content. Content is plain text unless format is markdown.",
     {
       ...itemRef,
       content: { type: "string" },
+      format: { type: "string", enum: ["text", "markdown"] },
     },
     ["libraryID", "key", "content"],
   ),

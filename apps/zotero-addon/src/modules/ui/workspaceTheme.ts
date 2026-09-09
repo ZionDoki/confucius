@@ -26,6 +26,8 @@ export const TUI_CSS = `
   min-width: 0;
   max-width: 100%;
 }
+.confucius-workspace-root.has-artifact > :not(.confucius-artifact-host) { visibility: hidden; pointer-events: none; }
+.confucius-artifact-host { position: absolute; inset: 0; z-index: 30; display: block; width: 100%; height: 100%; min-width: 0; border: 0; background: var(--confucius-paper); }
 .confucius-workspace-root > .confucius-topbar,
 .confucius-workspace-root > .confucius-columns,
 .confucius-workspace-root > .confucius-composer {
@@ -1106,6 +1108,62 @@ export const TUI_CSS = `
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font: 11px/1.45 ui-monospace, Consolas, monospace;
+}
+.confucius-note-save { z-index: 1300; }
+.confucius-note-save [hidden] { display: none !important; }
+.confucius-note-save-panel {
+  display: flex; flex-direction: column; width: min(760px, 100%);
+  max-height: min(820px, 100%); padding: 24px; overflow: visible;
+  scrollbar-gutter: auto;
+}
+.confucius-note-save-heading { flex-shrink: 0; margin: 0; font-size: 18px; line-height: 1.4; font-weight: 650; }
+.confucius-note-save-meta { flex-shrink: 0; margin-top: 5px; color: var(--confucius-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.confucius-note-save-controls { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; flex-shrink: 0; margin: 20px 0 14px; }
+.confucius-note-save-views { display: inline-flex; gap: 3px; padding: 4px; border-radius: 10px; background: var(--confucius-surface); }
+.confucius-note-save-views .confucius-button { padding: 6px 14px; min-height: 32px; background: transparent; color: var(--confucius-muted); font-size: 13px; font-weight: 500; }
+.confucius-note-save-views .confucius-button[aria-pressed=true] { background: var(--confucius-elevated); color: var(--confucius-ink); box-shadow: 0 1px 4px #00000012; font-weight: 650; }
+.confucius-note-save-destination { position: relative; margin-left: auto; }
+.confucius-note-save-destination > .confucius-button { background: transparent; color: var(--confucius-muted); font-size: 12px; padding: 6px 8px; }
+.confucius-note-save-destination .confucius-menu-surface { position: absolute; top: calc(100% + 5px); right: 0; z-index: 2; min-width: 170px; max-width: min(260px, 80vw); }
+.confucius-note-save-destination [role=menuitemradio] { display: block; width: 100%; text-align: left; background: transparent; font-size: 13px; font-weight: 500; }
+.confucius-note-save-destination [aria-checked=true] { background: var(--confucius-surface); color: var(--confucius-accent); }
+.confucius-note-save-panel > input { flex-shrink: 0; width: 100%; margin-bottom: 12px !important; }
+.confucius-note-save-preview { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--confucius-line); border-radius: 10px; background: var(--confucius-canvas); }
+.confucius-note-save-preview[aria-busy=true] { opacity: .5; pointer-events: none; }
+.confucius-note-content { color: var(--confucius-ink); font-size: 14px; line-height: 1.8; font-family: inherit; overflow-wrap: anywhere; }
+.confucius-note-save-paper { padding: 24px 28px 30px; }
+.confucius-note-content :is(h1,h2,h3,h4,h5,h6) { margin: 1.5em 0 .6em; color: var(--confucius-ink); font-weight: 650; line-height: 1.5; }
+.confucius-note-content h1 { font-size: 22px; }
+.confucius-note-content h2 { font-size: 18px; }
+.confucius-note-content :is(h3,h4,h5,h6) { font-size: 15px; }
+.confucius-note-content > :first-child, .confucius-note-content > div > :first-child { margin-top: 0; }
+.confucius-note-content p { margin: 0 0 1em; }
+.confucius-note-content blockquote { margin: 16px 0; padding: 10px 16px; border-left: 2px solid var(--confucius-line); color: var(--confucius-secondary); background: var(--confucius-surface); }
+.confucius-note-content :is(ul,ol) { padding-left: 24px; margin: 12px 0; }
+.confucius-note-content li { margin: 5px 0; }
+.confucius-note-content a { color: var(--confucius-accent); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.confucius-note-content a:hover { color: var(--confucius-ink); }
+.confucius-note-content table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px; }
+.confucius-note-content :is(th,td) { border: 1px solid var(--confucius-line); padding: 8px 10px; text-align: left; vertical-align: top; }
+.confucius-note-content th { background: var(--confucius-surface); font-weight: 600; }
+.confucius-note-content pre { white-space: pre-wrap; margin: 16px 0; padding: 12px 14px; border-radius: 6px; background: var(--confucius-surface); font: 12px/1.6 ui-monospace, monospace; }
+.confucius-note-content code { font-family: ui-monospace, monospace; font-size: .9em; }
+.confucius-note-content hr { border: 0; border-top: 1px solid var(--confucius-line); margin: 24px 0; }
+.confucius-note-math { overflow-x: auto; padding: 8px 0; }
+.confucius-note-save-previous { border-bottom: 1px solid var(--confucius-line); }
+.confucius-note-save-previous > summary { cursor: pointer; padding: 12px 20px; color: var(--confucius-muted); font-size: 12px; }
+.confucius-note-save-previous > .confucius-note-content { padding: 8px 28px 20px; }
+.confucius-note-save-error { flex-shrink: 0; color: var(--confucius-danger); font-size: 12px; max-height: 70px; overflow: auto; margin-top: 10px; }
+.confucius-note-save-error:empty { display: none; }
+.confucius-note-save-actions { display: flex; flex-shrink: 0; align-items: center; gap: 8px; margin-top: 18px; }
+.confucius-note-save-status { flex: 1; min-width: 0; color: var(--confucius-muted); font-size: 12px; }
+.confucius-note-save-actions > button { flex-shrink: 0; }
+@media (max-width: 620px) {
+  .confucius-note-save { padding: 10px; }
+  .confucius-note-save-panel { padding: 18px 14px; }
+  .confucius-note-save-paper { padding: 18px; }
+  .confucius-note-save-controls { margin-top: 16px; }
+  .confucius-note-save-views .confucius-button { padding: 6px 10px; }
 }
 @media (max-width: 620px) {
   .confucius-template-grid,

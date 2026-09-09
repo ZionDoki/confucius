@@ -2,6 +2,7 @@ import type { ExecutionBinding } from "./run";
 import type { RuntimeModelOption } from "./modelReasoning";
 import type { CollectionRef, ItemRef } from "./item";
 import type { SessionContext } from "./session";
+import { isReadingGuide, type ReadingGuide } from "./readingGuide";
 
 export const AGENT_BACKENDS = ["native", "codex", "kimi"] as const;
 
@@ -138,6 +139,7 @@ export interface Citation {
 export interface MarkdownArtifactBody {
   type: "markdown";
   markdown: string;
+  readingGuide?: ReadingGuide;
 }
 
 export interface EvidenceAuditArtifactBody {
@@ -275,6 +277,7 @@ export type ArtifactBody =
 export type ArtifactStatus = "draft" | "ready" | "committed";
 
 export interface ArtifactWriteback {
+  view?: "guide" | "report";
   state: "none" | "pending" | "committed" | "partial" | "unknown" | "failed";
   operationId?: string;
   entries?: unknown[];
@@ -520,7 +523,12 @@ export function artifactBodyMatchesKind(
   const value = recordOf(body);
   if (!value) return false;
   if (kind === "deep_read" || kind === "report" || kind === "note_draft") {
-    return value.type === "markdown" && typeof value.markdown === "string";
+    return (
+      value.type === "markdown" &&
+      typeof value.markdown === "string" &&
+      (value.readingGuide === undefined ||
+        (kind === "deep_read" && isReadingGuide(value.readingGuide)))
+    );
   }
   if (kind === "evidence_audit") {
     return (
@@ -1045,6 +1053,9 @@ function isArtifactWriteback(value: unknown): boolean {
       "zotero_tags",
       "knowledge_base",
     ].includes(String(writeback.target)) &&
+    (writeback.view === undefined ||
+      writeback.view === "guide" ||
+      writeback.view === "report") &&
     optionalString(writeback.targetRef) &&
     (writeback.revision === undefined || positiveInteger(writeback.revision)) &&
     (writeback.committedAt === undefined ||

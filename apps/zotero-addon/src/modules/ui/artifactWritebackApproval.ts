@@ -3,6 +3,7 @@ import type { WorkspaceHost } from "./WorkspaceView";
 export interface WritebackPreview {
   before: string;
   after: string;
+  note?: { html: string; isNew: boolean };
 }
 
 /** Owns only this dialog's approval; closing it must not leave a hidden request. */

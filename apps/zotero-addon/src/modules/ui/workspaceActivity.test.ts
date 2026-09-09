@@ -9,6 +9,72 @@ import {
   sendErrorInTimeline,
 } from "./workspaceActivity";
 
+it("distinguishes gateway, service, throttling and transport failures and clears retry status on success", () => {
+  for (const [code, message, chinese, english] of [
+    ["server", "Model HTTP 504: nginx", "网关超时", "Gateway timeout"],
+    ["server", "Model HTTP 503", "模型服务异常", "Model service error"],
+    ["rate_limit", "Model HTTP 429", "请求受到限流", "Rate limited"],
+    ["timeout", "deadline", "请求超时", "Request timed out"],
+    ["transport", "fetch failed", "连接中断", "Connection interrupted"],
+    ["auth", "Model HTTP 401", "身份验证失败", "Authentication failed"],
+    [
+      "invalid_request",
+      "Model HTTP 400",
+      "模型请求无效",
+      "Invalid model request",
+    ],
+  ]) {
+    const failure: ConfuciusEvent = {
+      id: "failed",
+      sessionId: "s",
+      turnId: "t",
+      ts: 1000,
+      type: "model_request_progress",
+      payload: {
+        requestId: "r",
+        attempt: 1,
+        maxAttempts: 3,
+        status: "failed",
+        retryable: !["auth", "invalid_request"].includes(code),
+        code,
+        message,
+        delayMs: 1000,
+      },
+    };
+    const started: ConfuciusEvent = {
+      ...failure,
+      id: "started",
+      type: "turn_started",
+      payload: { userText: "Read" },
+    };
+    assert.ok(
+      retryActivity([started, failure], false, 1500)!.includes(chinese),
+    );
+    assert.ok(retryActivity([started, failure], true, 1500)!.includes(english));
+    assert.match(
+      retryActivity([started, failure], false, 1500)!,
+      /1\/3.*1 秒后.*00:00/,
+    );
+    assert.equal(
+      retryActivity(
+        [
+          started,
+          failure,
+          {
+            ...failure,
+            id: "completed",
+            ts: 3000,
+            payload: { requestId: "r", attempt: 2, status: "completed" },
+          },
+        ],
+        false,
+        3100,
+      ),
+      undefined,
+    );
+  }
+});
+
 it("shows a failed submission once after its durable error arrives, without hiding older or unrelated errors", () => {
   const failure = (id: string, message: string): ConfuciusEvent => ({
     id,
@@ -140,6 +206,7 @@ it("keeps loading visible through reasoning, retries and recovery and clears it 
     attempt: 1,
     maxAttempts: 5,
     status: "failed",
+    code: "transport",
     retryable: true,
     delayMs: 2000,
   });
@@ -159,7 +226,7 @@ it("keeps loading visible through reasoning, retries and recovery and clears it 
     status: "started",
     stage: "recovering",
   });
-  assert.match(retryActivity(events, false)!, /正在恢复连接/);
+  assert.match(retryActivity(events, false)!, /正在恢复任务/);
   add("tool_requested", { callId: "p", toolName: "get_pages", args: {} });
   assert.equal(retryActivity(events, false), undefined);
   add("model_request_progress", {
@@ -169,7 +236,7 @@ it("keeps loading visible through reasoning, retries and recovery and clears it 
     retryable: true,
     exhausted: true,
   });
-  assert.match(retryActivity(events, false)!, /重试失败/);
+  assert.match(retryActivity(events, false)!, /请求失败/);
   add("turn_aborted", { reason: "retries exhausted" });
   assert.equal(turnAwaitingReply(events), false);
   assert.equal(retryActivity(events, false), undefined);

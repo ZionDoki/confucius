@@ -4,7 +4,7 @@ import {
   selectUpdate,
   type ReleaseUpdate,
 } from "./GitHubRelease";
-import { installRelease } from "./ReleaseInstaller";
+import { installRelease, type ReleaseInstallResult } from "./ReleaseInstaller";
 
 export interface UpdateServiceOptions {
   addonId: string;
@@ -14,7 +14,10 @@ export interface UpdateServiceOptions {
   getIncludePrerelease: () => boolean;
   setIncludePrerelease: (enabled: boolean) => void;
   loadReleases?: () => Promise<unknown>;
-  installRelease?: (release: ReleaseUpdate, addonId: string) => Promise<void>;
+  installRelease?: (
+    release: ReleaseUpdate,
+    addonId: string,
+  ) => Promise<ReleaseInstallResult>;
   now?: () => number;
   checkTimeoutMs?: number;
   scheduleTimeout?: (callback: () => void, delayMs: number) => unknown;
@@ -23,6 +26,7 @@ export interface UpdateServiceOptions {
 
 /** Confucius owns release discovery, preferences, and automatic checks. */
 export class UpdateService {
+  private currentVersion: string;
   private readonly now: () => number;
   private readonly scheduleTimeout: NonNullable<
     UpdateServiceOptions["scheduleTimeout"]
@@ -42,6 +46,7 @@ export class UpdateService {
   private disposed = false;
 
   constructor(private readonly options: UpdateServiceOptions) {
+    this.currentVersion = options.currentVersion;
     this.now = options.now ?? Date.now;
     this.scheduleTimeout =
       options.scheduleTimeout ??
@@ -52,9 +57,17 @@ export class UpdateService {
         globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>));
   }
 
-  start(): void {
+  start(afterUpdate = false): void {
     if (this.started || this.disposed) return;
     this.started = true;
+    if (afterUpdate)
+      this.last = {
+        state: "ready",
+        canInstall: false,
+        availableVersion: this.currentVersion,
+        restartRequired: false,
+        checkedAt: this.now(),
+      };
     this.scheduleBackgroundCheck(30_000);
   }
 
@@ -66,7 +79,7 @@ export class UpdateService {
 
   async status(): Promise<UpdateStatus> {
     return {
-      currentVersion: this.options.currentVersion,
+      currentVersion: this.currentVersion,
       autoUpdate: this.options.getAutoUpdate(),
       includePrerelease: this.options.getIncludePrerelease(),
       ...this.last,
@@ -74,7 +87,7 @@ export class UpdateService {
   }
 
   check(): Promise<UpdateStatus> {
-    if (this.disposed || this.last.state === "ready") return this.status();
+    if (this.disposed || this.awaitingRestart) return this.status();
     if (this.installing) return this.installing;
     if (this.checking) return this.checking;
     this.checking = this.performCheck().finally(() => {
@@ -84,7 +97,7 @@ export class UpdateService {
   }
 
   install(): Promise<UpdateStatus> {
-    if (this.disposed || this.last.state === "ready") return this.status();
+    if (this.disposed || this.awaitingRestart) return this.status();
     if (this.installing) return this.installing;
     // Finish discovery before setting installing: check() also joins installs.
     if (this.checking) return this.checking.then(() => this.install());
@@ -107,7 +120,7 @@ export class UpdateService {
   }
 
   async setPrerelease(enabled: boolean): Promise<UpdateStatus> {
-    if (this.installing || this.last.state === "ready") return this.status();
+    if (this.installing || this.awaitingRestart) return this.status();
     await this.checking;
     this.options.setIncludePrerelease(enabled);
     this.pendingRelease = null;
@@ -135,7 +148,7 @@ export class UpdateService {
       if (this.disposed) return this.status();
       const release = selectUpdate(
         data,
-        this.options.currentVersion,
+        this.currentVersion,
         this.options.getIncludePrerelease(),
       );
       this.pendingRelease = release;
@@ -158,6 +171,10 @@ export class UpdateService {
     return this.status();
   }
 
+  private get awaitingRestart(): boolean {
+    return this.last.state === "ready" && this.last.restartRequired === true;
+  }
+
   private async performInstall(release: ReleaseUpdate): Promise<UpdateStatus> {
     this.last = {
       ...this.last,
@@ -166,16 +183,17 @@ export class UpdateService {
       message: undefined,
     };
     try {
-      await (this.options.installRelease ?? installRelease)(
+      const installed = await (this.options.installRelease ?? installRelease)(
         release,
         this.options.addonId,
       );
+      if (!installed.restartRequired) this.currentVersion = release.version;
       this.pendingRelease = null;
       this.last = {
         state: "ready",
         canInstall: false,
         availableVersion: release.version,
-        restartRequired: true,
+        restartRequired: installed.restartRequired,
         checkedAt: this.now(),
       };
     } catch (error) {

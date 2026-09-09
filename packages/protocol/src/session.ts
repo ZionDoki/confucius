@@ -84,6 +84,8 @@ export interface WorkflowState {
 
 /** Schema-v3 task with a durable history and replaceable context windows. */
 export interface ResearchTaskRecord extends SessionRecord {
+  /** Last host-assigned event sequence, persisted across executor restarts. */
+  eventSequence?: number;
   annotationBatchId?: string;
   postProcessing?: Array<{
     turnId: string;

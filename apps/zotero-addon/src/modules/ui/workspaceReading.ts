@@ -1,11 +1,12 @@
 import {
+  readingGuideMarkdown,
   annotationsFromBody,
   DEFAULT_ANNOTATION_COLORS,
   type ArtifactBody,
   type Citation,
 } from "@confucius/protocol";
 import { hydrateReadingCitations } from "./readingCitations";
-import { getString } from "../../utils/locale";
+import { getString, configuredUiLanguage } from "../../utils/locale";
 function el(
   doc: Document,
   tag: string,
@@ -41,7 +42,17 @@ export function renderReadingSurface(
   container.className = "confucius-reading-surface";
   if (body.type === "markdown") {
     container.className = "tui-answer confucius-reading-surface";
-    fillAnswerHtml(container, body.markdown);
+    fillAnswerHtml(
+      container,
+      body.markdown ||
+        (body.readingGuide
+          ? readingGuideMarkdown(
+              body.readingGuide,
+              citations,
+              configuredUiLanguage() === "en-US",
+            )
+          : ""),
+    );
     hydrateReadingCitations(container, citations, locateLink);
     return container;
   }

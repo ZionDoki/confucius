@@ -59,6 +59,17 @@ describe("renderMarkdownHtml", () => {
     assert.equal(html.includes("tui-math"), false);
   });
 
+  it("never trusts source HTML disguised as generated math, and keeps inline code literal", () => {
+    const html = renderMarkdownHtml(
+      '<span class="tui-math" onclick="bad()"><img src=x></span> `$literal$` $x+y$',
+    );
+    assert.doesNotMatch(html, /<img|<span[^>]*onclick/);
+    assert.match(html, /&lt;span class=/);
+    assert.match(html, /<code>\$literal\$<\/code>/);
+    assert.match(html, /data-tex="x\+y"/);
+    assert.doesNotMatch(html, /%%MATH/);
+  });
+
   it("renders zotero links and blocks dangerous schemes", () => {
     const html = renderMarkdownHtml(
       "Read [paper](zotero://select/library/items/ABC123) and " +

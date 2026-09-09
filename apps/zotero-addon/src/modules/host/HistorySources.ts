@@ -49,8 +49,19 @@ export function historySourceRefs(
       return;
     }
     const record = value as Record<string, unknown>;
-    for (const key of ["key", "itemKey", "attachmentKey", "parentKey"])
+    // Annotation keys identify marks inside a PDF, not additional papers. Adding
+    // them to sourceIds makes a paper-scoped task unable to reread its own marks.
+    const annotation =
+      record.itemType === "annotation" ||
+      (typeof record.type === "string" &&
+        ["highlight", "underline", "note", "text", "image", "ink"].includes(
+          record.type,
+        ) &&
+        ("position" in record || typeof record.pageLabel === "string"));
+    for (const key of ["key", "itemKey", "attachmentKey", "parentKey"]) {
+      if (annotation && (key === "key" || key === "itemKey")) continue;
       add(record.libraryID, record[key]);
+    }
     // Host provenance can also contain shorter fixture or legacy identifiers.
     if (Array.isArray(record.sourceIds))
       for (const source of record.sourceIds) {

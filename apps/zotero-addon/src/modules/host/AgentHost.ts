@@ -1,3 +1,11 @@
+import { ReadingDiscussions } from "./ReadingDiscussions";
+import { ReadingDiscussionStore } from "./ReadingDiscussionStore";
+import {
+  guideFromBody,
+  type ReadingState,
+  readingBodyForView,
+  type ReadingView,
+} from "@confucius/protocol";
 import {
   prepareContextHandoff,
   contextHandoffText,
@@ -93,6 +101,7 @@ import {
   deepReadReviewState,
 } from "./DeepReadReview";
 import { deepReadReviewMessages } from "./DeepReadReviewContext";
+import { sourceReadEvidence, sourceReviewBinding } from "./SourceReadEvidence";
 import { createHistoryStore } from "./MemoryTools";
 import { historySourceRefs } from "./HistorySources";
 import { setTaskPreset } from "./TaskPreset";
@@ -183,7 +192,6 @@ import {
   PermissionGate,
   TurnLoop,
   validateArgs,
-  createClock,
   createIdFactory,
   errorMessage,
   listEndpointModels,
@@ -224,6 +232,7 @@ import {
   pdfAttachmentInfo,
   groupIDForLibrary,
   liveReaderContext,
+  markdownToNoteHtml,
 } from "../tools/ZoteroToolHost";
 import {
   describeCallForApproval,
@@ -622,6 +631,49 @@ export class AgentHost {
     scheduleTimeout: scheduleUpdateTimeout,
     cancelTimeout: cancelUpdateTimeout,
   });
+  private readonly readingStore = new ReadingDiscussionStore();
+  private readingDiscussionsInstance?: ReadingDiscussions;
+  private readonly reportRequests = new Set<string>();
+  private get readingDiscussions(): ReadingDiscussions {
+    return (this.readingDiscussionsInstance ??= new ReadingDiscussions({
+      store: this.readingStore,
+      tools: () => new ZoteroToolProvider(this.tools),
+      backend: (kind) => this.backendFor(kind),
+      endpoint: () => this.requireEndpoint(),
+      language: () => configuredUiLanguage(),
+      maxIterations: () => this.maxIterations(),
+      maxToolCalls: () => this.maxToolCalls(),
+      validateLease: (lease) => this.pluginRuntime.isCurrentLease(lease),
+      removeRuntime: (id) =>
+        IOUtils.remove(runtimeIoPath(runtimePath("runtime-workspaces", id)), {
+          recursive: true,
+          ignoreAbsent: true,
+        }),
+      schedule: (cb, delay) => Zotero.getMainWindow().setTimeout(cb, delay),
+      cancel: (handle) => Zotero.getMainWindow().clearTimeout(handle as number),
+      model: (snapshot, emit) => {
+        const endpoint = this.readEndpointStore().store.endpoints.find(
+          (e) => e.id === snapshot.id && e.baseUrl === snapshot.baseUrl,
+        );
+        if (!endpoint)
+          throw new Error(
+            "The reading discussion's model endpoint is no longer configured",
+          );
+        return new OpenAICompatibleAdapter({
+          ...snapshot,
+          apiKey: endpoint.apiKey,
+          fetchImpl: hostFetch,
+          createAbortController,
+          scheduleTimeout: (cb, delay) =>
+            Zotero.getMainWindow().setTimeout(cb, delay),
+          cancelTimeout: (handle) =>
+            Zotero.getMainWindow().clearTimeout(handle as number),
+          onTextDelta: (text) =>
+            emit({ type: "text_delta", payload: { text } } as ConfuciusEvent),
+        });
+      },
+    }));
+  }
   private readonly sessions = new Map<string, SessionState>();
   private readonly pendingApprovals = new Map<string, PendingApproval>();
   /** One-shot queue for entry points (item menu); consumed by the poll. */
@@ -681,7 +733,7 @@ export class AgentHost {
     kimi: new ExternalBackend("kimi", this.pluginRuntime),
   };
 
-  async start(): Promise<void> {
+  async start(afterUpdate = false): Promise<void> {
     if (getPref("historyCleanupMigrated") !== true) {
       if (
         getPref("memoryConsent") === "off" ||
@@ -795,7 +847,7 @@ export class AgentHost {
     }
     ztoolkit.log("[Confucius] Runtime storage", runtimePath());
     await this.reloadMcp();
-    this.updates.start();
+    this.updates.start(afterUpdate);
   }
 
   private async initializeStorage(): Promise<void> {
@@ -840,6 +892,7 @@ export class AgentHost {
         Zotero.getMainWindows()[0]?.clearTimeout(this.persistTimer);
         this.persistTimer = null;
       }
+      await this.readingDiscussionsInstance?.shutdown();
       const states = [...this.sessions.values()];
       for (const state of states) {
         state.promptSubmission = (state.promptSubmission ?? 0) + 1;
@@ -1598,6 +1651,69 @@ export class AgentHost {
         return this.taskToolCall(params);
       case RPC_METHODS.artifactList:
         return this.artifactList(String(params.taskId ?? ""));
+      case RPC_METHODS.artifactGenerateReport:
+        return this.artifactGenerateReport(params);
+      case RPC_METHODS.artifactReadingState: {
+        const { artifact } = await this.artifactGet(
+          String(params.artifactId ?? ""),
+        );
+        this.requireSession(artifact.taskId);
+        return {
+          state: await this.readingStore.state(
+            artifact.id,
+            params.state as Partial<ReadingState> | undefined,
+          ),
+        };
+      }
+      case RPC_METHODS.readingDiscussionOpen: {
+        const { artifact } = await this.artifactGet(
+          String(params.artifactId ?? ""),
+        );
+        const parent = this.requireSession(artifact.taskId).record;
+        return this.readingDiscussions.open(
+          artifact,
+          parent,
+          Number(params.revision ?? artifact.revision),
+          String(params.checkpointId ?? ""),
+          params.create === true,
+        );
+      }
+      case RPC_METHODS.readingDiscussionEvents:
+      case RPC_METHODS.readingDiscussionPrompt:
+      case RPC_METHODS.readingDiscussionContinue:
+      case RPC_METHODS.readingDiscussionAbort: {
+        const { artifact } = await this.artifactGet(
+          String(params.artifactId ?? ""),
+        );
+        this.requireSession(artifact.taskId);
+        const id = String(params.discussionId ?? "");
+        if (method === RPC_METHODS.readingDiscussionEvents)
+          return this.readingDiscussions.get(
+            artifact.id,
+            id,
+            Number(params.afterSequence ?? 0),
+          );
+        if (method === RPC_METHODS.readingDiscussionAbort)
+          return this.readingDiscussions.abort(artifact.id, id);
+        const stored = await this.readingStore.get(artifact.id, id);
+        const current = await this.readingDiscussions.open(
+          artifact,
+          this.requireSession(artifact.taskId).record,
+          artifact.revision,
+          stored.record.checkpointId,
+          false,
+        );
+        if (current.discussion?.id !== id)
+          throw new Error(
+            "This checkpoint has changed. Open the current version to start a new discussion; previous answers remain available.",
+          );
+        return this.readingDiscussions.prompt(
+          artifact.id,
+          id,
+          String(params.text ?? ""),
+          method === RPC_METHODS.readingDiscussionContinue,
+        );
+      }
       case RPC_METHODS.artifactGet:
         return this.artifactGet(String(params.id ?? ""));
       case RPC_METHODS.artifactUpsert:
@@ -2903,6 +3019,7 @@ export class AgentHost {
     await this.persistNow();
     if (this.historyFailure) throw this.historyFailure;
     await clearMigratedContextCopies();
+    await this.readingDiscussions.removeArtifacts(state.record.artifactIds);
     await this.history.deleteTask(sessionId);
     await this.logs.deleteSession(sessionId);
     await this.execution.retireContext(sessionId);
@@ -3064,6 +3181,11 @@ export class AgentHost {
   }
 
   private recordTaskTrace(state: SessionState, event: ConfuciusEvent): void {
+    state.record.eventSequence ??= state.events.reduce(
+      (max, previous) => Math.max(max, previous.sequence ?? 0),
+      0,
+    );
+    event.sequence = ++state.record.eventSequence;
     const run = state.record.run;
     if (run && event.turnId === state.activeTurnId) {
       run.updatedAt = event.ts;
@@ -3104,6 +3226,33 @@ export class AgentHost {
         initialContextWindow(state.record.id, state.record.backend),
     );
     this.persistSoon();
+  }
+
+  private recordSourceDelivery(
+    state: SessionState,
+    turnId: string,
+    callId: string,
+    result: ToolResult,
+    args: Record<string, unknown>,
+    delivery: "native-request" | "host-provided",
+    draft?: ArtifactRecord,
+  ): void {
+    const evidence = sourceReadEvidence(result, args);
+    if (
+      !evidence ||
+      state.events.some(
+        (event) =>
+          event.type === "source_read_delivered" &&
+          event.payload.callId === callId,
+      )
+    )
+      return;
+    this.emitSessionEvent(state, turnId, "source_read_delivered", {
+      callId,
+      evidence,
+      delivery,
+      review: sourceReviewBinding(draft, callId, state.events),
+    });
   }
 
   private async taskTrace(taskId: string) {
@@ -3436,7 +3585,67 @@ export class AgentHost {
     return {
       artifact,
       taskStatus: this.sessions.get(artifact.taskId)?.record.status ?? null,
+      reportGeneration:
+        this.sessions.get(artifact.taskId)?.record.run?.reportArtifactId === id
+          ? { status: this.sessions.get(artifact.taskId)!.record.run!.status }
+          : null,
     };
+  }
+
+  private async artifactGenerateReport(params: Record<string, unknown>) {
+    const { artifact } = await this.artifactGet(
+      String(params.artifactId ?? ""),
+    );
+    const state = this.requireSession(artifact.taskId);
+    if (artifact.kind !== "deep_read" || !guideFromBody(artifact.body))
+      throw new Error("This artifact has no reading guide");
+    if (
+      state.activeTurnId ||
+      state.record.status === "awaiting_approval" ||
+      this.reportRequests.has(state.record.id)
+    )
+      return {
+        status:
+          state.record.run?.reportArtifactId === artifact.id
+            ? "running"
+            : "busy",
+        taskId: state.record.id,
+      };
+    if (artifact.revision !== Number(params.expectedRevision))
+      throw new Error(
+        "The artifact changed; refresh before generating the report",
+      );
+    if (
+      artifact.body.type === "markdown" &&
+      artifact.body.markdown.trim() &&
+      artifact.status !== "draft"
+    )
+      return { status: "ready", taskId: state.record.id };
+    const resuming =
+      state.record.run?.reportArtifactId === artifact.id &&
+      state.record.run.status !== "completed";
+    if (!resuming && artifact.status === "draft")
+      throw new Error(
+        "Finish reviewing the reading guide before generating its report",
+      );
+    this.reportRequests.add(state.record.id);
+    try {
+      if (resuming) await this.taskContinue(state.record.id);
+      else
+        await this.sessionPrompt(
+          state.record.id,
+          configuredUiLanguage() === "en-US"
+            ? `Generate the research report for saved artifact ${artifact.id} at revision ${artifact.revision}. Read this artifact and its source paper, initialize reportMarkdown as a draft, review the evidence, and mark the same artifact ready. Preserve its reading guide and existing annotations. Include a one-minute overview, method, decisive evidence table, and boundaries. Do not duplicate sentence-level explanations or annotations.`
+            : `为已有成果 ${artifact.id}（版本 ${artifact.revision}）生成研究报告。读取这份成果和原论文，用 reportMarkdown 保存报告草稿，复核证据后将同一成果标记为 ready。保留陪读和已有批注。报告包含一分钟概览、方法、关键证据表和边界，减少逐句解释的重复。`,
+          undefined,
+          [],
+          false,
+          artifact.id,
+        );
+      return { status: "running", taskId: state.record.id };
+    } finally {
+      this.reportRequests.delete(state.record.id);
+    }
   }
 
   private async artifactUpsert(input: ArtifactUpsertInput) {
@@ -3446,7 +3655,9 @@ export class AgentHost {
       this.artifacts,
       state.record.id,
       state.record.backend,
-      lockedContextSourceIds(state.record.lockedContext),
+      lockedContextSourceIds(
+        state.record.run?.sources ?? state.record.lockedContext,
+      ),
       () => {},
       () => binding,
     );
@@ -3519,6 +3730,8 @@ export class AgentHost {
     lease?: unknown,
     runtimeGateway?: unknown,
   ) {
+    if (taskId.startsWith("rd_"))
+      return this.readingDiscussions.toolList(taskId, lease);
     const state = this.requireSession(taskId);
     this.validatedRuntimeLease(state, lease, runtimeGateway, true);
     const tools = [
@@ -3540,6 +3753,19 @@ export class AgentHost {
   }
 
   private async taskToolCall(params: Record<string, unknown>) {
+    if (String(params.taskId ?? "").startsWith("rd_")) {
+      const args = params.arguments ?? {};
+      if (!args || typeof args !== "object" || Array.isArray(args))
+        throw new Error("Invalid tool arguments");
+      return mcpToolResult(
+        await this.readingDiscussions.toolCall(
+          String(params.taskId),
+          params.lease,
+          String(params.name ?? ""),
+          args as Record<string, unknown>,
+        ),
+      );
+    }
     const state = this.requireSession(String(params.taskId ?? ""));
     if (state.record.contextResetRequested)
       return mcpToolResult({
@@ -3816,6 +4042,28 @@ export class AgentHost {
       executionContext.outputBudgetTokens,
       this.historyFailure ? undefined : ref,
     );
+    const deliveredResult =
+      bounded.ok && exposedResult.ok
+        ? { ...bounded, transientMedia: exposedResult.transientMedia }
+        : bounded;
+    if (current() && sourceReadEvidence(deliveredResult, approvedArgs)) {
+      const draft = (await this.artifacts.list(state.record.artifactIds)).find(
+        (artifact) =>
+          artifact.kind === "deep_read" &&
+          artifact.status === "draft" &&
+          artifact.execution?.runId === state.record.run?.id,
+      );
+      if (current())
+        this.recordSourceDelivery(
+          state,
+          turnId,
+          callId,
+          deliveredResult,
+          approvedArgs,
+          "host-provided",
+          draft,
+        );
+    }
     if (
       !JSON.stringify(bounded).includes('"archivedRef"') &&
       !this.historyFailure
@@ -3907,7 +4155,11 @@ export class AgentHost {
           writeback: recovered,
         }))) ?? artifact;
     }
-    const revision = this.writebackRevision(artifact, params.revision);
+    const { revision, view } = this.readingWritebackRevision(
+      artifact,
+      params.revision,
+      params.view,
+    );
     const target = writebackTarget(artifact, params.target);
     const state = this.requireSession(artifact.taskId);
     let prepared:
@@ -3970,19 +4222,21 @@ export class AgentHost {
               libraryID: existing.libraryID,
               key: existing.key,
               content: renderArtifactBody(revision.body, revision.citations),
+              format: "markdown",
             }
           : {
               libraryID: source?.itemLibraryID ?? item?.libraryID,
               parentKey: source?.itemKey ?? item?.key,
               content: renderArtifactBody(revision.body, revision.citations),
+              format: "markdown",
             },
         context: this.toolContext(
           state,
           "writeback",
-          `artifact_${artifact.id}_${revision.revision}_note`,
+          `artifact_${artifact.id}_${revision.revision}_${view ?? "body"}_note`,
         ),
       };
-      prepared.context.operationId = `${state.record.id}:artifact_${artifact.id}_${revision.revision}_note`;
+      prepared.context.operationId = `${state.record.id}:artifact_${artifact.id}_${revision.revision}_${view ?? "body"}_note`;
     }
     if (
       (target === "zotero_collection" || target === "zotero_tags") &&
@@ -4018,7 +4272,7 @@ export class AgentHost {
         { target, body: scope },
       );
       this.writebackSnapshots.set(
-        `${artifact.id}:${revision.revision}:${target}`,
+        `${artifact.id}:${revision.revision}:${target}:${view ?? ""}`,
         snapshot,
       );
       if (this.writebackSnapshots.size > 100)
@@ -4032,7 +4286,7 @@ export class AgentHost {
         .prepare?.(prepared.name, prepared.args, prepared.context);
       if (invalid) throw new Error(invalid.message);
       this.preparedWritebacks.set(
-        `${artifact.id}:${revision.revision}:${target}`,
+        `${artifact.id}:${revision.revision}:${target}:${view ?? ""}`,
         prepared,
       );
       if (this.preparedWritebacks.size > 100)
@@ -4040,8 +4294,20 @@ export class AgentHost {
           this.preparedWritebacks.keys().next().value!,
         );
     }
+    const noteContent =
+      target === "zotero_note"
+        ? String(prepared?.args.content ?? "")
+        : undefined;
     return {
       artifactId: artifact.id,
+      view,
+      note:
+        noteContent === undefined
+          ? undefined
+          : {
+              html: markdownToNoteHtml(noteContent),
+              isNew: prepared?.name === "create_note",
+            },
       revision: revision.revision,
       target,
       before: await this.writebackBefore(artifact, target, revision),
@@ -4076,6 +4342,42 @@ export class AgentHost {
     return revision;
   }
 
+  private readingWritebackRevision(
+    artifact: ArtifactRecord,
+    number: unknown,
+    requested: unknown,
+  ) {
+    const revision = this.writebackRevision(artifact, number);
+    if (
+      requested !== undefined &&
+      requested !== "guide" &&
+      requested !== "report"
+    )
+      throw new Error("Invalid reading view");
+    const guide = guideFromBody(revision.body);
+    const view: ReadingView | undefined =
+      (requested as ReadingView | undefined) ?? (guide ? "guide" : undefined);
+    if (view === "guide" && !guide)
+      throw new Error("This revision has no reading companion");
+    if (
+      view === "report" &&
+      (revision.body.type !== "markdown" || !revision.body.markdown.trim())
+    )
+      throw new Error("Generate the research report before writing it back");
+    return {
+      view,
+      revision: {
+        ...revision,
+        body: readingBodyForView(
+          revision.body,
+          revision.citations,
+          view,
+          configuredUiLanguage() === "en-US",
+        ),
+      },
+    };
+  }
+
   private async artifactWritebackCommit(params: Record<string, unknown>) {
     const artifact = await this.requireArtifact(String(params.id ?? ""));
     const state = this.requireSession(artifact.taskId);
@@ -4084,10 +4386,10 @@ export class AgentHost {
     }
     const preview = await this.artifactWritebackPreview(params);
     const prepared = this.preparedWritebacks.get(
-      `${artifact.id}:${preview.revision}:${preview.target}`,
+      `${artifact.id}:${preview.revision}:${preview.target}:${preview.view ?? ""}`,
     );
     const expectedSnapshot = this.writebackSnapshots.get(
-      `${artifact.id}:${preview.revision}:${preview.target}`,
+      `${artifact.id}:${preview.revision}:${preview.target}:${preview.view ?? ""}`,
     );
     let previousWriteback: ArtifactWriteback | undefined;
     const id = `approval_writeback_${Date.now().toString(36)}_${Math.random()
@@ -4099,10 +4401,15 @@ export class AgentHost {
       sessionId: state.record.id,
       turnId,
       toolName: "artifact.writeback",
-      args: { ...params, target: preview.target },
+      args: {
+        ...params,
+        revision: preview.revision,
+        view: preview.view,
+        target: preview.target,
+      },
       riskLevel: "write",
       createdAt: Date.now(),
-      summary: `Write revision ${preview.revision} to ${preview.target}`,
+      summary: `Write revision ${preview.revision}${preview.view ? " (" + preview.view + ")" : ""} to ${preview.target}`,
       origin: state.record.backend,
       kind: "artifact_writeback",
       before: preview.before,
@@ -4127,6 +4434,7 @@ export class AgentHost {
             prepared?.context.operationId ??
             `${state.record.id}:writeback:${id}`,
           target: preview.target,
+          view: preview.view,
           targetRef:
             previousWriteback?.target === preview.target
               ? previousWriteback.targetRef
@@ -4167,6 +4475,8 @@ export class AgentHost {
             preview.target,
             {
               ...params,
+              revision: preview.revision,
+              view: preview.view,
               expectedBefore: preview.before,
               operationId: id,
               preparedWriteback: prepared,
@@ -4401,7 +4711,11 @@ export class AgentHost {
     turnId: string,
   ): Promise<void> {
     const state = this.requireSession(artifact.taskId);
-    const revision = this.writebackRevision(artifact, revisionNumber);
+    const { revision, view } = this.readingWritebackRevision(
+      artifact,
+      revisionNumber,
+      params.view,
+    );
     if (
       (target === "zotero_note" || target === "knowledge_base") &&
       typeof params.expectedBefore === "string" &&
@@ -4439,6 +4753,7 @@ export class AgentHost {
                     revision.body,
                     revision.citations,
                   ),
+                  format: "markdown",
                   libraryID: existing.libraryID,
                   key: existing.key,
                 }
@@ -4447,6 +4762,7 @@ export class AgentHost {
                     revision.body,
                     revision.citations,
                   ),
+                  format: "markdown",
                   libraryID: citation?.itemLibraryID ?? item?.libraryID,
                   parentKey: citation?.itemKey ?? item?.key,
                 },
@@ -4610,6 +4926,7 @@ export class AgentHost {
           : current.status;
       current.writeback = {
         state: writebackState,
+        view,
         operationId:
           annotationOutcome?.operationId ?? current.writeback?.operationId,
         target,
@@ -5587,7 +5904,7 @@ export class AgentHost {
       maxTokens?: number;
     } = {},
   ): string {
-    const context = task.lockedContext;
+    const context = task.run?.sources ?? task.lockedContext;
     const inherited = task.externalSessionId
       ? ""
       : history
@@ -5626,6 +5943,8 @@ export class AgentHost {
         "",
         artifactUpsertGuidance({
           templateId: task.templateId,
+          templateVersion: task.run?.templateVersion,
+          reportArtifactId: task.run?.reportArtifactId,
           artifacts: artifactPromptRefsFromEvents(task.artifactIds, events),
         }),
       );
@@ -5786,7 +6105,9 @@ export class AgentHost {
       this.artifacts,
       state.record.id,
       state.record.backend,
-      lockedContextSourceIds(state.record.lockedContext),
+      lockedContextSourceIds(
+        state.record.run?.sources ?? state.record.lockedContext,
+      ),
       (artifact) => {
         if (!state.record.artifactIds.includes(artifact.id))
           state.record.artifactIds.push(artifact.id);
@@ -5797,6 +6118,7 @@ export class AgentHost {
         ? (artifact) => deepReadReviewState(artifact, binding, state.events)
         : undefined,
       (artifact) => deepReadReviewNextAction(artifact, binding, state.events),
+      state.record.run?.reportArtifactId,
     );
   }
 
@@ -5864,6 +6186,7 @@ export class AgentHost {
     promptContext?: PromptContextOptions,
     requestedAttachmentIds: string[] = [],
     resuming = false,
+    reportArtifactId?: string,
   ): Promise<unknown> {
     if (this.shuttingDown)
       throw new Error(
@@ -5897,12 +6220,48 @@ export class AgentHost {
       (preparedAttachments.length ? "Analyze the attached file(s)." : "");
     if (!trimmed) throw new Error("Empty prompt");
     if (state.record.backend === "native") this.requireEndpoint();
+    let effectiveContext =
+      resuming && state.record.run?.reportArtifactId
+        ? state.record.run.sources
+        : state.record.lockedContext;
+    if (reportArtifactId) {
+      const artifact = await this.requireArtifact(reportArtifactId);
+      if (artifact.taskId !== sessionId)
+        throw new Error("Report artifact belongs to another task");
+      const guide = guideFromBody(artifact.body);
+      const firstSource = guide?.checkpoints
+        .flatMap((cp) => cp.citationIds)
+        .map((id) => artifact.citations.find((c) => c.id === id))
+        .find((c) => c?.attachmentKey);
+      if (!firstSource)
+        throw new Error("The reading guide has no original PDF source");
+      effectiveContext = withLockedContextFingerprint({
+        version: 1,
+        capturedAt: Date.now(),
+        items: [
+          {
+            id: `item:${firstSource.itemLibraryID}:${firstSource.itemKey}`,
+            libraryID: firstSource.itemLibraryID,
+            key: firstSource.itemKey,
+            title: firstSource.title ?? artifact.title,
+            source: "library",
+            attachmentKey: firstSource.attachmentKey,
+          },
+        ],
+        reader: {
+          id: `reader:${firstSource.itemLibraryID}:${firstSource.attachmentKey}`,
+          libraryID: firstSource.itemLibraryID,
+          attachmentKey: firstSource.attachmentKey!,
+          parentKey: firstSource.itemKey,
+          title: firstSource.title ?? artifact.title,
+          pageIndex: null,
+          pageLabel: null,
+        },
+      });
+    }
     const template = taskTemplate(state.record.templateId);
     if (template) {
-      const validation = validateTemplateContext(
-        template,
-        state.record.lockedContext,
-      );
+      const validation = validateTemplateContext(template, effectiveContext);
       if (!validation.ok)
         throw new Error(
           getString(`workspace-template-context-${validation.reason}`),
@@ -5912,6 +6271,13 @@ export class AgentHost {
       state.record.references = taskContextReferences(
         promptContext.references,
       ).filter((ref) => ref.taskId !== sessionId);
+    if (
+      reportArtifactId &&
+      (state.activeTurnId || state.record.status === "awaiting_approval")
+    )
+      throw new Error(
+        "The main task started running; report generation was not started",
+      );
     const submission = (state.promptSubmission ?? 0) + 1;
     state.promptSubmission = submission;
     const previous = state.record.run;
@@ -5925,11 +6291,26 @@ export class AgentHost {
     const abort = createAbortController();
     const turnId = newTurnId();
     const now = Date.now();
+    const legacyReport =
+      !previous &&
+      state.record.templateId === "deep-read" &&
+      (await this.artifacts.list(state.record.artifactIds)).some(
+        (artifact) =>
+          artifact.kind === "deep_read" && !guideFromBody(artifact.body),
+      );
     const preset =
       state.record.mode === "agent"
-        ? presetWorkflow(state.record.templateId)
+        ? presetWorkflow(state.record.templateId, {
+            version:
+              previous?.templateVersion ?? (legacyReport ? 2 : undefined),
+            reportArtifactId:
+              reportArtifactId ??
+              (resuming ? previous?.reportArtifactId : undefined),
+          })
         : undefined;
-    const continuing = Boolean(previous && previous.status !== "completed");
+    const continuing = Boolean(
+      !reportArtifactId && previous && previous.status !== "completed",
+    );
     const run: RunState = continuing
       ? JSON.parse(JSON.stringify(previous!))
       : {
@@ -5938,7 +6319,7 @@ export class AgentHost {
           generation: 0,
           intentRevision: 1,
           request: trimmed,
-          sources: state.record.lockedContext,
+          sources: effectiveContext,
           templateId: state.record.templateId,
           templateVersion: preset?.version ?? 1,
           requiredArtifactKinds: [
@@ -5969,18 +6350,19 @@ export class AgentHost {
     const changedIntent =
       continuing &&
       (!resuming ||
-        run.sources.fingerprint !== state.record.lockedContext.fingerprint ||
+        run.sources.fingerprint !== effectiveContext.fingerprint ||
         run.templateId !== state.record.templateId);
     if (changedIntent) {
       if (!resuming) run.request += `\n\nLatest user instruction:\n${trimmed}`;
       run.intentRevision++;
-      run.sources = JSON.parse(JSON.stringify(state.record.lockedContext));
+      run.sources = JSON.parse(JSON.stringify(effectiveContext));
       run.templateId = state.record.templateId;
     }
     run.generation++;
     run.status = "running";
     run.stopReason = undefined;
-    run.templateVersion = preset?.version ?? 1;
+    if (!continuing) run.templateVersion = preset?.version ?? 1;
+    if (!resuming) run.reportArtifactId = reportArtifactId;
     run.requiredArtifactKinds = [
       ...(state.record.mode === "agent" &&
       template &&
@@ -6733,7 +7115,10 @@ export class AgentHost {
       );
     const preset =
       state.record.mode === "agent"
-        ? presetWorkflow(run.templateId)
+        ? presetWorkflow(run.templateId, {
+            version: run.templateVersion,
+            reportArtifactId: run.reportArtifactId,
+          })
         : undefined;
     if (preset && state.externalSourceScope)
       tools = new PresetToolProvider(tools, preset, state.externalSourceScope);
@@ -6762,6 +7147,8 @@ export class AgentHost {
       suppressSelection: input.promptContext?.suppressSelection === true,
       lockedContext: run.sources,
       templateId: run.templateId,
+      templateVersion: run.templateVersion,
+      reportArtifactId: run.reportArtifactId,
       references: state.record.references,
       taskId: state.record.id,
       artifacts: (await this.artifacts.list(state.record.artifactIds)).map(
@@ -6775,7 +7162,7 @@ export class AgentHost {
     const alwaysAllowed = this.alwaysAllowedTools();
     const permissions = new PermissionGate({
       ids: this.ids,
-      now: createClock(Date.now()),
+      now: Date.now,
       modeFor: (name) => {
         if (
           isAnnotationProposalTool(name) ||
@@ -6842,13 +7229,62 @@ export class AgentHost {
                     artifact.execution?.runId === run.id &&
                     artifact.execution.intentRevision === run.intentRevision,
                 );
-                return adapter.complete(
+                const sourceInputs: ModelMessage[] = [];
+                const messages = deepReadReviewMessages(
+                  request.messages,
+                  draft,
+                  (message) => sourceInputs.push(message),
+                );
+                const response = await adapter.complete(
                   {
                     ...request,
-                    messages: deepReadReviewMessages(request.messages, draft),
+                    messages,
                   },
                   signal,
                 );
+                // This is the exact successful model view, including full tool
+                // results restored by WindowContext and evidence in review inputs.
+                if (!signal?.aborted && state.record.run === run) {
+                  for (const message of sourceInputs) {
+                    if (message.role !== "tool" || !message.toolCallId)
+                      continue;
+                    const call = state.latestCheckpoint?.toolExecutions.find(
+                      (call) =>
+                        (call.modelCallId ?? call.callId) ===
+                        message.toolCallId,
+                    );
+                    if (!call) continue;
+                    let result: ToolResult;
+                    try {
+                      result = JSON.parse(message.content);
+                    } catch {
+                      continue;
+                    }
+                    if (result.ok)
+                      result = {
+                        ...result,
+                        transientMedia: messages.flatMap((input) =>
+                          input.transient &&
+                          input.sourceToolCallId === message.toolCallId
+                            ? (input.images ?? []).map((image) => ({
+                                ...image,
+                                type: "image" as const,
+                              }))
+                            : [],
+                        ),
+                      };
+                    this.recordSourceDelivery(
+                      state,
+                      input.turnId,
+                      call.callId,
+                      result,
+                      call.args,
+                      "native-request",
+                      draft,
+                    );
+                  }
+                }
+                return response;
               },
             }
           : adapter,
@@ -6861,7 +7297,7 @@ export class AgentHost {
         save: (checkpoint) => this.saveCheckpoint(state, checkpoint),
       },
       ids: this.ids,
-      now: createClock(Date.now()),
+      now: Date.now,
       systemPrompt,
       transientMediaTimeoutMs: 45_000,
       createAbortController,
@@ -7805,6 +8241,8 @@ export class AgentHost {
       suppressSelection?: boolean;
       lockedContext: LockedContextSnapshot;
       templateId?: string;
+      templateVersion?: number;
+      reportArtifactId?: string;
       artifacts?: ArtifactPromptRef[];
       includeArtifactGuidance?: boolean;
       /** Exclude recalled memory/knowledge from isolated preset contexts. */
@@ -7846,6 +8284,8 @@ export class AgentHost {
       parts.push(
         artifactUpsertGuidance({
           templateId: options.templateId,
+          templateVersion: options.templateVersion,
+          reportArtifactId: options.reportArtifactId,
           artifacts: options.artifacts,
         }),
       );

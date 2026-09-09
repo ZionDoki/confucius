@@ -29,7 +29,12 @@ describe("artifact upsert guidance", () => {
     assert.match(text, /kind deep_read/);
     assert.doesNotMatch(text, /kind annotation_set/);
     assert.match(text, /ONE deep_read artifact/);
-    assert.match(text, /Reading map/);
+    assert.match(text, /readingGuide/);
+    assert.match(text, /Do not generate a research report until requested/);
+    assert.match(
+      artifactUpsertGuidance({ templateId: "deep-read", templateVersion: 2 }),
+      /Reading map/,
+    );
     assert.match(text, /Follow-ups and clarifications do not need an artifact/);
     assert.doesNotMatch(text, /commit_annotations/);
     assert.doesNotMatch(text, /approval dialog/i);

@@ -16,6 +16,8 @@ export interface RunState {
   templateId?: string;
   templateVersion: number;
   requiredArtifactKinds: ArtifactKind[];
+  /** Explicit report request; guide-only output does not satisfy this run. */
+  reportArtifactId?: string;
   status: "running" | "interrupted" | "completed" | "failed";
   stopReason?: string;
   modelRequest?: import("./events").ModelRequestProgress;
@@ -84,6 +86,8 @@ export function restoreRun(value: unknown): RunState | undefined {
     run.version !== 1 ||
     typeof run.id !== "string" ||
     typeof run.request !== "string" ||
+    (run.reportArtifactId !== undefined &&
+      (typeof run.reportArtifactId !== "string" || !run.reportArtifactId)) ||
     !isLockedContextSnapshot(run.sources) ||
     !Number.isSafeInteger(run.templateVersion) ||
     run.templateVersion < 1 ||

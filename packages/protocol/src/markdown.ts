@@ -72,6 +72,15 @@ function extractMath(source: string): { text: string; slots: MathSlot[] } {
         next = inline;
         kind = "inline";
       }
+      const codeStart = rest.indexOf("`");
+      if (codeStart >= 0 && (next < 0 || codeStart < next)) {
+        const codeEnd = rest.indexOf("`", codeStart + 1);
+        if (codeEnd >= 0) {
+          built += rest.slice(0, codeEnd + 1);
+          rest = rest.slice(codeEnd + 1);
+          continue;
+        }
+      }
       if (next < 0 || !kind) {
         built += rest;
         break;
@@ -129,20 +138,16 @@ function findInlineDollar(text: string): number {
 }
 
 function renderInline(source: string, slots: MathSlot[]): string {
-  const restored = source.replace(/%%MATH(\d+)%%/g, (_match, raw) => {
-    const slot = slots[Number(raw)];
-    if (!slot) {
-      return "";
-    }
-    const display = slot.display ? "1" : "0";
-    return `<span class="tui-math" data-display="${display}" data-tex="${escapeHtml(slot.tex)}">${escapeHtml(slot.tex)}</span>`;
-  });
   let html = "";
-  let rest = restored;
+  let rest = source;
   while (rest.length) {
-    const math = rest.match(/^<span class="tui-math"[\s\S]*?<\/span>/);
+    const math = rest.match(/^%%MATH(\d+)%%/);
     if (math) {
-      html += math[0];
+      const slot = slots[Number(math[1])];
+      if (slot) {
+        const display = slot.display ? "1" : "0";
+        html += `<span class="tui-math" data-display="${display}" data-tex="${escapeHtml(slot.tex)}">${escapeHtml(slot.tex)}</span>`;
+      }
       rest = rest.slice(math[0].length);
       continue;
     }
@@ -236,7 +241,7 @@ function renderList(
 ): string {
   const tag = ordered ? "ol" : "ul";
   const items = lines
-    .map((line) => line.replace(/^\s*(?:[-*+]|\d+\.)\s+/, ""))
+    .map((line) => line.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, ""))
     .map((item) => `<li>${renderInline(item, slots)}</li>`)
     .join("");
   return `<${tag}>${items}</${tag}>`;
@@ -287,7 +292,7 @@ export function renderMarkdownHtml(source: string): string {
       blocks.push(renderTable(table, slots));
       continue;
     }
-    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
     if (heading) {
       const level = heading[1].length;
       blocks.push(`<h${level}>${renderInline(heading[2], slots)}</h${level}>`);
@@ -319,9 +324,9 @@ export function renderMarkdownHtml(source: string): string {
       blocks.push(renderList(items, false, slots));
       continue;
     }
-    if (/^\s*\d+\.\s+/.test(line)) {
+    if (/^\s*\d+[.)]\s+/.test(line)) {
       const items: string[] = [];
-      while (index < lines.length && /^\s*\d+\.\s+/.test(lines[index])) {
+      while (index < lines.length && /^\s*\d+[.)]\s+/.test(lines[index])) {
         items.push(lines[index]);
         index += 1;
       }
@@ -335,9 +340,9 @@ export function renderMarkdownHtml(source: string): string {
       lines[index].trim() &&
       !lines[index].trim().startsWith("```") &&
       !lines[index].trim().startsWith("|") &&
-      !/^#{1,3}\s+/.test(lines[index]) &&
+      !/^#{1,6}\s+/.test(lines[index]) &&
       !/^\s*[-*+]\s+/.test(lines[index]) &&
-      !/^\s*\d+\.\s+/.test(lines[index])
+      !/^\s*\d+[.)]\s+/.test(lines[index])
     ) {
       para.push(lines[index]);
       index += 1;

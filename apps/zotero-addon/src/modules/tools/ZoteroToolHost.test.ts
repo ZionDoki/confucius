@@ -1,7 +1,7 @@
 import { memoryJsonStorage, type JsonStorage } from "../host/RuntimeStorage";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ZoteroToolHost, findPdf } from "./ZoteroToolHost";
+import { ZoteroToolHost, findPdf, markdownToNoteHtml } from "./ZoteroToolHost";
 import { layoutQuoteVariants } from "./PdfQuote";
 import { spatialPageText } from "./PdfLayout";
 import {
@@ -115,6 +115,25 @@ describe("native passage annotation contract", () => {
     assert.equal(
       (annotations.data as { requestedLimit: number }).requestedLimit,
       100,
+    );
+    const metadata = annotations.data as {
+      offset: number;
+      snapshot: string;
+      filtered: boolean;
+    };
+    assert.equal(metadata.offset, 0);
+    assert.equal(metadata.filtered, false);
+    assert.ok(metadata.snapshot);
+    const again = await installed.execute("get_annotations", {
+      libraryID: 1,
+      key: "ITEMKEY1",
+      offset: 0,
+      limit: 10,
+    });
+    assert.ok(again.ok);
+    assert.equal(
+      (again.data as { snapshot: string }).snapshot,
+      metadata.snapshot,
     );
   });
   it("reuses an unchanged physical source, really verifies, and rejects a stale reader", async () => {
@@ -1026,6 +1045,69 @@ describe("native write contracts", () => {
     assert.equal(stale.effect, "none");
     assert.equal(stale.ok, false);
     assert.equal(note.note, "Human edit");
+  });
+
+  it("saves formatted notes exactly as prepared while retaining default plain text semantics", async () => {
+    const { provider, native } = installLibrary();
+    const content =
+      "# Paper\n\n> Original text\n\n[Page 4](zotero://open-pdf/library/items/PDF?page=4)\n\n| Evidence | Limit |\n| --- | --- |\n| **Result** | One task |\n\n$x+y$\n\n$$x^2$$";
+    const args = { content, format: "markdown", libraryID: 1 };
+    const context: ToolExecutionContext = { operationId: "formatted-note" };
+    await provider.prepare!("create_note", args, context);
+    const created = await provider.call(
+      "create_note",
+      args,
+      undefined,
+      context,
+    );
+    assert.ok(created.ok);
+    const key = (created.data as { key: string }).key;
+    const note = native.get(key)!;
+    assert.equal(note.note, context.expectedAfter?.[key]);
+    assert.match(note.note, /<h1>Paper<\/h1>/);
+    assert.match(note.note, /<blockquote>Original text<\/blockquote>/);
+    assert.match(
+      note.note,
+      /<a href="zotero:\/\/open-pdf\/library\/items\/PDF\?page=4">Page 4<\/a>/,
+    );
+    assert.match(note.note, /<table>.*<strong>Result<\/strong>/);
+    assert.match(note.note, /<span class="math">\$x\+y\$<\/span>/);
+    assert.match(note.note, /<pre class="math">\$\$x\^2\$\$<\/pre>/);
+    const update = {
+      libraryID: 1,
+      key,
+      content: "## Changed\n\n- Evidence",
+      format: "markdown",
+    };
+    const updateContext: ToolExecutionContext = {
+      operationId: "formatted-update",
+    };
+    await provider.prepare!("update_note", update, updateContext);
+    assert.ok(
+      (await provider.call("update_note", update, undefined, updateContext)).ok,
+    );
+    assert.equal(note.note, updateContext.expectedAfter?.[key]);
+    assert.match(note.note, /<h2>Changed<\/h2><ul>/);
+    const plain = await provider.call("create_note", {
+      content: "# Literal\n<b>text</b>",
+    });
+    assert.ok(plain.ok);
+    assert.equal(
+      native.get((plain.data as { key: string }).key)?.note,
+      "<div># Literal<br/>&lt;b&gt;text&lt;/b&gt;</div>",
+    );
+  });
+
+  it("escapes active markup in Markdown notes, including fake math placeholders", () => {
+    const html = markdownToNoteHtml(
+      '<span class="tui-math" onclick="alert(1)"><img src=x onerror=bad></span>\n\n[bad](javascript:bad)\n\n<script>bad()</script>\n\n###### Detail\n\n1) One',
+    );
+    assert.doesNotMatch(
+      html,
+      /<script|<img|<span[^>]*onclick|href="javascript:/,
+    );
+    assert.match(html, /&lt;script&gt;/);
+    assert.match(html, /<h6>Detail<\/h6><ol><li>One<\/li><\/ol>/);
   });
 
   it("prechecks all tag and metadata arguments and rolls back both sides of a relation", async () => {

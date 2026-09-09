@@ -7,6 +7,7 @@
 - [任务执行与恢复](runtime.md)：执行、存储、上下文和诊断的维护契约。
 - [上下文与记忆管理](context-memory-refactor.md)：可靠交接、读取预算、本地归档与独立保留策略；[最新优化验收](acceptance/context-optimization-2026-09-08.md)、[完整修复验收](acceptance/context-system-repair-2026-09-08.md)、[基础验收](acceptance/context-memory-refactor-2026-09-08.md)与[专项实测及复现脚本](acceptance/context-memory-stress-2026-09-08.md)。
 - [请求恢复、标注批次与记忆审批验收](acceptance/request-recovery-batches-memory-2026-09-07.md)：请求恢复与记忆审批的自动回归、隔离 Zotero 操作与验证边界。
+- [陪读与私有阅读分支](reading-companion.md)：成果结构、报告生成、分支隔离与验证入口。
 - [研究报告修订](research-reports.md)：同一报告的读取、局部修改、复核、恢复与成本验证。
 - [研读 harness 验收](acceptance/research-harness-2026-09-07.md)：单报告、上下文恢复、引用跳转与 M3/K3 挑战。
 - [历史升级验收](acceptance/upgrade-acceptance.md)：0.3.8 → 0.4.0-beta.1，macOS。
@@ -19,7 +20,9 @@
 - [0.4.3-beta.2 发布验收](acceptance/release-0.4.3-beta.2.md)：请求恢复、标注批次与记忆审批、Beta 1 隔离升级。
 
 - [0.4.3 发布验收](acceptance/release-0.4.3.md)：正式版候选、稳定版与 Beta 升级，以及公开更新资产核验。
+- [0.4.5 发布验收](acceptance/release-0.4.5.md)：陪读、私有问答、笔记保存、候选检查及公开安装包升级。
 - [0.4.4 发布验收](acceptance/release-0.4.4.md)：侧栏连续点击、流光可见性、无主窗口编码与旧包升级。
+- [自动热更新开发阶段验收](acceptance/update-window.md)：自动恢复会话、窗口／侧栏交接、实际安装状态和无需重启的验证。
 
 过时的上下文 v3 设计、界面实现草稿及一次性代理设计计划已移出当前文档集，历史
 仍可从 Git 查询。验收结果只适用于记录中的安装包和环境。

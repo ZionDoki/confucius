@@ -41,7 +41,18 @@ export function projectWork(
       artifact.execution.intentRevision === run.intentRevision &&
       artifact.execution.sourceFingerprint === run.sources.fingerprint,
   );
-  const ready = bound.filter((artifact) => artifact.status !== "draft");
+  const ready = bound.filter(
+    (artifact) =>
+      artifact.status !== "draft" &&
+      (run.reportArtifactId
+        ? artifact.id === run.reportArtifactId &&
+          artifact.body.type === "markdown" &&
+          !!artifact.body.markdown.trim()
+        : run.templateId !== "deep-read" ||
+          run.templateVersion < 3 ||
+          artifact.kind !== "deep_read" ||
+          (artifact.body.type === "markdown" && !!artifact.body.readingGuide)),
+  );
   return {
     completed: [
       ...ready.map((artifact) => ({
