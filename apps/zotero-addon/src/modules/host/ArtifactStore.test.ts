@@ -44,6 +44,7 @@ function deliveredReviewEvents(events: ConfuciusEvent[]): ConfuciusEvent[] {
 }
 import {
   ARTIFACT_UPSERT_DEFINITION,
+  advertisedArtifactUpsertSchema,
   ArtifactToolProvider,
   artifactBodyShapeHint,
   normalizeArtifactBodyArgument,
@@ -1789,5 +1790,65 @@ describe("artifact_upsert contract", () => {
     });
     assert.equal(result.ok, true);
     assert.equal(fs.files.size, 1);
+  });
+
+  it("advertises one open body branch for the current task kinds", () => {
+    const schema = advertisedArtifactUpsertSchema(["deep_read"]);
+    const body = schema.properties.body as Record<string, unknown>;
+    assert.equal(body.oneOf, undefined);
+    assert.deepEqual(
+      (body.properties as { type: { enum: string[] } }).type.enum,
+      ["markdown"],
+    );
+    assert.equal(
+      JSON.stringify(schema).includes('"additionalProperties":false'),
+      false,
+    );
+    assert.equal(
+      JSON.stringify(ARTIFACT_UPSERT_DEFINITION.inputSchema).includes(
+        '"additionalProperties":false',
+      ),
+      true,
+    );
+  });
+
+  it("strips invented body fields and still saves markdown", async () => {
+    const fs = new MemoryFileSystem();
+    const provider = new ArtifactToolProvider(
+      new ArtifactStore(
+        "artifacts",
+        fs,
+        () => 1,
+        () => "art_placeholders",
+      ),
+      "task_a",
+      "kimi",
+      [],
+      () => {},
+    );
+    assert.deepEqual(
+      normalizeArtifactBodyArgument({
+        type: "markdown",
+        markdown: "Guide",
+        version: 1,
+        overview_placeholder: "",
+        checkpoints_placeholder: [],
+        citationIdsNote: "todo",
+      }),
+      { type: "markdown", markdown: "Guide" },
+    );
+    const result = await provider.call("artifact_upsert", {
+      kind: "deep_read",
+      title: "Paper",
+      version: 1,
+      body: {
+        type: "markdown",
+        markdown: "Guide",
+        version: 1,
+        overview_placeholder: "",
+        checkpoints_placeholder: [],
+      },
+    });
+    assert.equal(result.ok, true);
   });
 });

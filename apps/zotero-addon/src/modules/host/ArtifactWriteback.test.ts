@@ -1,11 +1,40 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { groupIDForLibrary } from "../tools/ZoteroToolHost";
+import { groupIDForLibrary, markdownToNoteHtml } from "../tools/ZoteroToolHost";
 import {
   collectTagChanges,
   writebackBodyForTarget,
   markdownWithCitationLinks,
 } from "./ArtifactWriteback";
+
+it("exports paired passages and collapsed help as visible note text with working citations and math", () => {
+  const markdown = markdownWithCitationLinks(
+    ":::parallel\n> Source [cite:p]\n\nExplanation $qk$.\n:::\n\n:::details Background\nEssential supplement [cite:p].\n:::",
+    [
+      {
+        id: "p",
+        itemLibraryID: 1,
+        itemKey: "PAPER",
+        attachmentKey: "PDF",
+        page: 4,
+      },
+    ],
+    () => undefined,
+  );
+  const html = markdownToNoteHtml(markdown);
+  assert.doesNotMatch(html, /<details|<summary|:::|\[cite:p\]/);
+  assert.match(html, /<blockquote>Source/);
+  assert.match(html, /Essential supplement/);
+  assert.equal(
+    [
+      ...html.matchAll(
+        /href="zotero:\/\/open-pdf\/library\/items\/PDF\?page=4"/g,
+      ),
+    ].length,
+    2,
+  );
+  assert.match(html, /<span class="math">\$qk\$<\/span>/);
+});
 
 it("exports page, annotation and abstract references with the correct Zotero library scope", () => {
   const text = markdownWithCitationLinks(

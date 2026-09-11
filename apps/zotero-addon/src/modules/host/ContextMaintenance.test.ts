@@ -285,14 +285,7 @@ test("deleting a task clears its history and duplicate transcript without deleti
     content: "User-saved conclusion",
     protection: "user",
   });
-  const cleaned: string[][] = [];
-  Reflect.set(f.host, "readingDiscussionsInstance", {
-    removeArtifacts: async (ids: string[]) => {
-      cleaned.push(ids);
-    },
-  });
   assert.equal((await f.host.sessionDelete("old")).ok, true);
-  assert.deepEqual(cleaned, [["kept-report"]]);
   assert.ok(!JSON.stringify(f.fs.snapshot()).includes("RAW_OLD_CONTEXT"));
   assert.equal(await f.logs.read("old"), null);
   assert.equal(f.memory.get("kept")?.content, "User-saved conclusion");

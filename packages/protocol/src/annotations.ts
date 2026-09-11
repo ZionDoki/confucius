@@ -4,6 +4,8 @@ export interface AnnotationBatch {
   taskId: string;
   name: string;
   createdAt: number;
+  /** Local batch time, frozen once so labels survive timezone changes. */
+  timeLabel?: string;
   named?: boolean;
   /** Durable index detects a lost PDF baseline instead of recomputing it. */
   pdfs?: string[];

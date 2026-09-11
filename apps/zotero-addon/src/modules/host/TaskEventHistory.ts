@@ -8,6 +8,25 @@ export function isTerminalTaskEventType(type: ConfuciusEvent["type"]): boolean {
   );
 }
 
+/** Same call/status is a stream fragment, not a new stage. Keep the lease alive separately. */
+export function shouldKeepToolProgress(
+  last: Map<string, string>,
+  event: ConfuciusEvent,
+): boolean {
+  if (isTerminalTaskEventType(event.type)) {
+    last.clear();
+    return true;
+  }
+  if (event.type === "tool_result") {
+    last.delete(event.payload.callId);
+    return true;
+  }
+  if (event.type !== "tool_progress") return true;
+  if (last.get(event.payload.callId) === event.payload.message) return false;
+  last.set(event.payload.callId, event.payload.message);
+  return true;
+}
+
 /**
  * Collapse streamed text/reasoning chunks after a turn finishes. The merged
  * event keeps the newest id so a client that already consumed the stream can
@@ -20,6 +39,17 @@ export function compactTaskEvents(
   const compacted: ConfuciusEvent[] = [];
   for (const event of events) {
     const previous = compacted.at(-1);
+    if (
+      previous &&
+      event.turnId === previous.turnId &&
+      event.type === "tool_progress" &&
+      previous.type === "tool_progress" &&
+      event.payload.callId === previous.payload.callId &&
+      event.payload.message === previous.payload.message
+    ) {
+      compacted[compacted.length - 1] = event;
+      continue;
+    }
     if (
       previous &&
       event.turnId === previous.turnId &&

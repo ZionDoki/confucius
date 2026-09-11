@@ -1,4 +1,5 @@
 import { CONTEXT_POLICY } from "./contextPolicy";
+import { restoreReportStyle, type ReportStyle } from "./reportStyle";
 import { restoreRun, type RunState } from "./run";
 import {
   restoreContextHandoff,
@@ -146,6 +147,7 @@ export interface ResearchTaskRecord extends SessionRecord {
   capabilityProfile: CapabilityProfile;
   workingDirectory?: string;
   templateId?: string;
+  reportStyle?: ReportStyle;
   titleState: TaskTitleState;
 }
 
@@ -302,6 +304,7 @@ export function migrateSessionRecord(
         typeof candidate.templateId === "string"
           ? candidate.templateId
           : undefined,
+      reportStyle: restoreReportStyle(candidate.reportStyle),
       titleState: isTaskTitleState(candidate.titleState)
         ? candidate.titleState
         : isPlaceholderTaskTitle(candidate.title)

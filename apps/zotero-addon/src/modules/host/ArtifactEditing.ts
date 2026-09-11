@@ -1,8 +1,4 @@
-import {
-  contextTextSlice,
-  READING_GUIDE_SCHEMA,
-  type ReadingGuide,
-} from "@confucius/protocol";
+import { contextTextSlice, markdownForDisplay } from "@confucius/protocol";
 import type {
   ArtifactBody,
   ArtifactRecord,
@@ -44,7 +40,7 @@ export const ARTIFACT_READ_SCHEMA: JsonSchemaObject = {
     id,
     part: {
       type: "string",
-      enum: ["body", "citations", "guide"],
+      enum: ["body", "citations"],
       description:
         "Defaults to body. Markdown is returned verbatim; other bodies and citations are JSON text.",
     },
@@ -68,16 +64,6 @@ export const ARTIFACT_PATCH_SCHEMA: JsonSchemaObject = {
       ...revision,
       description:
         "Revision returned by the latest save or artifact_read. A stale version is rejected without changing the report.",
-    },
-    readingGuide: {
-      ...READING_GUIDE_SCHEMA,
-      description:
-        "Replace the complete reading guide, retaining stable checkpoint IDs. Omit to preserve it.",
-    },
-    reportMarkdown: {
-      type: "string",
-      description:
-        "Initialize or replace report prose while preserving the reading guide. Mutually exclusive with edits.",
     },
     edits: {
       type: "array",
@@ -133,8 +119,6 @@ export interface ArtifactPatchArgs {
   title?: string;
   status?: "draft" | "ready";
   citations?: Citation[];
-  readingGuide?: ReadingGuide;
-  reportMarkdown?: string;
 }
 
 /** Match all spans in the same snapshot: replacement text is never another edit's target. */
@@ -146,38 +130,21 @@ export function patchArtifactInput(
     !args.edits?.length &&
     args.title === undefined &&
     args.status === undefined &&
-    args.citations === undefined &&
-    args.readingGuide === undefined &&
-    args.reportMarkdown === undefined
+    args.citations === undefined
   )
     throw new Error(
       "Supply edits, title, status or citations. To finalize an unchanged reviewed draft, supply status=ready.",
     );
   let body: ArtifactBody = artifact.body;
-  if (args.reportMarkdown !== undefined && args.edits?.length)
-    throw new Error("Use reportMarkdown or edits, not both.");
-  if (args.readingGuide !== undefined || args.reportMarkdown !== undefined) {
-    if (
-      body.type !== "markdown" ||
-      (args.readingGuide && artifact.kind !== "deep_read")
-    )
-      throw new Error("Reading guides require a deep_read Markdown artifact.");
-    body = {
-      ...body,
-      ...(args.readingGuide === undefined
-        ? {}
-        : { readingGuide: args.readingGuide }),
-      ...(args.reportMarkdown === undefined
-        ? {}
-        : { markdown: args.reportMarkdown }),
-    };
-  }
   if (args.edits?.length) {
     if (body.type !== "markdown")
       throw new Error(
         "Text edits require a Markdown report. Use artifact_upsert to replace a structured body under the same id.",
       );
-    const text = body.markdown;
+    const text =
+      body.type === "markdown"
+        ? markdownForDisplay(body, artifact.citations)
+        : "";
     const spans = args.edits
       .map((edit, index) => {
         const start = text.indexOf(edit.oldText);
@@ -221,26 +188,13 @@ export function readArtifactPart(
   args: Record<string, unknown>,
   outputBudgetTokens?: number,
 ) {
-  const part =
-    args.part === "citations"
-      ? "citations"
-      : args.part === "guide"
-        ? "guide"
-        : "body";
+  const part = args.part === "citations" ? "citations" : "body";
   const text =
     part === "citations"
       ? JSON.stringify(artifact.citations, null, 2)
-      : part === "guide"
-        ? JSON.stringify(
-            artifact.body.type === "markdown"
-              ? (artifact.body.readingGuide ?? null)
-              : null,
-            null,
-            2,
-          )
-        : artifact.body.type === "markdown"
-          ? artifact.body.markdown
-          : JSON.stringify(artifact.body, null, 2);
+      : artifact.body.type === "markdown"
+        ? markdownForDisplay(artifact.body, artifact.citations)
+        : JSON.stringify(artifact.body, null, 2);
   const offset = Number(args.offset ?? 0);
   if (offset > text.length)
     throw new Error(

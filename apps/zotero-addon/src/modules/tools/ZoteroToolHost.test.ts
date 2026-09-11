@@ -3,6 +3,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { ZoteroToolHost, findPdf, markdownToNoteHtml } from "./ZoteroToolHost";
 import { layoutQuoteVariants } from "./PdfQuote";
+import {
+  annotationBatchTag,
+  annotationBatchTime,
+} from "./AnnotationBatchLabels";
 import { spatialPageText } from "./PdfLayout";
 import {
   anchorPage,
@@ -1374,7 +1378,7 @@ function installHost(
     },
   };
   (globalThis as unknown as { Zotero: unknown }).Zotero = {
-    Libraries: { userLibraryID: 1 },
+    Libraries: { userLibraryID: 1, get: () => ({ editable: true }) },
     Groups: {
       getGroupIDFromLibraryID: (id: number) => (id === 1 ? 0 : 77),
     },
@@ -2956,7 +2960,15 @@ it("changes conflicting colors, retains the original batch across Agents, and pr
   );
   assert.equal(second.ok, true);
   assert.notEqual(env.saved[1].color, env.saved[0].color);
-  assert.ok(JSON.stringify(env.saved[1].tags).includes("Second batch"));
+  assert.equal((env.saved[1].tags as unknown[]).length, 1);
+  assert.match(
+    JSON.stringify(env.saved[1].tags),
+    /Confucius 批次：\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(env.saved[1].tags),
+    /Second batch|批次日期/,
+  );
   const edited = await env.execute(
     "update_annotation_comment",
     { libraryID: 1, key, comment: "corrected" },
@@ -3005,6 +3017,98 @@ it("changes conflicting colors, retains the original batch across Agents, and pr
   const view = await env.host.annotationBatchView(1, "PDFKEY01");
   assert.equal(view.existingCount, 1);
   assert.equal(view.total, 2);
+});
+
+it("migrates only verified legacy batch labels, retries a failed save, and skips completed PDFs", async () => {
+  const env = installHost();
+  const previousToolkit = Reflect.get(globalThis, "ztoolkit");
+  Reflect.set(globalThis, "ztoolkit", { log() {} });
+  try {
+    const pdf = Zotero.Items.getByLibraryAndKey(1, "PDFKEY01") as Zotero.Item;
+    const { batch } = await env.host.ownership.freeze(
+      "1_PDFKEY01",
+      { taskId: "old-task", createdAt: 1000 },
+      [],
+    );
+    batch.name = "Original title";
+    await env.host.ownership.change("1_PDFKEY01", (record) => {
+      record.batches[batch.id].batch.name = batch.name;
+    });
+    const originalTags = [
+      "Confucius 批次：Original title",
+      `Confucius 批次日期：${annotationBatchTime(batch.createdAt).slice(0, 10)}`,
+      "human-tag",
+    ];
+    let tags = [...originalTags],
+      committed = [...tags],
+      failed = true,
+      saves = 0;
+    const mark = {
+      libraryID: 1,
+      key: "OLDA",
+      parentItemID: pdf.id,
+      isAnnotation: () => true,
+      annotationComment: "Keep comment",
+      annotationColor: "#ffd400",
+      getTags: () => tags.map((tag) => ({ tag })),
+      removeTag: (tag: string) => {
+        tags = tags.filter((value) => value !== tag);
+      },
+      addTag: (tag: string) => {
+        if (!tags.includes(tag)) tags.push(tag);
+      },
+      saveTx: async (options: unknown) => {
+        assert.deepEqual(options, { skipDateModifiedUpdate: true });
+        saves++;
+        if (failed) throw new Error("disk full");
+        committed = [...tags];
+      },
+      reload: async () => {
+        tags = [...committed];
+      },
+    };
+    env.native.set(mark.key, mark);
+    const humanTags = [...originalTags];
+    env.native.set("HUMAN", {
+      ...mark,
+      key: "HUMAN",
+      getTags: () => humanTags.map((tag) => ({ tag })),
+      removeTag: () => assert.fail("unverified annotation"),
+      addTag: () => assert.fail("unverified annotation"),
+    });
+    await env.host.ownership.plan(
+      "1_PDFKEY01",
+      mark.key,
+      batch.id,
+      { taskId: "old-task" },
+      "payload",
+    );
+    await env.host.ownership.confirm("1_PDFKEY01", mark.key, "payload", 2000);
+    const before = await env.host.ownership.owned("1_PDFKEY01", mark.key);
+    await env.host.migrateAnnotationBatchLabels();
+    assert.equal(
+      (await env.host.ownership.read("1_PDFKEY01")).batchLabelsVersion,
+      undefined,
+    );
+    assert.deepEqual(tags, originalTags);
+    failed = false;
+    await env.host.migrateAnnotationBatchLabels();
+    assert.deepEqual(tags, ["human-tag", annotationBatchTag(batch)]);
+    assert.deepEqual(humanTags, originalTags);
+    assert.deepEqual(
+      await env.host.ownership.owned("1_PDFKEY01", mark.key),
+      before,
+    );
+    assert.equal(mark.annotationComment, "Keep comment");
+    assert.equal(
+      (await env.host.ownership.read("1_PDFKEY01")).batchLabelsVersion,
+      1,
+    );
+    await env.host.migrateAnnotationBatchLabels();
+    assert.equal(saves, 2);
+  } finally {
+    Reflect.set(globalThis, "ztoolkit", previousToolkit);
+  }
 });
 
 it("rejects edits made stale by human changes after approval preview", async () => {

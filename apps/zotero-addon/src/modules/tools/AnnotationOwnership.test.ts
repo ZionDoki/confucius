@@ -7,6 +7,11 @@ import {
   normalizedColor,
 } from "./AnnotationOwnership";
 import { annotationMatchesFilter } from "@confucius/protocol";
+import {
+  annotationBatchTag,
+  annotationBatchTime,
+  legacyBatchTagChange,
+} from "./AnnotationBatchLabels";
 
 test("task/PDF baselines survive continuation and restart, new tasks get independent batches", async () => {
   const storage = memoryJsonStorage();
@@ -28,6 +33,11 @@ test("task/PDF baselines survive continuation and restart, new tasks get indepen
   );
   assert.deepEqual(continued.forbiddenColors, ["#ffd400", "#aabbcc"]);
   assert.equal(continued.batch.name, first.batch.name);
+  assert.equal(continued.batch.timeLabel, first.batch.timeLabel);
+  assert.equal(
+    annotationBatchTag(continued.batch),
+    annotationBatchTag(first.batch),
+  );
   assert.equal(await store.color("1_PDF", first.batch.id, "#ffd400"), color);
   const other = await store.freeze(
     "1_PDF",
@@ -38,6 +48,30 @@ test("task/PDF baselines survive continuation and restart, new tasks get indepen
   assert.notEqual(await store.color("1_PDF", other.batch.id, color), color);
   const later = await store.freeze("1_OTHER", a, ["#ff6666"]);
   assert.deepEqual(later.forbiddenColors, ["#ff6666"]);
+});
+
+test("one time label replaces exactly the two old batch tags and preserves user labels", () => {
+  const createdAt = new Date(2026, 8, 10, 18, 30, 5).getTime();
+  const batch = { id: "b", taskId: "t", name: "Old title · task-1", createdAt };
+  assert.equal(annotationBatchTime(createdAt), "2026-09-10 18:30:05");
+  const tag = "Confucius 批次：2026-09-10 18:30:05";
+  assert.equal(annotationBatchTag(batch), tag);
+  const old = [
+    "Confucius 批次：Old title · task-1",
+    "Confucius 批次日期：2026-09-10",
+  ];
+  const changed = legacyBatchTagChange(
+    [...old, "human-tag", "Confucius 批次：Manually renamed"],
+    batch,
+  );
+  assert.deepEqual(changed, { remove: old, add: tag });
+  assert.equal(legacyBatchTagChange([tag, "human-tag"], batch), undefined);
+  assert.equal(legacyBatchTagChange(["human-tag"], batch), undefined);
+  assert.equal(
+    annotationBatchTag({ ...batch, timeLabel: "2026-09-10 10:30:05" }),
+    "Confucius 批次：2026-09-10 10:30:05",
+  );
+  assert.throws(() => annotationBatchTime(Number.NaN), /Invalid/);
 });
 test("provenance is confirmed only after creation; edits and deletion preserve the original owner", async () => {
   const store = new AnnotationOwnership(memoryJsonStorage());

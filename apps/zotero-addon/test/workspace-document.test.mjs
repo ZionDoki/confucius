@@ -106,6 +106,28 @@ test("workspace layout can switch between window and sidebar", () => {
   assert.equal(view.includes('className = "confucius-icon-button"'), true);
 });
 
+test("window topbar ellipsizes attached titles instead of shrinking New task", () => {
+  const view = workspaceSource();
+  assert.match(
+    view,
+    /\.confucius-workspace-root \.confucius-attached-sources \{[^}]*overflow: hidden/,
+  );
+  assert.match(
+    view,
+    /\.confucius-attached-sources > span \{[^}]*text-overflow: ellipsis/,
+  );
+  assert.match(
+    view,
+    /\.confucius-workspace-root\[data-confucius-density=wide\] \.confucius-topbar-actions \{ min-width: max-content; \}/,
+  );
+  assert.match(
+    view,
+    /\.confucius-workspace-root\[data-confucius-density=wide\] #confucius-new-session \{ flex: 0 0 auto; min-width: max-content;/,
+  );
+  assert.match(view, /minWidth: stacked \? "0px" : ""/);
+  assert.match(view, /flex: stacked \? "1 1 auto" : ""/);
+});
+
 test("HTTP bridge registers health, RPC, events, and MCP, not Chrome pair/probe", () => {
   const bridge = readFileSync(
     join(root, "src/modules/bridge/HttpBridge.ts"),
@@ -454,6 +476,12 @@ test("long model rounds expose their real stage after tool results", () => {
   assert.match(tools, /renderingAllowed/);
   assert.match(view, /tool_progress/);
   assert.match(host, /onProgress/);
+  assert.match(
+    view,
+    /Date\.now\(\) - \(workflowStatus \? workflowStartedAt : startedAt\)/,
+  );
+  assert.equal(view.includes("Math.max(startedAt, stage.ts)"), false);
+  assert.match(host, /shouldKeepToolProgress/);
 });
 
 test("timeline is TUI-style: foldable thinking/tools, unfolded answers", () => {
@@ -517,6 +545,63 @@ test("artifact document has native window chrome and no embedded close button or
   assert.doesNotMatch(
     viewer,
     /closeButton|aria-modal|bindDialogNavigation|artifact-overlay/,
+  );
+});
+
+test("report document styles its dividers, lists and empty state", () => {
+  const theme = readFileSync(
+    join(root, "src/modules/ui/workspaceTheme.ts"),
+    "utf8",
+  );
+  assert.match(theme, /.tui-answer hr { border: 0;/);
+  assert.match(theme, /.tui-answer :is[(]ul, ol[)]/);
+  assert.match(theme, /.confucius-citation-reference/);
+  const viewer = readFileSync(
+    join(root, "src/modules/ui/artifactWindowView.ts"),
+    "utf8",
+  );
+  assert.match(
+    viewer,
+    /.confucius-artifact-dialog-body { flex: 1 1 auto; min-height: 0;[^}]*overflow-y: auto;/,
+  );
+  assert.match(viewer, /.confucius-artifact-references ol/);
+  assert.match(viewer, /confucius-artifact-empty/);
+  assert.match(viewer, /workspace-writeback-disabled-empty/);
+  assert.match(viewer, /workspace-artifact-empty/);
+  assert.doesNotMatch(viewer, /margin-top: 2.8em/);
+});
+
+test("report header follows the app topbar and uses no decorative dividers", () => {
+  const viewer = readFileSync(
+    join(root, "src/modules/ui/artifactWindowView.ts"),
+    "utf8",
+  );
+  assert.match(
+    viewer,
+    /.confucius-artifact-toolbar {[^}]*gap: 10px;[^}]*padding: 10px 14px;[^}]*min-height: 48px;/,
+  );
+  const surface = readFileSync(
+    join(root, "src/modules/ui/workspaceSurface.ts"),
+    "utf8",
+  );
+  assert.match(
+    surface,
+    /.confucius-topbar #confucius-new-session, .confucius-artifact-toolbar .confucius-button {[^}]*min-height: 34px;[^}]*padding: 6px 8px;/,
+  );
+  assert.match(
+    viewer,
+    /.confucius-reading-surface hr { border: 0; height: 0; background: transparent; margin: 24px 0; }/,
+  );
+  assert.match(
+    viewer,
+    /\.confucius-artifact-window \.confucius-artifact-dialog-body:focus \{ outline: none; \}/,
+  );
+  assert.match(viewer, /body\.tabIndex = 0/);
+  assert.match(viewer, /body\.focus\(\{ preventScroll: true \}\)/);
+  assert.doesNotMatch(viewer, /border-top: 1px solid var\(--confucius-line\)/);
+  assert.doesNotMatch(
+    viewer,
+    /border-bottom: 1px solid var\(--confucius-line\)/,
   );
 });
 

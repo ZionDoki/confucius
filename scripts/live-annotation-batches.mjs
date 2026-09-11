@@ -97,107 +97,107 @@ try {
     result.view.batches.length === 2 && result.view.existingCount === 1,
   );
   check(
-    "Native labels contain fixed batch name and date",
-    result.tags.some((t) => t.tag.startsWith("Confucius 批次：")) &&
-      result.tags.some((t) => t.tag.startsWith("Confucius 批次日期：")),
+    "Each annotation has one batch-start timestamp tag",
+    result.tags.length === 1 &&
+      /^Confucius 批次：\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(
+        result.tags[0].tag,
+      ),
   );
   const selected = result.view.batches.find((b) => b.taskId === "task-a").id;
-  await instance.rpc("annotation/batches", {
-    ...fixture,
-    filter: { mode: "selected", batchIds: [selected], includeExisting: false },
-  });
-  const readerState = await until(
-    () =>
-      evaluate(`
-    const q=globalThis.confuciusBatchQA, r=q.reader._internalReader;
-    const shown=r._state.annotations.filter(x=>!x._hidden).map(x=>x.id);
-    const page=r._primaryView._annotations?.map(x=>x.id);
-    if(shown.length!==1||shown[0]!==q.firstKey)return false;
-    return {shown,page,toolbar:!!q.reader._iframeWindow?.document.querySelector('.confucius-annotation-batches')};
-  `),
-    15000,
-  );
-  check(
-    "Reader sidebar and PDF view use the same filtered IDs",
-    readerState.page?.length === 1 &&
-      readerState.page[0] === readerState.shown[0],
-  );
-  check("Reader toolbar installed", readerState.toolbar);
   await instance.rpc("annotation/batches", {
     ...fixture,
     filter: { mode: "selected", batchIds: [], includeExisting: false },
   });
   check(
-    "Empty selection hides all annotations",
+    "Removed toolbar filter cannot hide native reader annotations",
     await until(
       () =>
-        evaluate(
-          `return globalThis.confuciusBatchQA.reader._internalReader._state.annotations.every(x=>x._hidden);`,
-        ),
-      10000,
+        evaluate(`
+      const q=globalThis.confuciusBatchQA, r=q.reader._internalReader;
+      return !q.reader._iframeWindow.document.querySelector('.confucius-annotation-batches')
+        && r._state.annotations.filter(x=>!x._hidden).length===3
+        && r._primaryView._annotations.length===3;
+    `),
+      15000,
     ),
   );
-  await instance.rpc("annotation/batches", {
-    ...fixture,
-    filter: { mode: "all", batchIds: [], includeExisting: false },
-  });
+  const migration = await evaluate(`
+    const q=globalThis.confuciusBatchQA, token=q.pdf.libraryID+'_'+q.pdf.key;
+    const item=Zotero.Items.getByLibraryAndKey(q.pdf.libraryID,q.secondKey);
+    const record=await q.host.tools.ownership.read(token);
+    const batch=record.batches[record.marks[item.key].batchId].batch;
+    batch.name='Legacy acceptance batch';
+    await q.host.tools.ownership.change(token,current=>{current.batches[batch.id].batch.name=batch.name;});
+    const date=new Date(batch.createdAt);
+    const day=date.getFullYear()+'-'+String(date.getMonth()+1).padStart(2,'0')+'-'+String(date.getDate()).padStart(2,'0');
+    item.setTags([{tag:'Confucius 批次：'+batch.name},{tag:'Confucius 批次日期：'+day},{tag:'human-tag'}]);await item.saveTx();
+    const before={comment:item.annotationComment,color:item.annotationColor,position:item.annotationPosition,added:item.dateAdded,modified:item.dateModified};
+    const human=Zotero.Items.getByLibraryAndKey(q.pdf.libraryID,q.humanKey);
+    human.addTag('Confucius 批次：'+batch.name);await human.saveTx();
+    await q.host.tools.migrateAnnotationBatchLabels();
+    const tags=item.getTags();
+    await q.host.tools.migrateAnnotationBatchLabels();
+    return {tags,again:item.getTags(),human:human.getTags(),before,after:{comment:item.annotationComment,color:item.annotationColor,position:item.annotationPosition,added:item.dateAdded,modified:item.dateModified}};
+  `);
   check(
-    "All restores the full reader set",
-    await until(
-      () =>
-        evaluate(
-          `return globalThis.confuciusBatchQA.reader._internalReader._state.annotations.filter(x=>!x._hidden).length===3;`,
-        ),
-      10000,
-    ),
-  );
-  await instance.rpc("annotation/batches", {
-    ...fixture,
-    filter: {
-      mode: "selected",
-      batchIds: result.view.batches.map((b) => b.id),
-      includeExisting: false,
-    },
-  });
-  check(
-    "Historical batches support multi-selection",
-    await until(
-      () =>
-        evaluate(
-          `return globalThis.confuciusBatchQA.reader._internalReader._state.annotations.filter(x=>!x._hidden).length===2;`,
-        ),
-      10000,
-    ),
-  );
-  await evaluate(
-    `const q=globalThis.confuciusBatchQA;await q.reader._internalReader._annotationManager.setFilter(Cu.cloneInto({query:'Keep this'},q.reader._iframeWindow));return true;`,
+    "Verified legacy labels consolidate without changing annotation data",
+    JSON.stringify(migration.before) === JSON.stringify(migration.after) &&
+      migration.tags.length === 2 &&
+      migration.tags.some((t) => t.tag === "human-tag") &&
+      migration.tags.filter((t) => /^Confucius 批次：\d{4}-/.test(t.tag))
+        .length === 1 &&
+      JSON.stringify(migration.tags) === JSON.stringify(migration.again),
   );
   check(
-    "Batch restriction intersects native search",
-    await until(
-      () =>
-        evaluate(
-          `return globalThis.confuciusBatchQA.reader._internalReader._state.annotations.every(x=>x._hidden);`,
-        ),
-      10000,
-    ),
+    "Unverified human labels remain unchanged",
+    migration.human.length === 2,
   );
-  await instance.rpc("annotation/batches", {
-    ...fixture,
-    filter: { mode: "all", batchIds: [], includeExisting: false },
-  });
+  await evaluate(`
+    const q=globalThis.confuciusBatchQA;
+    await q.reader._internalReader._annotationManager.setFilter(Cu.cloneInto({tags:[${JSON.stringify(result.tags[0].tag)}]},q.reader._iframeWindow));
+    return true;
+  `);
   check(
-    "All keeps the reader's native search",
+    "Native tag filtering still works",
     await until(
       () =>
-        evaluate(
-          `return globalThis.confuciusBatchQA.reader._internalReader._state.annotations.filter(x=>!x._hidden).length===1;`,
-        ),
+        evaluate(`
+    const q=globalThis.confuciusBatchQA;
+    const shown=q.reader._internalReader._state.annotations.filter(x=>!x._hidden);
+    return shown.length>0&&shown.length<3&&shown.every(x=>x.tags.some(t=>t.name===${JSON.stringify(result.tags[0].tag)}));
+  `),
       10000,
     ),
   );
-  await evaluate(
-    `const q=globalThis.confuciusBatchQA;await q.reader._internalReader._annotationManager.setFilter(Cu.cloneInto({query:''},q.reader._iframeWindow));return true;`,
+  await evaluate(`
+    const q=globalThis.confuciusBatchQA;
+    await q.reader._internalReader._annotationManager.setFilter(Cu.cloneInto({tags:[],query:'Keep this'},q.reader._iframeWindow));return true;
+  `);
+  check(
+    "Native search still works",
+    await until(
+      () =>
+        evaluate(`
+    const q=globalThis.confuciusBatchQA;
+    const shown=q.reader._internalReader._state.annotations.filter(x=>!x._hidden);
+    return shown.length===1&&shown[0].id===q.humanKey;
+  `),
+      10000,
+    ),
+  );
+  await evaluate(`
+    const q=globalThis.confuciusBatchQA;
+    await q.reader._internalReader._annotationManager.setFilter(Cu.cloneInto({query:''},q.reader._iframeWindow));return true;
+  `);
+  const screenshot = await evaluate(`
+    const w=globalThis.confuciusBatchQA.reader._iframeWindow,d=w.document;
+    const c=d.createElementNS('http://www.w3.org/1999/xhtml','canvas');
+    c.width=w.innerWidth;c.height=w.innerHeight;
+    c.getContext('2d').drawWindow(w,0,0,c.width,c.height,'white');return c.toDataURL('image/png');
+  `);
+  await writeFile(
+    join(output, "native-reader.png"),
+    Buffer.from(screenshot.split(",")[1], "base64"),
   );
   const removed = await evaluate(
     `const q=globalThis.confuciusBatchQA; const result=await q.call('delete_annotation',{key:q.firstKey},'task-c','kimi'); return {result,mark:(await q.host.tools.ownership.read(q.pdf.libraryID+'_'+q.pdf.key)).marks[q.firstKey]};`,
@@ -208,18 +208,33 @@ try {
       removed.mark.status === "deleted" &&
       removed.mark.batchId === selected,
   );
-  await instance.rpc("annotation/batches", {
-    ...fixture,
-    filter: { mode: "selected", batchIds: [], includeExisting: true },
-  });
+  const restartLabels = await evaluate(`
+    const q=globalThis.confuciusBatchQA,token=q.pdf.libraryID+'_'+q.pdf.key;
+    const record=await q.host.tools.ownership.read(token);
+    const item=Zotero.Items.getByLibraryAndKey(q.pdf.libraryID,q.secondKey);
+    const batch=record.batches[record.marks[item.key].batchId].batch;
+    item.setTags([{tag:'Confucius 批次：'+batch.name},{tag:'Confucius 批次日期：'+batch.timeLabel.slice(0,10)},{tag:'human-tag'}]);await item.saveTx();
+    await q.host.tools.ownership.change(token,current=>{delete current.batchLabelsVersion;});
+    return {key:item.key,tag:'Confucius 批次：'+batch.timeLabel,dateModified:item.dateModified};
+  `);
   await instance.stop({ graceful: true });
   await instance.launch();
+  const migratedAtStartup = await evaluate(`
+    await Zotero.Confucius.hooks.host.annotationLabelMigration;
+    const item=Zotero.Items.getByLibraryAndKey(${fixture.libraryID},${JSON.stringify(restartLabels.key)});
+    return {tags:item.getTags(),dateModified:item.dateModified};
+  `);
+  check(
+    "Startup resumes legacy label migration without changing modification time",
+    migratedAtStartup.tags.length === 2 &&
+      migratedAtStartup.tags.some((t) => t.tag === restartLabels.tag) &&
+      migratedAtStartup.tags.some((t) => t.tag === "human-tag") &&
+      migratedAtStartup.dateModified === restartLabels.dateModified,
+  );
   const restored = await instance.rpc("annotation/batches", fixture);
   check(
-    "Batch, legacy grouping, deleted membership and filter survive restart",
-    restored.filter.includeExisting &&
-      restored.total === 2 &&
-      restored.existingCount === 1,
+    "Batch provenance and native annotations survive restart",
+    restored.total === 2 && restored.existingCount === 1,
   );
   const memoryTask = await instance.rpc("task/new", {
     title: "Memory approval acceptance",
@@ -327,7 +342,7 @@ try {
   await until(
     () =>
       evaluate(
-        `return !!Zotero.Reader._readers[0]?._iframeWindow.document.querySelector('.confucius-annotation-batches');`,
+        `const r=Zotero.Reader._readers[0];return !!r?._internalReader?._state.annotations.length&&!r._iframeWindow.document.querySelector('.confucius-annotation-batches');`,
       ),
     10000,
   );
@@ -335,7 +350,7 @@ try {
     `const {AddonManager}=ChromeUtils.importESModule('resource://gre/modules/AddonManager.sys.mjs');const addon=await AddonManager.getAddonByID('confucius@zotero.plugin');await addon.disable();return true;`,
   );
   check(
-    "Disabling the add-on clears the toolbar and restores reader marks",
+    "Disabling the add-on leaves native tags and reader marks available",
     await until(
       () =>
         evaluate(
@@ -347,7 +362,7 @@ try {
   report.status = "passed";
 } catch (error) {
   report.diagnostics = await evaluate(
-    `const r=Zotero.Reader._readers[0];return {toolbar:r?._iframeWindow.document.querySelector('.confucius-annotation-batches')?.outerHTML, annotations:r?._internalReader._state.annotations.map(x=>({id:x.id,hidden:x._hidden})),errors:Zotero.getErrors(true).slice(-8)};`,
+    `const r=Zotero.Reader._readers[0];return {toolbar:r?._iframeWindow.document.querySelector('.confucius-annotation-batches')?.outerHTML, annotations:r?._internalReader._state.annotations.map(x=>({id:x.id,hidden:x._hidden,tags:x.tags})),filter:r?._internalReader._annotationManager._filter,errors:Zotero.getErrors(true).slice(-8)};`,
   ).catch(String);
   report.status = "failed";
   report.error = String(error);

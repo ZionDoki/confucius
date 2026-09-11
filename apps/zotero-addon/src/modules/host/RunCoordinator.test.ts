@@ -373,6 +373,42 @@ for (const backend of ["native", "kimi", "codex"] as const) {
     assert.equal(state.budget.iterationsUsed, 2);
   });
 }
+it("an external executor that ends without tools while work remains is stalled", async () => {
+  const state = run();
+  state.budget.modelRequestsObservable = false;
+  state.requiredArtifactKinds = ["deep_read"];
+  let calls = 0;
+  const coordinator = new RunCoordinator({
+    run: state,
+    current: () => true,
+    persist: async () => {},
+    progress: () => {},
+    snapshot: async () => ({
+      ...empty(),
+      missing: [
+        {
+          id: "artifact:deep_read",
+          kind: "artifact" as const,
+          description: "Save deep_read",
+        },
+      ],
+    }),
+    executor: {
+      run: async () => {
+        calls++;
+        return { stopReason: "completed", text: "" };
+      },
+    },
+  });
+  const outcome = await coordinator.execute(
+    "Read",
+    new AbortController().signal,
+  );
+  assert.equal(outcome.stopReason, "stalled");
+  assert.equal(calls, 2);
+  assert.equal(state.budget.executorStarts, 2);
+});
+
 it("plain answer ends after one executor result with no hidden verifier", async () => {
   const state = run();
   let calls = 0;

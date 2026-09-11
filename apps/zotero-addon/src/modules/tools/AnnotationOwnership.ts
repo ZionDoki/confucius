@@ -5,6 +5,7 @@ import {
   type AnnotationProvenance,
 } from "@confucius/protocol";
 import { ResourceLocks, type JsonStorage } from "../host/RuntimeStorage";
+import { annotationBatchTime } from "./AnnotationBatchLabels";
 
 export interface AnnotationOwnerContext {
   taskId: string;
@@ -25,6 +26,7 @@ export interface PdfOwnership {
   >;
   marks: Record<string, AnnotationProvenance>;
   filter: AnnotationBatchFilter;
+  batchLabelsVersion?: 1;
 }
 export function normalizedColor(value: string): string {
   const hex = value.trim().toLowerCase();
@@ -67,15 +69,6 @@ export function annotationBatchId(taskId: string): string {
     .map((c) => c.codePointAt(0)!.toString(16))
     .join("_")}`;
 }
-const changeListeners = new Set<(pdf: string) => void>();
-export function onAnnotationOwnershipChanged(
-  listener: (pdf: string) => void,
-): () => void {
-  changeListeners.add(listener);
-  return () => {
-    changeListeners.delete(listener);
-  };
-}
 export class AnnotationOwnership {
   private locks = new ResourceLocks();
   constructor(private storage: JsonStorage) {}
@@ -97,10 +90,9 @@ export class AnnotationOwnership {
           name: "",
           createdAt: context.createdAt ?? Date.now(),
         };
-      if (!batch.named && context.title?.trim()) {
-        batch.name = `${context.title.trim().replace(/\s+/g, " ").slice(0, 32)} · ${context.taskId.slice(-6)}`;
-        batch.named = true;
-      }
+      batch.timeLabel ??= annotationBatchTime(batch.createdAt);
+      if (!batch.name) batch.name = batch.timeLabel;
+      batch.named = true;
       await this.storage.write(key, batch);
       return batch;
     });
@@ -151,13 +143,6 @@ export class AnnotationOwnership {
       const record = await this.read(pdf);
       const result = await work(record);
       await this.storage.write(`ownership_${pdf}`, record);
-      for (const listener of changeListeners) {
-        try {
-          listener(pdf);
-        } catch {
-          /* UI cannot affect a persisted receipt. */
-        }
-      }
       return result;
     });
   }
@@ -175,6 +160,7 @@ export class AnnotationOwnership {
         ],
         colors: {},
       };
+      record.batches[batch.id].batch.timeLabel ??= batch.timeLabel;
       return record.batches[batch.id];
     });
     // Persist both files before permitting the first annotation write. A crash

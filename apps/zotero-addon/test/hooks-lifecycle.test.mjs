@@ -69,11 +69,6 @@ function fixture({ failShutdown = false, failToolbar = false } = {}) {
         registered.get(win).delete("item-menu");
       },
     },
-    "./modules/ui/annotationBatchFilter": {
-      registerAnnotationBatchFilter: () => calls.push("batch-filter-register"),
-      unregisterAnnotationBatchFilter: () =>
-        calls.push("batch-filter-unregister"),
-    },
     "./modules/ui/readerContextMenu": {
       registerReaderContextMenu() {},
       unregisterReaderContextMenu() {

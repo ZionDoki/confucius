@@ -1,6 +1,8 @@
 import { SURFACE_CSS } from "./workspaceSurface";
+import { REPORT_STYLE_CSS } from "./reportStyleStyles";
 
 export const TUI_CSS = `
+${REPORT_STYLE_CSS}
 .confucius-citation-link {
   display: inline; margin: 0 2px; padding: 1px 5px;
   border: 1px solid var(--confucius-line); border-radius: 4px;
@@ -175,6 +177,11 @@ export const TUI_CSS = `
 .tui-answer .katex-display { max-width: 100%; overflow-x: scroll; overflow-y: hidden; }
 .tui-answer h1, .tui-answer h2, .tui-answer h3 { margin: 10px 0 6px; }
 .tui-answer p { margin: 0 0 8px; }
+.tui-answer :is(ul, ol) { padding-left: 24px; margin: 12px 0; }
+.tui-answer li { margin: 4px 0; }
+.tui-answer li::marker { color: var(--confucius-muted); }
+.tui-answer hr { border: 0; border-top: 1px solid var(--confucius-line); margin: 24px 0; }
+.tui-answer .confucius-citation-reference { display: inline; margin: 0 2px; padding: 1px 5px; border: 1px dashed var(--confucius-line); border-radius: 4px; color: var(--confucius-muted); font-size: .85em; }
 .tui-answer math { font-size: 1.05em; }
 .confucius-answer-shell { position: relative; }
 .confucius-answer-actions {
@@ -337,7 +344,7 @@ export const TUI_CSS = `
   padding-top: 4px;
 }
 .confucius-composer-toolbar[data-status-active="true"] { grid-template-columns: minmax(0, max-content) minmax(24px, 1fr) 30px var(--confucius-composer-control-size); }
-.confucius-composer-leading { grid-area: 1 / 1; display: flex; align-items: center; gap: 4px; min-width: 0; }
+.confucius-composer-leading { grid-area: 1 / 1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
 .confucius-composer-leading #confucius-plus { flex: none; }
 .confucius-composer-toolbar .confucius-composer-status {
   appearance: none; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
@@ -1230,12 +1237,16 @@ export const TUI_CSS = `
 .confucius-article-toggle[aria-expanded=true]::before { transform: rotate(45deg); }
 .confucius-article-toggle span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .confucius-article-toggle small { color: var(--confucius-muted); font-size: .8em; font-variant-numeric: tabular-nums; }
-.confucius-workspace-root .confucius-attached-sources { appearance: none; display: flex; align-items: center; gap: 7px; flex: 0 1 420px; min-width: 0; max-width: 100%; padding: 5px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--confucius-ink); font: inherit; cursor: pointer; text-align: left; }
+.confucius-brand-group { flex: 1 1 auto; min-width: 0; }
+.confucius-topbar-actions { flex: 0 0 auto; min-width: auto; }
+.confucius-workspace-root[data-confucius-density=wide] .confucius-topbar-actions { min-width: max-content; }
+.confucius-workspace-root[data-confucius-density=wide] #confucius-new-session { flex: 0 0 auto; min-width: max-content; max-width: none; overflow: visible; }
+.confucius-workspace-root .confucius-attached-sources { appearance: none; display: flex; align-items: center; gap: 7px; flex: 1 1 0%; min-width: 0; max-width: 420px; overflow: hidden; padding: 5px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--confucius-ink); font: inherit; cursor: pointer; text-align: left; }
 .confucius-attached-sources:hover { background: var(--confucius-hover); }
-.confucius-attached-sources small { flex-shrink: 0; color: var(--confucius-muted); font-size: .8em; }
-.confucius-attached-sources > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .9em; }
+.confucius-attached-sources small { flex: 0 0 auto; color: var(--confucius-muted); font-size: .8em; }
+.confucius-attached-sources > span { flex: 1 1 0%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .9em; }
 .confucius-attached-sources[data-empty=true] > span { color: var(--confucius-muted); }
-.confucius-workspace-root[data-confucius-density=narrow] .confucius-attached-sources { display: block; padding: 3px 4px; }
+.confucius-workspace-root[data-confucius-density=narrow] .confucius-attached-sources { display: block; max-width: 100%; padding: 3px 4px; }
 .confucius-workspace-root[data-confucius-density=narrow] .confucius-attached-sources > :is(small, span) { display: block; }
 .confucius-session-pane .confucius-task-empty { padding: 8px; color: var(--confucius-muted); font-size: .9em; }
 .confucius-activity-shell { max-width: 880px; margin: 0 auto; padding-bottom: 16px; }

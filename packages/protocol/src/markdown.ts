@@ -251,9 +251,20 @@ function renderList(
  * Convert Markdown (GFM tables, fences, emphasis, links, $math$) into HTML.
  * Math is emitted as .tui-math placeholders for KaTeX/MathML later.
  */
-export function renderMarkdownHtml(source: string): string {
+export function renderMarkdownHtml(
+  source: string,
+  options: { expandReadingBlocks?: boolean } = {},
+): string {
   const { text, slots } = extractMath(source.replace(/\r\n/g, "\n"));
-  const lines = text.split("\n");
+  return renderBlocks(text.split("\n"), slots, options, true);
+}
+
+function renderBlocks(
+  lines: string[],
+  slots: MathSlot[],
+  options: { expandReadingBlocks?: boolean },
+  allowReadingBlocks: boolean,
+): string {
   const blocks: string[] = [];
   let index = 0;
   while (index < lines.length) {
@@ -291,6 +302,51 @@ export function renderMarkdownHtml(source: string): string {
       }
       blocks.push(renderTable(table, slots));
       continue;
+    }
+    // A small closed grammar, not raw HTML. Invalid/unclosed blocks remain text.
+    const readingBlock = allowReadingBlocks
+      ? line.match(/^:::(parallel|details(?:\s+(.+)))\s*$/)
+      : null;
+    if (readingBlock) {
+      let end = index + 1;
+      let fenced = false;
+      let nested = false;
+      for (; end < lines.length; end++) {
+        if (lines[end].trim().startsWith("```")) fenced = !fenced;
+        if (fenced) continue;
+        if (lines[end].trim() === ":::") break;
+        if (/^:::(parallel|details)\b/.test(lines[end])) nested = true;
+      }
+      if (end < lines.length && !nested) {
+        const body = lines.slice(index + 1, end);
+        const render = (content: string[]) =>
+          renderBlocks(content, slots, options, false);
+        if (readingBlock[2]) {
+          const title = escapeHtml(readingBlock[2].trim());
+          blocks.push(
+            options.expandReadingBlocks
+              ? `<div><p><strong>${title}</strong></p>${render(body)}</div>`
+              : `<details class="confucius-reading-help"><summary>${title}</summary>${render(body)}</details>`,
+          );
+          index = end + 1;
+          continue;
+        }
+        while (body.length && !body[0].trim()) body.shift();
+        const quote: string[] = [];
+        while (body.length && /^\s*>\s?/.test(body[0]))
+          quote.push(body.shift()!);
+        if (quote.length && body.some((part) => part.trim())) {
+          const source = render(quote),
+            explanation = render(body);
+          blocks.push(
+            options.expandReadingBlocks
+              ? `${source}${explanation}`
+              : `<div class="confucius-reading-parallel"><div>${source}</div><div>${explanation}</div></div>`,
+          );
+          index = end + 1;
+          continue;
+        }
+      }
     }
     const heading = line.match(/^(#{1,6})\s+(.+)$/);
     if (heading) {
@@ -340,6 +396,7 @@ export function renderMarkdownHtml(source: string): string {
       lines[index].trim() &&
       !lines[index].trim().startsWith("```") &&
       !lines[index].trim().startsWith("|") &&
+      !/^:::(parallel|details)\b/.test(lines[index]) &&
       !/^#{1,6}\s+/.test(lines[index]) &&
       !/^\s*[-*+]\s+/.test(lines[index]) &&
       !/^\s*\d+[.)]\s+/.test(lines[index])

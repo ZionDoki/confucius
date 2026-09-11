@@ -1,7 +1,3 @@
-import {
-  registerAnnotationBatchFilter,
-  unregisterAnnotationBatchFilter,
-} from "./modules/ui/annotationBatchFilter";
 import { config } from "../package.json";
 import { initLocale } from "./utils/locale";
 import {
@@ -54,7 +50,6 @@ async function onStartup(isUpdate = false, isInstall = false) {
   registerHttpBridge(host);
   try {
     registerReaderContextMenu();
-    registerAnnotationBatchFilter((method, params) => host.rpc(method, params));
   } catch (error) {
     ztoolkit.log("[Confucius] reader context-menu registration failed", error);
   }
@@ -117,7 +112,6 @@ async function onShutdown(isUpdate = false): Promise<void> {
   cleanup(closeWorkspaceWindow, "workspace window");
   cleanup(() => artifactWindows.closeAll(), "artifact windows");
   cleanup(disposeAppearanceBindings, "appearance bindings");
-  cleanup(unregisterAnnotationBatchFilter, "annotation batch filter");
   cleanup(unregisterReaderContextMenu, "reader context menu");
   try {
     await host.shutdown();

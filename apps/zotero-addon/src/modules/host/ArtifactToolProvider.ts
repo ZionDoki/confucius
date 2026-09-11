@@ -13,10 +13,7 @@ import type {
 import {
   artifactBodyMatchesKind,
   isArtifactKind,
-  READING_GUIDE_SCHEMA,
-  readingCitationErrors,
-  type ArtifactBody,
-  type Citation,
+  mapMarkdownCitations,
 } from "@confucius/protocol";
 import type { ToolProvider } from "@confucius/harness";
 import { ArtifactWriteCancelled, type ArtifactStore } from "./ArtifactStore";
@@ -55,7 +52,6 @@ const markdownBodySchema = {
   properties: {
     type: { type: "string", enum: ["markdown"] },
     markdown: { type: "string" },
-    readingGuide: READING_GUIDE_SCHEMA,
   },
   required: ["type", "markdown"],
   additionalProperties: false,
@@ -312,6 +308,28 @@ export function artifactBodyShapeHint(kind: unknown): string {
   return "one of the advertised artifact body schemas";
 }
 
+const MARKDOWN_KINDS = new Set(["deep_read", "report", "note_draft"]);
+const ARTIFACT_UPSERT_ARGUMENT_KEYS = new Set([
+  "id",
+  "kind",
+  "title",
+  "body",
+  "status",
+  "citations",
+  "sourceContextIds",
+  "taskId",
+]);
+const MARKDOWN_BODY_KEYS = ["type", "markdown"] as const;
+const TYPED_BODY_KEYS: Record<string, readonly string[]> = {
+  markdown: MARKDOWN_BODY_KEYS,
+  evidence_audit: ["type", "claims"],
+  literature_map: ["type", "nodes", "edges"],
+  triage_table: ["type", "rows"],
+  annotation_set: ["type", "item", "annotations", "highlights", "legend"],
+  collection_diff: ["type", "collection", "name", "operations"],
+  citation_list: ["type", "style", "entries"],
+};
+
 /**
  * Some OpenAI-compatible runtimes stringify nested object arguments when a
  * schema uses `oneOf`. Accept that interoperable wire shape at this boundary,
@@ -335,7 +353,48 @@ export function normalizeArtifactBodyArgument(body: unknown): unknown {
       return body;
     }
   }
-  return normalizeRuntimeArtifactScalars(unwrapRuntimeArrayItems(decoded));
+  return stripUnknownArtifactBody(
+    normalizeRuntimeArtifactScalars(unwrapRuntimeArrayItems(decoded)),
+  );
+}
+
+function asObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function dropInventedFields(record: Record<string, unknown>): void {
+  for (const key of Object.keys(record))
+    if (/placeholder$/i.test(key) || key === "citationIdsNote")
+      delete record[key];
+}
+
+function pickKeys(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+): Record<string, unknown> {
+  const next: Record<string, unknown> = {};
+  for (const key of keys)
+    if (record[key] !== undefined) next[key] = record[key];
+  return next;
+}
+
+/** Drop placeholder keys and hoist only the supported markdown fields. */
+function stripUnknownArtifactBody(value: unknown): unknown {
+  const record = asObject(value);
+  if (!record) return value;
+  dropInventedFields(record);
+  if (record.type === "markdown") {
+    delete record.version;
+    delete record.overview;
+    delete record.checkpoints;
+    delete record.readingGuide;
+    return pickKeys(record, MARKDOWN_BODY_KEYS);
+  }
+  const allowed =
+    typeof record.type === "string" ? TYPED_BODY_KEYS[record.type] : undefined;
+  return allowed ? pickKeys(record, allowed) : record;
 }
 
 /**
@@ -487,6 +546,67 @@ export const ARTIFACT_TOOL_NAMES = new Set(
   ARTIFACT_TOOL_DEFINITIONS.map((tool) => tool.name),
 );
 
+function withoutClosedAdditionalProperties(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutClosedAdditionalProperties);
+  if (!value || typeof value !== "object") return value;
+  const next: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (key === "additionalProperties" && child === false) continue;
+    next[key] = withoutClosedAdditionalProperties(child);
+  }
+  return next;
+}
+
+function advertisedBodySchemas(
+  kinds?: readonly ArtifactRecord["kind"][],
+): unknown[] {
+  const selected = kinds?.length
+    ? artifactBodySchemas.filter((entry) => {
+        const types = (entry as { properties?: { type?: { enum?: string[] } } })
+          .properties?.type?.enum;
+        if (!types?.length) return false;
+        return kinds.some((kind) =>
+          MARKDOWN_KINDS.has(kind)
+            ? types.includes("markdown")
+            : types.includes(kind),
+        );
+      })
+    : artifactBodySchemas;
+  const bodies = (selected.length ? selected : artifactBodySchemas).map(
+    (entry) => withoutClosedAdditionalProperties(entry),
+  );
+  return bodies;
+}
+
+/** Runtime-facing schema: one body branch for the task, extras allowed on the wire. */
+export function advertisedArtifactUpsertSchema(
+  kinds?: readonly ArtifactRecord["kind"][],
+): JsonSchemaObject {
+  const bodies = advertisedBodySchemas(kinds);
+  const description = (schema.properties.body as { description?: string })
+    .description;
+  const body =
+    bodies.length === 1
+      ? { ...(bodies[0] as object), description }
+      : { description, oneOf: bodies };
+  return withoutClosedAdditionalProperties({
+    ...schema,
+    properties: { ...schema.properties, body },
+  }) as JsonSchemaObject;
+}
+
+export function advertisedArtifactTools(
+  kinds?: readonly ArtifactRecord["kind"][],
+): ToolDefinition[] {
+  return [
+    {
+      ...ARTIFACT_UPSERT_DEFINITION,
+      inputSchema: advertisedArtifactUpsertSchema(kinds),
+    },
+    ...ARTIFACT_EDIT_DEFINITIONS,
+  ];
+}
+
 export class ArtifactToolProvider implements ToolProvider {
   constructor(
     private readonly store: ArtifactStore,
@@ -502,11 +622,11 @@ export class ArtifactToolProvider implements ToolProvider {
     private readonly reviewNextAction?: (
       artifact: ArtifactRecord | null,
     ) => string,
-    private readonly reportArtifactId?: string,
+    private readonly requiredKinds?: readonly ArtifactRecord["kind"][],
   ) {}
 
   listTools(): ToolDefinition[] {
-    return ARTIFACT_TOOL_DEFINITIONS;
+    return advertisedArtifactTools(this.requiredKinds);
   }
 
   getMeta(name: string): ToolRuntimeMeta | null {
@@ -531,20 +651,6 @@ export class ArtifactToolProvider implements ToolProvider {
     args: Record<string, unknown>,
     context: ToolExecutionContext = {},
   ): Promise<ToolFailure | null> {
-    if (
-      this.reportArtifactId &&
-      (args.id !== this.reportArtifactId ||
-        (name !== ARTIFACT_READ_TOOL &&
-          (name !== ARTIFACT_PATCH_TOOL || args.readingGuide !== undefined)))
-    )
-      return {
-        ok: false,
-        toolName: name,
-        code: "permission_denied",
-        effect: "none",
-        message:
-          "Report generation may only read or patch the requested artifact. Preserve readingGuide and existing annotations.",
-      };
     if (name === ARTIFACT_READ_TOOL || name === ARTIFACT_PATCH_TOOL)
       return this.prepareEdit(name, args, context);
     return this.prepareUpsert(name, args, context);
@@ -556,6 +662,8 @@ export class ArtifactToolProvider implements ToolProvider {
     context: ToolExecutionContext,
   ): Promise<ToolFailure | null> {
     args.body = normalizeArtifactBodyArgument(args.body);
+    for (const key of Object.keys(args))
+      if (!ARTIFACT_UPSERT_ARGUMENT_KEYS.has(key)) delete args[key];
     const invalid = validateArgs(name, this.getSchema(name), args);
     if (
       invalid &&
@@ -581,22 +689,17 @@ export class ArtifactToolProvider implements ToolProvider {
           "Invalid id: this artifact is not available for revision in the current task. To create a new artifact, omit id; the host generates it. To revise a saved artifact, use the id returned by artifact_upsert in this task. Changing taskId or requesting approval cannot fix this id. No write was performed.",
         details: { argument: "id", reason: "artifact_not_in_task" },
       };
-    const body = args.body as ArtifactBody;
+    const body = args.body as { type?: string; markdown?: string };
     if (body?.type === "markdown" && typeof body.markdown === "string") {
-      if (!artifactBodyMatchesKind(args.kind as ArtifactRecord["kind"], body))
-        return {
-          ok: false,
-          toolName: name,
-          code: "invalid_args",
-          effect: "none",
-          retryable: false,
-          message:
-            "Invalid reading guide: require unique checkpoint IDs, both explanations for checkpoints, and source citations.",
-        };
-      const citations = (args.citations ??
-        existing?.citations ??
-        []) as Citation[];
-      const unresolved = new Set(readingCitationErrors(body, citations));
+      const citations = (args.citations ?? existing?.citations ?? []) as Array<{
+        id?: string;
+      }>;
+      const unresolved = new Set<string>();
+      mapMarkdownCitations(body.markdown, (id, marker) => {
+        if (citations.filter((citation) => citation.id === id).length !== 1)
+          unresolved.add(id);
+        return marker;
+      });
       if (unresolved.size)
         return {
           ok: false,
@@ -811,10 +914,16 @@ export class ArtifactToolProvider implements ToolProvider {
             string,
             unknown
           >)
-        : {
-            ...args,
-            body: normalizeArtifactBodyArgument(args.body),
-          };
+        : (() => {
+            const normalized: Record<string, unknown> = {
+              ...args,
+              body: normalizeArtifactBodyArgument(args.body),
+            };
+            for (const key of Object.keys(normalized))
+              if (!ARTIFACT_UPSERT_ARGUMENT_KEYS.has(key))
+                delete normalized[key];
+            return normalized;
+          })();
     if (
       isArtifactKind(normalizedArgs.kind) &&
       !artifactBodyMatchesKind(normalizedArgs.kind, normalizedArgs.body)

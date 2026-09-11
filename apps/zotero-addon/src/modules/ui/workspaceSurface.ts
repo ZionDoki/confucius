@@ -85,6 +85,7 @@ export const SURFACE_CSS = `
 .confucius-button:focus-visible { outline: 2px solid var(--confucius-focus); outline-offset: 2px; }
 .confucius-menu-row[data-danger=true] { color: var(--confucius-danger); }
 .confucius-topbar :is(#confucius-new-session, #confucius-toggle-sessions) { min-height: 34px; height: 34px; margin: 0; }
+.confucius-topbar #confucius-new-session, .confucius-artifact-toolbar .confucius-button { min-height: 34px; height: 34px; padding: 6px 8px; font-size: 13px; }
 .confucius-task-menu-trigger { width: 28px; min-width: 28px; height: 28px; padding: 0; background: transparent; color: var(--confucius-muted); opacity: 0; }
 .confucius-task-row:is(:hover, :focus-within) .confucius-task-menu-trigger,
 .confucius-task-menu-trigger[aria-expanded=true] { opacity: 1; }

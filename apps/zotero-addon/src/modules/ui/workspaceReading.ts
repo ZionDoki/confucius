@@ -1,12 +1,12 @@
 import {
-  readingGuideMarkdown,
+  markdownForDisplay,
   annotationsFromBody,
   DEFAULT_ANNOTATION_COLORS,
   type ArtifactBody,
   type Citation,
 } from "@confucius/protocol";
 import { hydrateReadingCitations } from "./readingCitations";
-import { getString, configuredUiLanguage } from "../../utils/locale";
+import { getString } from "../../utils/locale";
 function el(
   doc: Document,
   tag: string,
@@ -42,17 +42,7 @@ export function renderReadingSurface(
   container.className = "confucius-reading-surface";
   if (body.type === "markdown") {
     container.className = "tui-answer confucius-reading-surface";
-    fillAnswerHtml(
-      container,
-      body.markdown ||
-        (body.readingGuide
-          ? readingGuideMarkdown(
-              body.readingGuide,
-              citations,
-              configuredUiLanguage() === "en-US",
-            )
-          : ""),
-    );
+    fillAnswerHtml(container, markdownForDisplay(body, citations));
     hydrateReadingCitations(container, citations, locateLink);
     return container;
   }
@@ -134,7 +124,6 @@ export function renderReadingSurface(
     for (const node of body.nodes) {
       const row = el(doc, "div", {
         padding: "8px 0",
-        borderBottom: "1px solid var(--confucius-line)",
       });
       const name = el(doc, "strong");
       name.textContent = node.label;
@@ -218,7 +207,6 @@ export function renderReadingSurface(
     container.appendChild(legendHeading);
     const legendList = el(doc, "div", {
       marginBottom: "18px",
-      borderTop: "1px solid var(--confucius-line)",
     });
     for (const entry of legend) {
       const row = el(doc, "div", {
@@ -226,7 +214,6 @@ export function renderReadingSurface(
         alignItems: "center",
         gap: "8px",
         padding: "7px 0",
-        borderBottom: "1px solid var(--confucius-line)",
         color: "var(--confucius-secondary)",
         fontSize: ".9em",
       });
@@ -256,7 +243,6 @@ export function renderReadingSurface(
         marginBottom: "16px",
         padding: "0 0 16px 14px",
         borderLeft: `3px solid ${color}`,
-        borderBottom: "1px solid var(--confucius-line)",
       });
       const meta = el(doc, "div", {
         display: "flex",

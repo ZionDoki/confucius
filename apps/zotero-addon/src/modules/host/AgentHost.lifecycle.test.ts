@@ -39,6 +39,7 @@ import { memoryJsonStorage } from "./RuntimeStorage";
 import { TaskTraceBuffer } from "./TaskTrace";
 import { responseLanguageInstruction } from "./ResponseLanguage";
 import { deepReadReviewMessages } from "./DeepReadReviewContext";
+import { setTaskReportStyle } from "./TaskReportStyle";
 import { ArtifactStore } from "./ArtifactStore";
 import { LibraryMentionSources } from "../ui/libraryMention";
 import { ZoteroToolHost } from "../tools/ZoteroToolHost";
@@ -852,6 +853,12 @@ describe("configured research response language", () => {
       });
       try {
         const { host, state } = fixture();
+        state.record.templateId = "deep-read";
+        state.record.reportStyle = {
+          layout: "parallel",
+          tone: "questions",
+          focus: "method",
+        };
         const prompts = host as unknown as {
           buildSystemPrompt(
             text: string,
@@ -871,6 +878,8 @@ describe("configured research response language", () => {
             loadedSkills: [],
             lockedContext: state.record.lockedContext,
             includeRecallContext: false,
+            templateId: state.record.templateId,
+            reportStyle: state.record.reportStyle,
           },
         );
         state.record.externalSessionId = "continued-session";
@@ -882,11 +891,127 @@ describe("configured research response language", () => {
         const instruction = responseLanguageInstruction(language);
         assert.ok(native.includes(instruction));
         assert.ok(external.includes(instruction));
+        for (const prompt of [native, external]) {
+          assert.match(prompt, /layout=parallel; tone=questions; focus=method/);
+          assert.match(prompt, /:::parallel/);
+          assert.match(prompt, /:::details/);
+        }
         assert.match(instruction, /quote/);
       } finally {
         Reflect.set(globalThis, "Zotero", previous);
       }
     });
+  }
+});
+
+it("persists report choices atomically, rejects invalid and active changes, and allows stopped revisions", async () => {
+  const { state } = fixture();
+  state.record.templateId = "deep-read";
+  const original = {
+    layout: "essay",
+    tone: "concise",
+    focus: "overview",
+  } as const;
+  await setTaskReportStyle(state, original, async () => undefined);
+  const updatedAt = state.record.updatedAt;
+  const changed = {
+    layout: "parallel",
+    tone: "patient",
+    focus: "method",
+  } as const;
+  await assert.rejects(
+    setTaskReportStyle(state, changed, async () => {
+      throw new Error("disk full");
+    }),
+    /disk full/,
+  );
+  assert.deepEqual(state.record.reportStyle, original);
+  assert.equal(state.record.updatedAt, updatedAt);
+  await assert.rejects(
+    setTaskReportStyle(state, { ...changed, tone: "unknown" }, async () =>
+      assert.fail("invalid input must not persist"),
+    ),
+    /Invalid/,
+  );
+  for (const status of ["running", "awaiting_approval"] as const) {
+    state.record.status = status;
+    await assert.rejects(
+      setTaskReportStyle(state, changed, async () =>
+        assert.fail("active task must not persist"),
+      ),
+      /Wait/,
+    );
+  }
+  state.record.status = "interrupted";
+  await setTaskReportStyle(state, changed, async () => undefined);
+  assert.deepEqual(state.record.reportStyle, changed);
+  assert.notEqual(state.record.reportStyle, changed);
+});
+
+it("applies retained report preferences only while the paper reading preset is active", async (t) => {
+  const previous = Reflect.get(globalThis, "Zotero");
+  Reflect.set(globalThis, "Zotero", {
+    locale: "en-US",
+    Prefs: { get: () => "en-US" },
+  });
+  t.after(() => Reflect.set(globalThis, "Zotero", previous));
+  const { host, state } = fixture();
+  state.record.reportStyle = {
+    layout: "parallel",
+    tone: "questions",
+    focus: "method",
+  };
+  const prompts = host as unknown as {
+    buildSystemPrompt(
+      text: string,
+      options: Record<string, unknown>,
+    ): Promise<string>;
+    externalPrompt(
+      task: ResearchTaskRecord,
+      text: string,
+      history: ModelMessage[],
+    ): string;
+  };
+  const style = state.record.reportStyle;
+  for (const templateId of [
+    "deep-read",
+    undefined,
+    ...TASK_TEMPLATES.map((t) => t.id),
+    "deep-read",
+  ] as const) {
+    state.record.templateId = templateId;
+    for (const planMode of [false, true]) {
+      state.record.mode = planMode ? "plan" : "agent";
+      const native = await prompts.buildSystemPrompt("Read the paper", {
+        planMode,
+        skills: [],
+        loadedSkills: [],
+        lockedContext: state.record.lockedContext,
+        includeRecallContext: false,
+        templateId,
+        reportStyle: style,
+      });
+      const external = prompts.externalPrompt(
+        state.record,
+        "Read the paper",
+        [],
+      );
+      for (const prompt of [native, external]) {
+        assert.equal(
+          prompt.includes("layout=parallel; tone=questions; focus=method"),
+          templateId === "deep-read",
+          `${templateId ?? "ordinary"}, plan=${planMode}`,
+        );
+      }
+    }
+    if (templateId !== "deep-read")
+      await assert.rejects(
+        setTaskReportStyle(state, style, async () =>
+          assert.fail("inactive preset must not persist"),
+        ),
+        /only available for paper reading/,
+      );
+    assert.deepEqual(state.record.reportStyle, style);
   }
 });
 

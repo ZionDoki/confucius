@@ -1,5 +1,4 @@
 import { renderMemoryProposal } from "./memoryProposalCards";
-import { setAnnotationFilterTask } from "./annotationBatchFilter";
 import { artifactWindows } from "./artifactWindow";
 import { mountWorkspaceArtifact } from "./artifactWorkspace";
 import { UI_FONT_STACKS } from "./workspaceTypography";
@@ -20,6 +19,7 @@ import {
   bindMenuNavigation,
 } from "./workspaceMenus";
 import { renderReadingSurface } from "./workspaceReading";
+import { openReportStyleDialog, reportStyleLabel } from "./reportStyleDialog";
 import { TUI_CSS } from "./workspaceTheme";
 import { ensurePaletteStyles } from "./workspaceSurface";
 import {
@@ -1218,6 +1218,7 @@ function bindWorkspace(
   let pendingPermissionUpdate: Promise<void> = Promise.resolve();
   let pendingReaderUpdate: Promise<void> = Promise.resolve();
   let presetUpdatePending = false;
+  let reportStyleDialog: ReturnType<typeof openReportStyleDialog> | undefined;
   let modeUpdatePending = false;
   const mentionSources = new LibraryMentionSources(async (taskId, context) => {
     const updated = (await rpc("task/setContext", {
@@ -1382,7 +1383,6 @@ function bindWorkspace(
     alignItems: "center",
     justifyContent: "flex-end",
     gap: "8px",
-    minWidth: "0px",
     marginLeft: "auto",
   });
   topbarActions.className = "confucius-topbar-actions";
@@ -1623,6 +1623,16 @@ function bindWorkspace(
   );
   const presetChip = presetStatus.node;
   const presetLabel = presetStatus.label;
+  const reportStyleButton = createWorkspaceButton(
+    doc,
+    "confucius-report-style",
+    getString("workspace-report-style-button"),
+  );
+  reportStyleButton.hidden = true;
+  reportStyleButton.setAttribute("aria-haspopup", "dialog");
+  reportStyleButton.addEventListener("click", () => {
+    void chooseReportStyle(false);
+  });
 
   const endpointBtn = el(
     doc,
@@ -1666,7 +1676,12 @@ function bindWorkspace(
   const contextRing = buildContextRing(doc);
   contextRing.node.style.margin = "0";
 
-  composerLeading.append(plusBtn, planStatus.node, presetChip);
+  composerLeading.append(
+    plusBtn,
+    planStatus.node,
+    presetChip,
+    reportStyleButton,
+  );
   composerToolbar.appendChild(composerLeading);
   composerToolbar.appendChild(endpointBtn);
   composerToolbar.appendChild(contextRing.node);
@@ -1829,6 +1844,7 @@ function bindWorkspace(
     });
     Object.assign(brandGroup.style, {
       width: stacked ? "100%" : "auto",
+      minWidth: "0px",
       minHeight: stacked ? "24px" : "0px",
     });
     status.style.display = narrow ? "none" : "inline";
@@ -1838,19 +1854,19 @@ function bindWorkspace(
       width: stacked ? "100%" : "auto",
       marginLeft: stacked ? "0px" : "auto",
       gap: stacked ? "4px" : "8px",
+      minWidth: stacked ? "0px" : "",
+      flex: stacked ? "1 1 auto" : "",
     });
-    for (const action of [newSessionBtn]) {
-      Object.assign(action.style, {
-        minWidth: "0px",
-        maxWidth: "100%",
-        justifyContent: "center",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-        padding: narrow ? "5px 4px" : "6px 8px",
-        fontSize: stacked ? "12px" : "13px",
-      });
-    }
+    Object.assign(newSessionBtn.style, {
+      minWidth: stacked ? "0px" : "",
+      maxWidth: stacked ? "100%" : "",
+      justifyContent: "center",
+      overflow: stacked ? "hidden" : "",
+      textOverflow: stacked ? "ellipsis" : "",
+      whiteSpace: "nowrap",
+      padding: narrow ? "5px 4px" : "6px 8px",
+      fontSize: stacked ? "12px" : "13px",
+    });
     newSessionBtn.textContent = narrow ? "+" : newSessionLabel;
     brand.style.display = measured < 400 ? "none" : "";
     status.style.display = measured < 900 ? "none" : "inline";
@@ -1885,6 +1901,7 @@ function bindWorkspace(
     };
   });
   layoutCleanups.set(root, () => {
+    reportStyleDialog?.close();
     artifactOpenGeneration++;
     void workspaceArtifact?.dispose();
     unregisterSnapshot();
@@ -3977,6 +3994,7 @@ function bindWorkspace(
       const previousTaskId = state.sessionId;
       const switching = previousTaskId !== taskId;
       if (switching) {
+        reportStyleDialog?.close();
         if (!preserveModelMenu) closeEndpointMenu();
         closePlusMenu();
         doc.getElementById("confucius-source-menu")?.remove();
@@ -4002,7 +4020,6 @@ function bindWorkspace(
           loaded.draft?.references ?? loaded.references ?? [],
         );
       state.sessionId = taskId;
-      setAnnotationFilterTask(taskId);
       state.lastEventId = null;
       state.running = false;
       state.pendingUserText = "";
@@ -4152,6 +4169,25 @@ function bindWorkspace(
   function syncPresetChip(): void {
     syncModeButton();
     const template = taskTemplate(currentTask()?.templateId);
+    const style = currentTask()?.reportStyle;
+    reportStyleButton.hidden = template?.id !== "deep-read";
+    reportStyleButton.disabled =
+      reportStyleButton.hidden ||
+      Boolean(reportStyleDialog) ||
+      presetUpdatePending ||
+      modeUpdatePending ||
+      modelUpdatePending ||
+      state.running ||
+      state.sending;
+    reportStyleButton.title = state.running
+      ? getString("workspace-report-style-busy")
+      : style
+        ? reportStyleLabel(style)
+        : getString("workspace-report-style-title");
+    reportStyleButton.setAttribute(
+      "aria-label",
+      `${getString("workspace-report-style-button")} · ${reportStyleButton.title}`,
+    );
     presetChip.hidden = !template;
     composerToolbar.dataset.statusActive = String(
       Boolean(template) || state.mode === "plan",
@@ -4207,6 +4243,50 @@ function bindWorkspace(
       presetUpdatePending = false;
       updateRunningUI();
       renderLists();
+    }
+  }
+
+  async function chooseReportStyle(generating: boolean): Promise<boolean> {
+    const task = currentTask();
+    if (
+      task?.templateId !== "deep-read" ||
+      reportStyleDialog ||
+      state.running ||
+      state.sending ||
+      presetUpdatePending ||
+      modeUpdatePending ||
+      modelUpdatePending
+    )
+      return false;
+    const dialog = openReportStyleDialog({
+      parent: root,
+      initial: task.reportStyle,
+      generating,
+      fillAnswerHtml,
+      save: async (reportStyle) => {
+        if (
+          !root.isConnected ||
+          state.sessionId !== task.id ||
+          currentTask()?.templateId !== "deep-read"
+        )
+          throw new Error(getString("workspace-report-style-task-changed"));
+        const updated = (await rpc("task/setReportStyle", {
+          taskId: task.id,
+          reportStyle,
+        })) as ResearchTaskRecord;
+        const index = state.sessions.findIndex((entry) => entry.id === task.id);
+        if (index >= 0) state.sessions[index] = updated;
+      },
+    });
+    reportStyleDialog = dialog;
+    syncPresetChip();
+    try {
+      return (
+        (await dialog.result) && root.isConnected && state.sessionId === task.id
+      );
+    } finally {
+      if (reportStyleDialog === dialog) reportStyleDialog = undefined;
+      if (root.isConnected) syncPresetChip();
     }
   }
 
@@ -4962,7 +5042,6 @@ function bindWorkspace(
         if (state.sessionId === taskId) {
           if (!pendingTaskId) taskLoadGeneration += 1;
           state.sessionId = null;
-          setAnnotationFilterTask(null);
           state.events = [];
           state.lastEventId = null;
           state.running = false;
@@ -5504,12 +5583,10 @@ function bindWorkspace(
       !state.sessions.some((task) => task.id === state.sessionId)
     )
       state.sessionId = null;
-    setAnnotationFilterTask(state.sessionId);
     if (!state.sessionId && !state.sessions.length)
       prompt.value = composerDrafts.get("new") ?? "";
     if (!state.sessionId && !pendingTaskId && state.sessions[0]) {
       state.sessionId = state.sessions[0].id;
-      setAnnotationFilterTask(state.sessionId);
     }
     // The first poll restores the selected task without calling loadTask.
     // Hydrate its composer too, including a cached task retained across layouts.
@@ -5531,6 +5608,7 @@ function bindWorkspace(
     const enteredText = prompt.value.trim();
     const submittedReferences = currentReferences().map((ref) => ({ ...ref }));
     if (
+      reportStyleDialog ||
       state.sending ||
       state.running ||
       presetUpdatePending ||
@@ -5565,6 +5643,14 @@ function bindWorkspace(
     const attachmentIds = submittedAttachments.map((item) => item.record.id);
     const selectedTask = currentTask();
     if (
+      selectedTask?.templateId === "deep-read" &&
+      !selectedTask.reportStyle &&
+      state.mode !== "plan"
+    ) {
+      if (await chooseReportStyle(true)) await sendPrompt();
+      return;
+    }
+    if (
       (selectedTask?.backend ?? "native") === "native" &&
       state.config &&
       !configReady(state.config)
@@ -5598,7 +5684,6 @@ function bindWorkspace(
           mode: state.mode,
         })) as SessionRow;
         state.sessionId = created.id;
-        setAnnotationFilterTask(created.id);
         referenceDrafts.set(created.id, submittedReferences);
         referenceDrafts.delete("new");
         state.events = [];
@@ -8780,11 +8865,7 @@ function bindWorkspace(
     const seconds = Math.max(
       0,
       Math.floor(
-        (Date.now() -
-          (workflowStatus
-            ? workflowStartedAt
-            : Math.max(startedAt, stage.ts))) /
-          1000,
+        (Date.now() - (workflowStatus ? workflowStartedAt : startedAt)) / 1000,
       ),
     );
     const minutes = Math.floor(seconds / 60);

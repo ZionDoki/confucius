@@ -98,6 +98,8 @@ export {
   isMemoryConsent,
   isRecoverableTurn,
   legacyContextSnapshot,
+  legacyReadingGuideMarkdown,
+  markdownForDisplay,
   lockedContextFingerprint,
   lockedContextSourceIds,
   mergeLockedContexts,
@@ -314,6 +316,7 @@ export type {
   TaskSetBackendParams,
   TaskSetContextParams,
   TaskStageTemplateParams,
+  TaskSetReportStyleParams,
 } from "./rpc";
 
 export * from "./history";
@@ -332,5 +335,4 @@ export * from "./codexOutput";
 export * from "./contextPolicy";
 export * from "./contextHandoff";
 export * from "./sourceCoverage";
-export * from "./readingGuide";
-export * from "./readingDiscussion";
+export * from "./reportStyle";

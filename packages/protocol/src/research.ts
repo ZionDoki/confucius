@@ -2,7 +2,6 @@ import type { ExecutionBinding } from "./run";
 import type { RuntimeModelOption } from "./modelReasoning";
 import type { CollectionRef, ItemRef } from "./item";
 import type { SessionContext } from "./session";
-import { isReadingGuide, type ReadingGuide } from "./readingGuide";
 
 export const AGENT_BACKENDS = ["native", "codex", "kimi"] as const;
 
@@ -139,7 +138,8 @@ export interface Citation {
 export interface MarkdownArtifactBody {
   type: "markdown";
   markdown: string;
-  readingGuide?: ReadingGuide;
+  /** Legacy reading-companion payload kept only for rendering reports saved before its removal. New reports must not write it. */
+  readingGuide?: unknown;
 }
 
 export interface EvidenceAuditArtifactBody {
@@ -277,7 +277,6 @@ export type ArtifactBody =
 export type ArtifactStatus = "draft" | "ready" | "committed";
 
 export interface ArtifactWriteback {
-  view?: "guide" | "report";
   state: "none" | "pending" | "committed" | "partial" | "unknown" | "failed";
   operationId?: string;
   entries?: unknown[];
@@ -525,9 +524,7 @@ export function artifactBodyMatchesKind(
   if (kind === "deep_read" || kind === "report" || kind === "note_draft") {
     return (
       value.type === "markdown" &&
-      typeof value.markdown === "string" &&
-      (value.readingGuide === undefined ||
-        (kind === "deep_read" && isReadingGuide(value.readingGuide)))
+      typeof value.markdown === "string"
     );
   }
   if (kind === "evidence_audit") {
@@ -638,6 +635,65 @@ export function artifactBodyMatchesKind(
       );
     })
   );
+}
+
+/** Legacy reading-companion payload: history-only, never written by new reports. */
+function legacyGuideRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function legacyText(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+/** Flatten a pre-removal readingGuide into plain markdown for display and reads. */
+export function legacyReadingGuideMarkdown(guide: unknown, citations: readonly Citation[] = []): string {
+  const record = legacyGuideRecord(guide);
+  if (!record) return "";
+  const checkpoints = Array.isArray(record.checkpoints) ? record.checkpoints : [];
+  if (checkpoints.length === 0 && typeof record.overview !== "string") return "";
+  const lines: string[] = [];
+  const overview = legacyText(record.overview);
+  if (overview.trim()) lines.push(overview);
+  for (const entry of checkpoints) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const cp = entry as Record<string, unknown>;
+    const section = legacyText(cp.section);
+    const title = legacyText(cp.title);
+    if (section || title) lines.push("## " + (section ? section + " \u00b7 " : "") + title);
+    const before = legacyText(cp.before);
+    if (before) lines.push(before);
+    const ids = Array.isArray(cp.citationIds)
+      ? (cp.citationIds as unknown[]).filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+      : [];
+    for (const id of ids) {
+      const source = citations.find((c) => c.id === id);
+      const quote = source && typeof source.quote === "string" ? source.quote : "";
+      if (quote.trim()) lines.push(quote.split("\n").map((line) => "> " + line).join("\n"));
+      lines.push("[cite:" + id + "]");
+    }
+    const reading = legacyText(cp.reading);
+    if (reading) lines.push("### \u8bfb\u61c2\u8fd9\u6bb5", reading);
+    const writing = legacyText(cp.writing);
+    if (writing) lines.push("### \u770b\u4f5c\u8005\u600e\u4e48\u5199", writing);
+    for (const key of ["further", "question", "hint", "after"] as const) {
+      const text = legacyText(cp[key]);
+      if (text) lines.push(text);
+    }
+  }
+  const annotations = legacyText((record as Record<string, unknown>).annotationsMarkdown);
+  if (annotations.trim()) lines.push("## \u539f\u6587\u6279\u6ce8", annotations);
+  return lines.filter((line) => typeof line === "string" && line.length > 0).join("\n\n");
+}
+
+/** Display markdown: prefer saved prose, fall back to a flattened legacy guide. */
+export function markdownForDisplay(body: ArtifactBody, citations: readonly Citation[] = []): string {
+  if (body.type !== "markdown") return "";
+  if (body.markdown.trim().length > 0) return body.markdown;
+  const guide = (body as { readingGuide?: unknown }).readingGuide;
+  if (guide === undefined) return body.markdown;
+  return legacyReadingGuideMarkdown(guide, citations);
 }
 
 /** Normalize legacy highlight-only artifacts for all current consumers. */
@@ -1053,9 +1109,6 @@ function isArtifactWriteback(value: unknown): boolean {
       "zotero_tags",
       "knowledge_base",
     ].includes(String(writeback.target)) &&
-    (writeback.view === undefined ||
-      writeback.view === "guide" ||
-      writeback.view === "report") &&
     optionalString(writeback.targetRef) &&
     (writeback.revision === undefined || positiveInteger(writeback.revision)) &&
     (writeback.committedAt === undefined ||

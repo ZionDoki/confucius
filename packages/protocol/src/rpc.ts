@@ -112,18 +112,12 @@ export const RPC_METHODS = {
   taskSetBackend: "task/setBackend",
   taskSetModel: "task/setModel",
   taskStageTemplate: "task/stageTemplate",
+  taskSetReportStyle: "task/setReportStyle",
   taskPreviewCapabilities: "task/previewCapabilities",
   taskToolList: "task/toolList",
   taskToolCall: "task/toolCall",
   artifactList: "artifact/list",
   artifactGet: "artifact/get",
-  artifactGenerateReport: "artifact/generateReport",
-  artifactReadingState: "artifact/readingState",
-  readingDiscussionOpen: "readingDiscussion/open",
-  readingDiscussionPrompt: "readingDiscussion/prompt",
-  readingDiscussionEvents: "readingDiscussion/events",
-  readingDiscussionAbort: "readingDiscussion/abort",
-  readingDiscussionContinue: "readingDiscussion/continue",
   artifactUpsert: "artifact/upsert",
   artifactWritebackPreview: "artifact/writebackPreview",
   artifactWritebackCommit: "artifact/writebackCommit",
@@ -181,6 +175,7 @@ export interface TaskNewParams {
   workingDirectory?: string;
   confirmed?: boolean;
   templateId?: TaskTemplateId;
+  reportStyle?: import("./reportStyle").ReportStyle;
   autoStart?: boolean;
   prompt?: string;
 }
@@ -195,6 +190,11 @@ export interface TaskPromptParams {
 export interface TaskStageTemplateParams {
   taskId: string;
   templateId: TaskTemplateId;
+}
+
+export interface TaskSetReportStyleParams {
+  taskId: string;
+  reportStyle: import("./reportStyle").ReportStyle;
 }
 
 export interface AttachmentPrepareParams {
@@ -264,7 +264,6 @@ export interface ArtifactGetParams {
 export interface ArtifactWritebackParams {
   id: string;
   revision?: number;
-  view?: "guide" | "report";
   target?:
     | "zotero_note"
     | "zotero_annotations"

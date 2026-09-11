@@ -336,7 +336,7 @@ test("a stopped draft retains its revision boundary so fresh reads can finish re
       sessionId: "task",
       type: "tool_progress",
       ts: 100,
-      payload: { callId: "work", message: "Working" },
+      payload: { callId: "work", message: `Working ${i}` },
     });
   const retained = compactTaskEvents(f.events, 10);
   assert.deepEqual(compactTaskEvents(f.events, 1), [f.events.at(-1)]);

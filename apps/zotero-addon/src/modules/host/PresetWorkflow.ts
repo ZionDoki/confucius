@@ -251,29 +251,7 @@ const presets: Record<PresetWorkflowId, PresetWorkflow> = {
 
 export function presetWorkflow(
   templateId: TaskTemplateId | string | undefined,
-  options: { version?: number; reportArtifactId?: string } = {},
 ): PresetWorkflow | undefined {
-  if (templateId === "deep-read") {
-    const legacy = presets["deep-read"];
-    if (options.reportArtifactId)
-      return {
-        ...legacy,
-        version: options.version ?? 3,
-        annotationFirst: false,
-        instruction: `${common}\nREPORT REQUEST: only add/revise the research report on artifact ${options.reportArtifactId}. Use artifact_read then artifact_patch(reportMarkdown,status=draft), reread decisive pages and saved annotations, and finalize the SAME artifact. Omit readingGuide so it is preserved. Do not generate another guide or create/change annotations. No private reading discussions are available to this task.`,
-      };
-    if (options.version !== undefined && options.version < 3)
-      return {
-        ...legacy,
-        version: options.version,
-        instruction: `${legacy.instruction}\nCOMPATIBILITY: this task predates structured reading guides. Continue its report format and original completion requirement. Do not generate a readingGuide during upgrade or resume; this overrides newer loaded skill defaults.`,
-      };
-    return {
-      ...legacy,
-      version: 3,
-      instruction: `${common}\nRead the paper and existing annotations. Create selected native highlights with brief comments through commit_annotations using actual [anchor:ID] passages; keep detailed explanations in the guide. Save ONE deep_read with body:{type:markdown,markdown:"",readingGuide:{version:1,overview,checkpoints,annotationsMarkdown}} and status=draft. Review the saved guide against source pages and actual annotations, then correct the same artifact and mark ready. A reviewed readingGuide completes this workflow; a research report is generated only when explicitly requested. Follow original article order, using brief signposts around demanding checkpoints. Include both reading and writing explanations in the first guide. Preserve the original language of excerpts in shared citations. No page/count quota; choose density by difficulty and avoid invented derivations. Native annotation approval, color remapping and actual outcome rules remain in force.`,
-    };
-  }
   return templateId && Object.hasOwn(presets, templateId)
     ? presets[templateId as PresetWorkflowId]
     : undefined;

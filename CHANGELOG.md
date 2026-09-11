@@ -2,6 +2,57 @@
 
 ## Unreleased
 
+### Added
+
+- Deep-read tasks offer independent report layout, writing voice and reading
+  focus choices, with a live excerpt preview. Choices persist with the task
+  across restarts, engine changes and branches, and apply to later revisions.
+  Choosing later retains the draft without starting research.
+- Reading reports support source passages alongside explanations and expandable
+  language or technical help. Narrow readers stack paired passages; Zotero
+  note exports expand the help so its content stays visible.
+
+### Fixed
+
+- The report-style control and instructions apply only to paper-reading tasks.
+  Clearing or changing the preset hides the control without leaving space in
+  the composer; saved choices return when paper reading is selected again.
+- Removed the PDF reader's annotation-batch toolbar filter and its repeated
+  reader refreshes. Native annotation tags remain available; new annotations
+  carry one batch-start timestamp tag. A background migration consolidates the
+  two old batch tags on verified, editable annotations while preserving content,
+  timestamps and unrelated tags.
+- Artifact readers no longer use decorative dividers in the toolbar, citation
+  section, Markdown, literature lists or annotation lists. Header buttons share
+  the workspace styles and spacing in both regular and compact layouts; narrow
+  windows wrap actions instead of shrinking their labels. An empty revision
+  shows a placeholder instead of a blank title plus a stray rule.
+- Focusing the artifact reader in Zotero no longer draws a full-width line
+  below the header. Keyboard scrolling and control focus indicators remain
+  available in embedded readers and separate windows.
+
+- Legacy reading-companion reports render again: reports saved with an empty
+  Markdown body plus a `readingGuide` fall back to the flattened guide text
+  in the reader, `artifact_read` and model context, and stay editable via
+  `artifact_patch`. New reports remain plain Markdown without companion data.
+
+- Artifact saves advertised to models use the current task's body shape and
+  allow extra wire fields. The host still drops placeholders before the strict
+  save check, so a nested oneOf dump no longer blocks the first draft.
+- Duplicate in-progress tool updates are not stored. The working clock follows
+  the turn start, instead of resetting on every streamed fragment.
+- An external engine that ends a turn without tools while required work remains
+  is stalled instead of starting another empty prompt.
+- Long attached paper titles in the workspace window ellipsize instead of
+  shrinking the New task button.
+
+### Removed
+
+- The reading companion (陪读), private passage questions, PDF-following guide
+  view and on-demand report mode have been removed. Deep-read tasks again
+  deliver a single research report directly. Formatted Zotero note saving and
+  the unrelated bug fixes remain.
+
 ## 0.4.5 - 2026-09-09
 
 Confucius 0.4.5 adds an article-centered reading companion, private passage

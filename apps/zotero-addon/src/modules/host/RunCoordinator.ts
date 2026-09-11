@@ -41,18 +41,7 @@ export function projectWork(
       artifact.execution.intentRevision === run.intentRevision &&
       artifact.execution.sourceFingerprint === run.sources.fingerprint,
   );
-  const ready = bound.filter(
-    (artifact) =>
-      artifact.status !== "draft" &&
-      (run.reportArtifactId
-        ? artifact.id === run.reportArtifactId &&
-          artifact.body.type === "markdown" &&
-          !!artifact.body.markdown.trim()
-        : run.templateId !== "deep-read" ||
-          run.templateVersion < 3 ||
-          artifact.kind !== "deep_read" ||
-          (artifact.body.type === "markdown" && !!artifact.body.readingGuide)),
-  );
+  const ready = bound.filter((artifact) => artifact.status !== "draft");
   return {
     completed: [
       ...ready.map((artifact) => ({
@@ -229,6 +218,7 @@ export class RunCoordinator {
       requestProgress("started");
       await this.options.persist();
       if (!this.options.current() || signal.aborted) break;
+      const toolsBefore = run.budget.toolCallsUsed;
       try {
         result = await this.options.executor.run(
           {
@@ -317,6 +307,11 @@ export class RunCoordinator {
           .sort(),
       });
       repeatedGap = gap === previousGap ? repeatedGap + 1 : 0;
+      if (
+        !run.budget.modelRequestsObservable &&
+        run.budget.toolCallsUsed === toolsBefore
+      )
+        repeatedGap++;
       previousGap = gap;
       if (repeatedGap >= 2) return finish("stalled");
       this.options.progress(

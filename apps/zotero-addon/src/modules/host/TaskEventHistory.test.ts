@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ConfuciusEvent } from "@confucius/protocol";
-import { compactTaskEvents } from "./TaskEventHistory";
+import { compactTaskEvents, shouldKeepToolProgress } from "./TaskEventHistory";
 
 function event(
   id: string,
@@ -85,5 +85,44 @@ describe("compactTaskEvents", () => {
       result.map((item) => item.id),
       ["tool-1", "delta-2"],
     );
+  });
+
+  it("keeps one in_progress update per tool call and merges stored duplicates", () => {
+    const last = new Map<string, string>();
+    const progress = (id: string, message: string) =>
+      event(id, "tool_progress", { callId: "call", message });
+    assert.equal(
+      shouldKeepToolProgress(last, progress("p1", "in_progress")),
+      true,
+    );
+    assert.equal(
+      shouldKeepToolProgress(last, progress("p2", "in_progress")),
+      false,
+    );
+    assert.equal(shouldKeepToolProgress(last, progress("p3", "saving")), true);
+    assert.equal(
+      shouldKeepToolProgress(
+        last,
+        event("done", "tool_result", {
+          callId: "call",
+          result: { ok: true, toolName: "artifact_upsert", data: {} },
+        }),
+      ),
+      true,
+    );
+    assert.equal(
+      shouldKeepToolProgress(last, progress("p4", "in_progress")),
+      true,
+    );
+    const compacted = compactTaskEvents(
+      [
+        progress("p1", "in_progress"),
+        progress("p2", "in_progress"),
+        progress("p3", "in_progress"),
+      ],
+      400,
+    );
+    assert.equal(compacted.length, 1);
+    assert.equal(compacted[0].id, "p3");
   });
 });

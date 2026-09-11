@@ -1,12 +1,6 @@
-import {
-  guideFromBody,
-  renderMarkdownHtml,
-  type ArtifactRecord,
-  type ReadingView,
-} from "@confucius/protocol";
-import { readingLabel } from "./readingGuideView";
+import { renderMarkdownHtml, type ArtifactRecord } from "@confucius/protocol";
 import type { WorkspaceHost } from "./WorkspaceView";
-import { getString } from "../../utils/locale";
+import { configuredUiLanguage, getString } from "../../utils/locale";
 import {
   ArtifactWritebackApproval,
   type WritebackPreview,
@@ -34,7 +28,6 @@ export function showArtifactWriteback(
   artifact: ArtifactRecord,
   revision: number,
   onSaved: () => Promise<void>,
-  activeView?: ReadingView,
 ): void {
   const doc = win.document;
   if (doc.getElementById("confucius-writeback-overlay")) return;
@@ -60,11 +53,6 @@ export function showArtifactWriteback(
       { value: "zotero_tags", label: getString("workspace-writeback-tags") },
     );
   let target = targets[0];
-  const body =
-    artifact.revisions.find((r) => r.revision === revision)?.body ??
-    artifact.body;
-  const hasGuide = !!guideFromBody(body);
-  let view = hasGuide ? (activeView ?? "guide") : undefined;
   const approval = new ArtifactWritebackApproval(host);
   const returnFocus = doc.activeElement as HTMLElement | null;
   const overlay = el(doc, "div", "confucius-dialog confucius-note-save");
@@ -94,34 +82,6 @@ export function showArtifactWriteback(
   const meta = el(doc, "div", "confucius-note-save-meta");
   meta.textContent = `${artifact.title} · ${getString("workspace-artifact-version")} ${revision}`;
   const controls = el(doc, "div", "confucius-note-save-controls");
-  const views = el(doc, "div", "confucius-note-save-views");
-  views.hidden = !hasGuide;
-  views.setAttribute("role", "group");
-  views.setAttribute("aria-label", readingLabel("保存内容", "Content to save"));
-  const viewButtons = (
-    [
-      ["guide", readingLabel("陪读", "Reading companion")],
-      ["report", readingLabel("研究报告", "Research report")],
-    ] as const
-  ).map(([value, label]) => {
-    const control = button(doc, `confucius-writeback-${value}`, label);
-    const unavailable =
-      value === "report" && body.type === "markdown" && !body.markdown.trim();
-    control.disabled = unavailable;
-    if (unavailable)
-      control.title = readingLabel(
-        "先生成研究报告",
-        "Generate the research report first",
-      );
-    control.addEventListener("click", () => {
-      if (view === value) return;
-      view = value;
-      updateControls();
-      void loadPreview();
-    });
-    views.append(control);
-    return { control, value, unavailable };
-  });
   const destination = el(doc, "div", "confucius-note-save-destination");
   const targetButton = button(doc, "confucius-writeback-target", "");
   targetButton.setAttribute("aria-haspopup", "menu");
@@ -157,7 +117,7 @@ export function showArtifactWriteback(
       targetButtons.find((item) => item.option === target)?.control.focus();
   });
   destination.append(targetButton, menu);
-  controls.append(views, destination);
+  controls.append(destination);
   const knowledgeInput = el(doc, "input") as HTMLInputElement;
   knowledgeInput.id = "confucius-writeback-knowledge-id";
   knowledgeInput.type = "text";
@@ -188,16 +148,12 @@ export function showArtifactWriteback(
     heading.textContent =
       target.value === "zotero_note"
         ? getString("workspace-writeback-preview")
-        : `${readingLabel("保存到", "Save to ")}${target.label}`;
+        : `${configuredUiLanguage() === "en-US" ? "Save to " : "保存到 "}${target.label}`;
     targetButton.textContent = `${getString("workspace-writeback-destination")} ▾`;
     targetButton.title = target.label;
     targetButton.disabled = busy || approval.pending;
     knowledgeInput.hidden = target.value !== "knowledge_base";
     knowledgeInput.disabled = busy || approval.pending;
-    for (const item of viewButtons) {
-      item.control.setAttribute("aria-pressed", String(item.value === view));
-      item.control.disabled = item.unavailable || busy || approval.pending;
-    }
     for (const item of targetButtons) {
       item.control.setAttribute("aria-checked", String(item.option === target));
       item.control.disabled = busy || approval.pending;
@@ -258,14 +214,16 @@ export function showArtifactWriteback(
     const generation = ++previewGeneration;
     requestApproval.disabled = true;
     errorLine.textContent = "";
-    status.textContent = readingLabel("正在准备预览…", "Preparing preview…");
+    status.textContent =
+      configuredUiLanguage() === "en-US"
+        ? "Preparing preview…"
+        : "正在准备预览…";
     preview.setAttribute("aria-busy", "true");
     try {
       const result = (await rpc("artifact/writebackPreview", {
         id: artifact.id,
         revision,
         target: target.value,
-        view,
       })) as WritebackPreview;
       if (!overlay.isConnected || generation !== previewGeneration) return;
       showPreview(result);
@@ -301,7 +259,6 @@ export function showArtifactWriteback(
           id: artifact.id,
           revision,
           target: target.value,
-          view,
           knowledgeBaseId: knowledgeInput.value.trim() || undefined,
         });
         if (!prepared || !overlay.isConnected) return;
@@ -341,9 +298,5 @@ export function showArtifactWriteback(
   overlay.append(panel);
   root.append(overlay);
   updateControls();
-  (hasGuide
-    ? viewButtons.find((item) => item.value === view)!.control
-    : cancel
-  ).focus({ preventScroll: true });
   void loadPreview();
 }

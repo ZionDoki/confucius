@@ -4,7 +4,6 @@ import {
   isCitation,
   isArtifactKind,
   isArtifactRecord,
-  readingCitationErrors,
   type AgentBackendKind,
   type ArtifactRecord,
   type ArtifactUpsertInput,
@@ -98,13 +97,6 @@ export class ArtifactStore {
     }
     if (!artifactBodyMatchesKind(input.kind, input.body)) {
       throw new Error(`Artifact body does not match kind ${input.kind}`);
-    }
-    if (input.body.type === "markdown" && input.body.readingGuide) {
-      const errors = readingCitationErrors(input.body, input.citations ?? []);
-      if (errors.length)
-        throw new Error(
-          `Unresolved or duplicate citation IDs: ${errors.join(", ")}`,
-        );
     }
     const title = String(input.title ?? "").trim();
     if (!title) throw new Error("Artifact title is required");

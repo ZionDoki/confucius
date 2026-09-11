@@ -91,3 +91,67 @@ describe("escapeHtml", () => {
     assert.equal(escapeHtml('<a "b">'), "&lt;a &quot;b&quot;&gt;");
   });
 });
+
+describe("reading report blocks", () => {
+  const sample = [
+    "Intro $a+b$.",
+    ":::parallel",
+    "> Original evidence [cite:e1]",
+    "",
+    "Explanation with $qk$ and [cite:e2].",
+    ":::",
+    ":::details Unpack <img src=x onerror=bad()>",
+    "Background **reasoning**, $x^2$ and [cite:e3].",
+    "",
+    "```txt",
+    "::: literal fence",
+    "```",
+    ":::",
+    "",
+    "Next paragraph.",
+  ].join("\n");
+
+  it("renders paired passages, collapsed help, math and citations with escaped text", () => {
+    const html = renderMarkdownHtml(sample);
+    assert.match(html, /class="confucius-reading-parallel"/);
+    assert.match(
+      html,
+      /<details class="confucius-reading-help"><summary>Unpack &lt;img/,
+    );
+    assert.doesNotMatch(html, /<img|<details[^>]*open/);
+    for (const id of ["e1", "e2", "e3"])
+      assert.ok(html.includes(`data-citation-id="${id}"`));
+    for (const tex of ["a+b", "qk", "x^2"])
+      assert.ok(html.includes(`data-tex="${tex}"`));
+    assert.match(html, /<code>::: literal fence/);
+    assert.match(html, /<p>Next paragraph\.<\/p>/);
+  });
+
+  it("expands help and linearizes source pairs for note export without losing content", () => {
+    const html = renderMarkdownHtml(sample, { expandReadingBlocks: true });
+    assert.doesNotMatch(
+      html,
+      /<details|<summary|class="confucius-reading-parallel"/,
+    );
+    assert.match(html, /<blockquote>Original evidence/);
+    assert.match(html, /Background <strong>reasoning<\/strong>/);
+    assert.match(html, /Next paragraph/);
+  });
+
+  it("keeps unclosed, unknown and fenced directives readable without interpreting HTML", () => {
+    for (const source of [
+      ":::details Help\nUnclosed text",
+      ":::parallel\nNo original quote\n:::",
+      ":::unknown\nText\n:::",
+    ]) {
+      const html = renderMarkdownHtml(source);
+      assert.doesNotMatch(html, /<details|class="confucius-reading-parallel"/);
+      assert.match(html, /:::/);
+    }
+    const html = renderMarkdownHtml(
+      "```\n:::details Not a control\nText\n:::\n```\n\n<details>Raw HTML</details>",
+    );
+    assert.doesNotMatch(html, /<details/);
+    assert.match(html, /&lt;details&gt;/);
+  });
+});
