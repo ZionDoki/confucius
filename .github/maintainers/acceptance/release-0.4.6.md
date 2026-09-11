@@ -45,3 +45,33 @@
 
 原始日志、摘要、截图与隔离测试数据保存在已忽略的 `output/release-0.4.6/`；
 公开包与真实更新器验收在发布后补充，不提前将候选结果当作公开包结果。
+
+## 公开发布与安装验收
+
+`v0.4.6` 指向提交 `d1d20bf1fc510a46711003b446970b5a675a3b09`，于
+2026-09-11 15:28:27 UTC [公开发布](https://github.com/ZionDoki/confucius/releases/tag/v0.4.6)，
+draft=false、prerelease=false，Latest 为 v0.4.6。原 v0.4.5 仍指向
+`0c7239bea5640e3e4d5251287140eb123e10dd8b`。
+
+- [tag CI](https://github.com/ZionDoki/confucius/actions/runs/34616087821) 的 Node.js
+  22、24 检查与发布任务全部成功；对应
+  [master CI](https://github.com/ZionDoki/confucius/actions/runs/34616087937) 也成功。
+- 发布正文与 CHANGELOG 提取结果一致。三个资产均为 uploaded；下载大小与 GitHub
+  SHA-256 一致，版本、插件 ID、兼容范围、更新链接与 SHA-512 均核对通过。
+- 公开 XPI 为 **654,275 bytes**，SHA-256：
+  `d1bb28fe36e2dc5fb819518960070263887614f4dc558423d107bb632eca5b8b`。
+- 两份更新 JSON 各 **573 bytes**，SHA-256 均为：
+  `3a2459331e2e8f0e75b2d543a70b9e90e67fe1f4705c2e32e3e2a7ad08853dec`。
+
+公开 XPI 在新建隔离配置中重新执行划线询问 **12 组通过**，包括实际 PDF、深浅
+主题和重启恢复，无未捕获界面错误。使用已发布的 0.4.5，通过真实 Confucius
+更新器检查、下载、校验、安装公开 0.4.6 并重启，**28 项通过**：
+
+- Zotero 全局自动更新关闭时仍能更新；stable、beta 渠道均发现新稳定版。
+- 任务、中文草稿、文章关联、批注、笔记、报告修订、原始历史、工作笔记、记忆和
+  待审批提案保留；原始正文逐文件摘要不变，继续任务不重复写笔记。
+- 重启后实际安装文件与公开包摘要一致，当前版本不重复安装；关闭 Beta 不降级，
+  再次重启保留显式渠道选择。
+
+本次验收进程已退出，未安装到日常 profile。此处只补充发布后的验收事实，没有
+改动 tag、产品代码或公开安装包。模型和平台覆盖仍以此前说明为限。
