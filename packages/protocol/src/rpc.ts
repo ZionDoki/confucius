@@ -46,6 +46,11 @@ export interface JsonRpcError {
 export type JsonRpcResponse<T = unknown> = JsonRpcSuccess<T> | JsonRpcError;
 
 export const RPC_METHODS = {
+  btwOpen: "btw/open",
+  btwPrompt: "btw/prompt",
+  btwEvents: "btw/events",
+  btwAbort: "btw/abort",
+  btwDraft: "btw/draft",
   health: "health",
   sessionNew: "session/new",
   sessionLoad: "session/load",

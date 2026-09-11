@@ -425,8 +425,11 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
     prompt: string,
     cwd: string,
     selection?: RuntimeModelSelection,
+    options?: import("@confucius/protocol").RuntimeAnalysisOptions,
+    signal?: AbortSignal,
   ): Promise<string> {
-    const deadline = Date.now() + 60_000;
+    if (signal?.aborted) throw new Error("Analysis cancelled");
+    const deadline = Date.now() + (options?.timeoutMs ?? 60_000);
     let text = "";
     const opened = await this.openConnection({
       taskId: "analysis",
@@ -438,6 +441,11 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
       },
       approvals: denyApprovals,
     });
+    const cancel = () => {
+      opened.rpc.close();
+    };
+    signal?.addEventListener("abort", cancel, { once: true });
+    if (signal?.aborted) cancel();
     try {
       return await withTimeout(
         (async () => {
@@ -458,7 +466,9 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
               opened.rpc,
               opened.sessionId,
               modelState,
-              { modelId: selection.modelId },
+              options?.preserveSettings
+                ? selection
+                : { modelId: selection.modelId },
             );
           const selected =
             kimiModels(modelState).find((m) => m.id === selection?.modelId) ??
@@ -468,18 +478,26 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
               opened.rpc,
               opened.sessionId,
               modelState,
-              lowestRuntimeSelection(selected),
+              options?.preserveSettings
+                ? (selection ?? { modelId: selected.id })
+                : lowestRuntimeSelection(selected),
             );
-          await opened.rpc.request("session/prompt", {
-            sessionId: opened.sessionId,
-            prompt: [{ type: "text", text: prompt }],
-          });
+          const response = await opened.rpc.request<Record<string, unknown>>(
+            "session/prompt",
+            {
+              sessionId: opened.sessionId,
+              prompt: [{ type: "text", text: prompt }],
+            },
+          );
+          if (response.stopReason !== "end_turn")
+            throw new Error(`Incomplete analysis: ${response.stopReason}`);
           return text;
         })(),
         Math.max(1, deadline - Date.now()),
         "Kimi analysis timed out",
       );
     } finally {
+      signal?.removeEventListener("abort", cancel);
       await opened.rpc.closeAndWait();
     }
   }

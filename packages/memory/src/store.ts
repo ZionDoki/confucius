@@ -56,6 +56,7 @@ export class FileMemoryStore {
         const text = await this.fs.readFile(path);
         const record = parseMemoryFile(fileName(path), text);
         if (record) {
+          await this.restoreAccess(record);
           loaded.set(record.id, record);
         }
       } catch (error) {
@@ -91,6 +92,7 @@ export class FileMemoryStore {
     if (!record || record.id !== id) {
       throw new Error(`Cannot reconcile existing memory ${id}`);
     }
+    await this.restoreAccess(record);
     this.records.set(id, record);
     this.indexDirty = true;
     return record;
@@ -158,9 +160,44 @@ export class FileMemoryStore {
     for (const id of dirty) {
       const record = this.records.get(id);
       if (record) {
-        await this.fs.writeFile(this.memoryPath(id), serializeMemory(record));
+        // Usage metadata must never rewrite a body that the user can edit or
+        // delete independently. A stale sidecar cannot recreate a memory.
+        await this.fs.makeDirectory(joinPath(this.root, "access"));
+        await this.fs.writeFile(
+          this.accessPath(id),
+          JSON.stringify({
+            createdAt: record.createdAt,
+            lastAccessedAt: record.lastAccessedAt,
+            lastUsedAt: record.lastUsedAt,
+            accessCount: record.accessCount,
+          }),
+        );
         this.accessDirty.delete(id);
       }
+    }
+  }
+
+  private accessPath(id: string): string {
+    this.memoryPath(id); // Validate the same identifier used by the source file.
+    return joinPath(this.root, `access/${id}.json`);
+  }
+
+  private async restoreAccess(record: MemoryRecord): Promise<void> {
+    try {
+      const access = JSON.parse(
+        await this.fs.readFile(this.accessPath(record.id)),
+      );
+      if (access.createdAt !== record.createdAt) return;
+      for (const field of [
+        "lastAccessedAt",
+        "lastUsedAt",
+        "accessCount",
+      ] as const) {
+        if (typeof access[field] === "number" && Number.isFinite(access[field]))
+          record[field] = Math.max(record[field] ?? 0, access[field]);
+      }
+    } catch {
+      // Sidecars are optional; legacy files keep their embedded usage values.
     }
   }
 

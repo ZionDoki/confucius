@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Explicit live model comparison. Offline npm test never calls a model.
 // node --import tsx scripts/live-research-challenges.mjs --prefs PATH --with-skill true --stream true --output DIR --repeats 2
+// Use --style parallel,patient,method or --style-matrix true to compare all 27 combinations.
 // Optional --baseline JSON --baseline-review TS restore earlier contracts for ablation.
 // A Zotero prefs file supplies credentials in memory only. Library tools and writes
 // use synthetic fixtures; the actual adapter, turn loop, artifact store and review run.
@@ -31,10 +32,16 @@ import {
   normalizeArtifactBodyArgument,
 } from "../apps/zotero-addon/src/modules/host/ArtifactToolProvider.ts";
 import {
-  deepReadReviewState,
-  deepReadReviewNextAction,
-} from "../apps/zotero-addon/src/modules/host/DeepReadReview.ts";
-import { deepReadReviewMessages } from "../apps/zotero-addon/src/modules/host/DeepReadReviewContext.ts";
+  reportEvidence,
+  reportRevisionMessages,
+  reportRevisionPatch,
+} from "../apps/zotero-addon/src/modules/host/ReportRevision.ts";
+import {
+  DEFAULT_REPORT_STYLE,
+  REPORT_STYLE_OPTIONS,
+  reportStyleGuidance,
+  isReportStyle,
+} from "@confucius/protocol";
 import { HISTORY_TOOL_DEFINITIONS } from "../apps/zotero-addon/src/modules/host/HistoryTools.ts";
 import { SourceReadIndex } from "../packages/harness/src/SourceReadIndex.ts";
 import { parsePreferences } from "./lib/zotero-live.mjs";
@@ -45,6 +52,26 @@ const flag = (name) => {
   return i < 0 ? undefined : args[i + 1];
 };
 const output = resolve(flag("output") || "output/research-challenges");
+const explicitStyle = flag("style")?.split(",");
+const style = explicitStyle
+  ? {
+      layout: explicitStyle[0],
+      tone: explicitStyle[1],
+      focus: explicitStyle[2],
+    }
+  : DEFAULT_REPORT_STYLE;
+if (!isReportStyle(style))
+  throw Error(
+    "--style expects layout,tone,focus from the report-style options",
+  );
+const styles =
+  flag("style-matrix") === "true"
+    ? REPORT_STYLE_OPTIONS.layout.flatMap((layout) =>
+        REPORT_STYLE_OPTIONS.tone.flatMap((tone) =>
+          REPORT_STYLE_OPTIONS.focus.map((focus) => ({ layout, tone, focus })),
+        ),
+      )
+    : [style];
 const repeats = Number(flag("repeats") || 2);
 const maxOutputTokens = Number(flag("max-output-tokens") ?? 0);
 const stream = flag("stream") !== "false";
@@ -84,7 +111,7 @@ await mkdir(output, { recursive: true });
 const baselineReview = flag("baseline-review")
   ? (await import(pathToFileURL(resolve(flag("baseline-review"))).href))
       .deepReadReviewMessages
-  : deepReadReviewMessages;
+  : (messages) => messages;
 const item = { libraryID: 1, key: "PAPER001", attachmentKey: "PDF00001" };
 const uri = (page) =>
   `zotero://open-pdf/library/items/${item.attachmentKey}?page=${page}`;
@@ -155,9 +182,9 @@ class Files {
   async makeDirectory() {}
 }
 
-async function runCase(model, variant, challenge, repeat) {
+async function runCase(model, variant, challenge, repeat, style) {
   const started = Date.now(),
-    id = `${model}-${variant}-${challenge}-${repeat}`;
+    id = `${model}-${variant}-${challenge}-${repeat}-${style.layout}-${style.tone}-${style.focus}`;
   const files = new Files(),
     events = new MemoryEventLog(),
     binding = { runId: id, intentRevision: 1, sourceFingerprint: "fixture" };
@@ -187,8 +214,6 @@ async function runCase(model, variant, challenge, repeat) {
       });
     },
     () => binding,
-    (a) => deepReadReviewState(a, binding, events.events),
-    (a) => deepReadReviewNextAction(a, binding, events.events),
   );
   const historyRef = {
     taskId: id,
@@ -420,7 +445,7 @@ async function runCase(model, variant, challenge, repeat) {
     complete: async (request, signal) => {
       const view =
         challenge === "delivery"
-          ? (variant === "baseline" ? baselineReview : deepReadReviewMessages)(
+          ? (variant === "baseline" ? baselineReview : (messages) => messages)(
               request.messages,
             )
           : request.messages;
@@ -477,6 +502,9 @@ async function runCase(model, variant, challenge, repeat) {
           (variant === "baseline"
             ? baseline.skill.replace(/^---[\s\S]*?---\s*/, "")
             : skillBody)
+        : "") +
+      (variant === "candidate" && challenge !== "schema-repair"
+        ? "\n" + reportStyleGuidance(style)
         : ""),
     completionGuard: () => {
       const wanted =
@@ -520,6 +548,69 @@ async function runCase(model, variant, challenge, repeat) {
       stopReason: "error",
       failureMessage: String(error),
     };
+  }
+  const initialReport = [...saved.values()].find((a) => a.kind === "deep_read");
+  const revision = {
+    attempted: false,
+    elapsedMs: 0,
+    before: initialReport?.body.markdown,
+  };
+  if (
+    variant === "candidate" &&
+    initialReport?.status === "ready" &&
+    budget.canStartIteration() &&
+    budget.canRunTools(1)
+  ) {
+    revision.attempted = true;
+    const started = Date.now();
+    try {
+      const evidence = reportEvidence(initialReport, events.events, [
+        toolMessage("get_pages", { ...item, pages }),
+        toolMessage("get_annotations", {
+          ...item,
+          annotations,
+          offset: 0,
+          nextOffset: null,
+        }),
+      ]);
+      const messages = reportRevisionMessages({
+        request: userText,
+        languageInstruction: "All report prose must be Chinese.",
+        style,
+        artifact: initialReport,
+        evidence,
+        maxInputTokens: 24000,
+      });
+      const response = await engine.complete(
+        {
+          messages,
+          maxAttempts: 1,
+          onAttempt: async () => {
+            if (!budget.canStartIteration())
+              throw Error("Revision budget exhausted");
+            budget.recordIteration();
+            budget.recordModelAttempt();
+          },
+        },
+        AbortSignal.timeout(
+          Math.max(1, Math.min(120000, budget.remainingElapsedMs() ?? 120000)),
+        ),
+      );
+      budget.recordUsage(response.usage);
+      if (response.end && response.end !== "stop")
+        throw Error(`Incomplete revision: ${response.end}`);
+      const patch = reportRevisionPatch(response.text ?? "", initialReport);
+      if (patch) {
+        budget.recordToolCalls(1);
+        const result = await artifact.call("artifact_patch", patch);
+        if (!result.ok) throw Error(result.message);
+      }
+      revision.outcome = "finished";
+    } catch (error) {
+      revision.outcome = "retained-original";
+      revision.error = String(error);
+    }
+    revision.elapsedMs = Date.now() - started;
   }
   const products = [...saved.values()],
     report = products.find((a) => a.kind === "deep_read");
@@ -578,6 +669,8 @@ async function runCase(model, variant, challenge, repeat) {
     variant,
     challenge,
     repeat,
+    style,
+    revision,
     elapsedMs: Date.now() - started,
     phase: outcome.phase,
     stopReason: outcome.stopReason,
@@ -622,7 +715,10 @@ for (let repeat = 1; repeat <= repeats; repeat++)
   ).split(","))
     for (const variant of baseline ? ["baseline", "candidate"] : ["candidate"])
       for (const model of models)
-        cases.push({ model, variant, challenge, repeat });
+        for (const style of challenge === "schema-repair"
+          ? [DEFAULT_REPORT_STYLE]
+          : styles)
+          cases.push({ model, variant, challenge, repeat, style });
 const results = [];
 // Two independent requests at a time; each case preserves its own sequential loop.
 await Promise.all(
@@ -630,7 +726,9 @@ await Promise.all(
     for (;;) {
       const c = cases.shift();
       if (!c) return;
-      results.push(await runCase(c.model, c.variant, c.challenge, c.repeat));
+      results.push(
+        await runCase(c.model, c.variant, c.challenge, c.repeat, c.style),
+      );
     }
   }),
 );
@@ -644,6 +742,12 @@ const report = {
     "Tool/output contracts only; factual quality requires separate human review",
   repeats,
   withSkill,
+  styles,
+  comparisonGuide: [
+    "Compare before/after reports against the same original sources.",
+    "Check factual scope, missing reasoning, term explanations, selected style and added latency.",
+    "These development observations never gate user delivery.",
+  ],
   modelSettings: {
     models,
     stream,

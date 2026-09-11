@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
   CONFUCIUS_VERSION,
   artifactUpsertGuidance,
+  runtimeModelSelection,
   type AgentBackendKind,
   type ApprovalResolution,
   type RuntimeStatus,
@@ -28,6 +29,7 @@ export class SidecarService {
     Exclude<AgentBackendKind, "native">
   >();
   private mcpUrl = "";
+  private readonly analyses = new Map<string, AbortController>();
 
   constructor(
     private readonly configPath = process.env.CONFUCIUS_SIDECAR_CONFIG ||
@@ -120,24 +122,47 @@ export class SidecarService {
         return {
           ok: this.approvals.resolve(params as unknown as ApprovalResolution),
         };
+      case "runtime/cancelAnalysis":
+        this.analyses.get(String(params.analysisId))?.abort();
+        return { ok: true };
       case "runtime/analyze": {
         const adapter = this.adapter(params.backend);
         if (!adapter.analyze)
           throw new Error("Runtime does not support analysis");
-        const cwd = await this.resolveCwd(
-          `analysis_${adapter.kind}`,
-          "zotero_only",
+        const id = String(
+          params.analysisId ?? `analysis_${Date.now()}_${Math.random()}`,
         );
-        return {
-          text: await adapter.analyze(String(params.prompt ?? ""), cwd),
-        };
+        const controller = new AbortController();
+        this.analyses.set(id, controller);
+        try {
+          const cwd = await this.resolveCwd(
+            `analysis_${adapter.kind}`,
+            "zotero_only",
+          );
+          if (controller.signal.aborted) throw new Error("Analysis cancelled");
+          return {
+            text: await adapter.analyze(
+              String(params.prompt ?? ""),
+              cwd,
+              runtimeModelSelection(params.runtimeModel),
+              params.options as
+                | import("@confucius/protocol").RuntimeAnalysisOptions
+                | undefined,
+              controller.signal,
+            ),
+          };
+        } finally {
+          this.analyses.delete(id);
+        }
       }
+
       default:
         throw new Error(`Unknown sidecar method: ${method}`);
     }
   }
 
   async shutdown(): Promise<void> {
+    for (const analysis of this.analyses.values()) analysis.abort();
     this.events.shutdown();
     const tasks = [...this.activeTasks.entries()];
     this.activeTasks.clear();

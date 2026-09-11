@@ -1,3 +1,4 @@
+import { createAbortController } from "../../utils/webPlatform";
 import { runtimePath } from "./RuntimeStorage";
 import {
   CONFUCIUS_MCP_PATH,
@@ -59,6 +60,7 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
     }
   >();
   private readonly starts = new Map<string, Promise<unknown>>();
+  private readonly analyses = new Map<string, AbortController>();
   private cachedStatuses: RuntimeStatus[] | null = null;
 
   get enabled(): boolean {
@@ -68,7 +70,10 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
   async setEnabled(enabled: boolean): Promise<RuntimeListResult> {
     setPref("pluginRuntimeHost", enabled);
     this.cachedStatuses = null;
-    if (!enabled) await this.stopAll("in-plugin Runtime Host disabled");
+    if (!enabled) {
+      for (const analysis of this.analyses.values()) analysis.abort();
+      await this.stopAll("in-plugin Runtime Host disabled");
+    }
     return this.listRuntimes(enabled);
   }
 
@@ -164,6 +169,10 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
           ok: this.approvals.resolve(params as unknown as ApprovalResolution),
         };
         break;
+      case "runtime/cancelAnalysis":
+        this.analyses.get(String(params.analysisId))?.abort();
+        result = { ok: true };
+        break;
       case "runtime/analyze":
         result = await this.analyze(params);
         break;
@@ -206,6 +215,7 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
   }
 
   async shutdown(): Promise<void> {
+    for (const analysis of this.analyses.values()) analysis.abort();
     await this.stopAll("Zotero shutting down");
     this.eventsBuffer.shutdown();
     this.capabilities.clear();
@@ -579,17 +589,30 @@ export class PluginRuntimeHost implements ExternalRuntimeClient {
       throw new Error("The in-plugin Runtime Host is disabled");
     const adapter = this.adapter(externalKind(params.backend));
     if (!adapter.analyze) throw new Error("Runtime does not support analysis");
-    const cwd = await this.resolveCwd(
-      `analysis_${adapter.kind}`,
-      "zotero_only",
+    const id = String(
+      params.analysisId ?? `analysis_${Date.now()}_${Math.random()}`,
     );
-    return {
-      text: await adapter.analyze(
-        String(params.prompt ?? ""),
-        cwd,
-        runtimeModelSelection(params.runtimeModel),
-      ),
-    };
+    const controller = createAbortController();
+    this.analyses.set(id, controller);
+    try {
+      const cwd = await this.resolveCwd(
+        `analysis_${adapter.kind}`,
+        "zotero_only",
+      );
+      if (controller.signal.aborted) throw new Error("Analysis cancelled");
+      return {
+        text: await adapter.analyze(
+          String(params.prompt ?? ""),
+          cwd,
+          runtimeModelSelection(params.runtimeModel),
+          params.options as
+            import("@confucius/protocol").RuntimeAnalysisOptions | undefined,
+          controller.signal,
+        ),
+      };
+    } finally {
+      this.analyses.delete(id);
+    }
   }
 
   private async resolveCwd(

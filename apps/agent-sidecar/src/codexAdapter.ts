@@ -1,3 +1,8 @@
+import {
+  codexModelParams,
+  codexModels,
+  validateRuntimeModel,
+} from "@confucius/protocol";
 import { runtimeFailure } from "@confucius/protocol";
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
@@ -358,8 +363,19 @@ export class CodexAdapter implements RuntimeAdapter {
     else session.rpc.close();
   }
 
-  async analyze(prompt: string, cwd: string): Promise<string> {
+  async analyze(
+    prompt: string,
+    cwd: string,
+    selection?: import("@confucius/protocol").RuntimeModelSelection,
+    options?: import("@confucius/protocol").RuntimeAnalysisOptions,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    if (signal?.aborted) throw new Error("Analysis cancelled");
+    const deadline = Date.now() + (options?.timeoutMs ?? 60000);
     const rpc = await this.openRpc("zotero_only");
+    const cancel = () => rpc.close();
+    signal?.addEventListener("abort", cancel, { once: true });
+    if (signal?.aborted) cancel();
     let text = "";
     const output = new CodexOutputTracker((type, payload) => {
       if (
@@ -406,12 +422,15 @@ export class CodexAdapter implements RuntimeAdapter {
     try {
       return await withTimeout(
         (async () => {
+          if (selection)
+            validateRuntimeModel(await codexModels(rpc), selection);
           const configuredMcpServers = await this.configuredMcpServers(rpc);
           const started = await rpc.request<ThreadStartResponse>(
             "thread/start",
             {
               cwd,
               ephemeral: true,
+              ...codexModelParams(selection),
               approvalPolicy: "never",
               sandbox: "read-only",
               baseInstructions:
@@ -423,16 +442,18 @@ export class CodexAdapter implements RuntimeAdapter {
           if (!threadId) throw new Error("Codex did not return a thread id");
           await rpc.request("turn/start", {
             threadId,
+            ...codexModelParams(selection),
             input: [{ type: "text", text: prompt, text_elements: [] }],
           } satisfies TurnStartParams);
           await done;
           if (failure) throw failure;
           return text;
         })(),
-        60_000,
+        Math.max(1, deadline - Date.now()),
         "Codex analysis timed out",
       );
     } finally {
+      signal?.removeEventListener("abort", cancel);
       await rpc.closeAndWait();
     }
   }

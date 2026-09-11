@@ -398,9 +398,17 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
     prompt: string,
     cwd: string,
     selection?: RuntimeModelSelection,
+    options?: import("@confucius/protocol").RuntimeAnalysisOptions,
+    signal?: AbortSignal,
   ): Promise<string> {
-    const deadline = Date.now() + 60_000;
+    if (signal?.aborted) throw new Error("Analysis cancelled");
+    const deadline = Date.now() + (options?.timeoutMs ?? 60_000);
     const rpc = await this.openRpc("zotero_only");
+    const cancel = () => {
+      rpc.close();
+    };
+    signal?.addEventListener("abort", cancel, { once: true });
+    if (signal?.aborted) cancel();
     let text = "";
     const output = new CodexOutputTracker((type, payload) => {
       if (
@@ -449,10 +457,17 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
         (async () => {
           const models = await codexModels(rpc);
           const selected = selection
-            ? validateRuntimeModel(models, { modelId: selection.modelId })
+            ? validateRuntimeModel(
+                models,
+                options?.preserveSettings
+                  ? selection
+                  : { modelId: selection.modelId },
+              )
             : models.find((m) => m.isDefault);
           const runtimeModel = selected
-            ? lowestRuntimeSelection(selected)
+            ? options?.preserveSettings
+              ? (selection ?? { modelId: selected.id })
+              : lowestRuntimeSelection(selected)
             : undefined;
           const configuredMcpServers = await this.configuredMcpServers(rpc);
           const started = await rpc.request<Record<string, unknown>>(
@@ -486,6 +501,7 @@ export class PluginCodexAdapter implements PluginRuntimeAdapter {
         "Codex analysis timed out",
       );
     } finally {
+      signal?.removeEventListener("abort", cancel);
       await rpc.closeAndWait();
     }
   }

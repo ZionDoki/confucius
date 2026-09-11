@@ -42,6 +42,15 @@ export interface RunState {
   updatedAt: number;
   /** Imported notes are evidence only, and are archived before being removed. */
   recoveryNotes?: string;
+  /** Baseline and one best-effort editing attempt, never completion requirements. */
+  reportRevisionBaseline?: Record<string, string>;
+  reportRevision?: {
+    artifactId: string;
+    inputRevision: number;
+    intentRevision: number;
+    status: "started" | "finished" | "skipped";
+    reason?: string;
+  };
 }
 
 export interface ExecutionBinding {

@@ -121,7 +121,7 @@ export class MemoryEngine {
   async read(id: string): Promise<MemoryRecord | undefined> {
     await this.ensureLoaded();
     return this.serialize(async () => {
-      const record = this.store.get(id);
+      const record = await this.store.recover(id, true);
       if (!record) return undefined;
       const previous = {
         lastUsedAt: record.lastUsedAt,
@@ -279,6 +279,10 @@ export class MemoryEngine {
         (record) =>
           jaccard(record.content, content) >= NEAR_DUPLICATE_THRESHOLD,
       );
+  }
+
+  allocateId(): string {
+    return this.idFactory();
   }
 
   async save(input: {

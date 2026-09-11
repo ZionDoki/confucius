@@ -5,6 +5,8 @@ import type {
   CapabilityProfile,
   ConfuciusEvent,
   RuntimeStatus,
+  RuntimeModelSelection,
+  RuntimeAnalysisOptions,
   SessionMode,
 } from "@confucius/protocol";
 
@@ -52,7 +54,13 @@ export interface RuntimeAdapter {
   ): Promise<RuntimeTurnHandle>;
   interrupt(taskId: string): Promise<void>;
   dispose(taskId: string): Promise<void>;
-  analyze?(prompt: string, cwd: string): Promise<string>;
+  analyze?(
+    prompt: string,
+    cwd: string,
+    selection?: RuntimeModelSelection,
+    options?: RuntimeAnalysisOptions,
+    signal?: AbortSignal,
+  ): Promise<string>;
 }
 
 export interface SidecarDescriptor {

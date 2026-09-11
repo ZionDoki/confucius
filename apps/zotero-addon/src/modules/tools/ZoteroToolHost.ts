@@ -2952,12 +2952,21 @@ export class ZoteroToolHost {
     if (!collection) {
       return fail("get_collection_items", "not_found", "Collection not found");
     }
-    const limit = Math.min(Number(args.limit) || 30, 100);
-    const items = collection.getChildItems().slice(0, limit);
+    const limit = Math.max(
+      1,
+      Math.min(Math.trunc(Number(args.limit)) || 30, 50),
+    );
+    const offset = Math.max(0, Math.trunc(Number(args.offset)) || 0);
+    const all = collection.getChildItems();
+    const items = all.slice(offset, offset + limit);
     return ok("get_collection_items", {
       libraryID,
       key,
       name: collection.name,
+      total: all.length,
+      offset,
+      nextOffset:
+        offset + items.length < all.length ? offset + items.length : null,
       items: items.map(summarizeItem),
     });
   }
@@ -3019,9 +3028,20 @@ export class ZoteroToolHost {
       return fail("run_saved_search", "not_found", "Saved search not found");
     }
     const ids = await saved.search();
-    const items = await Zotero.Items.getAsync(ids.slice(0, 30));
+    const limit = Math.max(
+      1,
+      Math.min(Math.trunc(Number(args.limit)) || 30, 50),
+    );
+    const offset = Math.max(0, Math.trunc(Number(args.offset)) || 0);
+    const page = ids.slice(offset, offset + limit);
+    const items = await Zotero.Items.getAsync(page);
     return ok("run_saved_search", {
+      libraryID,
       key,
+      total: ids.length,
+      offset,
+      nextOffset:
+        offset + page.length < ids.length ? offset + page.length : null,
       items: items.map(summarizeItem),
     });
   }

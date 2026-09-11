@@ -75,6 +75,14 @@ function fixture({ failShutdown = false, failToolbar = false } = {}) {
         calls.push("reader.dispose");
       },
     },
+    "./modules/ui/btwReader": {
+      registerBtwReader() {
+        calls.push("btw.register");
+      },
+      unregisterBtwReader() {
+        calls.push("btw.dispose");
+      },
+    },
     "./modules/ui/workspaceWindow": {
       consumeWorkspaceReload(isUpdate) {
         calls.push(`workspace.consume.${isUpdate}`);
@@ -114,6 +122,9 @@ function fixture({ failShutdown = false, failToolbar = false } = {}) {
     },
     "./modules/host/AgentHost": {
       AgentHost: class {
+        startBtwCleanup() {
+          calls.push("btw.cleanup");
+        }
         start(afterUpdate) {
           return hostStart(afterUpdate);
         }
@@ -181,6 +192,7 @@ it("real hooks reuse one Addon toolkit and release every main-window surface on 
     1,
   );
   assert.ok(f.calls.indexOf("http.dispose") < f.calls.indexOf("host.dispose"));
+  assert.ok(f.calls.indexOf("btw.dispose") < f.calls.indexOf("host.dispose"));
   assert.equal(
     f.calls.filter((value) => value === "artifacts.dispose").length,
     1,

@@ -2,7 +2,25 @@
 
 ## Unreleased
 
+## 0.4.6 - 2026-09-11
+
+Confucius 0.4.6 adds selection questions across readers and conversations,
+refines paper reports, and fixes task, memory and tool reliability.
+
 ### Added
+
+- Select text in PDFs, reports or conversations to ask a question in a shared
+  single-line input. Streaming answers and follow-ups persist in an independent
+  btw history. PDF questions retrieve relevant completed conversations for the
+  same article; report and conversation questions stay within their owning task.
+  Read-only Native, Codex and Kimi runs leave the main task and memory untouched.
+  Closing the popup keeps generation running; drafts and saved partial answers
+  survive reopening. Network search is not included.
+
+- Report preferences now guide source selection, explanations and organization
+  for researchers entering an unfamiliar field. Readable reports receive one
+  best-effort direct revision with the task's model and reasoning settings in
+  an independent context. Failed improvements retain the saved report.
 
 - Deep-read tasks offer independent report layout, writing voice and reading
   focus choices, with a live excerpt preview. Choices persist with the task
@@ -13,6 +31,31 @@
   note exports expand the help so its content stays visible.
 
 ### Fixed
+
+- Collection and saved-search tools expose complete counts and continuation
+  offsets. Research presets allow all resolved members, including papers beyond
+  the first 100, while keeping their initial source preview bounded.
+- Ordinary follow-up questions after a completed preset report can finish
+  without generating another report. Continuing with attached files or task
+  references now includes the newly submitted material.
+- Response branches copy the report revision at the selected response into
+  independent task-owned files. Older shared branch reports are separated when
+  their historical revisions are still available.
+- Repeated protection changes and retries after a rejected memory proposal
+  remain actionable; retries of the same identified operation stay idempotent.
+- Knowledge-base and report-to-knowledge writes retain their intended contents
+  and stable creation IDs, allowing lost filesystem receipts to be reconciled
+  after restart without blocking subsequent writes in other tasks.
+- Reading a memory reloads its Markdown source and persists usage separately,
+  preserving external edits and avoiding recreation of externally deleted files.
+- Report writebacks preserve independent Zotero note and knowledge-base
+  associations across target switches and report revisions.
+- Optional MCP discovery runs in the background with a cancellable ten-second
+  deadline per server. Unresponsive servers no longer delay workspace startup.
+
+- Deep-read delivery no longer waits for a prescribed post-draft reading sequence
+  or a quality verdict. Ready means deliverable; citation and atomic revision
+  checks still apply. Explicitly unfinished drafts remain drafts.
 
 - The report-style control and instructions apply only to paper-reading tasks.
   Clearing or changing the preset hides the control without leaving space in
@@ -52,6 +95,34 @@
   view and on-demand report mode have been removed. Deep-read tasks again
   deliver a single research report directly. Formatted Zotero note saving and
   the unrelated bug fixes remain.
+
+### Upgrade notes
+
+- This is a stable update from 0.4.5. Existing tasks, annotations, notes and
+  report revisions remain available; no model reconfiguration is required.
+- Deep-read tasks now deliver one research report. The old reading-companion,
+  PDF-following and on-demand-report views are removed. Existing guide-only
+  reports are shown as plain text. The new btw conversations are separate
+  from old private passage discussions and do not import their history.
+- Existing verified annotation batch tags are consolidated in the background.
+  Report branches gain independent artifact copies when their historical
+  revisions are available. Back up runtime data before downgrading; older
+  versions cannot expose the new btw histories or report preferences.
+
+### Validation and known limits
+
+- All 1,080 automated tests, type checking, lint, build and skill synchronization
+  passed locally. Selection questions passed 12 isolated Zotero checks,
+  including restart recovery; report-style controls passed 44 checks on
+  macOS with Zotero 10.0.1. See the [selection acceptance record](https://github.com/ZionDoki/confucius/blob/v0.4.6/.github/maintainers/acceptance/selection-questions.md).
+- Native acceptance uses controlled model responses; Codex and Kimi are covered
+  by adapter and isolation tests, without live service runs in this release.
+  Other operating systems and Zotero versions were not retested. Selection
+  questions do not include network search.
+- Upgrading the published 0.4.5 package to the candidate passed 20 persistence
+  and recovery checks, including unchanged history bodies and no duplicate note
+  writes. Seven hot-update checks covered restored windows, sidebars, drafts,
+  settings and closed-workspace behavior. See the [release acceptance record](https://github.com/ZionDoki/confucius/blob/v0.4.6/.github/maintainers/acceptance/release-0.4.6.md).
 
 ## 0.4.5 - 2026-09-09
 

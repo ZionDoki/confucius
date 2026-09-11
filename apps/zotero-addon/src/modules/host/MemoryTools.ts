@@ -20,6 +20,10 @@ import {
   type MemoryFileSystem,
 } from "@confucius/memory";
 import { TOOL_DEFINITIONS, TOOL_META } from "@confucius/zotero-tools";
+import {
+  prepareKnowledgeWrite,
+  callPreparedKnowledgeWrite,
+} from "./KnowledgeOperations";
 
 /** IOUtils-backed filesystem so memories live as plain markdown files. */
 export class ZoteroMemoryFs implements MemoryFileSystem {
@@ -140,6 +144,8 @@ export class ConfuciusMemoryToolProvider implements ToolProvider {
   ) {
     const invalid = validateArgs(name, this.getSchema(name), args);
     if (invalid) return invalid;
+    if (name.startsWith("knowledge_base_") && this.getMeta(name)?.mutatesState)
+      return prepareKnowledgeWrite(this.engine, name, args, context);
     // The memory index is one aggregate shared by all entries and knowledge bases.
     context.resources = ["memory:index"];
     context.preparedOperation = {
@@ -169,6 +175,8 @@ export class ConfuciusMemoryToolProvider implements ToolProvider {
             message:
               "Memory writes require a task proposal and explicit approval",
           };
+    if (name.startsWith("knowledge_base_") && this.getMeta(name)?.mutatesState)
+      return callPreparedKnowledgeWrite(this.engine, name, args, context);
     return callMemoryCatalogTool(this.engine, this.logs, name, args);
   }
 }

@@ -1,10 +1,72 @@
 import type { ModelMessage } from "@confucius/harness";
 import type { ConfuciusEvent } from "@confucius/protocol";
+import type { ArtifactStore } from "./ArtifactStore";
 
 export interface TaskBranchSnapshot {
   events: ConfuciusEvent[];
   messages: ModelMessage[];
   artifactIds: string[];
+}
+
+export async function forkBranchArtifacts(
+  snapshot: TaskBranchSnapshot,
+  store: ArtifactStore,
+  taskId: string,
+  foreignOnly = false,
+): Promise<boolean> {
+  const selected = new Map<
+    string,
+    Extract<
+      ConfuciusEvent,
+      { type: "artifact_upserted" }
+    >["payload"]["artifact"]
+  >();
+  for (const event of snapshot.events)
+    if (event.type === "artifact_upserted")
+      selected.set(event.payload.artifact.id, event.payload.artifact);
+  const ids = new Map<string, string>();
+  for (const [id, artifact] of selected) {
+    if (!snapshot.artifactIds.includes(id)) continue;
+    const source = await store.get(id);
+    if (foreignOnly && (!source || source.taskId === taskId)) continue;
+    const copy = await store.fork(
+      id,
+      artifact.revision,
+      taskId,
+      artifact.title,
+      artifact.status,
+    );
+    ids.set(id, copy.id);
+  }
+  if (ids.size === 0) return false;
+  const remap = (value: unknown): unknown => {
+    if (typeof value === "string") return ids.get(value) ?? value;
+    if (Array.isArray(value)) return value.map(remap);
+    if (value && typeof value === "object")
+      return Object.fromEntries(
+        Object.entries(value).map(([key, entry]) => [key, remap(entry)]),
+      );
+    return value;
+  };
+  snapshot.events = snapshot.events.map((event) => {
+    const copy = remap(event) as ConfuciusEvent;
+    if (
+      copy.type === "artifact_upserted" &&
+      event.type === "artifact_upserted" &&
+      ids.has(event.payload.artifact.id)
+    ) {
+      copy.payload.artifact.taskId = taskId;
+      copy.payload.artifact.sessionId = taskId;
+      copy.payload.artifact.writeback = undefined;
+      Reflect.deleteProperty(copy.payload.artifact, "execution");
+      Reflect.deleteProperty(copy.payload.artifact, "writebacks");
+      if (copy.payload.artifact.status === "committed")
+        copy.payload.artifact.status = "ready";
+    }
+    return copy;
+  });
+  snapshot.artifactIds = snapshot.artifactIds.map((id) => ids.get(id) ?? id);
+  return ids.size > 0;
 }
 
 const TERMINAL_EVENT_TYPES = new Set<ConfuciusEvent["type"]>([

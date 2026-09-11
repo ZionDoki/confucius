@@ -7,16 +7,8 @@ import {
   InMemoryFileSystem,
   MemoryEngine,
 } from "@confucius/memory";
-import type {
-  ModelMessage,
-  ModelRequest,
-  TurnCheckpoint,
-} from "@confucius/harness";
-import {
-  BudgetAccountant,
-  MemoryToolProvider,
-  WindowContext,
-} from "@confucius/harness";
+import type { ModelMessage, TurnCheckpoint } from "@confucius/harness";
+import { BudgetAccountant } from "@confucius/harness";
 import {
   coalesceTimeline,
   initialContextWindow,
@@ -27,6 +19,8 @@ import {
   type RunState,
   type ToolExecutionContext,
   type ToolResult,
+  type PromptContextOptions,
+  lockedContextSourceIds,
   type WorkSnapshot,
 } from "@confucius/protocol";
 import { AgentHost } from "./AgentHost";
@@ -38,7 +32,6 @@ import type { ExecutorResult, RunOutcome } from "./RunCoordinator";
 import { memoryJsonStorage } from "./RuntimeStorage";
 import { TaskTraceBuffer } from "./TaskTrace";
 import { responseLanguageInstruction } from "./ResponseLanguage";
-import { deepReadReviewMessages } from "./DeepReadReviewContext";
 import { setTaskReportStyle } from "./TaskReportStyle";
 import { ArtifactStore } from "./ArtifactStore";
 import { LibraryMentionSources } from "../ui/libraryMention";
@@ -76,142 +69,6 @@ it("opens abstract-only citations in the library without resolving a PDF", async
   }
 });
 
-it("isolates a source-grounded review while preserving the durable history and later tool groups", () => {
-  const tool = (toolName: string, data: unknown, id: string): ModelMessage => ({
-    role: "tool",
-    toolCallId: id,
-    content: JSON.stringify({ ok: true, toolName, data }),
-  });
-  const original: ModelMessage[] = [
-    { role: "system", content: "Use configured Chinese" },
-    { role: "user", content: "Read this paper" },
-    {
-      role: "assistant",
-      content: "PREMATURE CONCLUSION",
-      replayState: {
-        provider: "test",
-        version: 1,
-        data: { reasoning: "BIASED REASONING" },
-      },
-    },
-    tool(
-      "get_pages",
-      {
-        libraryID: 1,
-        key: "P",
-        pages: [{ page: 2, text: "Primary evidence" }],
-      },
-      "p",
-    ),
-    {
-      role: "assistant",
-      content: "",
-      toolCalls: [
-        {
-          id: "draft",
-          name: "artifact_upsert",
-          args: {
-            id: "r",
-            kind: "deep_read",
-            body: { type: "markdown", markdown: "Fallible draft" },
-          },
-        },
-      ],
-    },
-    tool(
-      "artifact_upsert",
-      { artifact: { id: "r", kind: "deep_read", status: "draft" } },
-      "draft",
-    ),
-  ];
-  assert.equal(deepReadReviewMessages(original), original);
-  original.push(
-    tool(
-      "get_annotations",
-      {
-        libraryID: 1,
-        key: "P",
-        annotations: [{ key: "MARK", comment: "Saved explanation" }],
-      },
-      "annotations",
-    ),
-  );
-  original.push(
-    tool(
-      "get_pages",
-      {
-        libraryID: 1,
-        key: "P",
-        pages: [{ page: 3, text: "Parallel source read" }],
-      },
-      "parallel",
-    ),
-  );
-  const tail: ModelMessage[] = [
-    {
-      role: "assistant",
-      content: "",
-      toolCalls: [
-        {
-          id: "fix",
-          name: "update_annotation_comment",
-          args: { key: "MARK", comment: "Corrected explanation" },
-        },
-      ],
-    },
-    tool("update_annotation_comment", { key: "MARK" }, "fix"),
-  ];
-  original.push(...tail);
-  const snapshot = JSON.stringify(original);
-  const projected = deepReadReviewMessages(original);
-  const text = JSON.stringify(projected);
-  assert.doesNotMatch(text, /PREMATURE CONCLUSION|BIASED REASONING/);
-  for (const evidence of [
-    "Parallel source read",
-    "Fallible draft",
-    "Saved explanation",
-    "Use configured Chinese",
-  ])
-    assert(text.includes(evidence));
-  assert.doesNotMatch(text, /Primary evidence/);
-  assert.match(text, /earlierPageIndex/);
-  assert.deepEqual(projected.slice(-2), tail);
-  assert.equal(JSON.stringify(original), snapshot);
-  const recovered = deepReadReviewMessages(
-    [original[0], original[1], original[2], original[6], original[7], ...tail],
-    {
-      id: "r",
-      title: "Recovered draft",
-      body: { type: "markdown", markdown: "Durable report" },
-      citations: [],
-      revision: 2,
-      status: "draft",
-    },
-  );
-  assert.match(
-    JSON.stringify(recovered),
-    /Durable report|Parallel source read/,
-  );
-  assert.doesNotMatch(JSON.stringify(recovered), /PREMATURE CONCLUSION/);
-  assert.deepEqual(recovered.slice(-2), tail);
-  const historyBearingDraft = {
-    id: "r",
-    title: "Current draft",
-    revision: 3,
-    status: "draft" as const,
-    body: { type: "markdown" as const, markdown: "Latest report" },
-    citations: [],
-    revisions: [{ body: "OBSOLETE FULL REPORT" }],
-  };
-  const latest = deepReadReviewMessages(original, historyBearingDraft);
-  const inputs = latest.find((m) =>
-    m.content.startsWith("Review inputs"),
-  )!.content;
-  assert.match(inputs, /"revision":3/);
-  assert.match(inputs, /Latest report/);
-  assert.doesNotMatch(inputs, /OBSOLETE FULL REPORT|"revisions"/);
-});
-
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => {
@@ -243,6 +100,8 @@ interface LifecycleHost {
   sessionPrompt(
     id: string,
     text: string,
+    context?: PromptContextOptions,
+    attachments?: string[],
   ): Promise<{ turnId?: string; superseded?: boolean }>;
   taskContinue(id: string): Promise<{ turnId?: string }>;
   taskToolCall(args: Record<string, unknown>): Promise<McpToolCallResult>;
@@ -399,263 +258,6 @@ function fixture() {
   });
   return { host, state, backend, starts, execution };
 }
-
-it("native review consumes restored annotation pages, retains five pending edits, and checkpoints elapsed wall time", async (t) => {
-  const previousZotero = Reflect.get(globalThis, "Zotero");
-  Reflect.set(globalThis, "Zotero", {
-    Prefs: { get: () => undefined },
-    getMainWindow: () => ({ setTimeout, clearTimeout }),
-  });
-  const startedAt = 1800000000000;
-  let clock = startedAt;
-  t.mock.method(Date, "now", () => clock);
-  try {
-    const { host, state } = fixture();
-    state.record.backend = "native";
-    state.record.templateId = "deep-read";
-    state.record.run = { ...run(state.record), templateId: "deep-read" };
-    state.abort = new AbortController();
-    state.activeTurnId = "native-review";
-    state.runBudget = new BudgetAccountant({
-      maxIterations: 12,
-      maxToolCalls: 20,
-    });
-    const fs = new InMemoryFileSystem();
-    const artifacts = new ArtifactStore("/artifacts", {
-      read: (path) => fs.readFile(path),
-      writeAtomic: (path, text) => fs.writeFile(path, text),
-      exists: async (path) => Object.hasOwn(fs.snapshot(), path),
-      makeDirectory: () => fs.makeDirectory(),
-    });
-    let id = 0,
-      round = 0;
-    const edits = Array.from({ length: 5 }, (_, i) => ({
-      oldText: `original-${i}`,
-      newText: `corrected-${i}`,
-    }));
-    const patch = { id: "report", expectedRevision: 1, status: "ready", edits };
-    const calls = (name: string, args: Record<string, unknown>) => ({
-      toolCalls: [{ id: `model-${++id}`, name, args }],
-    });
-    Reflect.deleteProperty(host, "emitSessionEvent");
-    Object.assign(host, {
-      artifacts,
-      skills: { list: () => [] },
-      mcpProviders: [],
-      historyTools: () => new MemoryToolProvider(),
-      memoryProvider: () => new MemoryToolProvider(),
-      buildSystemPrompt: async () => "Review the paper",
-      alwaysAllowedTools: () => new Set(),
-      onToolAccess: () => undefined,
-      nativeWindowContext: () =>
-        new WindowContext({
-          window: initialContextWindow(state.record.id, "native"),
-          contextWindowTokens: 200000,
-          maxOutputTokens: 4096,
-          nextId: () => `history-${++id}`,
-          archive: async ({ id, windowId }) => ({
-            taskId: state.record.id,
-            windowId,
-            itemId: id,
-          }),
-          switchWindow: async () => assert.fail("evidence fits this window"),
-          hint: async () => "",
-        }),
-      saveCheckpoint: async (_state: TestState, checkpoint: TurnCheckpoint) => {
-        state.latestCheckpoint = checkpoint;
-      },
-      tools: {
-        prepare: async () => null,
-        execute: async (name: string, args: Record<string, unknown>) => ({
-          ok: true,
-          toolName: name,
-          data:
-            name === "get_pages"
-              ? {
-                  libraryID: 1,
-                  key: "PAPER",
-                  attachmentKey: "PDF",
-                  pages: [{ page: 2, text: "Source evidence" }],
-                }
-              : {
-                  libraryID: 1,
-                  key: "PDF",
-                  attachmentKey: "PDF",
-                  offset: Number(args.offset ?? 0),
-                  totalAnnotations: 41,
-                  snapshot: "unchanged-comments",
-                  annotations: Array.from(
-                    { length: Number(args.offset) === 32 ? 9 : 16 },
-                    (_, i) => ({
-                      key: `mark-${Number(args.offset ?? 0) + i}`,
-                      comment: "Detailed saved comment. ".repeat(100),
-                    }),
-                  ),
-                  nextOffset:
-                    Number(args.offset) === 32
-                      ? null
-                      : Number(args.offset ?? 0) + 16,
-                },
-        }),
-      },
-      openaiAdapter: () => ({
-        complete: async (request: ModelRequest) => {
-          round++;
-          clock += 20000;
-          if (round === 1)
-            return calls("artifact_upsert", {
-              id: "report",
-              kind: "deep_read",
-              title: "Report",
-              status: "draft",
-              body: {
-                type: "markdown",
-                markdown: edits.map((edit) => edit.oldText).join("\n"),
-              },
-              sourceContextIds: ["item:1:PAPER"],
-            });
-          if (round === 2) return calls("artifact_patch", patch);
-          if (round === 3)
-            return {
-              toolCalls: [
-                ...calls("get_pages", {
-                  libraryID: 1,
-                  key: "PAPER",
-                  start: 2,
-                  end: 2,
-                }).toolCalls,
-                ...calls("get_annotations", {
-                  libraryID: 1,
-                  key: "PDF",
-                  offset: 0,
-                  limit: 16,
-                }).toolCalls,
-              ],
-            };
-          if (round === 4) {
-            const review = request.messages.find((message) =>
-              message.content.startsWith("Review inputs"),
-            );
-            assert.ok(review);
-            const inputs = JSON.parse(
-              review.content.split("\n").slice(1).join("\n"),
-            );
-            assert.equal(inputs.savedAnnotations[0].annotations.length, 16);
-            assert.equal(inputs.pendingCorrections[0].args.edits.length, 5);
-            return calls("artifact_patch", patch);
-          }
-          if (round === 5) {
-            const receipt = request.messages.findLast(
-              (message) =>
-                message.role === "tool" &&
-                JSON.parse(message.content).toolName === "artifact_patch",
-            );
-            assert.ok(receipt);
-            assert.match(
-              JSON.parse(receipt.content).message,
-              /16\/41.*offset=16/,
-            );
-            return calls("get_annotations", {
-              libraryID: 1,
-              key: "PDF",
-              offset: 16,
-              limit: 16,
-            });
-          }
-          if (round === 6)
-            return calls("get_annotations", {
-              libraryID: 1,
-              key: "PDF",
-              offset: 32,
-              limit: 16,
-            });
-          if (round === 7) return calls("artifact_patch", patch);
-          return { text: "Five verified corrections saved." };
-        },
-      }),
-    });
-    const stopped =
-      deferred<Parameters<NonNullable<BackendCallbacks["stopped"]>>[0]>();
-    const native = Reflect.get(host, "nativeExecution").bind(host);
-    await native(
-      {
-        task: state.record,
-        turnId: state.activeTurnId,
-        prompt: "Review",
-        mode: "agent",
-        capabilityProfile: "zotero_only",
-      },
-      {
-        event: (event: ConfuciusEvent) => {
-          Reflect.get(host, "recordTaskTrace").call(host, state, event);
-          state.events.push(event);
-        },
-        stopped: stopped.resolve,
-        disconnected: (error: Error) => {
-          throw error;
-        },
-      },
-    );
-    const outcome = await stopped.promise;
-    assert.equal(outcome.stopReason, "completed", JSON.stringify(outcome));
-    const saved = (await artifacts.get("report"))!;
-    assert.equal(saved.revision, 2);
-    assert.equal(saved.status, "ready");
-    assert.deepEqual(saved.body, {
-      type: "markdown",
-      markdown: edits.map((edit) => edit.newText).join("\n"),
-    });
-    assert.equal(
-      state.events.filter((event) => event.type === "source_read_delivered")
-        .length,
-      4,
-    );
-    assert.ok(
-      state.events.some(
-        (event) =>
-          event.type === "tool_result" &&
-          event.payload.result.ok &&
-          event.payload.result.toolName === "get_annotations" &&
-          (event.payload.result.data as { archivedRef?: unknown }).archivedRef,
-      ),
-    );
-    assert.equal(state.latestCheckpoint?.savedAt, startedAt + round * 20000);
-    const savedEvent = state.events.find(
-      (event) =>
-        event.type === "artifact_upserted" &&
-        event.payload.artifact.revision === 2,
-    )!;
-    const receipt = state.events.findLast(
-      (event) =>
-        event.type === "tool_result" &&
-        event.payload.result.ok &&
-        event.payload.result.toolName === "artifact_patch",
-    )!;
-    assert.ok(receipt.ts >= savedEvent.ts);
-    assert.ok(receipt.sequence! > savedEvent.sequence!);
-    assert.equal(
-      receipt.type === "tool_result" &&
-        receipt.payload.result.ok &&
-        (receipt.payload.result.data as { appliedEditCount: number })
-          .appliedEditCount,
-      5,
-    );
-    const lastSequence = state.record.eventSequence!;
-    // Restart the event producer with persisted state and a clock moving back.
-    const restarted = fixture().host;
-    clock -= 10000;
-    Reflect.get(restarted, "recordTaskTrace").call(restarted, state, {
-      id: "after-restart",
-      sessionId: state.record.id,
-      type: "text_delta",
-      ts: clock,
-      payload: { text: "continued" },
-    });
-    assert.equal(state.record.eventSequence, lastSequence + 1);
-  } finally {
-    Reflect.set(globalThis, "Zotero", previousZotero);
-  }
-});
 
 async function waitFor(predicate: () => boolean) {
   for (let attempt = 0; attempt < 100; attempt++) {
@@ -1043,6 +645,121 @@ describe("task sources attached after choosing a research mode", () => {
   afterEach(() => {
     Reflect.set(globalThis, "Zotero", previousZotero);
     Reflect.set(globalThis, "addon", previousAddon);
+  });
+
+  it("answers a completed preset follow-up without requiring a fresh report, but preserves first-run obligations", async () => {
+    const { host, state, backend, starts } = fixture();
+    state.record.templateId = "deep-read";
+    state.record.lockedContext.items = [
+      {
+        id: "item:1:A",
+        libraryID: 1,
+        key: "A",
+        title: "Paper",
+        source: "library",
+      },
+    ];
+    const previous = run(state.record);
+    previous.templateId = "deep-read";
+    previous.status = "completed";
+    previous.requiredArtifactKinds = ["deep_read"];
+    state.record.run = previous;
+    Object.assign(host, {
+      artifacts: {
+        list: async () => [
+          {
+            id: "report",
+            kind: "deep_read",
+            status: "ready",
+            sourceContextIds: lockedContextSourceIds(
+              state.record.lockedContext,
+            ),
+            body: { type: "markdown", markdown: "Report" },
+          },
+        ],
+      },
+    });
+    backend.startTurn = async (input, callbacks) => {
+      starts.push(input);
+      callbacks.stopped?.({ stopReason: "completed", text: "2024." });
+      return {};
+    };
+    await host.sessionPrompt(
+      state.record.id,
+      "What year? Answer only, leave the report unchanged.",
+    );
+    await waitFor(() => state.activeTurnId === null);
+    assert.equal(starts.length, 1);
+    assert.equal(state.record.run?.status, "completed");
+    assert.deepEqual(state.record.run?.requiredArtifactKinds, []);
+    assert.match(
+      starts[0].workflowInstruction!,
+      /Answer ordinary questions directly/,
+    );
+    assert.notEqual(state.record.run?.id, previous.id);
+
+    // A branch has its own report files but deliberately no inherited run.
+    state.record.run = undefined;
+    await host.sessionPrompt(state.record.id, "What year was it published?");
+    await waitFor(() => state.activeTurnId === null);
+    assert.deepEqual(
+      (state.record.run as RunState | undefined)?.requiredArtifactKinds,
+      [],
+    );
+
+    // A completed planning turn has not delivered the preset's report.
+    Object.assign(host, { artifacts: { list: async () => [] } });
+    state.record.run = previous;
+    await host.sessionPrompt(
+      state.record.id,
+      "Execute the plan and produce the report",
+    );
+    await waitFor(() => state.activeTurnId === null);
+    assert.deepEqual(state.record.run?.requiredArtifactKinds, ["deep_read"]);
+  });
+
+  it("continue with new attachments or references submits the additional context", async () => {
+    const { host, state, starts } = fixture();
+    state.record.run = run(state.record);
+    state.record.run.status = "interrupted";
+    const consumed: string[][] = [];
+    Object.assign(host, {
+      attachments: {
+        resolve: (ids: string[]) =>
+          ids.map((id) => ({
+            record: {
+              id,
+              name: "new.txt",
+              mediaType: "text/plain",
+              includedCharacters: 14,
+              truncated: false,
+            },
+            content: "Added evidence",
+          })),
+        consume: (ids: string[]) => consumed.push(ids),
+      },
+    });
+    const references = [
+      { kind: "task" as const, taskId: "prior-task", title: "prior-task" },
+    ];
+    await host.sessionPrompt(state.record.id, "继续", { references }, [
+      "new-attachment",
+    ]);
+    await waitFor(() => state.activeTurnId === null);
+    assert.deepEqual(consumed[0], ["new-attachment"]);
+    assert.deepEqual(state.record.references, references);
+    assert.match(starts[0].prompt, /Added evidence/);
+    assert.equal(state.record.run?.intentRevision, 2);
+
+    const revision = state.record.run!.intentRevision;
+    let continued = false;
+    host.taskContinue = async () => {
+      continued = true;
+      return {};
+    };
+    await host.sessionPrompt(state.record.id, "继续", { references });
+    assert.equal(continued, true);
+    assert.equal(state.record.run?.intentRevision, revision);
   });
 
   for (const backend of ["native", "codex", "kimi"] as const) {

@@ -8,6 +8,7 @@ import type {
   ResearchTaskRecord,
   RuntimeStatus,
   RuntimeModelSelection,
+  RuntimeAnalysisOptions,
   SessionMode,
   PromptContextOptions,
 } from "@confucius/protocol";
@@ -81,7 +82,12 @@ export interface AgentBackend {
     callbacks: BackendCallbacks,
   ): Promise<BackendTurnHandle>;
   interrupt(taskId: string): Promise<void>;
-  analyze(prompt: string, selection?: RuntimeModelSelection): Promise<string>;
+  analyze(
+    prompt: string,
+    selection?: RuntimeModelSelection,
+    options?: RuntimeAnalysisOptions,
+    signal?: AbortSignal,
+  ): Promise<string>;
   dispose(taskId: string): Promise<void>;
   resolveApproval?(resolution: ApprovalResolution): Promise<unknown>;
 }
@@ -261,12 +267,36 @@ export class ExternalBackend implements AgentBackend {
   async analyze(
     prompt: string,
     selection?: RuntimeModelSelection,
+    options?: RuntimeAnalysisOptions,
+    signal?: AbortSignal,
   ): Promise<string> {
-    const result = await this.runtime.rpc<{ text?: string }>(
-      "runtime/analyze",
-      { backend: this.kind, prompt, runtimeModel: selection },
-    );
-    return result.text ?? "";
+    if (signal?.aborted) throw new Error("Analysis cancelled");
+    const analysisId = `analysis_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    let rejectAbort: (error: Error) => void = () => {};
+    const aborted = new Promise<never>((_resolve, reject) => {
+      rejectAbort = reject;
+    });
+    const cancel = () => {
+      void this.runtime
+        .rpc("runtime/cancelAnalysis", { analysisId })
+        .catch(() => undefined);
+      rejectAbort(new Error("Analysis cancelled"));
+    };
+    signal?.addEventListener("abort", cancel, { once: true });
+    try {
+      const running = this.runtime.rpc<{ text?: string }>("runtime/analyze", {
+        backend: this.kind,
+        prompt,
+        runtimeModel: selection,
+        analysisId,
+        options,
+      });
+      if (signal?.aborted) cancel();
+      const result = await Promise.race([running, aborted]);
+      return result.text ?? "";
+    } finally {
+      signal?.removeEventListener("abort", cancel);
+    }
   }
 
   async dispose(taskId: string): Promise<void> {

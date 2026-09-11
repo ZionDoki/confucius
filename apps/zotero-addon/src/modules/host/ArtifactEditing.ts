@@ -85,7 +85,7 @@ export const ARTIFACT_PATCH_SCHEMA: JsonSchemaObject = {
       type: "string",
       enum: ["draft", "ready"],
       description:
-        "After evidence review, send all corrections with status=ready in one call. If no correction is needed, send only id, expectedRevision and status=ready.",
+        "Batch concrete corrections in one call. ready means deliverable, not certified correct; draft is for unfinished content. No review verdict or read sequence is required.",
     },
     citations: {
       ...ARTIFACT_CITATIONS_SCHEMA,
@@ -133,7 +133,7 @@ export function patchArtifactInput(
     args.citations === undefined
   )
     throw new Error(
-      "Supply edits, title, status or citations. To finalize an unchanged reviewed draft, supply status=ready.",
+      "Supply edits, title, status or citations. To mark an unchanged draft deliverable, supply status=ready.",
     );
   let body: ArtifactBody = artifact.body;
   if (args.edits?.length) {

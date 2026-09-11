@@ -156,7 +156,10 @@ describe("FileMemoryStore", () => {
     assert.equal(Object.keys(fs.snapshot()).length, writesBefore);
     await store.flushAccess();
     const text = await fs.readFile("/mem/memories/mem_test01.md");
-    assert.match(text, /access-count: 5/);
-    assert.match(text, /last-accessed: 9999/);
+    assert.match(text, /access-count: 3/);
+    const reopened = new FileMemoryStore(fs, "/mem");
+    await reopened.load();
+    assert.equal(reopened.get("mem_test01")?.accessCount, 5);
+    assert.equal(reopened.get("mem_test01")?.lastAccessedAt, 9999);
   });
 });

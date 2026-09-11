@@ -62,6 +62,8 @@ export interface HistoryAppend extends Omit<
   createdAt?: number;
 }
 export interface HistoryQuery {
+  /** Host-only scope restriction, applied before ranking and pagination. */
+  includeItem?(item: HistoryItem): boolean;
   /** Host-only identity of the whole source passage, never just the search excerpt. */
   fingerprint?(content: string): Promise<string>;
   taskId?: string;
@@ -146,6 +148,23 @@ export class HistoryStore {
   register(task: HistoryTask): void {
     safeId(task.id);
     this.tasks.set(task.id, { ...task });
+  }
+
+  /** Host-written terminal answers survive trimming the visible task timeline. */
+  async completedTurns(taskId: string, before: number): Promise<string[]> {
+    if (!this.tasks.has(taskId)) return [];
+    await this.queue;
+    const manifest = await this.load(taskId);
+    if (manifest.deleted) return [];
+    return manifest.items.flatMap((item) =>
+      item.turnId &&
+      item.itemId === `answer_${item.turnId}` &&
+      item.role === "assistant" &&
+      !item.incomplete &&
+      item.createdAt <= before
+        ? [item.turnId]
+        : [],
+    );
   }
   private path(taskId: string, suffix: string): string {
     return `${this.root}/${safeId(taskId)}/${suffix}`;
@@ -509,6 +528,7 @@ export class HistoryStore {
         for (const item of index.items) {
           if (
             !retrievable(item) ||
+            (query.includeItem && !query.includeItem(item)) ||
             (query.windowId && query.windowId !== item.windowId)
           )
             continue;

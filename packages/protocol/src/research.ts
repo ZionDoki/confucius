@@ -325,6 +325,8 @@ export interface ArtifactRecord {
   sourceContextIds: string[];
   revisions: ArtifactRevision[];
   writeback?: ArtifactWriteback;
+  /** Independent associations retained when the current writeback target changes. */
+  writebacks?: ArtifactWriteback[];
   createdAt: number;
   updatedAt: number;
 }
@@ -454,6 +456,9 @@ export function isArtifactRecord(value: unknown): value is ArtifactRecord {
     artifact.revisions.length === 0 ||
     !artifact.revisions.every((entry) => isArtifactRevision(entry, kind)) ||
     !optionalRecord(artifact.writeback, isArtifactWriteback) ||
+    (artifact.writebacks !== undefined &&
+      (!Array.isArray(artifact.writebacks) ||
+        !artifact.writebacks.every(isArtifactWriteback))) ||
     !finiteNumber(artifact.createdAt) ||
     !finiteNumber(artifact.updatedAt)
   ) {
@@ -522,10 +527,7 @@ export function artifactBodyMatchesKind(
   const value = recordOf(body);
   if (!value) return false;
   if (kind === "deep_read" || kind === "report" || kind === "note_draft") {
-    return (
-      value.type === "markdown" &&
-      typeof value.markdown === "string"
-    );
+    return value.type === "markdown" && typeof value.markdown === "string";
   }
   if (kind === "evidence_audit") {
     return (
@@ -648,11 +650,17 @@ function legacyText(value: unknown): string {
 }
 
 /** Flatten a pre-removal readingGuide into plain markdown for display and reads. */
-export function legacyReadingGuideMarkdown(guide: unknown, citations: readonly Citation[] = []): string {
+export function legacyReadingGuideMarkdown(
+  guide: unknown,
+  citations: readonly Citation[] = [],
+): string {
   const record = legacyGuideRecord(guide);
   if (!record) return "";
-  const checkpoints = Array.isArray(record.checkpoints) ? record.checkpoints : [];
-  if (checkpoints.length === 0 && typeof record.overview !== "string") return "";
+  const checkpoints = Array.isArray(record.checkpoints)
+    ? record.checkpoints
+    : [];
+  if (checkpoints.length === 0 && typeof record.overview !== "string")
+    return "";
   const lines: string[] = [];
   const overview = legacyText(record.overview);
   if (overview.trim()) lines.push(overview);
@@ -661,34 +669,53 @@ export function legacyReadingGuideMarkdown(guide: unknown, citations: readonly C
     const cp = entry as Record<string, unknown>;
     const section = legacyText(cp.section);
     const title = legacyText(cp.title);
-    if (section || title) lines.push("## " + (section ? section + " \u00b7 " : "") + title);
+    if (section || title)
+      lines.push("## " + (section ? section + " \u00b7 " : "") + title);
     const before = legacyText(cp.before);
     if (before) lines.push(before);
     const ids = Array.isArray(cp.citationIds)
-      ? (cp.citationIds as unknown[]).filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+      ? (cp.citationIds as unknown[]).filter(
+          (id): id is string => typeof id === "string" && id.trim().length > 0,
+        )
       : [];
     for (const id of ids) {
       const source = citations.find((c) => c.id === id);
-      const quote = source && typeof source.quote === "string" ? source.quote : "";
-      if (quote.trim()) lines.push(quote.split("\n").map((line) => "> " + line).join("\n"));
+      const quote =
+        source && typeof source.quote === "string" ? source.quote : "";
+      if (quote.trim())
+        lines.push(
+          quote
+            .split("\n")
+            .map((line) => "> " + line)
+            .join("\n"),
+        );
       lines.push("[cite:" + id + "]");
     }
     const reading = legacyText(cp.reading);
     if (reading) lines.push("### \u8bfb\u61c2\u8fd9\u6bb5", reading);
     const writing = legacyText(cp.writing);
-    if (writing) lines.push("### \u770b\u4f5c\u8005\u600e\u4e48\u5199", writing);
+    if (writing)
+      lines.push("### \u770b\u4f5c\u8005\u600e\u4e48\u5199", writing);
     for (const key of ["further", "question", "hint", "after"] as const) {
       const text = legacyText(cp[key]);
       if (text) lines.push(text);
     }
   }
-  const annotations = legacyText((record as Record<string, unknown>).annotationsMarkdown);
-  if (annotations.trim()) lines.push("## \u539f\u6587\u6279\u6ce8", annotations);
-  return lines.filter((line) => typeof line === "string" && line.length > 0).join("\n\n");
+  const annotations = legacyText(
+    (record as Record<string, unknown>).annotationsMarkdown,
+  );
+  if (annotations.trim())
+    lines.push("## \u539f\u6587\u6279\u6ce8", annotations);
+  return lines
+    .filter((line) => typeof line === "string" && line.length > 0)
+    .join("\n\n");
 }
 
 /** Display markdown: prefer saved prose, fall back to a flattened legacy guide. */
-export function markdownForDisplay(body: ArtifactBody, citations: readonly Citation[] = []): string {
+export function markdownForDisplay(
+  body: ArtifactBody,
+  citations: readonly Citation[] = [],
+): string {
   if (body.type !== "markdown") return "";
   if (body.markdown.trim().length > 0) return body.markdown;
   const guide = (body as { readingGuide?: unknown }).readingGuide;

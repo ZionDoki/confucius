@@ -18,7 +18,6 @@ import {
 import type { ToolProvider } from "@confucius/harness";
 import { ArtifactWriteCancelled, type ArtifactStore } from "./ArtifactStore";
 import { throwIfScopeExpired } from "./ExecutionScope";
-import { DEEP_READ_REVIEW_INSTRUCTION } from "./DeepReadReview";
 import {
   ARTIFACT_READ_TOOL,
   ARTIFACT_PATCH_TOOL,
@@ -511,7 +510,7 @@ const schema: JsonSchemaObject = {
       type: "string",
       enum: ["draft", "ready"],
       description:
-        "For deep_read, first save a draft, then read its source pages and saved annotations. Prefer artifact_patch to submit corrections and ready status together. A new draft revision resets those read prerequisites.",
+        "For deep_read, save readable content with status=ready. Use draft only for unfinished content. The host may directly improve the report once; this is not an approval or quality gate.",
     },
     citations: {
       ...ARTIFACT_CITATIONS_SCHEMA,
@@ -534,7 +533,7 @@ const compatibilitySchema: JsonSchemaObject = {
 export const ARTIFACT_UPSERT_DEFINITION: ToolDefinition = {
   name: ARTIFACT_UPSERT_TOOL,
   description:
-    'Create or fully replace a saved research artifact in the current task. For focused report corrections, prefer artifact_patch instead of resending the whole body. For a new artifact, omit id and taskId; the host assigns both. For an update, use the id returned by a save in this task. Saving a task artifact needs no Zotero write approval. Do not call this for an ordinary reply. For deep_read, report, and note_draft, use {"type":"markdown","markdown":"..."}; for other kinds, body.type must equal kind and the body must follow its schema. A deep-read task first saves deep_read as draft; reread its source evidence and actual annotations, correct the report/comments, then update the same id to ready. Follow reviewRequired and nextAction in the save receipt.',
+    'Create or fully replace a saved research artifact in the current task. For focused report corrections, prefer artifact_patch instead of resending the whole body. For a new artifact, omit id and taskId; the host assigns both. For an update, use the id returned by a save in this task. Saving a task artifact needs no Zotero write approval. Do not call this for an ordinary reply. For deep_read, report, and note_draft, use {"type":"markdown","markdown":"..."}; for other kinds, body.type must equal kind and the body must follow its schema. Save a readable deep_read as ready; unfinished content may be draft. Ground it in source evidence and actual annotations. The host may make one independent direct improvement pass; do not wait for an assessment or repeat work to satisfy read prerequisites.',
   inputSchema: schema,
 };
 
@@ -616,12 +615,6 @@ export class ArtifactToolProvider implements ToolProvider {
     private readonly onUpsert: (artifact: ArtifactRecord) => void,
     private readonly execution?: () =>
       import("@confucius/protocol").ExecutionBinding | undefined,
-    private readonly reviewState?: (
-      artifact: ArtifactRecord | null,
-    ) => "draft_required" | "evidence_required" | "reviewed",
-    private readonly reviewNextAction?: (
-      artifact: ArtifactRecord | null,
-    ) => string,
     private readonly requiredKinds?: readonly ArtifactRecord["kind"][],
   ) {}
 
@@ -708,24 +701,6 @@ export class ArtifactToolProvider implements ToolProvider {
           effect: "none",
           retryable: false,
           message: `Unresolved or duplicate citation IDs: ${[...unresolved].join(", ")}. Supply exactly one citations entry for every [cite:id] marker, using source identifiers returned by tools. No write was performed.`,
-        };
-    }
-    if (
-      args.kind === "deep_read" &&
-      args.status !== "draft" &&
-      this.reviewState
-    ) {
-      const review = this.reviewState(existing);
-      if (review === "draft_required") args.status = "draft";
-      else if (review === "evidence_required")
-        return {
-          ok: false as const,
-          toolName: name,
-          code: "invalid_args" as const,
-          effect: "none" as const,
-          retryable: false,
-          message:
-            this.reviewNextAction?.(existing) ?? DEEP_READ_REVIEW_INSTRUCTION,
         };
     }
     context.expected ??= {};
@@ -964,16 +939,6 @@ export class ArtifactToolProvider implements ToolProvider {
           ...(name === ARTIFACT_PATCH_TOOL
             ? artifactPatchReceipt(artifact, args)
             : { artifact }),
-          ...(artifact.kind === "deep_read" &&
-          artifact.status === "draft" &&
-          this.reviewState
-            ? {
-                reviewRequired: true,
-                nextAction:
-                  this.reviewNextAction?.(artifact) ??
-                  DEEP_READ_REVIEW_INSTRUCTION,
-              }
-            : {}),
         },
         warnings,
       };

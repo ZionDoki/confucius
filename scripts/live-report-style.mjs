@@ -103,6 +103,28 @@ try {
     ),
     ["parallel", "questions", "method"],
   );
+  const reading = await evaluate(`
+    const preview=d.querySelector('.confucius-report-style-preview');
+    const pair=preview.querySelector('.confucius-reading-parallel');
+    const help=[...preview.querySelectorAll('details')];
+    if(help[0])help[0].open=true;
+    return {paired:!!pair,columns:pair?.children.length,help:help.length,expanded:help[0]?.open,rawSyntax:preview.textContent.includes(':::')};
+  `);
+  assert.equal(reading.paired, true);
+  assert.equal(reading.columns, 2);
+  assert.ok(reading.help > 0);
+  assert.equal(reading.expanded, true);
+  assert.equal(reading.rawSyntax, false);
+  report.checks.push({ readingBlocks: reading });
+  const readingPng = await evaluate(`
+    const panel=d.querySelector('.confucius-dialog-panel'),r=panel.getBoundingClientRect();
+    const c=d.createElementNS('http://www.w3.org/1999/xhtml','canvas');c.width=r.width;c.height=r.height;
+    c.getContext('2d').drawWindow(win,r.x,r.y,r.width,r.height,'white');return c.toDataURL('image/png');
+  `);
+  await writeFile(
+    join(output, "reading-blocks.png"),
+    Buffer.from(readingPng.split(",")[1], "base64"),
+  );
   await evaluate(
     `d.activeElement.dispatchEvent(new win.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));d.getElementById('confucius-preset').click();return true;`,
   );

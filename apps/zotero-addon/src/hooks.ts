@@ -22,6 +22,7 @@ import {
   restoreWorkspaceAfterReload,
 } from "./modules/ui/workspaceWindow";
 import { AgentHost } from "./modules/host/AgentHost";
+import { registerBtwReader, unregisterBtwReader } from "./modules/ui/btwReader";
 import { disposeAppearanceBindings } from "./modules/ui/workspaceAppearance";
 import { artifactWindows } from "./modules/ui/artifactWindow";
 import {
@@ -47,9 +48,11 @@ async function onStartup(isUpdate = false, isInstall = false) {
   ensurePairingToken();
   await host.start(isUpdate || workspaceReload !== undefined);
   if (!addon.data.alive) return;
+  host.startBtwCleanup();
   registerHttpBridge(host);
   try {
     registerReaderContextMenu();
+    registerBtwReader(host);
   } catch (error) {
     ztoolkit.log("[Confucius] reader context-menu registration failed", error);
   }
@@ -113,6 +116,7 @@ async function onShutdown(isUpdate = false): Promise<void> {
   cleanup(() => artifactWindows.closeAll(), "artifact windows");
   cleanup(disposeAppearanceBindings, "appearance bindings");
   cleanup(unregisterReaderContextMenu, "reader context menu");
+  cleanup(unregisterBtwReader, "btw reader");
   try {
     await host.shutdown();
   } catch (error) {

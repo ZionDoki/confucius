@@ -41,6 +41,7 @@ export async function callMemoryCatalogTool(
   logs: ConversationLogEngine | undefined,
   name: string,
   args: Record<string, unknown>,
+  prepared?: { creationId?: string },
 ): Promise<ToolResult> {
   const knowledge = new KnowledgeBaseService(engine);
   try {
@@ -184,6 +185,7 @@ export async function callMemoryCatalogTool(
       }
       case "knowledge_base_create": {
         const knowledgeBase = await knowledge.create({
+          id: prepared?.creationId,
           title: String(args.title ?? ""),
           description: args.description ? String(args.description) : undefined,
           tags: asTags(args.tags),
@@ -267,6 +269,7 @@ export async function callMemoryCatalogTool(
         const hasSource =
           Number(args.libraryID) > 0 && String(args.key ?? "").trim();
         const entry = await knowledge.saveEntry({
+          creationId: prepared?.creationId,
           id: args.id ? String(args.id) : undefined,
           knowledgeBaseId: String(args.knowledgeBaseId ?? ""),
           kind,

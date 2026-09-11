@@ -24,8 +24,19 @@ export class MemoryApprovals {
       sourceId?: string;
     },
   ): Promise<{ proposal: MemoryProposal; created: boolean }> {
-    const id = `memprop_${await (this.options.digest ?? runtimeDigest)(canonical({ op, taskId: context.taskId, runId: context.runId, source: context.source, sourceId: context.sourceId }))}`;
-    return this.locks.run([id], async () => {
+    const baseId = `memprop_${await (this.options.digest ?? runtimeDigest)(canonical({ op, taskId: context.taskId, runId: context.runId, source: context.source, sourceId: context.sourceId }))}`;
+    return this.locks.run([baseId], async () => {
+      // A source ID identifies a replay of one operation. Without it, only a
+      // pending proposal is a duplicate; a resolved choice can be made again.
+      let id = baseId;
+      if (!context.sourceId) {
+        let sequence = 1;
+        while (
+          this.options.proposals.get(id)?.status !== "pending" &&
+          this.options.proposals.has(id)
+        )
+          id = `${baseId}_${sequence++}`;
+      }
       const previous = this.options.proposals.get(id);
       if (previous) return { proposal: previous, created: false };
       const proposal: MemoryProposal = {

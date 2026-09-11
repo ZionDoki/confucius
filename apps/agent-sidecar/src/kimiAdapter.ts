@@ -1,3 +1,4 @@
+import { selectKimiModel } from "@confucius/protocol";
 import { runtimeFailure } from "@confucius/protocol";
 import {
   execFile,
@@ -345,7 +346,15 @@ export class KimiAdapter implements RuntimeAdapter {
     await stopKimiProcess(session.child);
   }
 
-  async analyze(prompt: string, cwd: string): Promise<string> {
+  async analyze(
+    prompt: string,
+    cwd: string,
+    selection?: import("@confucius/protocol").RuntimeModelSelection,
+    options?: import("@confucius/protocol").RuntimeAnalysisOptions,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    if (signal?.aborted) throw new Error("Analysis cancelled");
+    const deadline = Date.now() + (options?.timeoutMs ?? 60000);
     let text = "";
     const opened = await this.openConnection({
       taskId: "analysis",
@@ -357,27 +366,59 @@ export class KimiAdapter implements RuntimeAdapter {
       },
       approvals: denyApprovals,
     });
+    const cancel = () => {
+      void stopKimiProcess(opened.child);
+    };
+    signal?.addEventListener("abort", cancel, { once: true });
+    if (signal?.aborted) cancel();
     try {
-      const created = await opened.connection.newSession({
-        cwd,
-        additionalDirectories: [],
-        mcpServers: [],
-      });
-      opened.sessionId = created.sessionId;
-      await opened.connection.setSessionMode({
-        sessionId: created.sessionId,
-        modeId: "plan",
-      });
-      await withTimeout(
-        opened.connection.prompt({
-          sessionId: created.sessionId,
-          prompt: [{ type: "text", text: prompt }],
-        }),
-        60_000,
+      return await withTimeout(
+        (async () => {
+          const created = await opened.connection.newSession({
+            cwd,
+            additionalDirectories: [],
+            mcpServers: [],
+          });
+          opened.sessionId = created.sessionId;
+          await opened.connection.setSessionMode({
+            sessionId: created.sessionId,
+            modeId: "plan",
+          });
+          if (selection)
+            await selectKimiModel(
+              {
+                request: async <T>(
+                  method: string,
+                  params: Record<string, unknown>,
+                ): Promise<T> => {
+                  if (method !== "session/set_config_option")
+                    throw new Error(
+                      "This Kimi CLI cannot configure the requested analysis model",
+                    );
+                  return (await opened.connection.setSessionConfigOption(
+                    params as unknown as Parameters<
+                      ClientSideConnection["setSessionConfigOption"]
+                    >[0],
+                  )) as T;
+                },
+              },
+              created.sessionId,
+              created,
+              selection,
+            );
+          const response = await opened.connection.prompt({
+            sessionId: created.sessionId,
+            prompt: [{ type: "text", text: prompt }],
+          });
+          if (response.stopReason !== "end_turn")
+            throw new Error(`Incomplete analysis: ${response.stopReason}`);
+          return text;
+        })(),
+        Math.max(1, deadline - Date.now()),
         () => "Kimi analysis timed out",
       );
-      return text;
     } finally {
+      signal?.removeEventListener("abort", cancel);
       await stopKimiProcess(opened.child);
     }
   }

@@ -136,6 +136,8 @@ export class RunCoordinator {
       requestProgress?(
         progress: import("@confucius/protocol").ModelRequestProgress,
       ): void;
+      /** Optional direct editing; failure never adds a work gap. */
+      improve?(): Promise<void>;
       recover?(): Promise<void>;
       switchContext?(): Promise<void>;
       wait?: (ms: number, signal: AbortSignal) => Promise<void>;
@@ -297,7 +299,23 @@ export class RunCoordinator {
       }
       recoveries = 0;
       requestId = `runtime_${run.id}_${run.budget.executorStarts + 1}`;
-      if (!work.missing.length) return finish("completed");
+      if (!work.missing.length) {
+        try {
+          await this.options.improve?.();
+        } catch {
+          this.options.progress(
+            this.options.language === "en-US"
+              ? "Automatic improvements were unavailable; the saved report is retained."
+              : "自动完善暂不可用，已保留生成的报告。",
+          );
+        }
+        if (!this.options.current())
+          return { ...result, work, superseded: true };
+        if (signal.aborted) return finish("aborted");
+        work = await this.options.snapshot();
+        if (work.unknownOperationIds.length) return finish("outcome_unknown");
+        return finish("completed");
+      }
       const gap = JSON.stringify({
         missing: work.missing
           .map((x) => JSON.stringify([x.id, x.description, x.progress]))

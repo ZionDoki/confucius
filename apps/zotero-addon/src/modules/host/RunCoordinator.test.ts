@@ -800,3 +800,55 @@ it("unknown writes, authentication failures and cancelled recovery never start a
     );
   }
 });
+
+it("direct improvement failures do not reopen completed work or create a delivery gate", async () => {
+  const state = run();
+  let starts = 0,
+    edits = 0;
+  const coordinator = new RunCoordinator({
+    run: state,
+    current: () => true,
+    persist: async () => {},
+    progress: () => {},
+    snapshot: async () => empty(),
+    executor: {
+      run: async () => {
+        starts++;
+        return { stopReason: "completed", text: "Saved report" };
+      },
+    },
+    improve: async () => {
+      edits++;
+      throw new Error("Editing unavailable");
+    },
+  });
+  const result = await coordinator.execute(
+    "Read",
+    new AbortController().signal,
+  );
+  assert.equal(result.stopReason, "completed");
+  assert.equal(starts, 1);
+  assert.equal(edits, 1);
+  assert.deepEqual(result.work.missing, []);
+});
+
+it("cancellation during direct improvement keeps the run cancelled", async () => {
+  const state = run(),
+    controller = new AbortController();
+  const coordinator = new RunCoordinator({
+    run: state,
+    current: () => true,
+    persist: async () => {},
+    progress: () => {},
+    snapshot: async () => empty(),
+    executor: {
+      run: async () => ({ stopReason: "completed", text: "Saved report" }),
+    },
+    improve: async () => {
+      controller.abort();
+    },
+  });
+  const result = await coordinator.execute("Read", controller.signal);
+  assert.equal(result.stopReason, "aborted");
+  assert.equal(state.status, "interrupted");
+});

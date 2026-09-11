@@ -22,24 +22,52 @@ export class McpHttpClient {
   constructor(
     private readonly server: McpServerConfig,
     private readonly fetchImpl: typeof fetch = fetch,
+    private readonly createController: () => AbortController = () =>
+      new AbortController(),
   ) {}
 
-  async listTools(): Promise<ToolDefinition[]> {
-    const result = await this.rpc<{
-      tools?: Array<{
-        name: string;
-        description?: string;
-        inputSchema?: JsonSchemaObject;
-      }>;
-    }>("tools/list", {});
-    return (result.tools ?? []).map((tool) => ({
-      name: mcpToolName(this.server.id, tool.name),
-      description: tool.description || tool.name,
-      inputSchema: tool.inputSchema ?? {
-        type: "object",
-        properties: {},
-      },
-    }));
+  async listTools(
+    signal?: AbortSignal,
+    timeoutMs = 10_000,
+  ): Promise<ToolDefinition[]> {
+    const controller = this.createController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let abort = () => {};
+    const cancelled = new Promise<never>((_, reject) => {
+      abort = () => {
+        controller.abort();
+        reject(new Error("MCP discovery cancelled"));
+      };
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) abort();
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new Error("MCP discovery timed out"));
+      }, timeoutMs);
+    });
+    try {
+      const result = await Promise.race([
+        this.rpc<{
+          tools?: Array<{
+            name: string;
+            description?: string;
+            inputSchema?: JsonSchemaObject;
+          }>;
+        }>("tools/list", {}, controller.signal),
+        cancelled,
+      ]);
+      return (result.tools ?? []).map((tool) => ({
+        name: mcpToolName(this.server.id, tool.name),
+        description: tool.description || tool.name,
+        inputSchema: tool.inputSchema ?? {
+          type: "object",
+          properties: {},
+        },
+      }));
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+    }
   }
 
   async call(

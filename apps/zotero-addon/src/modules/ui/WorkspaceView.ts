@@ -1,4 +1,5 @@
 import { renderMemoryProposal } from "./memoryProposalCards";
+import { bindBtwSelection } from "./btwPopup";
 import { artifactWindows } from "./artifactWindow";
 import { mountWorkspaceArtifact } from "./artifactWorkspace";
 import { UI_FONT_STACKS } from "./workspaceTypography";
@@ -1450,6 +1451,9 @@ function bindWorkspace(
     },
   );
   timelinePane.className = "confucius-pane confucius-timeline-pane";
+  const disposeBtwSelection = host
+    ? bindBtwSelection(timelinePane, host, fillAnswerHtml)
+    : () => {};
   workbenchPane.appendChild(timelinePane);
   columns.appendChild(sessionPane);
   columns.appendChild(workbenchPane);
@@ -1901,6 +1905,7 @@ function bindWorkspace(
     };
   });
   layoutCleanups.set(root, () => {
+    disposeBtwSelection();
     reportStyleDialog?.close();
     artifactOpenGeneration++;
     void workspaceArtifact?.dispose();
@@ -2575,13 +2580,24 @@ function bindWorkspace(
             ? "Protect"
             : "保护",
       );
+      let protectionRequestId: string | undefined;
       protect.addEventListener("click", async () => {
+        if (protect.disabled) return;
+        protect.disabled = true;
+        protectionRequestId ??= `protect_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
         try {
-          await rpc("memory/protect", { id: memory.id, protected: !pinned });
+          await rpc("memory/protect", {
+            id: memory.id,
+            protected: !pinned,
+            requestId: protectionRequestId,
+          });
+          protectionRequestId = undefined;
           await refreshMemoryProposals();
           renderKnowledgeWindow();
         } catch (error) {
           card.appendChild(muted(doc, String(error)));
+        } finally {
+          protect.disabled = false;
         }
       });
       card.appendChild(protect);
@@ -3651,10 +3667,25 @@ function bindWorkspace(
     index: number,
   ): HTMLElement | null {
     if (block.kind === "user") {
-      return renderUserLine(targetDoc, block.text);
+      const row = renderUserLine(targetDoc, block.text);
+      if (state.sessionId)
+        row.dataset.btwSource = JSON.stringify({
+          kind: "conversation",
+          taskId: state.sessionId,
+          messageId: `user_${index}`,
+        });
+      return row;
     }
     if (block.kind === "text") {
-      return renderAnswer(targetDoc, block.text, block.turnId);
+      const row = renderAnswer(targetDoc, block.text, block.turnId);
+      const body = row.querySelector<HTMLElement>(".tui-answer");
+      if (body && state.sessionId)
+        body.dataset.btwSource = JSON.stringify({
+          kind: "conversation",
+          taskId: state.sessionId,
+          messageId: block.turnId ?? `answer_${index}`,
+        });
+      return row;
     }
     if (block.kind === "reasoning") {
       return renderReasoning(targetDoc, block.text, `reasoning:${index}`);

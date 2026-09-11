@@ -2,6 +2,36 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { McpHttpClient } from "./index";
 
+for (const stage of ["fetch", "body"] as const) {
+  it(`bounds discovery while ${stage} is unresponsive and aborts the transport`, async () => {
+    let signal: AbortSignal | null | undefined;
+    const client = new McpHttpClient(
+      { id: "offline", url: "http://example.test" },
+      (async (_url, init) => {
+        signal = init?.signal;
+        if (stage === "fetch") return new Promise<Response>(() => {});
+        return {
+          ok: true,
+          text: () => new Promise<string>(() => {}),
+        } as Response;
+      }) as typeof fetch,
+    );
+    await assert.rejects(client.listTools(undefined, 10), /timed out/);
+    assert.equal(signal?.aborted, true);
+  });
+}
+
+it("cancels discovery promptly when the host reloads or shuts down", async () => {
+  const controller = new AbortController();
+  const client = new McpHttpClient(
+    { id: "offline", url: "http://example.test" },
+    (async () => new Promise<Response>(() => {})) as typeof fetch,
+  );
+  const discovery = client.listTools(controller.signal);
+  controller.abort();
+  await assert.rejects(discovery, /cancelled/);
+});
+
 describe("McpHttpClient", () => {
   it("prefixes listed tools with mcp.<id>.", async () => {
     const client = new McpHttpClient(

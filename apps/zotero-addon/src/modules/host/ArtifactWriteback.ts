@@ -1,8 +1,32 @@
 import type {
   ArtifactBody,
   ArtifactWriteback,
+  ArtifactRecord,
   CollectionDiffArtifactBody,
 } from "@confucius/protocol";
+
+export function writebackAssociationKey(writeback: ArtifactWriteback): string {
+  return writeback.target === "knowledge_base"
+    ? `${writeback.target}:${writeback.targetRef?.split(":")[0] ?? ""}`
+    : writeback.target;
+}
+
+export function artifactWritebackFor(
+  artifact: ArtifactRecord,
+  target: ArtifactWriteback["target"],
+  knowledgeBaseId?: string,
+): ArtifactWriteback | undefined {
+  return [
+    artifact.writeback,
+    ...(artifact.writebacks ?? []).slice().reverse(),
+  ].find(
+    (entry) =>
+      entry?.target === target &&
+      (!knowledgeBaseId ||
+        target !== "knowledge_base" ||
+        entry.targetRef?.split(":")[0] === knowledgeBaseId),
+  );
+}
 import {
   buildOpenPdfUri,
   buildSelectUri,

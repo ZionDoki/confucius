@@ -192,11 +192,12 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   }),
   def(
     "get_collection_items",
-    "List items in a collection.",
+    "List a page of items in a collection. Continue at nextOffset until null; total reports the complete count.",
     {
       libraryID: { type: "integer" },
       key: { type: "string" },
       limit: { type: "integer", minimum: 1, maximum: 50 },
+      offset: { type: "integer", minimum: 0 },
     },
     ["libraryID", "key"],
   ),
@@ -212,10 +213,12 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   }),
   def(
     "run_saved_search",
-    "Run a saved search.",
+    "Read a page of saved-search results. Continue at nextOffset until null; total reports the complete count.",
     {
       libraryID: { type: "integer" },
       key: { type: "string" },
+      limit: { type: "integer", minimum: 1, maximum: 50 },
+      offset: { type: "integer", minimum: 0 },
     },
     ["libraryID", "key"],
   ),

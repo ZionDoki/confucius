@@ -31,40 +31,64 @@ export function restoreReportStyle(value: unknown): ReportStyle | undefined {
     : undefined;
 }
 
-/** Shared by native and external engines, including subsequent report revisions. */
+/** Shared writing recipe for drafting and direct revision in every engine. */
 export function reportStyleGuidance(
   style: ReportStyle = DEFAULT_REPORT_STYLE,
 ): string {
   const layout = {
-    essay:
-      "Write connected paragraphs with clear transitions and few headings. Keep the argument readable as a continuous essay; avoid turning it into a checklist.",
-    parallel:
-      "Pair selected verbatim source passages with explanations in the response language. Use a block for each key passage: a line ':::parallel', then a Markdown blockquote containing the original passage and [cite:id], a blank line, explanatory paragraphs, then a closing line ':::'. The reader displays the source and explanation side by side, stacked on narrow screens. Only quote text actually retrieved from the paper; do not invent quotations or translate an invented English source. Use ordinary prose when no original passage is available.",
-    sections:
-      "Use short descriptive headings and coherent explanatory paragraphs. Separate the problem, mechanism, evidence and boundaries into digestible sections; use a concrete example where it resolves a difficult step.",
+    essay: [
+      "Organize a continuous argument in connected paragraphs, with few headings. Each transition should explain why the next point follows; do not disguise a section checklist as prose.",
+      "Demonstration: The difficulty is not finding an action, but reaching the state where it becomes useful. This is why the method retains earlier steps. Its evaluation must therefore test complete sequences, not just isolated clicks.",
+    ],
+    parallel: [
+      "Select decisive original sentences, not arbitrary excerpts. For each, explain its meaning, role in the argument and material boundary in the response language. Use :::parallel on its own line, a Markdown blockquote with the verbatim retrieved passage and [cite:id], a blank line, explanatory paragraphs, and a closing :::. Narrow readers stack the two columns. If original text is unavailable, use ordinary prose and identify the source limit; never manufacture a quotation.",
+      "Syntax demonstration only: :::parallel\n> [retrieved original sentence] [cite:source_id]\n\n[Explain what it means, why it matters, and what it does not establish.]\n:::",
+    ],
+    sections: [
+      "Use descriptive headings for the research problem, mechanism, evidence and boundaries. Each section develops an explanation with connected paragraphs; use an example when it bridges a difficult step. Organize around understanding, not the paper's section numbering.",
+      "Demonstration heading: Why remembering earlier steps changes the search. Follow it with the obstacle, the mechanism addressing it, and the condition under which it helps.",
+    ],
   }[style.layout];
   const tone = {
-    patient:
-      "Explain patiently: connect causes and consequences, define unfamiliar terms on first use, and unpack intermediate reasoning without talking down to the reader.",
-    concise:
-      "Use concise, direct sentences. Remove repetition, but retain the premises, essential reasoning steps and qualifications needed to understand a claim. Brevity must not hide a technical gap.",
-    questions:
-      "Guide through substantive questions and answers: why is this problem hard, why does this design help, and what evidence could support it? Answer each question using the paper; do not leave a quiz for the reader or add rhetorical questions everywhere.",
+    patient: [
+      "Define unfamiliar terms on first use, connect causes to consequences and unpack intermediate reasoning. Assume research experience but no specialist knowledge of this paper's field. Use a concrete example, labelled illustrative if not from the paper, to bridge an actual technical gap.",
+      "Demonstration: A baseline is the comparison method used in the same experiment. Holding the task set fixed helps us ask whether the method, rather than an easier task selection, accounts for the difference.",
+    ],
+    concise: [
+      "Use direct sentences and remove repeated results, ornamental introductions and unnecessary background. Keep the premises, essential reasoning and qualifications. Concise does not mean replacing explanation with terminology or shortening every paragraph mechanically.",
+      "Demonstration: Both methods used the same tasks. The difference therefore concerns performance on those tasks; it does not establish performance on other applications.",
+    ],
+    questions: [
+      "Choose substantive questions whose answers advance the argument: why the problem is hard, why the design helps, and what the evidence establishes. Answer immediately from the paper. Do not leave exercises unanswered or add rhetorical questions to every paragraph. In essay layout place questions naturally in prose; in parallel layout answer beside the source.",
+      "Demonstration: Why is a successful first step insufficient? Later actions depend on the state it creates. The evaluation therefore needs to distinguish starting a sequence from completing it.",
+    ],
   }[style.tone];
   const focus = {
-    overview:
-      "Develop the full argument: problem → method → evidence → limits. Explain how the parts connect, rather than paraphrasing the abstract or listing section summaries.",
-    method:
-      "Spend the most explanatory space on the method: inputs, outputs, concrete steps, assumptions, symbols and why each design choice helps. Anchor equations to an intuitive worked example when supported. Retain a concise account of the evaluation and limits.",
-    experiments:
-      "Spend the most explanatory space on experiments: what each comparison tests, datasets, metrics, baselines, controls, key figures/tables and what the results cannot establish. Explain how to read the decisive figure or table. Retain enough method context to interpret it.",
+    overview: [
+      "Read across the problem, method, evaluation and limitations. Develop the full argument: problem → method → evidence → limits. Explain why the problem calls for this design and how the evidence supports the takeaway; do not paraphrase the abstract or concatenate section summaries.",
+      "Demonstration outline: obstacle → design response → decisive comparison → supported conclusion → applicability condition.",
+    ],
+    method: [
+      "During reading, locate inputs, outputs, steps, design motivations, assumptions, equations and the passages connecting them. Spend the most explanatory space on how the mechanism works and why each important choice helps. Explain symbols in context and walk through an illustrative input when supported. Retain evaluation and limits; do not invent a formula, ablation or implementation detail the paper does not provide.",
+      "Demonstration outline: input state → one transformation → resulting output → reason for that choice → assumption needed → evidence that the mechanism helps.",
+    ],
+    experiments: [
+      "During reading, locate comparison purposes, datasets/populations, metrics, baselines, controls, experiment settings and decisive figures/tables. Spend the most explanatory space on how to interpret them. Preserve denominators, intervals and absolute versus relative differences. Explain what each comparison can and cannot establish, with enough method context to make it intelligible. Use visible table evidence when headings are ambiguous; unresolved extraction is not an author error.",
+      "Demonstration outline: question tested → fixed conditions and changing factor → metric and denominator → how to read the result → supported conclusion and untested setting.",
+    ],
   }[style.focus];
   return [
-    `Reading report preferences: layout=${style.layout}; tone=${style.tone}; focus=${style.focus}. Apply these to deep_read reports and their revisions. These preferences override generic presentation/length defaults, while retaining source grounding, review and annotation requirements. They do not require an artifact for ordinary questions.`,
-    layout,
-    tone,
-    focus,
-    "For EVERY combination, help the reader overcome English and technical stumbling blocks. Put the explanation essential to following the argument in the main text. Place useful optional help immediately after the relevant passage, using ':::details A short localized title' on its own line, explanatory Markdown paragraphs, then ':::' on its own line. Examples of titles: 拆解这处英文 / Unpack this sentence, 补充技术背景 / Technical background. Explain sentence structure, terms, or prerequisites when helpful, without repeating a generic glossary. Never hide evidence qualifications or essential reasoning inside a collapsed block. Label general background and your deductions separately from the paper's claims.",
-    "Reading blocks must be top-level, closed, and not nested; put optional details after a parallel block. Do not emit raw HTML. Keep [cite:id] markers in the passage/explanation and preserve these blocks when patching. Start with the research question, central method, supported takeaway and main boundary, in the chosen layout. Scale length to the actual evidence and explanation needed, rather than padding to a quota.",
+    `Reading report preferences: layout=${style.layout}; tone=${style.tone}; focus=${style.focus}. Apply this recipe to deep_read drafting and revisions. Priority: the current user's explicit instructions, then selected report preferences, then generic defaults. Ordinary questions do not require an artifact.`,
+    "Audience: a researcher crossing into an unfamiliar field. Before writing, organize working points as claim → retrieved source location → explanation → boundary. These are private working material, not an extra artifact or mandatory form. Read relevant evidence before asserting a claim; focus determines where to investigate and explain most, not which contrary evidence to ignore.",
+    "Compose the three dimensions: focus determines the evidence and explanatory emphasis, tone determines how reasoning is explained, layout determines how that explanation is arranged. All examples below are demonstrations, NOT paper evidence. Never copy their invented setting or placeholder citations into the report.",
+    "LAYOUT",
+    ...layout,
+    "VOICE",
+    ...tone,
+    "READING AND EXPLANATORY FOCUS",
+    ...focus,
+    "For EVERY combination, help the reader overcome English and technical stumbling blocks. Put essential reasoning and evidence qualifications in the main text. Place optional sentence unpacking, terms or prerequisites immediately after the relevant passage using :::details A short localized title, explanatory Markdown, then ::: on its own line. Do not add a generic glossary or hide a premise in collapsed help. Label general background, illustrative examples and your deductions separately from the paper's claims.",
+    "Reading blocks must be top-level, closed and not nested; optional details follow a parallel block. Do not emit raw HTML. Keep [cite:id] markers in passages and explanations. Start with the research question, central method, supported takeaway and main boundary, expressed in the chosen layout. Use an evidence table only when it clarifies comparisons. No fixed length, heading, quotation or table quota: scale to the actual source and explanation needed. Preserve numerical scope and avoid repeating the same result.",
+    "Save one readable report. Keep exact figures in one explanatory location and make the opening takeaway qualitative unless a number is essential. Include an annotation appendix only for actual saved or unresolved annotation work, and a short plain-language reading map connecting problem → method → evidence → limits. Keep library IDs, item/attachment/annotation keys, tool receipts and other implementation metadata out of the prose; inline [cite:id] markers provide source access without an extra metadata list. The host may make one direct improvement pass with the current model. Do not wait for a review verdict, solicit approval for the report, or run a grading/repair loop. ready means deliverable, not certified correct. When evidence is limited, narrow the claim and state the limit rather than filling gaps.",
   ].join("\n");
 }

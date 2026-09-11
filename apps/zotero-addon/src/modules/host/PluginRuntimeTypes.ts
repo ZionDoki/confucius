@@ -5,6 +5,7 @@ import type {
   CapabilityProfile,
   ConfuciusEvent,
   RuntimeStatus,
+  RuntimeAnalysisOptions,
   RuntimeModelSelection,
   SessionMode,
 } from "@confucius/protocol";
@@ -64,5 +65,7 @@ export interface PluginRuntimeAdapter {
     prompt: string,
     cwd: string,
     selection?: RuntimeModelSelection,
+    options?: RuntimeAnalysisOptions,
+    signal?: AbortSignal,
   ): Promise<string>;
 }

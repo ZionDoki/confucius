@@ -1,4 +1,5 @@
 import { runtimePath, runtimeIoPath, writeRuntimeText } from "./RuntimeStorage";
+import { writebackAssociationKey } from "./ArtifactWriteback";
 import {
   artifactBodyMatchesKind,
   isCitation,
@@ -81,6 +82,42 @@ export class ArtifactStore {
     return artifacts
       .filter((artifact): artifact is ArtifactRecord => artifact !== null)
       .sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  /** Copy the selected historical revision, with independent ownership and writes. */
+  async fork(
+    sourceId: string,
+    revision: number,
+    taskId: string,
+    title?: string,
+    status?: ArtifactRecord["status"],
+  ): Promise<ArtifactRecord> {
+    const source = await this.get(sourceId);
+    const selected = source?.revisions.find(
+      (entry) => entry.revision === revision,
+    );
+    if (!source || !selected)
+      throw new Error(
+        "The report revision selected for branching is unavailable",
+      );
+    const at = this.now();
+    return this.save({
+      id: this.allocateId(),
+      sessionId: taskId,
+      taskId,
+      kind: source.kind,
+      title: title ?? source.title,
+      body: clone(selected.body),
+      citations: clone(selected.citations),
+      sourceContextIds: [...selected.sourceContextIds],
+      revision,
+      status: status === "draft" ? "draft" : "ready",
+      revisions: source.revisions
+        .filter((entry) => entry.revision <= revision)
+        .map(({ operationId: _operationId, ...entry }) => clone(entry)),
+      createdAt: at,
+      updatedAt: at,
+    });
   }
 
   async upsert(
@@ -170,6 +207,7 @@ export class ArtifactStore {
         citations,
         sourceContextIds,
         revisions: [...(existing?.revisions ?? []), nextRevision],
+        writebacks: existing?.writebacks,
         writeback:
           existing?.writeback?.state === "committed"
             ? {
@@ -218,6 +256,26 @@ export class ArtifactStore {
     beforeWrite?: () => void,
   ): Promise<ArtifactRecord> {
     const id = safeId(artifact.id);
+    const previous = await this.getUnlocked(id);
+    const associations = new Map<
+      string,
+      NonNullable<ArtifactRecord["writeback"]>
+    >();
+    for (const entry of [
+      ...(previous?.writebacks ?? []),
+      previous?.writeback,
+      ...(artifact.writebacks ?? []),
+      artifact.writeback,
+    ]) {
+      if (
+        entry?.targetRef &&
+        entry.state !== "pending" &&
+        (entry.state !== "none" ||
+          !associations.has(writebackAssociationKey(entry)))
+      )
+        associations.set(writebackAssociationKey(entry), clone(entry));
+    }
+    if (associations.size) artifact.writebacks = [...associations.values()];
     await this.fs.makeDirectory(this.root);
     // Once writeAtomic starts, retain its actual result even if cancellation
     // arrives during the native IO. Cancellation cannot undo a dispatched write.

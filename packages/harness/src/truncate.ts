@@ -14,6 +14,34 @@ export function truncateToolResult(
   if (result.ok && result.data && typeof result.data === "object") {
     const data = result.data as Record<string, unknown>;
     if (
+      ["get_collection_items", "run_saved_search"].includes(result.toolName) &&
+      Array.isArray(data.items) &&
+      typeof data.offset === "number"
+    ) {
+      // Never hide the continuation behind a generic truncated JSON excerpt.
+      // Only whole items are omitted, and the next page starts at the first one
+      // the model has not seen (not at the host's original page boundary).
+      const items: unknown[] = [];
+      let size = JSON.stringify({ ...data, items: [] }).length;
+      for (const item of data.items) {
+        const length = JSON.stringify(item).length + 1;
+        if (items.length && size + length > maxChars) break;
+        items.push(item);
+        size += length;
+      }
+      return {
+        ...result,
+        data: {
+          ...data,
+          items,
+          nextOffset:
+            items.length < data.items.length
+              ? data.offset + items.length
+              : data.nextOffset,
+        },
+      };
+    }
+    if (
       result.toolName === "get_annotations" &&
       Array.isArray(data.annotations)
     ) {

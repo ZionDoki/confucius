@@ -12,37 +12,6 @@ import { registerHostOperationDomains } from "./HostOperationDomains";
 import { truncateToolResult } from "../../../../../packages/harness/src/truncate";
 import type { ToolExecutionContext, ConfuciusEvent } from "@confucius/protocol";
 import {
-  deepReadReviewNextAction,
-  deepReadReviewState,
-} from "./DeepReadReview";
-import { sourceReadEvidence } from "./SourceReadEvidence";
-
-/** These provider-level tests simulate the model consuming complete read results. */
-function deliveredReviewEvents(events: ConfuciusEvent[]): ConfuciusEvent[] {
-  let saved: { id: string; revision: number } | undefined;
-  return events.flatMap((event): ConfuciusEvent[] => {
-    if (event.type === "artifact_upserted") saved = event.payload.artifact;
-    if (event.type !== "tool_result" || !saved) return [event];
-    const evidence = sourceReadEvidence(event.payload.result);
-    return evidence
-      ? [
-          event,
-          {
-            ...event,
-            id: `${event.id}-delivered`,
-            type: "source_read_delivered",
-            payload: {
-              callId: event.payload.callId,
-              evidence,
-              delivery: "native-request",
-              review: { artifactId: saved.id, revision: saved.revision },
-            },
-          },
-        ]
-      : [event];
-  });
-}
-import {
   ARTIFACT_UPSERT_DEFINITION,
   advertisedArtifactUpsertSchema,
   ArtifactToolProvider,
@@ -286,10 +255,6 @@ async function editableReport(
       });
     },
     () => binding,
-    review
-      ? (artifact) =>
-          deepReadReviewState(artifact, binding, deliveredReviewEvents(events))
-      : undefined,
   );
   assert.equal(
     (
@@ -563,75 +528,20 @@ describe("editable research reports", () => {
     );
   });
 
-  it("finalizes the same reviewed draft without resending the body, and never treats artifact reads as source evidence", async () => {
-    const reviewedText = reportMarkdown
-      .replace("方法在全部任务上成功。", "方法只完成一半任务。")
-      .replace("100/100", "50/100");
-    const { provider, store, events } = await editableReport(
-      true,
-      new MemoryFileSystem(),
-      reviewedText,
-    );
-    const final = { id: "report", expectedRevision: 1, status: "ready" };
-    const read = await provider.call("artifact_read", { id: "report" });
-    events.push({
-      id: "read-draft",
-      sessionId: "task",
-      ts: 100,
-      type: "tool_result",
-      payload: { callId: "read", result: read },
+  it("finalizes an explicitly unfinished deep read without post-save read prerequisites", async () => {
+    const { provider, store } = await editableReport(true);
+    const before = (await store.get("report"))!;
+    const result = await provider.call("artifact_patch", {
+      id: before.id,
+      expectedRevision: before.revision,
+      status: "ready",
     });
-    assert.equal((await provider.call("artifact_patch", final)).ok, false);
-    for (const name of ["get_pages", "get_annotations"])
-      events.push({
-        id: name,
-        sessionId: "task",
-        ts: 100,
-        type: "tool_result",
-        payload: {
-          callId: name,
-          result: {
-            ok: true,
-            toolName: name,
-            data: {
-              libraryID: 1,
-              key: "PAPER",
-              pages: [{ page: 2, text: "50 of 100 tasks were completed." }],
-              annotations: [],
-            },
-          },
-        },
-      });
-    assert.equal((await provider.call("artifact_patch", final)).ok, true);
-    const saved = (await store.get("report"))!;
-    assert.equal(saved.status, "ready");
-    assert.equal(saved.revision, 2);
-    assert.equal(
-      saved.body.type === "markdown" && saved.body.markdown,
-      reviewedText,
-    );
-    assert.equal(saved.citations.length, 1);
-    // A later corrected draft must establish its own evidence-read boundary.
-    assert.equal(
-      (
-        await provider.call("artifact_patch", {
-          id: "report",
-          expectedRevision: 2,
-          status: "draft",
-        })
-      ).ok,
-      true,
-    );
-    assert.equal(
-      (
-        await provider.call("artifact_patch", {
-          id: "report",
-          expectedRevision: 3,
-          status: "ready",
-        })
-      ).ok,
-      false,
-    );
+    assert.equal(result.ok, true);
+    const after = (await store.get("report"))!;
+    assert.equal(after.status, "ready");
+    assert.deepEqual(after.body, before.body);
+    assert.deepEqual(after.citations, before.citations);
+    assert.equal(after.revision, before.revision + 1);
   });
 
   it("keeps compact requests in checkpoints and replays a patch without a second revision", async (t) => {
@@ -1349,161 +1259,38 @@ describe("artifact_upsert contract", () => {
     assert.deepEqual(await store.get(otherTask.id), otherTask);
   });
 
-  it("saves a deep read draft and requires fresh same-source evidence and comments before ready, including after recreation", async () => {
+  it("saves a ready deep read immediately, including after provider recreation", async () => {
     const store = new ArtifactStore(
       "artifacts",
       new MemoryFileSystem(),
       () => 100,
-      () => "review",
+      () => "report",
     );
-    const execution = {
-      runId: "run",
-      intentRevision: 1,
-      sourceFingerprint: "source",
-    };
-    const events: ConfuciusEvent[] = [];
     const provider = () =>
-      new ArtifactToolProvider(
-        store,
-        "task",
-        "native",
-        ["item:1:PAPER"],
-        (artifact) =>
-          events.push({
-            id: `saved-${artifact.revision}`,
-            sessionId: "task",
-            turnId: "turn",
-            ts: 1000,
-            type: "artifact_upserted",
-            payload: { artifact },
-          }),
-        () => execution,
-        (artifact) =>
-          deepReadReviewState(
-            artifact,
-            execution,
-            deliveredReviewEvents(events),
-          ),
-        (artifact) =>
-          deepReadReviewNextAction(
-            artifact,
-            execution,
-            deliveredReviewEvents(events),
-          ),
-      );
-    const save = () => ({
-      id: "review",
+      new ArtifactToolProvider(store, "task", "native", [], () => {});
+    const result = await provider().call("artifact_upsert", {
       kind: "deep_read",
-      title: "报告",
+      title: "Report",
       status: "ready",
-      body: { type: "markdown", markdown: "A result to check" },
+      body: { type: "markdown", markdown: "A readable report" },
     });
-    const initial = await provider().call("artifact_upsert", save());
-    assert.equal(initial.ok, true);
-    assert.equal((await store.get("review"))?.status, "draft");
-    const read = (
-      toolName: string,
-      ts: number,
-      key = "PAPER",
-      ok = true,
-    ): ConfuciusEvent => ({
-      id: `${toolName}-${ts}-${key}`,
-      sessionId: "task",
-      turnId: "turn",
-      ts,
-      type: "tool_result",
-      payload: {
-        callId: "call",
-        result: ok
-          ? {
-              ok: true,
-              toolName,
-              data: {
-                libraryID: 1,
-                key: toolName === "get_annotations" ? "PDF" : key,
-                attachmentKey: key === "PAPER" ? "PDF" : "OTHERPDF",
-                pages: [{ page: 2, text: "Source evidence" }],
-                annotations: [],
-              },
-            }
-          : {
-              ok: false,
-              toolName,
-              code: "unavailable",
-              message: "No evidence",
-            },
-      },
-    });
-    events.unshift(read("get_pages", 90), read("get_annotations", 90));
-    events.push(
-      read("get_pages", 110, "OTHER"),
-      read("get_pages", 120, "PAPER", false),
+    assert.equal(result.ok, true);
+    assert.equal((await store.get("report"))?.status, "ready");
+    assert.equal(
+      result.ok && "reviewRequired" in (result.data as object),
+      false,
     );
-    assert.equal((await provider().call("artifact_upsert", save())).ok, false);
-    assert.equal((await store.get("review"))?.revision, 1);
-    events.push(read("get_pages", 130));
-    const missingComments = await provider().call("artifact_upsert", save());
-    assert.equal(missingComments.ok, false);
-    if (!missingComments.ok) {
-      assert.match(missingComments.message, /draft revision 1/);
-      assert.match(
-        missingComments.message,
-        /missing successful get_annotations/,
-      );
-      assert.match(
-        missingComments.message,
-        /source-page read is already satisfied/,
-      );
-    }
-    events.push(read("get_annotations", 140));
-    // Saving a corrected draft is a new revision; the error must identify the
-    // missing step for that revision instead of sending the model into a loop
-    // of page reads or comment writes that cannot satisfy get_annotations.
     assert.equal(
       (
-        await provider().call("artifact_upsert", {
-          ...save(),
-          status: "draft",
-          body: { type: "markdown", markdown: "Corrected draft" },
+        await provider().call("artifact_patch", {
+          id: "report",
+          expectedRevision: 1,
+          edits: [{ oldText: "readable", newText: "clearer" }],
         })
       ).ok,
       true,
     );
-    const missingBoth = await provider().call("artifact_upsert", save());
-    assert.equal(missingBoth.ok, false);
-    if (!missingBoth.ok)
-      assert.match(
-        missingBoth.message,
-        /draft revision 2: missing successful get_pages and get_annotations/,
-      );
-    events.push(read("get_pages", 150));
-    const missingLatestComments = await provider().call(
-      "artifact_upsert",
-      save(),
-    );
-    assert.equal(missingLatestComments.ok, false);
-    if (!missingLatestComments.ok) {
-      assert.match(missingLatestComments.message, /draft revision 2/);
-      assert.match(
-        missingLatestComments.message,
-        /missing successful get_annotations/,
-      );
-      assert.match(
-        missingLatestComments.message,
-        /Updating a comment does not replace/,
-      );
-    }
-    events.push(read("get_annotations", 160));
-    assert.equal((await provider().call("artifact_upsert", save())).ok, true);
-    assert.equal((await store.get("review"))?.status, "ready");
-    assert.equal(
-      deepReadReviewState(
-        await store.get("review"),
-        { ...execution, runId: "next" },
-        events,
-      ),
-      "draft_required",
-    );
+    assert.equal((await store.get("report"))?.status, "ready");
   });
 
   it("preserves a saved artifact when its UI callback fails and detects an intervening revision", async () => {

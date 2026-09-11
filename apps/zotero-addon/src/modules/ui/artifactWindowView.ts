@@ -12,6 +12,7 @@ import { config } from "../../../package.json";
 import { getPref } from "../../utils/prefs";
 import { getString, configuredUiLanguage } from "../../utils/locale";
 import type { WorkspaceHost } from "./WorkspaceView";
+import { bindBtwSelection } from "./btwPopup";
 import { UI_FONT_STACKS } from "./workspaceTypography";
 import { markdownForDisplay } from "@confucius/protocol";
 import { renderReadingSurface } from "./workspaceReading";
@@ -116,6 +117,7 @@ export function mountArtifactWindow(
   const body = element("div", "confucius-artifact-dialog-body");
   body.id = "confucius-artifact-dialog-body";
   body.tabIndex = 0;
+  const disposeBtwSelection = bindBtwSelection(body, host, fillAnswerHtml);
   root.replaceChildren(toolbar, errors, body);
 
   let artifact = initial;
@@ -256,6 +258,12 @@ export function mountArtifactWindow(
       },
       revision.citations,
     );
+    reading.dataset.btwSource = JSON.stringify({
+      kind: "report",
+      taskId: artifact.taskId,
+      artifactId: artifact.id,
+      revision: revision.revision,
+    });
     if (reading.firstElementChild?.localName !== "h1") paper.append(title);
     paper.append(reading);
     if (emptyBody) {
@@ -457,6 +465,7 @@ export function mountArtifactWindow(
     dispose() {
       if (disposed) return;
       disposed = true;
+      disposeBtwSelection();
       win.clearTimeout(timer);
       closeMenu();
       for (const observer of observers)

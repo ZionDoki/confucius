@@ -52,6 +52,12 @@ import {
   clearMigratedContextCopies,
 } from "./RuntimeStorage";
 import { ToolExecutionService } from "./ReliableToolProvider";
+import { artifactWritebackFor } from "./ArtifactWriteback";
+import {
+  prepareKnowledgeWrite,
+  callPreparedKnowledgeWrite,
+  reconcileKnowledgeWrite,
+} from "./KnowledgeOperations";
 import { TaskTraceBuffer } from "./TaskTrace";
 import { responseLanguageInstruction } from "./ResponseLanguage";
 import { collectTaskTrace } from "./TaskTraceReport";
@@ -89,10 +95,13 @@ import {
   contextTextTokens,
 } from "@confucius/protocol";
 import {
-  deepReadReviewNextAction,
-  deepReadReviewState,
-} from "./DeepReadReview";
-import { deepReadReviewMessages } from "./DeepReadReviewContext";
+  reportContent,
+  reportEvidence,
+  missingReportPages,
+  reportRevisionCandidate,
+  reportRevisionMessages,
+  reportRevisionPatch,
+} from "./ReportRevision";
 import { sourceReadEvidence, sourceReviewBinding } from "./SourceReadEvidence";
 import { createHistoryStore } from "./MemoryTools";
 import { historySourceRefs } from "./HistorySources";
@@ -272,7 +281,7 @@ import {
   previewCapabilityRequest,
   repairPersistedCapabilities,
 } from "./TaskCapabilities";
-import { createTaskBranchSnapshot } from "./TaskBranch";
+import { createTaskBranchSnapshot, forkBranchArtifacts } from "./TaskBranch";
 import {
   TaskAttachmentStore,
   buildTaskAttachmentUserText,
@@ -327,7 +336,7 @@ interface ResolvedPresetSources {
   inventory: string;
 }
 
-async function resolvePresetSources(
+export async function resolvePresetSources(
   context: LockedContextSnapshot,
   workflow: PresetWorkflow,
 ): Promise<ResolvedPresetSources> {
@@ -433,7 +442,7 @@ async function resolvePresetSources(
       context.collection.key,
     );
     if (collection) {
-      for (const item of collection.getChildItems().slice(0, 100)) {
+      for (const item of collection.getChildItems()) {
         await addResolvedItem(item);
       }
     }
@@ -448,13 +457,27 @@ async function resolvePresetSources(
       context.savedSearch.key,
     );
     const ids = search ? await search.search() : [];
-    for (const id of ids.slice(0, 100)) {
+    for (const id of ids) {
       const item = Zotero.Items.get(id);
       if (item && !Array.isArray(item)) await addResolvedItem(item);
     }
   }
 
-  const sourceLines = [...entries.values()].flatMap((entry) => [
+  const explicitItems = new Set(
+    context.items.map((item) => ref(item.libraryID, item.key)),
+  );
+  if (context.reader)
+    explicitItems.add(
+      ref(
+        context.reader.libraryID,
+        context.reader.parentKey ?? context.reader.attachmentKey,
+      ),
+    );
+  const preview = [...entries.values()].filter(
+    (entry, index) =>
+      index < 100 || explicitItems.has(ref(entry.libraryID, entry.key)),
+  );
+  const sourceLines = preview.flatMap((entry) => [
     `- Item ${entry.title || entry.key} [libraryID=${entry.libraryID}, key=${entry.key}${
       entry.attachmentKey ? `, attachmentKey=${entry.attachmentKey}` : ""
     }]`,
@@ -475,9 +498,10 @@ async function resolvePresetSources(
   }
   const lines = [
     "HOST-RESOLVED LOCKED SOURCE INVENTORY (authoritative for this stage):",
+    `Resolved ${entries.size} items. Showing ${preview.length} here, including all explicitly selected items. Enumerate bound collections/searches with get_collection_items/run_saved_search using nextOffset until null before claiming complete coverage. Their resolved members are in scope even when omitted from this preview.`,
     ...sourceLines,
     sourceLines.length
-      ? "Only source identifiers listed in this inventory are in scope. Never guess, recall, or substitute an identifier; the host rejects every out-of-scope source call."
+      ? "Only source identifiers listed here or resolved from the bound collections/searches are in scope. Never guess, recall, or substitute an identifier; the host rejects every out-of-scope source call."
       : "No concrete source could be resolved. Do not guess or recall an item, collection, or saved-search identifier.",
     "When an item lists multiple PDFs, keep the chosen attachmentKey on every read and annotation call. If the intended file is unclear, ask the user by title or filename, not by internal key.",
   ];
@@ -583,6 +607,205 @@ interface PendingHistoryEntry {
 }
 
 export class AgentHost {
+  private btwManager?: BtwManager;
+  private btwNotifier?: string;
+
+  startBtwCleanup(): void {
+    if (this.btwNotifier) return;
+    const manager = this.btw();
+    const prune = () =>
+      manager
+        .pruneSources((source) => {
+          if (source.kind !== "pdf") return this.sessions.has(source.taskId);
+          const item = Zotero.Items.getByLibraryAndKey(
+            source.libraryID,
+            source.parentKey ?? source.attachmentKey,
+          );
+          return !!item && !item.deleted;
+        })
+        .catch((error) =>
+          ztoolkit.log("[Confucius] btw cleanup failed", error),
+        );
+    this.btwNotifier = Zotero.Notifier.registerObserver(
+      {
+        notify: async (event: string) => {
+          if (event === "delete" || event === "trash") await prune();
+        },
+      },
+      ["item"],
+      "confucius-btw",
+    );
+    void prune();
+  }
+
+  private btw(): BtwManager {
+    return (this.btwManager ??= new BtwManager({
+      store: new BtwStore(new ZoteroMemoryFs(), () =>
+        runtimePath("btw").replace(/\\/g, "/"),
+      ),
+      history: this.history,
+      library: new ZoteroToolProvider(this.tools),
+      taskExists: (id) => this.sessions.has(id),
+      resolve: (selection) => this.resolveBtwContext(selection),
+      autoCleanup: () => getPref("historyAutoCleanup") !== false,
+      config: (endpointId) => {
+        const { store } = this.readEndpointStore();
+        const endpoint =
+          store.endpoints.find((e) => e.id === endpointId) ??
+          activeEndpoint(store);
+        return {
+          capacity: endpoint?.contextWindowTokens || 32768,
+          maxOutput: endpoint?.maxTokens || 4096,
+          maxIterations: this.maxIterations(),
+          maxToolCalls: this.maxToolCalls(),
+        };
+      },
+      execute: async (run) => {
+        if (run.task.backend !== "native")
+          return executeExternalBtw(run, this.backendFor(run.task.backend));
+        const { store } = this.readEndpointStore();
+        const endpoint = run.document.record.endpointId
+          ? store.endpoints.find((e) => e.id === run.document.record.endpointId)
+          : activeEndpoint(store);
+        if (!endpointIsConfigured(endpoint))
+          throw new Error(
+            "Btw model is unavailable. Configure its endpoint in Settings.",
+          );
+        const emit = (text: string) =>
+          run.event({
+            id: this.ids(),
+            sessionId: run.task.id,
+            turnId: run.turn.id,
+            ts: Date.now(),
+            type: "text_delta",
+            payload: { text },
+          });
+        return executeNativeBtw(
+          run,
+          this.openaiAdapter(
+            {
+              ...endpoint,
+              stream:
+                getPref("streamResponses") !== false && hostFetchCanStream(),
+              onTextDelta: emit,
+            },
+            endpoint,
+          ),
+        );
+      },
+      stop: async (run) => {
+        if (run.task.backend !== "native")
+          await this.backendFor(run.task.backend).dispose(run.task.id);
+      },
+    }));
+  }
+
+  private async resolveBtwContext(
+    selection: BtwSelection,
+  ): Promise<BtwResolvedContext> {
+    const source = selection.source;
+    let states: SessionState[];
+    let sources: LockedContextSnapshot;
+    let report: BtwResolvedContext["report"];
+    if (source.kind === "pdf") {
+      const attachment = Zotero.Items.getByLibraryAndKey(
+        source.libraryID,
+        source.attachmentKey,
+      );
+      if (!attachment || attachment.deleted || !attachment.isPDFAttachment())
+        throw new Error("The selected PDF is unavailable");
+      const parentKey = attachment.parentItemKey || null;
+      if (parentKey !== source.parentKey)
+        throw new Error("The PDF's parent item changed; select the text again");
+      const key = parentKey ?? source.attachmentKey;
+      states = [...this.sessions.values()].filter((state) =>
+        taskArticles(state.record).some(
+          (item) => item.libraryID === source.libraryID && item.key === key,
+        ),
+      );
+      sources = withLockedContextFingerprint({
+        ...emptyLockedContext(),
+        items: [
+          {
+            id: `item:${source.libraryID}:${key}`,
+            libraryID: source.libraryID,
+            key,
+            attachmentKey: source.attachmentKey,
+            title: source.title,
+            source: "reader",
+          },
+        ],
+        reader: {
+          id: `reader:${source.libraryID}:${source.attachmentKey}`,
+          libraryID: source.libraryID,
+          attachmentKey: source.attachmentKey,
+          parentKey,
+          title: source.title,
+          pageLabel: source.pageLabel,
+          pageIndex: source.pageIndex,
+        },
+        selection: {
+          id: `selection:${source.attachmentKey}:${selection.capturedAt}`,
+          text: selection.text,
+          attachmentKey: source.attachmentKey,
+          pageIndex: source.pageIndex,
+          pageLabel: source.pageLabel,
+        },
+      });
+    } else {
+      const state = this.requireSession(source.taskId);
+      states = [state];
+      sources = state.record.run?.sources ?? state.record.lockedContext;
+      if (source.kind === "report") {
+        const artifact = await this.artifacts.get(source.artifactId);
+        if (!artifact || artifact.taskId !== source.taskId)
+          throw new Error("Report does not belong to this task");
+        const revision = artifact.revisions.find(
+          (r) => r.revision === source.revision,
+        );
+        if (!revision)
+          throw new Error("Selected report version is unavailable");
+        report = {
+          id: artifact.id,
+          revision: revision.revision,
+          text:
+            revision.body.type === "markdown"
+              ? markdownForDisplay(revision.body, revision.citations)
+              : JSON.stringify(revision.body),
+        };
+      }
+    }
+    states.sort(
+      (a, b) =>
+        b.record.updatedAt - a.record.updatedAt ||
+        b.record.createdAt - a.record.createdAt ||
+        a.record.id.localeCompare(b.record.id),
+    );
+    return JSON.parse(
+      JSON.stringify({
+        selection,
+        sources,
+        tasks: states.map((s) => ({ record: s.record, events: s.events })),
+        report,
+        endpointId: this.readEndpointStore().store.activeEndpointId,
+      }),
+    ) as BtwResolvedContext;
+  }
+
+  private validateBtwLease(run: BtwRun, value: unknown): RuntimeTurnLease {
+    const lease = value as RuntimeTurnLease;
+    if (
+      !lease ||
+      run.abort.signal.aborted ||
+      lease.taskId !== run.task.id ||
+      lease.turnId !== run.turn.id ||
+      lease.runId !== run.task.run?.id ||
+      lease.generation !== run.task.run?.generation ||
+      !this.pluginRuntime.isCurrentLease(lease)
+    )
+      throw new Error("Btw execution capability expired");
+    return lease;
+  }
   readonly skills = new SkillStore();
   readonly tools = new ZoteroToolHost();
   private readonly execution = new ToolExecutionService(undefined, undefined, {
@@ -664,6 +887,7 @@ export class AgentHost {
     ContextItemSearchCache
   >();
   private mcpProviders: McpToolProvider[] = [];
+  private mcpDiscovery?: AbortController;
   private listeners = new Set<(event: ConfuciusEvent) => void>();
   private persistTimer: number | null = null;
   private persistQueue: Promise<void> = Promise.resolve();
@@ -715,7 +939,8 @@ export class AgentHost {
       history: this.history,
       tools: this.tools,
       reconcileMemory: async (operation) => {
-        if (operation.name !== "context_save") return null;
+        if (operation.name !== "context_save")
+          return reconcileKnowledgeWrite(this.memory, operation);
         await this.memory.ensureLoaded();
         const recovery = operation.intent?.recovery;
         if (!recovery?.memoryId) return null;
@@ -807,7 +1032,7 @@ export class AgentHost {
       }
     }
     ztoolkit.log("[Confucius] Runtime storage", runtimePath());
-    await this.reloadMcp();
+    void this.reloadMcp();
     this.updates.start(afterUpdate);
     if (this.storageReady)
       this.annotationLabelMigration = this.tools
@@ -853,8 +1078,15 @@ export class AgentHost {
   shutdown(): Promise<void> {
     if (this.shutdownTask) return this.shutdownTask;
     this.shuttingDown = true;
+    this.mcpDiscovery?.abort();
     this.updates.dispose();
     this.shutdownTask = (async () => {
+      if (this.btwNotifier)
+        Zotero.Notifier.unregisterObserver(this.btwNotifier);
+      this.btwNotifier = undefined;
+      await this.btwManager?.shutdown().catch((error) => {
+        ztoolkit.log("[Confucius] btw shutdown failed", error);
+      });
       if (this.persistTimer !== null) {
         Zotero.getMainWindows()[0]?.clearTimeout(this.persistTimer);
         this.persistTimer = null;
@@ -1227,7 +1459,7 @@ export class AgentHost {
         }
         if (record.run && record.run.status !== "completed") {
           record.status = "interrupted";
-          record.run.requiredArtifactKinds = [
+          record.run.requiredArtifactKinds ??= [
             ...(presetWorkflow(record.templateId)?.requiredArtifactKinds ?? []),
           ];
           record.run.budget.iterationsUsed = Math.max(
@@ -1249,6 +1481,32 @@ export class AgentHost {
         this.sessions.set(record.id, restored);
       }
       for (const state of this.sessions.values()) {
+        // Old branches stored their parent's artifact IDs. Copy only the
+        // historical revisions retained in this task, never the parent's latest.
+        const branchSnapshot = {
+          events: state.events,
+          messages: state.messages,
+          artifactIds: state.record.artifactIds,
+        };
+        try {
+          if (
+            await forkBranchArtifacts(
+              branchSnapshot,
+              this.artifacts,
+              state.record.id,
+              true,
+            )
+          ) {
+            state.events = branchSnapshot.events;
+            state.record.artifactIds = branchSnapshot.artifactIds;
+            repaired = true;
+          }
+        } catch (error) {
+          ztoolkit.log(
+            "[Confucius] Branch report history unavailable; original references retained",
+            error,
+          );
+        }
         for (const id of state.record.artifactIds) {
           const artifact = await this.artifacts.get(id);
           if (artifact?.writeback?.state !== "pending") continue;
@@ -1460,6 +1718,25 @@ export class AgentHost {
     params: Record<string, unknown> = {},
   ): Promise<unknown> {
     switch (method) {
+      case RPC_METHODS.btwOpen:
+        await this.initializeStorage();
+        return this.btw().open(params.selection);
+      case RPC_METHODS.btwPrompt:
+        return this.btw().prompt(params as unknown as BtwPromptParams);
+      case RPC_METHODS.btwEvents:
+        return this.btw().events(
+          String(params.btwId),
+          params.afterSequence === undefined
+            ? undefined
+            : Number(params.afterSequence),
+        );
+      case RPC_METHODS.btwAbort:
+        return this.btw().abort(String(params.btwId));
+      case RPC_METHODS.btwDraft:
+        return this.btw().draft(
+          String(params.btwId),
+          String(params.text ?? ""),
+        );
       case RPC_METHODS.annotationBatches: {
         const filter = params.filter as
           import("@confucius/protocol").AnnotationBatchFilter | undefined;
@@ -2622,6 +2899,7 @@ export class AgentHost {
         record.id,
         this.ids,
       );
+      await forkBranchArtifacts(snapshot, this.artifacts, record.id);
       branch.events = snapshot.events;
       branch.messages = snapshot.messages;
       branch.record.artifactIds = snapshot.artifactIds;
@@ -2915,6 +3193,8 @@ export class AgentHost {
   }
 
   private async sessionDelete(sessionId: string) {
+    // Delete persisted side history even if it was never opened this process.
+    await this.btwManager?.remove(`btw_task_${sessionId}`);
     const state = this.requireSession(sessionId);
     state.promptSubmission = (state.promptSubmission ?? 0) + 1;
     state.abort?.abort();
@@ -3597,6 +3877,11 @@ export class AgentHost {
     lease?: unknown,
     runtimeGateway?: unknown,
   ) {
+    const btw = this.btwManager?.run(taskId);
+    if (btw) {
+      this.validateBtwLease(btw, lease);
+      return { tools: btw.tools.listTools() };
+    }
     const state = this.requireSession(taskId);
     this.validatedRuntimeLease(state, lease, runtimeGateway, true);
     const tools = [
@@ -3618,6 +3903,37 @@ export class AgentHost {
   }
 
   private async taskToolCall(params: Record<string, unknown>) {
+    const btw = this.btwManager?.run(String(params.taskId ?? ""));
+    if (btw) {
+      const lease = this.validateBtwLease(btw, params.lease);
+      if (!btw.budget.canRunTools(1))
+        return mcpToolResult({
+          ok: false,
+          toolName: String(params.name),
+          code: "unavailable",
+          effect: "none",
+          message: "Btw tool budget exhausted; answer with existing evidence",
+        });
+      btw.budget.recordToolCalls(1);
+      const result = await btw.tools.call(
+        String(params.name),
+        (params.arguments ?? params.args ?? {}) as Record<string, unknown>,
+        this.pluginRuntime.leaseSignal(lease),
+        { taskId: btw.task.id, turnId: btw.turn.id, signal: btw.abort.signal },
+      );
+      this.validateBtwLease(btw, lease);
+      const ref = {
+        taskId: btw.task.id,
+        windowId: btw.task.contextWindow!.id,
+        itemId: this.ids(),
+      };
+      btw.document.archive[`h:${ref.taskId}:${ref.windowId}:${ref.itemId}`] =
+        JSON.stringify(durableToolResult(result));
+      await btw.save();
+      return mcpToolResult(
+        budgetToolResult(result, CONTEXT_POLICY.readTokens, ref),
+      );
+    }
     const state = this.requireSession(String(params.taskId ?? ""));
     if (state.record.contextResetRequested)
       return mcpToolResult({
@@ -4007,8 +4323,18 @@ export class AgentHost {
           writeback: recovered,
         }))) ?? artifact;
     }
-    const revision = this.writebackRevision(artifact, params.revision);
     const target = writebackTarget(artifact, params.target);
+    artifact = {
+      ...artifact,
+      writeback: artifactWritebackFor(
+        artifact,
+        target,
+        typeof params.knowledgeBaseId === "string"
+          ? params.knowledgeBaseId
+          : undefined,
+      ),
+    };
+    const revision = this.writebackRevision(artifact, params.revision);
     const state = this.requireSession(artifact.taskId);
     let prepared:
       | {
@@ -4081,10 +4407,10 @@ export class AgentHost {
         context: this.toolContext(
           state,
           "writeback",
-          `artifact_${artifact.id}_${revision.revision}_note`,
+          `artifact_${artifact.id}_${revision.revision}_note${existing ? `_${existing.libraryID}_${existing.key}` : ""}`,
         ),
       };
-      prepared.context.operationId = `${state.record.id}:artifact_${artifact.id}_${revision.revision}_note`;
+      prepared.context.operationId = `${state.record.id}:artifact_${artifact.id}_${revision.revision}_note${existing ? `_${existing.libraryID}_${existing.key}` : ""}`;
     }
     if (
       (target === "zotero_collection" || target === "zotero_tags") &&
@@ -4176,10 +4502,9 @@ export class AgentHost {
     revisionNumber?: unknown,
   ): ArtifactRevision {
     const revision = artifactRevision(artifact, revisionNumber);
-    const target =
-      artifact.writeback?.target === "zotero_collection"
-        ? parseLibraryTarget(artifact.writeback.targetRef)
-        : null;
+    const target = parseLibraryTarget(
+      artifactWritebackFor(artifact, "zotero_collection")?.targetRef,
+    );
     if (
       target &&
       revision.body.type === "collection_diff" &&
@@ -4244,10 +4569,13 @@ export class AgentHost {
             prepared?.context.operationId ??
             `${state.record.id}:writeback:${id}`,
           target: preview.target,
-          targetRef:
-            previousWriteback?.target === preview.target
-              ? previousWriteback.targetRef
+          targetRef: artifactWritebackFor(
+            latest,
+            preview.target,
+            typeof params.knowledgeBaseId === "string"
+              ? params.knowledgeBaseId
               : undefined,
+          )?.targetRef,
           revision: preview.revision,
         };
         latest.updatedAt = Date.now();
@@ -4518,6 +4846,16 @@ export class AgentHost {
     params: Record<string, unknown>,
     turnId: string,
   ): Promise<void> {
+    artifact = {
+      ...artifact,
+      writeback: artifactWritebackFor(
+        artifact,
+        target,
+        typeof params.knowledgeBaseId === "string"
+          ? params.knowledgeBaseId
+          : undefined,
+      ),
+    };
     const state = this.requireSession(artifact.taskId);
     const revision = this.writebackRevision(artifact, revisionNumber);
     if (
@@ -4571,7 +4909,7 @@ export class AgentHost {
                   parentKey: citation?.itemKey ?? item?.key,
                 },
             state,
-            `artifact_${artifact.id}_${revision.revision}_note`,
+            `artifact_${artifact.id}_${revision.revision}_note${existing ? `_${existing.libraryID}_${existing.key}` : ""}`,
           );
       if (
         !result.ok &&
@@ -4641,12 +4979,12 @@ export class AgentHost {
       if (!knowledgeBaseId) throw new Error("Choose a research topic first");
       const name = "artifact.knowledge";
       const args = {
-        id: artifact.id,
-        entryId: existing?.entryId,
+        id: existing?.entryId,
         knowledgeBaseId,
         title: artifact.title,
         content: renderArtifactBody(revision.body, revision.citations),
-        kind: artifact.kind,
+        kind: "insight",
+        tags: [artifact.kind],
       };
       const provider: ToolProvider = {
         listTools: () => [],
@@ -4657,41 +4995,16 @@ export class AgentHost {
           concurrency: "serial",
           mutatesState: true,
         }),
-        prepare: async (_name, preparedArgs, context = {}) => {
-          context.preparedOperation = {
-            schemaVersion: 1,
-            domain: "memory",
+        prepare: async (_name, preparedArgs, context = {}) =>
+          prepareKnowledgeWrite(
+            this.memory,
             name,
-            args: JSON.parse(JSON.stringify(preparedArgs)),
-            resources: ["memory:index"],
-            recovery: { knowledgeBaseId, entryId: existing?.entryId },
-          };
-          return null;
-        },
-        call: async () => {
-          const entry = await this.knowledge.saveEntry({
-            id: existing?.entryId,
-            knowledgeBaseId,
-            kind: "insight",
-            title: artifact.title,
-            content: String(args.content),
-            tags: [artifact.kind],
-          });
-          if (!entry)
-            return {
-              ok: false,
-              toolName: name,
-              code: "unavailable",
-              effect: "none",
-              message: "Knowledge-base write failed",
-            };
-          return {
-            ok: true,
-            toolName: name,
-            data: { targetRef: `${knowledgeBaseId}:${entry.id}` },
-            effect: "applied",
-          };
-        },
+            preparedArgs,
+            context,
+            "knowledge_base_save_entry",
+          ),
+        call: async (_name, preparedArgs, _signal, context = {}) =>
+          callPreparedKnowledgeWrite(this.memory, name, preparedArgs, context),
       };
       const context = this.toolContext(
         state,
@@ -5162,6 +5475,7 @@ export class AgentHost {
       },
       String(params.taskId ?? "manual"),
       "manual-protection",
+      typeof params.requestId === "string" ? params.requestId : undefined,
     );
     return { proposal, requiresApproval: true };
   }
@@ -5548,7 +5862,10 @@ export class AgentHost {
     this.persistSoon();
   }
 
-  private externalAnalysisAdapter(state: SessionState): ModelAdapter {
+  private externalAnalysisAdapter(
+    state: SessionState,
+    options?: import("@confucius/protocol").RuntimeAnalysisOptions,
+  ): ModelAdapter {
     const backend = this.backendFor(state.record.backend);
     return {
       handlesRetries: true,
@@ -5563,7 +5880,12 @@ export class AgentHost {
             await request.onAttempt?.();
             try {
               return {
-                text: await backend.analyze(prompt, state.record.runtimeModel),
+                text: await backend.analyze(
+                  prompt,
+                  state.record.runtimeModel,
+                  options,
+                  signal,
+                ),
               };
             } catch (error) {
               const failure = runtimeFailure(error);
@@ -5917,10 +6239,6 @@ export class AgentHost {
         this.emitSessionEvent(state, turnId, "artifact_upserted", { artifact });
       },
       () => binding,
-      state.record.mode === "agent" && state.record.templateId === "deep-read"
-        ? (artifact) => deepReadReviewState(artifact, binding, state.events)
-        : undefined,
-      (artifact) => deepReadReviewNextAction(artifact, binding, state.events),
       state.record.run?.requiredArtifactKinds,
     );
   }
@@ -6011,6 +6329,13 @@ export class AgentHost {
       state.record.run &&
       state.record.run.status !== "completed" &&
       !state.activeTurnId &&
+      requestedAttachmentIds.length === 0 &&
+      (promptContext?.references === undefined ||
+        JSON.stringify(
+          taskContextReferences(promptContext.references).filter(
+            (ref) => ref.taskId !== sessionId,
+          ),
+        ) === JSON.stringify(state.record.references ?? [])) &&
       isContinueRequest(text)
     )
       return this.taskContinue(sessionId);
@@ -6053,6 +6378,40 @@ export class AgentHost {
         ? presetWorkflow(state.record.templateId)
         : undefined;
     const continuing = Boolean(previous && previous.status !== "completed");
+    // A preset is an initial deliverable contract. Once it has completed for
+    // these sources, a follow-up may be answered without manufacturing a report.
+    const templateKinds =
+      template && template.id !== "freeform"
+        ? [template.artifactKind, ...(template.additionalArtifactKinds ?? [])]
+        : [];
+    const existingArtifacts = await this.artifacts.list(
+      state.record.artifactIds,
+    );
+    if (state.promptSubmission !== submission)
+      return { sessionId, superseded: true };
+    const completedPreset =
+      (!previous ||
+        (previous.status === "completed" &&
+          previous.templateId === state.record.templateId &&
+          previous.sources.fingerprint === effectiveContext.fingerprint)) &&
+      templateKinds.every((kind) =>
+        existingArtifacts.some(
+          (artifact) =>
+            artifact.kind === kind &&
+            artifact.status !== "draft" &&
+            (previous ||
+              lockedContextSourceIds(effectiveContext).every((id) =>
+                artifact.sourceContextIds.includes(id),
+              )),
+        ),
+      );
+    const requiredArtifactKinds =
+      state.record.mode === "agent" &&
+      template &&
+      template.id !== "freeform" &&
+      !completedPreset
+        ? [template.artifactKind, ...(template.additionalArtifactKinds ?? [])]
+        : [];
     const run: RunState = continuing
       ? JSON.parse(JSON.stringify(previous!))
       : {
@@ -6064,16 +6423,7 @@ export class AgentHost {
           sources: effectiveContext,
           templateId: state.record.templateId,
           templateVersion: preset?.version ?? 1,
-          requiredArtifactKinds: [
-            ...(state.record.mode === "agent" &&
-            template &&
-            template.id !== "freeform"
-              ? [
-                  template.artifactKind,
-                  ...(template.additionalArtifactKinds ?? []),
-                ]
-              : []),
-          ],
+          requiredArtifactKinds,
           status: "running",
           budget: {
             maxIterations: this.maxIterations(),
@@ -6104,15 +6454,22 @@ export class AgentHost {
     run.status = "running";
     run.stopReason = undefined;
     if (!continuing) run.templateVersion = preset?.version ?? 1;
-    run.requiredArtifactKinds = [
-      ...(state.record.mode === "agent" &&
-      template &&
-      template.id !== "freeform"
-        ? [template.artifactKind, ...(template.additionalArtifactKinds ?? [])]
-        : []),
-    ];
+    if (
+      continuing &&
+      (previous?.templateId !== state.record.templateId ||
+        previous?.sources.fingerprint !== effectiveContext.fingerprint)
+    )
+      run.requiredArtifactKinds = requiredArtifactKinds;
     run.budget.modelRequestsObservable = state.record.backend === "native";
     state.record.run = run;
+    if (!continuing || changedIntent) {
+      run.reportRevision = undefined;
+      run.reportRevisionBaseline = Object.fromEntries(
+        existingArtifacts
+          .filter((artifact) => artifact.kind === "deep_read")
+          .map((artifact) => [artifact.id, reportContent(artifact)]),
+      );
+    }
     // Keep article navigation stable after the live reader follows another PDF.
     state.record.articleSources = [
       ...new Map(
@@ -6306,6 +6663,10 @@ export class AgentHost {
           await this.persistNow();
         },
         snapshot: () => this.workSnapshot(state),
+        improve: async () => {
+          if (state.record.mode === "agent")
+            await this.improveReadingReport(state, run, turnId, isCurrent);
+        },
         requestProgress: (progress) =>
           this.emitSessionEvent(
             state,
@@ -6350,7 +6711,11 @@ export class AgentHost {
               promptContext,
               workflowInstruction:
                 preset && sources
-                  ? `${sources.inventory}\n${preset.instruction}`
+                  ? `${sources.inventory}\n${
+                      run.requiredArtifactKinds.length
+                        ? preset.instruction
+                        : "The preset report is already complete. Follow the latest user request using existing evidence and reports. Answer ordinary questions directly; create or revise an artifact only when the user requests it. Any draft you create must be finalized before completing this request."
+                    }`
                   : undefined,
               resumeCheckpoint: continuation ? undefined : resumeCheckpoint,
             };
@@ -6952,80 +7317,7 @@ export class AgentHost {
     });
     const loop = new TurnLoop({
       context: window,
-      model:
-        preset?.id === "deep-read"
-          ? {
-              handlesRetries: adapter.handlesRetries,
-              accountsAttempts: adapter.accountsAttempts,
-              complete: async (request, signal) => {
-                const draft = (
-                  await this.artifacts.list(state.record.artifactIds)
-                ).find(
-                  (artifact) =>
-                    artifact.kind === "deep_read" &&
-                    artifact.status === "draft" &&
-                    artifact.execution?.runId === run.id &&
-                    artifact.execution.intentRevision === run.intentRevision,
-                );
-                const sourceInputs: ModelMessage[] = [];
-                const messages = deepReadReviewMessages(
-                  request.messages,
-                  draft,
-                  (message) => sourceInputs.push(message),
-                );
-                const response = await adapter.complete(
-                  {
-                    ...request,
-                    messages,
-                  },
-                  signal,
-                );
-                // This is the exact successful model view, including full tool
-                // results restored by WindowContext and evidence in review inputs.
-                if (!signal?.aborted && state.record.run === run) {
-                  for (const message of sourceInputs) {
-                    if (message.role !== "tool" || !message.toolCallId)
-                      continue;
-                    const call = state.latestCheckpoint?.toolExecutions.find(
-                      (call) =>
-                        (call.modelCallId ?? call.callId) ===
-                        message.toolCallId,
-                    );
-                    if (!call) continue;
-                    let result: ToolResult;
-                    try {
-                      result = JSON.parse(message.content);
-                    } catch {
-                      continue;
-                    }
-                    if (result.ok)
-                      result = {
-                        ...result,
-                        transientMedia: messages.flatMap((input) =>
-                          input.transient &&
-                          input.sourceToolCallId === message.toolCallId
-                            ? (input.images ?? []).map((image) => ({
-                                ...image,
-                                type: "image" as const,
-                              }))
-                            : [],
-                        ),
-                      };
-                    this.recordSourceDelivery(
-                      state,
-                      input.turnId,
-                      call.callId,
-                      result,
-                      call.args,
-                      "native-request",
-                      draft,
-                    );
-                  }
-                }
-                return response;
-              },
-            }
-          : adapter,
+      model: adapter,
       tools,
       describeCall: this.describeApprovalCall,
       permissions,
@@ -7075,6 +7367,239 @@ export class AgentHost {
         ),
       );
     return {};
+  }
+
+  /** One optional editing pass. Its outcome never controls report delivery. */
+  private async improveReadingReport(
+    state: SessionState,
+    run: RunState,
+    turnId: string,
+    isCurrent: () => boolean,
+  ): Promise<void> {
+    if (
+      !isCurrent() ||
+      state.abort?.signal.aborted ||
+      run.templateId !== "deep-read"
+    )
+      return;
+    const artifact = reportRevisionCandidate(
+      run,
+      await this.artifacts.list(state.record.artifactIds),
+    );
+    if (!artifact || !isCurrent()) return;
+    const attempt: NonNullable<RunState["reportRevision"]> = {
+      artifactId: artifact.id,
+      inputRevision: artifact.revision,
+      intentRevision: run.intentRevision,
+      status: "started",
+    };
+    run.reportRevision = attempt;
+    const budget = state.runBudget;
+    const signal = state.abort?.signal;
+    const active = () => isCurrent() && !signal?.aborted;
+    const canCallModel = () =>
+      active() &&
+      (budget?.canStartIteration() ?? true) &&
+      (run.budget.modelRequestsObservable
+        ? run.budget.iterationsUsed < run.budget.maxIterations
+        : run.budget.executorStarts < run.budget.maxIterations);
+    const canRead = () =>
+      active() &&
+      (budget?.canRunTools(2) ?? true) &&
+      run.budget.toolCallsUsed + 1 < run.budget.maxToolCalls;
+    const note = (message: string) =>
+      this.emitSessionEvent(state, turnId, "text_delta", {
+        text: message,
+        phase: "commentary",
+      });
+    let notice: string | undefined;
+    try {
+      await this.persistNow(); // An interrupted attempt is not automatically replayed.
+      if (!canCallModel()) throw new Error("No remaining model budget");
+      if (
+        run.budget.toolCallsUsed >= run.budget.maxToolCalls ||
+        !(budget?.canRunTools(1) ?? true)
+      )
+        throw new Error("No remaining tool budget for report edits");
+      note(
+        configuredUiLanguage() === "zh-CN"
+          ? "正在按所选风格直接完善报告。已保存内容可继续阅读。"
+          : "Improving the report in the selected style. The saved report remains readable.",
+      );
+      let evidence = reportEvidence(artifact, state.events, state.messages);
+      const read = async (name: string, args: Record<string, unknown>) => {
+        if (!canRead()) return;
+        budget?.recordToolCalls(1);
+        run.budget.toolCallsUsed++;
+        await this.persistNow();
+        if (!active()) return;
+        const callId = `revision_read_${this.ids()}`;
+        this.emitSessionEvent(state, turnId, "tool_requested", {
+          callId,
+          toolName: name,
+          args,
+        });
+        const result = await this.executeTool(name, args, state, callId);
+        if (!active()) return;
+        this.emitSessionEvent(state, turnId, "tool_result", { callId, result });
+        return result;
+      };
+      // Reserve the final write. Missing sources are a limitation, not a repair loop.
+      for (const args of missingReportPages(artifact, evidence)) {
+        if (!canRead()) break;
+        try {
+          await read("get_pages", args);
+        } catch {
+          /* keep available evidence */
+        }
+      }
+      // Fetch current comments, as old reads may precede a successful edit/deletion.
+      const attachments = new Map(
+        artifact.citations
+          .filter((cite) => cite.attachmentKey && cite.annotationKey)
+          .map((cite) => [`${cite.itemLibraryID}:${cite.attachmentKey}`, cite]),
+      );
+      for (const cite of attachments.values()) {
+        let offset = 0;
+        while (canRead()) {
+          let result: ToolResult | undefined;
+          try {
+            result = await read("get_annotations", {
+              libraryID: cite.itemLibraryID,
+              key: cite.attachmentKey,
+              offset,
+              limit: 25,
+            });
+          } catch {
+            break;
+          }
+          if (!result?.ok) break;
+          const data = result.data as { nextOffset?: number | null };
+          if (!Number.isInteger(data.nextOffset) || data.nextOffset! <= offset)
+            break;
+          offset = data.nextOffset!;
+        }
+      }
+      evidence = reportEvidence(artifact, state.events, state.messages);
+      const outputAllowance =
+        state.record.backend === "native"
+          ? this.maxOutputTokens() || 8192
+          : 8192;
+      const capacity =
+        state.record.backend === "native"
+          ? this.contextWindowTokens()
+          : state.record.contextWindow?.capacityTokens || 32768;
+      const messages = reportRevisionMessages({
+        request: run.request,
+        languageInstruction: responseLanguageInstruction(
+          configuredUiLanguage(),
+        ),
+        style: state.record.reportStyle,
+        artifact,
+        evidence,
+        maxInputTokens: Math.max(0, capacity - outputAllowance - 1024),
+      });
+      if (!canCallModel()) throw new Error("No remaining model budget");
+      const configuredTimeout =
+        state.record.backend === "native"
+          ? (activeEndpoint(this.readEndpointStore().store)?.timeouts
+              ?.absoluteMs ?? 600000)
+          : 600000;
+      const timeoutMs = Math.max(
+        1,
+        Math.min(
+          configuredTimeout,
+          budget?.remainingElapsedMs() ?? configuredTimeout,
+        ),
+      );
+      const adapter =
+        state.record.backend === "native"
+          ? this.openaiAdapter({ stream: false })
+          : this.externalAnalysisAdapter(state, {
+              preserveSettings: true,
+              timeoutMs,
+            });
+      const result = await adapter.complete(
+        {
+          messages,
+          maxAttempts: 1,
+          deadlineMs: Date.now() + timeoutMs,
+          onAttempt: async () => {
+            if (!canCallModel())
+              throw new Error("Revision cancelled or budget exhausted");
+            budget?.recordIteration();
+            budget?.recordModelAttempt();
+            if (!run.budget.modelRequestsObservable)
+              run.budget.executorStarts++;
+            this.captureRunBudget(state);
+            await this.persistNow();
+          },
+          onRequestProgress: (progress) =>
+            this.emitSessionEvent(
+              state,
+              turnId,
+              "model_request_progress",
+              progress,
+            ),
+        },
+        signal,
+      );
+      if (result.usage) {
+        budget?.recordUsage(result.usage);
+        this.captureRunBudget(state);
+      }
+      if (!active()) return;
+      if (result.end && result.end !== "stop")
+        throw new Error(`Incomplete revision output: ${result.end}`);
+      const patch = reportRevisionPatch(result.text ?? "", artifact);
+      if (patch) {
+        const latest = await this.artifacts.get(artifact.id);
+        if (!active()) return;
+        if (latest?.revision !== artifact.revision)
+          throw new Error("Report changed during revision");
+        if (
+          run.budget.toolCallsUsed >= run.budget.maxToolCalls ||
+          !(budget?.canRunTools(1) ?? true)
+        )
+          throw new Error("No remaining tool budget for report edits");
+        budget?.recordToolCalls(1);
+        run.budget.toolCallsUsed++;
+        await this.persistNow();
+        const context = this.toolContext(
+          state,
+          turnId,
+          `artifact_revision_${this.ids()}`,
+        );
+        // The normal operation path preserves atomic writes, cancellation and recovery.
+        const saved = await this.execution
+          .wrap(this.artifactProvider(state, turnId), context)
+          .call("artifact_patch", patch, signal);
+        if (!saved.ok) throw new Error(saved.message);
+      }
+      attempt.status = "finished";
+    } catch (error) {
+      if (error instanceof ModelError && error.options.partial?.usage) {
+        budget?.recordUsage(error.options.partial.usage);
+        this.captureRunBudget(state);
+      }
+      attempt.status = "skipped";
+      attempt.reason = errorMessage(error);
+      notice =
+        configuredUiLanguage() === "zh-CN"
+          ? "自动完善未完成，已保留原报告；可继续阅读或提出具体修改。"
+          : "Automatic improvements were not completed. The saved report is retained for reading or further edits.";
+    } finally {
+      this.captureRunBudget(state);
+      if (isCurrent()) {
+        if (notice && !signal?.aborted) note(notice);
+        await this.persistNow().catch((error) =>
+          ztoolkit.log(
+            "[Confucius] report revision record persistence pending",
+            error,
+          ),
+        );
+      }
+    }
   }
 
   private async finalizeRun(
@@ -8411,8 +8936,9 @@ export class AgentHost {
 
   private openaiAdapter(
     extras: Partial<OpenAICompatibleConfig> = {},
+    selectedEndpoint?: ModelEndpoint,
   ): OpenAICompatibleAdapter {
-    const endpoint = this.requireEndpoint();
+    const endpoint = selectedEndpoint ?? this.requireEndpoint();
     return new OpenAICompatibleAdapter({
       apiKey: endpoint.apiKey,
       baseUrl: endpoint.baseUrl || "https://api.openai.com/v1",
@@ -8441,30 +8967,41 @@ export class AgentHost {
   }
 
   private async reloadMcp(): Promise<void> {
+    this.mcpDiscovery?.abort();
+    const discovery = createAbortController();
+    this.mcpDiscovery = discovery;
+    this.mcpProviders = [];
     const raw = String(getPref("mcpServersJson") || "").trim();
     const providers: McpToolProvider[] = [];
     if (raw) {
       try {
         const parsed = JSON.parse(raw) as McpServerConfig[] | McpServerConfig;
         const configs = Array.isArray(parsed) ? parsed : [parsed];
-        for (const config of configs) {
-          if (!config?.url || !config.id) {
-            continue;
-          }
-          try {
-            providers.push(await McpToolProvider.connect(config));
-          } catch (error) {
-            ztoolkit.log(
-              `[Confucius] MCP server "${config.id}" not loaded`,
-              error,
-            );
-          }
-        }
+        await Promise.all(
+          configs.map(async (config) => {
+            if (!config?.url || !config.id) {
+              return;
+            }
+            try {
+              const provider = await McpToolProvider.connect(
+                config,
+                discovery.signal,
+              );
+              if (!discovery.signal.aborted) providers.push(provider);
+            } catch (error) {
+              ztoolkit.log(
+                `[Confucius] MCP server "${config.id}" not loaded`,
+                error,
+              );
+            }
+          }),
+        );
       } catch (error) {
         ztoolkit.log("[Confucius] mcpServersJson invalid", error);
       }
     }
-    this.mcpProviders = providers;
+    if (!discovery.signal.aborted && !this.shuttingDown)
+      this.mcpProviders = providers;
   }
 
   /**
@@ -8875,3 +9412,14 @@ function historyMessageText(message: ModelMessage): string {
     ? JSON.stringify({ content: message.content, toolCalls: message.toolCalls })
     : message.content;
 }
+import { BtwManager, type BtwRun } from "./BtwManager";
+import { BtwStore } from "./BtwStore";
+import { type BtwResolvedContext } from "./BtwContext";
+import { executeNativeBtw, executeExternalBtw } from "./BtwExecution";
+import { ZoteroMemoryFs } from "./MemoryTools";
+import { taskArticles } from "./TaskSources";
+import {
+  emptyLockedContext,
+  type BtwSelection,
+  type BtwPromptParams,
+} from "@confucius/protocol";

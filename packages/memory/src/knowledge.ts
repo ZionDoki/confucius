@@ -122,27 +122,23 @@ export class KnowledgeBaseService {
   }
 
   async create(input: {
+    id?: string;
     title: string;
     description?: string;
     tags?: string[];
     sourceSessionId?: string;
   }): Promise<KnowledgeBase> {
     const title = requiredText(input.title, "Knowledge base title");
+    const id = input.id ?? this.engine.allocateId();
     const record = await this.engine.save({
+      id,
       type: "project",
       title,
       content: (input.description ?? "").trim(),
-      tags: mergeTags([KNOWLEDGE_BASE_TAG], input.tags),
+      tags: mergeTags([KNOWLEDGE_BASE_TAG, knowledgeBaseTag(id)], input.tags),
       sourceSessionId: input.sourceSessionId,
     });
-    const updated = await this.engine.update({
-      id: record.id,
-      tags: mergeTags(
-        [KNOWLEDGE_BASE_TAG, knowledgeBaseTag(record.id)],
-        input.tags,
-      ),
-    });
-    return toKnowledgeBase(updated ?? record, []);
+    return toKnowledgeBase(record, []);
   }
 
   async update(input: {
@@ -221,6 +217,8 @@ export class KnowledgeBaseService {
 
   async saveEntry(input: {
     id?: string;
+    /** Stable identity for a new entry; id continues to mean update-only. */
+    creationId?: string;
     knowledgeBaseId: string;
     kind: KnowledgeEntryType;
     title: string;
@@ -268,6 +266,7 @@ export class KnowledgeBaseService {
       return updated ? toKnowledgeEntry(updated) : null;
     }
     const record = await this.engine.save({
+      id: input.creationId,
       type: memoryTypeForKind(input.kind),
       title,
       content,

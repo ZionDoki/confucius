@@ -126,3 +126,9 @@ export function runtimeModelSelection(
       : {}),
   };
 }
+
+/** Internal auxiliary call controls; no extra user model configuration. */
+export interface RuntimeAnalysisOptions {
+  preserveSettings?: boolean;
+  timeoutMs?: number;
+}

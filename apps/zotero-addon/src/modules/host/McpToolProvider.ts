@@ -7,7 +7,7 @@ import type {
 } from "@confucius/protocol";
 import { validateArgs, type ToolProvider } from "@confucius/harness";
 import { McpHttpClient, type McpServerConfig } from "@confucius/mcp-client";
-import { hostFetch } from "../../utils/webPlatform";
+import { hostFetch, createAbortController } from "../../utils/webPlatform";
 
 export class McpToolProvider implements ToolProvider {
   private tools: ToolDefinition[] = [];
@@ -17,12 +17,15 @@ export class McpToolProvider implements ToolProvider {
     private readonly serverId = "external",
   ) {}
 
-  static async connect(config: McpServerConfig): Promise<McpToolProvider> {
+  static async connect(
+    config: McpServerConfig,
+    signal?: AbortSignal,
+  ): Promise<McpToolProvider> {
     const provider = new McpToolProvider(
-      new McpHttpClient(config, hostFetch),
+      new McpHttpClient(config, hostFetch, createAbortController),
       config.id,
     );
-    provider.tools = await provider.client.listTools();
+    provider.tools = await provider.client.listTools(signal);
     return provider;
   }
 

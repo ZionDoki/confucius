@@ -229,6 +229,34 @@ describe("FilteredToolProvider", () => {
 });
 
 describe("truncateToolResult", () => {
+  for (const toolName of ["get_collection_items", "run_saved_search"]) {
+    it(`preserves ${toolName} pagination when long item metadata exceeds the result budget`, () => {
+      const items = Array.from({ length: 50 }, (_, index) => ({
+        libraryID: 1,
+        key: `ITEM${index}`,
+        title: "Long title ".repeat(100),
+      }));
+      const result = truncateToolResult(
+        {
+          ok: true,
+          toolName,
+          data: { total: 120, offset: 50, nextOffset: 100, items },
+        },
+        3000,
+      );
+      assert.equal(result.ok, true);
+      if (!result.ok) return;
+      const page = result.data as {
+        items: typeof items;
+        nextOffset: number;
+        total: number;
+      };
+      assert.ok(page.items.length > 0 && page.items.length < 50);
+      assert.equal(page.nextOffset, 50 + page.items.length);
+      assert.equal(page.total, 120);
+      assert.deepEqual(page.items, items.slice(0, page.items.length));
+    });
+  }
   it("preserves every proposal issue and candidate mapping without echoing authored prose", () => {
     const annotations = [
       {
