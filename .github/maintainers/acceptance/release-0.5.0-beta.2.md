@@ -65,4 +65,45 @@ API 数据解析、24 小时缓存、失败后重试、模型精确匹配、端�
 目录请求访问真实 models.dev；模型推理、延迟回复和失败场景使用合成数据与本地服务，
 没有调用付费在线模型。目录只是参考，不保证不同网关的 ID、容量与思考参数一致；
 本版不导入思考 token 预算。未实测 Windows、Linux、其他 Zotero 版本、大型个人文库
-或 forced-colors。以上是本地候选验收，公开 CI 包的安装与升级结果另行补充。
+或 forced-colors。以上为本地候选验收；公开 CI 包的安装与升级结果见下文，未验证
+范围同样适用。
+
+## 公开发布与资产验收
+
+`v0.5.0-beta.2` 指向提交 `e243aaeca5b3aade78b0c91b8ee45a4241fa72de`，于
+2026-09-21 10:35:05 UTC [公开发布](https://github.com/ZionDoki/confucius/releases/tag/v0.5.0-beta.2)。
+`draft=false`、`prerelease=true`；Latest 保持 `v0.4.6`，其资产 ID、大小和摘要保持不变。
+
+- [tag CI](https://github.com/ZionDoki/confucius/actions/runs/35589307961) 的 Node.js
+  22／24 检查和发布任务全部成功；[主干 CI](https://github.com/ZionDoki/confucius/actions/runs/35589307259)
+  同样成功。发布正文与 CHANGELOG 提取结果一致。
+- 公开资产仅含 `confucius.xpi` 和 `update-beta.json`，均为 uploaded。下载大小、
+  GitHub SHA-256、manifest 版本／插件 ID、Zotero 兼容范围、更新链接与 SHA-512
+  全部核对一致。
+- 公开 XPI：698,530 bytes，SHA-256：
+  `a518ef0d05f200750b718857e0029e9e18091f1a4f969d152aa0ba9ab3cc187f`。
+- 公开更新 JSON：587 bytes，SHA-256：
+  `0aaf97485ea81cc4431ff22265d0bc8595ebace511f1382d3969398d266f4737`。
+
+公开 XPI 在新的隔离 Zotero 10.0.3 配置中重新完成全部九组模型设置检查，包括真实
+公开目录、输入法、延迟回复、失败重试、思考参数发送、深色窄窗和完整退出重启。
+
+分别从公开 **0.5.0-beta.1** 与 **0.4.6** 经真实 Confucius 更新器升级到公开 Beta 2，
+每条路径 **27 项检查通过**：
+
+- Zotero 全局更新关闭时，Confucius 手动检查正常。稳定渠道不提供 Beta；显式开启
+  测试渠道后发现 0.5.0-beta.2，完成公开资产下载、摘要校验、安装和重启。
+- 所有候选升级检查再次通过：任务、中文草稿、来源、批注、笔记、报告修订、原始
+  历史、工作笔记、记忆、待审提案与预算保留；原始正文逐文件摘要一致，继续执行
+  不重复写入已完成的笔记。
+- 实际安装文件与公开 XPI 摘要一致；当前版本不重复提供更新；关闭 Beta 不降级，
+  重启后显式稳定渠道选择保留。
+
+Beta 转同基础稳定版的顺序、独立自动检查定时器、网络／HTTP 失败、超时、资产缺失
+与校验失败由本轮 `UpdateService.test.ts` 自动化回归覆盖；这些失败场景未另做真实
+公网故障注入。热更新布局恢复使用候选包完成上述七组实机检查。
+
+原始结果为 `public-package.json`、`public-settings/result.json`、
+`public-upgrade-beta.json` 与 `public-upgrade-stable.json`，位于本次已忽略的 `output/`
+目录。隔离验收进程均已退出，未安装到日常 profile。此补充只记录发布后事实，
+不改动 tag、发布正文或公开安装包。
