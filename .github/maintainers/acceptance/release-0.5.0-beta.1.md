@@ -53,3 +53,34 @@
 Codex／Kimi 使用自动化适配器和生命周期回归；未进行真实在线三后端研究、认证缓存全文、
 机构登录或真实额度扣费测试。未复测 Windows、Linux、其他 Zotero 版本、大型个人文库
 或 forced-colors 实机表现。候选成功不等于公开 CI 包验收成功，公开发布后另行记录。
+
+## 公开发布与安装后验收
+
+`v0.5.0-beta.1` 指向提交 `4b799bc206f3933e804624c6d356b299c0ad9b78`，于
+2026-09-21 07:08:39 UTC [公开发布](https://github.com/ZionDoki/confucius/releases/tag/v0.5.0-beta.1)。
+`draft=false`、`prerelease=true`；Latest 保持 `v0.4.6`，原稳定版 tag 和资产未改动。
+
+- [tag CI](https://github.com/ZionDoki/confucius/actions/runs/35571357146) 的 Node.js
+  22／24 检查及发布任务全部成功；[主干 CI](https://github.com/ZionDoki/confucius/actions/runs/35571357025)
+  也成功。发布正文与 CHANGELOG 提取结果逐字一致。
+- 发布资产仅含 `confucius.xpi` 和 `update-beta.json`，均为 uploaded。下载大小、
+  GitHub SHA-256、manifest 版本／插件 ID、兼容范围、更新链接与 SHA-512 全部核对。
+- 公开 XPI：691,474 bytes，SHA-256：
+  `06cc9eaf4348567de14f3ca9bdbca0c2bce0ee584e6909511fed4ff79f1ca543`。
+- 公开更新 JSON：587 bytes，SHA-256：
+  `a90768ec0083cfe74758ec9f3688d0cb5ee11bc5bded07ed5bd6692ac6c08a8d`。
+
+公开 XPI 在新的隔离 Zotero 10.0.3 配置中重新完成文献流程 **14 组通过**，包括对话卡片、
+胶囊、候选确认、真实文件操作、子任务气泡、窄窗、重启及一次匿名 OpenAlex 查询。
+另外从公开 0.4.6 通过真实 Confucius 更新器完成公开 Beta 升级，**27 项通过**：
+
+- 稳定渠道不提供 Beta；显式开启后发现 0.5.0-beta.1，并完成下载、校验、安装与重启。
+- 旧任务、中文草稿、来源、批注、笔记、报告修订、原始历史、工作笔记、记忆、待审提案
+  和预算保留；原始正文逐文件摘要一致，继续任务不重复写笔记。
+- 实际安装文件摘要与公开 XPI 一致；当前版本不重复提供更新；关闭 Beta 不降级，
+  重启保留显式稳定渠道选择。
+
+原始结果为 `public-package.json`、`public-literature/result.json` 与
+`public-upgrade-stable.json`，均位于已忽略的本次 `output/` 目录。验收进程已退出，
+未安装到日常 profile。此补充仅记录发布后事实，不改动 tag、代码或公开安装包；
+模型凭据与平台范围仍受上面的未验证范围约束。
