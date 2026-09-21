@@ -115,59 +115,48 @@ it("uses library-qualified identities and recovers a reader without its parent r
   );
 });
 
-it("host follows idle tasks without changing recency, refreshes on Send, and preserves a running turn", async () => {
+it("host never rebinds a task when PDF tabs change, while explicit additions persist", async () => {
   const record = task("existing");
   const state = { record, activeTurnId: null as string | null };
   let live = pdf("A");
-  let freezes = 0;
   const host = Object.assign(Object.create(AgentHost.prototype), {
     sessions: new Map([[record.id, state]]),
     captureLockedContext: () => live,
-    emitSessionEvent: () => {
-      record.updatedAt = 99;
-    },
-    persistSoon: () => undefined,
-    freezeBoundAnnotations: async () => {
-      freezes++;
-    },
+    emitSessionEvent: () => {},
+    persistSoon: () => {},
+    freezeBoundAnnotations: async () => {},
   }) as {
-    detectContextDrift(current: typeof state): void;
     taskSetContext(
       params: Record<string, unknown>,
     ): Promise<ResearchTaskRecord>;
   };
-  const follow = (refresh = false) =>
-    host.taskSetContext({ taskId: record.id, mode: "follow_reader", refresh });
+  const follow = () =>
+    host.taskSetContext({
+      taskId: record.id,
+      mode: "follow_reader",
+      refresh: true,
+    });
   await follow();
-  assert.equal(record.lockedContext.reader?.attachmentKey, "PDFA");
-  assert.deepEqual(record.articleSources, []);
-  assert.deepEqual(articleTaskGroups([record]), []);
+  assert.equal(record.lockedContext.items.length, 0);
   assert.equal(record.updatedAt, 1);
-  live = pdf("A", 1, 4);
-  host.detectContextDrift(state);
-  assert.equal(record.updatedAt, 1);
-  await follow();
-  assert.equal(record.lockedContext.reader?.pageIndex, 0);
-  await follow(true);
-  assert.equal(record.lockedContext.reader?.pageIndex, 4);
-  const runningSources = record.lockedContext;
-  state.activeTurnId = "running";
-  live = pdf("B");
-  await follow(true);
-  assert.equal(record.lockedContext, runningSources);
-  state.activeTurnId = null;
-  await follow();
-  assert.equal(record.lockedContext.reader?.attachmentKey, "PDFB");
-  assert.equal(runningSources.reader?.attachmentKey, "PDFA");
-  assert.equal(freezes, 0);
-  // Pinning is a real change even if item identities and fingerprint match.
   await host.taskSetContext({ taskId: record.id, mode: "add", context: live });
-  assert.equal(record.lockedContext.items[0].source, "library");
-  live = pdf("C");
+  assert.equal(record.lockedContext.items[0].key, "A");
+  const bound = record.lockedContext;
+  live = pdf("B");
   await follow();
+  assert.equal(record.lockedContext, bound);
+  state.activeTurnId = "running";
+  await follow();
+  assert.equal(record.lockedContext, bound);
+  await assert.rejects(
+    host.taskSetContext({ taskId: record.id, mode: "add", context: live }),
+    /Wait/,
+  );
+  state.activeTurnId = null;
+  await host.taskSetContext({ taskId: record.id, mode: "add", context: live });
   assert.deepEqual(
-    record.lockedContext.items.map((item) => item.key),
-    ["C", "B"],
+    record.articleSources?.map((item) => item.key),
+    ["A", "B"],
   );
 });
 

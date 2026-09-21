@@ -12,14 +12,26 @@
   <img src="https://img.shields.io/badge/License-AGPL--3.0-171714?style=flat-square" alt="AGPL-3.0" />
 </p>
 
-Confucius is an open-source research workspace for Zotero 7 and later. It lets
-a model read papers, collections, PDF selections, and local text files in
-Zotero.
+**Confucius is an open-source research assistant for Zotero 7 and later.**
+Start with a research question: discover papers through **OpenAlex**, select
+relevant candidates, obtain available full text, and read or compare the evidence
+in the same conversation. Your Zotero library, PDF selections, and local files
+can join the research at any point.
 
-[Download the latest release](https://github.com/ZionDoki/confucius/releases/latest)
+[Download the latest stable release](https://github.com/ZionDoki/confucius/releases/latest)
 · [User guide](docs/README.md) · [Changelog](CHANGELOG.md) · [Build from source](#build-from-source)
 
+**New in [0.5.0 Beta](https://github.com/ZionDoki/confucius/releases/tag/v0.5.0-beta.1):**
+OpenAlex discovery, candidate selection, full-text acquisition, and research subagents.
+Install the Beta XPI or enable **Include prereleases** in Confucius Settings → Update.
+
 ## Features
+
+- Search OpenAlex from a research question, with year and open-access filters.
+- Keep the full search pool separate from selected candidates; review before
+  saving papers to Zotero and downloading available PDFs.
+- Delegate focused reading or method comparisons to research subagents, then
+  bring their findings and evidence back into the conversation.
 
 - Read one paper or compare several papers.
 - Check claims against passages, figures, and annotations.
@@ -30,11 +42,37 @@ Zotero.
 - Use an OpenAI-compatible endpoint, Ollama, Codex, or Kimi.
 
 You can start from the Zotero item menu, the PDF reader selection menu, or the
-Confucius workspace. Type `@` to add papers, type `/` to choose a task, or drop
-PDF, Markdown, and TXT files into the workspace.
+Confucius workspace. A new task needs no attached paper. Type `@` to add sources, or drop PDF, Markdown,
+and TXT files into the workspace. Paper-specific `/` presets appear when compatible
+sources are attached and prepare the next request in the current conversation.
 
 Task results appear as files in the activity view. Each file keeps its revision
 history and citations. Ordinary replies remain in the activity view.
+
+## Find literature with OpenAlex
+
+> Find papers from the last five years on graph neural networks for molecular
+> property prediction. Recommend the most relevant candidates and explain why.
+
+1. Add an **OpenAlex API Key** in Confucius Settings → Runtimes, or in
+   Zotero → Settings → Confucius. [Get a key](https://openalex.org/settings/api).
+2. Ask your question in the conversation. The Agent searches OpenAlex and shows
+   a literature card with the fetched pool and recommended candidates.
+3. Review abstracts and selection reasons, check or uncheck candidates, or refine
+   the selection in your next prompt. When the card scrolls out of view, a capsule
+   above the composer opens it without moving your reading position.
+4. Choose **Review selection → Confirm and acquire full text**. Confucius reuses
+   matching Zotero items and valid attachments, then tries open-access PDFs and
+   OpenAlex cached PDFs where available.
+5. For missing full text, open the paper in your browser, download it using your
+   existing access, and drag the PDF onto that paper's target in the card.
+
+OpenAlex retrieval uses Zotero's built-in HTTP client: no additional SDK, browser
+extension, or download service is needed. The key stays with the host and is not
+sent to the model. Each search page fetches up to 100 records; the deduplicated
+pool count is distinct from the API's total hits. Availability, API quotas, and
+access rights determine which full texts can be obtained. Reading only an abstract
+does not count as reading the full paper. See the [literature research guide](docs/literature-research.md).
 
 ## Runtimes
 
@@ -100,7 +138,9 @@ devices, and hosting the entire Zotero database there remain unverified.
 
 ## Permissions
 
-- External runtimes receive Zotero read tools and `artifact_upsert` by default.
+- External runtimes use scoped Zotero, literature, and research tools, with
+  `artifact_upsert` for results. Literature imports and downloads require candidate
+  confirmation; subagents cannot approve writes or recursively delegate.
 - Shell commands and general file writes require a selected working directory.
 - Zotero writes show their proposed changes and require approval.
 - The local MCP endpoint uses Zotero's HTTP port (normally `127.0.0.1:23119`) and requires the pairing

@@ -139,6 +139,7 @@ export async function writeRuntimeText(
 export interface JsonStorage {
   read<T>(key: string): Promise<T | null>;
   write<T>(key: string, value: T): Promise<void>;
+  remove?(key: string): Promise<void>;
   /** Listing makes operation indexes rebuildable. Older adapters may omit it. */
   keys?(prefix?: string): Promise<string[]>;
 }
@@ -149,6 +150,12 @@ const safeKey = (key: string) => {
 };
 export function runtimeJsonStorage(folder = "records"): JsonStorage {
   return {
+    async remove(key) {
+      await IOUtils.remove(
+        runtimeIoPath(runtimePath(folder, `${safeKey(key)}.json`)),
+        { ignoreAbsent: true },
+      );
+    },
     async keys(prefix = "") {
       if (prefix && !/^[a-zA-Z0-9_-]+$/.test(prefix))
         throw new Error("Invalid runtime record prefix");
@@ -177,6 +184,9 @@ export function runtimeJsonStorage(folder = "records"): JsonStorage {
 export function memoryJsonStorage(): JsonStorage {
   const values = new Map<string, string>();
   return {
+    async remove(key) {
+      values.delete(key);
+    },
     async keys(prefix = "") {
       return [...values.keys()].filter((key) => key.startsWith(prefix));
     },

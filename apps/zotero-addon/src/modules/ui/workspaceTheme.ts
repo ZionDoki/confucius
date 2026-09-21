@@ -1248,6 +1248,7 @@ ${REPORT_STYLE_CSS}
 .confucius-attached-sources[data-empty=true] > span { color: var(--confucius-muted); }
 .confucius-workspace-root[data-confucius-density=narrow] .confucius-attached-sources { display: block; max-width: 100%; padding: 3px 4px; }
 .confucius-workspace-root[data-confucius-density=narrow] .confucius-attached-sources > :is(small, span) { display: block; }
+.confucius-workspace-root .confucius-attached-sources[data-empty=true] > small { display:none; }
 .confucius-session-pane .confucius-task-empty { padding: 8px; color: var(--confucius-muted); font-size: .9em; }
 .confucius-activity-shell { max-width: 880px; margin: 0 auto; padding-bottom: 16px; }
 .confucius-activity-head { display: none; }

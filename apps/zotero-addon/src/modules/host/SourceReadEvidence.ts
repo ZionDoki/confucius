@@ -32,7 +32,18 @@ export function sourceReadEvidence(
       )
     )
       return;
-    return { ...source, toolName: result.toolName, sourceContent: true };
+    const pages = data.pages
+      .map((p: { page?: number }) => p.page)
+      .filter((p): p is number => Number.isInteger(p));
+    return {
+      ...source,
+      toolName: result.toolName,
+      sourceContent: true,
+      ...(typeof data.sourceVersion === "string"
+        ? { contentVersion: data.sourceVersion }
+        : {}),
+      ...(pages.length ? { pages } : {}),
+    };
   }
   if (result.toolName === "inspect_pdf_page") {
     // A visualAvailable flag alone is not proof that an image reached the model.

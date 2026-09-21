@@ -1,3 +1,4 @@
+import { SUBAGENT_TOOL_NAMES } from "@confucius/protocol";
 import type { ToolExecutionContext } from "@confucius/protocol";
 import { HISTORY_TOOL_NAMES } from "./HistoryTools";
 import { CONTEXT_TOOL_NAMES } from "./ContextTools";
@@ -67,6 +68,7 @@ const PRESET_ITEM_SOURCE_TOOLS = new Set<string>([
 export function presetToolNames(workflow: PresetWorkflow): ReadonlySet<string> {
   return new Set([
     ...PRESET_READ_TOOLS,
+    ...SUBAGENT_TOOL_NAMES,
     ...HISTORY_TOOL_NAMES,
     ...CONTEXT_TOOL_NAMES,
     ...ARTIFACT_TOOL_NAMES,

@@ -25,6 +25,7 @@ export async function setTaskPreset(
     );
 
   const previous = {
+    presetPrepared: state.record.presetPrepared,
     templateId: state.record.templateId,
     updatedAt: state.record.updatedAt,
     loadedSkills: state.loadedSkills,
@@ -37,6 +38,7 @@ export async function setTaskPreset(
   )
     state.loadedSkills.delete(previousTemplate.skillSlug);
   if (template?.skillSlug) state.loadedSkills.add(template.skillSlug);
+  state.record.presetPrepared = !!template;
   if (template) state.record.templateId = template.id;
   else delete state.record.templateId;
   state.record.updatedAt = Date.now();
@@ -45,6 +47,7 @@ export async function setTaskPreset(
   } catch (error) {
     if (previous.templateId === undefined) delete state.record.templateId;
     else state.record.templateId = previous.templateId;
+    state.record.presetPrepared = previous.presetPrepared;
     state.record.updatedAt = previous.updatedAt;
     state.loadedSkills = previous.loadedSkills;
     throw error;

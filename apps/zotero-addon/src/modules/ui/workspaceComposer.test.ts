@@ -87,3 +87,99 @@ test("streaming and tool completions keep earlier activity keys stable", () => {
     keys,
   );
 });
+
+test("search cards and child progress stay at their first chronological position across requests", () => {
+  const events: ConfuciusEvent[] = [];
+  const add = (type: string, payload: unknown, turnId = "t1") =>
+    events.push({
+      id: String(events.length),
+      sessionId: "task",
+      turnId,
+      ts: events.length,
+      type,
+      payload,
+    } as ConfuciusEvent);
+  const summary = {
+    id: "task",
+    revision: 1,
+    candidateRevision: 0,
+    pool: 100,
+    evaluated: 0,
+    candidates: 0,
+    pendingFulltext: 0,
+    available: 0,
+    read: 0,
+    awaitingConfirmation: false,
+    latestQuery: {
+      id: "q1",
+      query: "graph networks",
+      total: 2500,
+      createdAt: 1,
+    },
+  };
+  add("turn_started", { userText: "Find papers" });
+  add("tool_requested", {
+    callId: "search",
+    toolName: "literature_search",
+    args: { query: "graph networks" },
+  });
+  add("literature_updated", { summary, sources: [] });
+  add("tool_result", {
+    callId: "search",
+    result: { toolName: "literature_search", ok: true, data: {} },
+  });
+  add("text_delta", { text: "Found 100 papers" });
+  const child = {
+    id: "child1",
+    parentTaskId: "task",
+    parentRunId: "run",
+    intentRevision: 1,
+    parentTurnId: "t1",
+    title: "Compare methods",
+    status: "running",
+    createdAt: 2,
+    updatedAt: 2,
+    attempt: 1,
+  };
+  add("subagent_updated", { subagent: child });
+  const before = keyedTimeline(events);
+  add("turn_started", { userText: "Select these two" }, "t2");
+  add(
+    "literature_updated",
+    { summary: { ...summary, revision: 2, candidates: 2 }, sources: [] },
+    "t2",
+  );
+  add(
+    "subagent_updated",
+    { subagent: { ...child, status: "completed", updatedAt: 3 } },
+    "t2",
+  );
+  add(
+    "literature_updated",
+    {
+      summary: {
+        ...summary,
+        latestQuery: { ...summary.latestQuery, id: "q2", query: "new search" },
+      },
+      sources: [],
+    },
+    "t2",
+  );
+  const after = keyedTimeline(events);
+  assert.deepEqual(
+    after.slice(0, before.length).map((e) => e.key),
+    before.map((e) => e.key),
+  );
+  assert.equal(after.filter((e) => e.block.kind === "literature").length, 2);
+  const children = after.filter((e) => e.block.kind === "subagent");
+  assert.equal(children.length, 1);
+  assert.equal(
+    children[0].block.kind === "subagent" && children[0].block.subagent.status,
+    "completed",
+  );
+  const tools = after.flatMap((e) =>
+    e.block.kind === "tools" ? e.block.calls : [],
+  );
+  assert.equal(tools.length, 1);
+  assert.equal(tools[0].result?.ok, true);
+});

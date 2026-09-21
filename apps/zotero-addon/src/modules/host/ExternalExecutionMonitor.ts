@@ -4,6 +4,7 @@ import type { ConfuciusEvent } from "@confucius/protocol";
 export class ExternalExecutionMonitor {
   private timer?: unknown;
   private approvals = new Set<string>();
+  private hostWaits = new Set<string>();
   private closed = false;
   private retrying = false;
   constructor(
@@ -38,6 +39,13 @@ export class ExternalExecutionMonitor {
       return;
     if (event.type === "model_request_progress" && event.payload.purpose)
       return;
+    if (
+      event.type === "tool_requested" &&
+      ["literature_acquire", "subagent_wait"].includes(event.payload.toolName)
+    )
+      this.hostWaits.add(event.payload.callId);
+    if (event.type === "tool_result")
+      this.hostWaits.delete(event.payload.callId);
     if (event.type === "approval_required")
       this.approvals.add(event.payload.request.id);
     if (event.type === "approval_resolved")
@@ -60,7 +68,7 @@ export class ExternalExecutionMonitor {
   private arm(): void {
     if (this.timer !== undefined) this.timers.cancel(this.timer);
     this.timer = undefined;
-    if (this.closed || this.approvals.size) return;
+    if (this.closed || this.approvals.size || this.hostWaits.size) return;
     this.timer = this.timers.schedule(
       () => {
         this.closed = true;

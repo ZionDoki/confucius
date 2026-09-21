@@ -1,7 +1,7 @@
 {
   "name": "@confucius/zotero-addon",
-  "version": "0.4.6",
-  "description": "Read, compare, annotate, and organize papers in Zotero.",
+  "version": "0.5.0-beta.1",
+  "description": "A research assistant for Zotero: discover papers with OpenAlex, read, compare, and organize evidence.",
   "config": {
     "addonName": "Confucius",
     "addonID": "confucius@zotero.plugin",

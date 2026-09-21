@@ -1,3 +1,19 @@
+import { SubagentManager, type SubagentRun } from "./SubagentManager";
+import { SubagentToolProvider, SubagentResearchTools } from "./SubagentTools";
+import {
+  executeNativeSubagent,
+  executeExternalSubagent,
+} from "./SubagentExecution";
+import { SUBAGENT_TOOL_NAMES } from "@confucius/protocol";
+import { LiteratureService } from "./LiteratureService";
+import { OpenAlexClient } from "./OpenAlexClient";
+import { ZoteroLiteratureAcquirer } from "./LiteratureAcquisition";
+import { LiteratureToolProvider } from "./LiteratureToolProvider";
+import {
+  LITERATURE_TOOL_NAMES,
+  RESEARCH_INSTRUCTIONS,
+  type LiteratureSearch,
+} from "@confucius/protocol";
 import {
   prepareContextHandoff,
   contextHandoffText,
@@ -576,6 +592,7 @@ interface SessionState {
   driftReportedForLockedFingerprint?: string;
   promptSubmission?: number;
   runBudget?: BudgetAccountant;
+  nativeExecutionConfig?: import("@confucius/protocol").SubagentRecord["nativeConfig"];
   /** Runtime-only MCP tool projection for the active request. */
   externalToolNames?: Set<string>;
   /** Runtime-only source boundary resolved from the active request. */
@@ -808,6 +825,307 @@ export class AgentHost {
   }
   readonly skills = new SkillStore();
   readonly tools = new ZoteroToolHost();
+  private readonly openAlex = new OpenAlexClient(() =>
+    String(getPref("openAlexApiKey") || ""),
+  );
+  private readonly literature = new LiteratureService({
+    client: this.openAlex,
+    acquire: new ZoteroLiteratureAcquirer(() =>
+      String(getPref("openAlexApiKey") || ""),
+    ),
+    exists: (id) => this.sessions.has(id),
+    canConfirm: (id) => {
+      const state = this.requireSession(id);
+      if (
+        state.activeTurnId &&
+        !this.literature.isWaitingForConfirmation(
+          id,
+          state.record.run?.id ?? "",
+        )
+      )
+        throw new Error(
+          "请在研究停止或等待文献确认时应用来源 / Stop research before applying sources",
+        );
+    },
+    bind: async (id, items, removed) => {
+      const state = this.requireSession(id);
+      const key = (item: { libraryID: number; key: string }) =>
+        `${item.libraryID}:${item.key}`;
+      const managed = new Set(state.record.literatureSourceKeys ?? []);
+      const keep = new Set(items.map(key));
+      const remove = new Set(
+        [...removed.map(key).filter((k) => managed.has(k)), ...managed].filter(
+          (k) => !keep.has(k),
+        ),
+      );
+      const sources = state.record.lockedContext;
+      const merged = new Map(
+        sources.items
+          .filter((i) => !remove.has(key(i)))
+          .map((i) => [key(i), i]),
+      );
+      for (const item of items) {
+        if (!merged.has(key(item))) managed.add(key(item));
+        merged.set(key(item), item);
+      }
+      for (const k of remove) managed.delete(k);
+      state.record.literatureSourceKeys = [...managed];
+      const next = withLockedContextFingerprint({
+        ...sources,
+        capturedAt: Date.now(),
+        items: [...merged.values()],
+      });
+      if (
+        next.reader &&
+        remove.has(
+          `${next.reader.libraryID}:${next.reader.parentKey ?? next.reader.attachmentKey}`,
+        )
+      ) {
+        delete next.reader;
+        delete next.selection;
+      }
+      state.record.lockedContext = withLockedContextFingerprint(next);
+      if (
+        state.activeTurnId &&
+        state.record.run &&
+        this.literature.isWaitingForConfirmation(id, state.record.run.id)
+      ) {
+        // The main executor is paused at literature_acquire. Previously spawned
+        // children retain their copied source snapshots; later delegation uses this one.
+        state.record.run.sources = JSON.parse(
+          JSON.stringify(state.record.lockedContext),
+        );
+      }
+      state.record.context = legacyContextForLocked(state.record.lockedContext);
+      state.record.articleSources = contextArticles(state.record.lockedContext);
+      await this.persistNow();
+      this.emitSessionEvent(state, undefined, "context_updated", {
+        context: state.record.context,
+      });
+    },
+    changed: async (id, summary) => {
+      const state = this.requireSession(id);
+      state.record.literature = summary;
+      this.emitSessionEvent(
+        state,
+        state.activeTurnId ?? undefined,
+        "literature_updated",
+        { summary, sources: state.record.lockedContext },
+      );
+      await this.persistNow();
+    },
+  });
+  private subagentManager?: SubagentManager;
+  private subagents(): SubagentManager {
+    return (this.subagentManager ??= new SubagentManager({
+      references: (id) => this.sessions.get(id)?.record.subagentIds ?? [],
+      parent: (id) => {
+        const state = this.requireSession(id);
+        const run = state.record.run;
+        if (!run) throw new Error("Parent request is unavailable");
+        if (!state.runBudget) {
+          state.runBudget = new BudgetAccountant({
+            maxIterations: run.budget.maxIterations,
+            maxToolCalls: run.budget.maxToolCalls,
+          });
+          state.runBudget.restoreMax({
+            iterationsUsed: run.budget.iterationsUsed,
+            modelAttempts: run.budget.iterationsUsed,
+            toolCallsUsed: run.budget.toolCallsUsed,
+            tokensUsed: run.budget.totalTokens,
+            promptTokens: run.budget.promptTokens,
+            completionTokens: run.budget.completionTokens,
+            elapsedMs: run.budget.elapsedMs ?? 0,
+          });
+        }
+        const endpoint = activeEndpoint(this.readEndpointStore().store);
+        return {
+          task: state.record,
+          turnId: state.activeTurnId ?? run.id,
+          budget: state.runBudget,
+          nativeConfig:
+            state.nativeExecutionConfig ??
+            (endpoint
+              ? {
+                  endpointId: endpoint.id,
+                  model: endpoint.model,
+                  reasoningEffort: endpoint.reasoningEffort ?? "auto",
+                  capacity: endpoint.contextWindowTokens || 32768,
+                  maxOutput: endpoint.maxTokens || 4096,
+                }
+              : undefined),
+        };
+      },
+      current: (record) => {
+        const state = this.sessions.get(record.parentTaskId);
+        return (
+          !!state &&
+          state.record.run?.id === record.parentRunId &&
+          state.record.run.intentRevision === record.intentRevision &&
+          !state.abort?.signal.aborted &&
+          !this.shuttingDown
+        );
+      },
+      sources: async (task, ids) => {
+        const parent = task.run?.sources ?? task.lockedContext;
+        const scope =
+          this.sessions.get(task.id)?.externalSourceScope ??
+          (parent.collection || parent.savedSearch
+            ? (await resolvePresetSources(parent, presetWorkflow("synthesis")!))
+                .scope
+            : undefined);
+        const selected = [] as LockedContextSnapshot["items"];
+        for (const id of ids) {
+          let item = parent.items.find(
+            (i) => id === `${i.libraryID}:${i.key}` || id === i.id,
+          );
+          if (!item && scope?.itemRefs.has(id)) {
+            const [library, key] = id.split(":");
+            const entry = Zotero.Items.getByLibraryAndKey(Number(library), key);
+            if (entry && !entry.deleted)
+              item = {
+                id: `item:${id}`,
+                libraryID: entry.libraryID,
+                key: entry.key,
+                title: String(entry.getField("title")),
+                source: "library",
+              };
+          }
+          if (/^W\d+$/.test(id)) {
+            const work = await this.literature.get(task.id, id);
+            const candidate = work.acquisition.item;
+            if (
+              candidate &&
+              parent.items.some(
+                (i) =>
+                  i.libraryID === candidate.libraryID &&
+                  i.key === candidate.key,
+              )
+            )
+              item = candidate;
+            else if (task.templateId)
+              throw new Error("Paper is outside this preset's source scope");
+            else continue; // Metadata-only paper; the child cannot read an unbound PDF.
+          }
+          if (!item)
+            throw new Error("Delegated source is outside the parent request");
+          const native = Zotero.Items.getByLibraryAndKey(
+            item.libraryID,
+            item.key,
+          );
+          const attachment =
+            !item.attachmentKey && native && native.isRegularItem()
+              ? await native.getBestAttachment()
+              : undefined;
+          selected.push({
+            ...item,
+            attachmentKey:
+              item.attachmentKey ||
+              (attachment && attachment.isPDFAttachment()
+                ? attachment.key
+                : undefined),
+          });
+        }
+        return withLockedContextFingerprint({
+          ...emptyLockedContext(),
+          items: selected,
+        });
+      },
+      tools: (run) =>
+        new SubagentResearchTools(
+          run,
+          new ZoteroToolProvider(this.tools),
+          this.literature,
+        ),
+      execute: async (run) => {
+        if (run.task.backend !== "native")
+          return executeExternalSubagent(
+            run,
+            this.backendFor(run.task.backend),
+          );
+        const config = run.document.record.nativeConfig;
+        const { store } = this.readEndpointStore();
+        const endpoint = store.endpoints.find(
+          (e) => e.id === config?.endpointId,
+        );
+        if (!endpoint || !endpointIsConfigured(endpoint))
+          throw new Error("Subagent model endpoint is unavailable");
+        const snapshot = {
+          ...endpoint,
+          model: config?.model ?? endpoint.model,
+          reasoningEffort: isReasoningEffort(config?.reasoningEffort)
+            ? config.reasoningEffort
+            : endpoint.reasoningEffort,
+        };
+        return executeNativeSubagent(
+          run,
+          this.openaiAdapter(
+            {
+              ...snapshot,
+              stream:
+                getPref("streamResponses") !== false && hostFetchCanStream(),
+              onTextDelta: (text) =>
+                run.event({
+                  id: this.ids(),
+                  sessionId: run.task.id,
+                  turnId: run.task.run!.id,
+                  ts: Date.now(),
+                  type: "text_delta",
+                  payload: { text },
+                }),
+            },
+            snapshot,
+          ),
+        );
+      },
+      stop: async (run) => {
+        if (run.task.backend !== "native")
+          await this.backendFor(run.task.backend).dispose(run.task.id);
+      },
+      charge: async (run) => {
+        const state = this.sessions.get(run.document.record.parentTaskId);
+        if (state?.record.run?.id === run.document.record.parentRunId) {
+          this.captureRunBudget(state, true);
+          await this.persistNow();
+        }
+      },
+      changed: async (record) => {
+        const state = this.sessions.get(record.parentTaskId);
+        if (!state) return;
+        state.record.subagentIds = [
+          ...new Set([...(state.record.subagentIds ?? []), record.id]),
+        ];
+        this.emitSessionEvent(state, record.parentTurnId, "subagent_updated", {
+          subagent: record,
+        });
+        await this.persistNow();
+      },
+    }));
+  }
+  private subagentTools(state: SessionState) {
+    return new SubagentToolProvider(this.subagents(), state.record.id);
+  }
+  private validateSubagentLease(
+    run: SubagentRun,
+    value: unknown,
+  ): RuntimeTurnLease {
+    const lease = value as RuntimeTurnLease;
+    if (
+      run.abort.signal.aborted ||
+      !lease ||
+      lease.taskId !== run.task.id ||
+      lease.turnId !== run.task.run?.id ||
+      lease.runId !== run.task.run?.id ||
+      lease.generation !== run.task.run?.generation ||
+      !this.pluginRuntime.isCurrentLease(lease)
+    )
+      throw new Error("Subagent execution capability expired");
+    return lease;
+  }
+  private literatureTools(state: SessionState) {
+    return new LiteratureToolProvider(this.literature, state.record.id);
+  }
+
   private readonly execution = new ToolExecutionService(undefined, undefined, {
     readWarning: () =>
       this.historyFailure || this.stateStorageFailure
@@ -1021,6 +1339,18 @@ export class AgentHost {
     }
     if (this.storageReady) {
       try {
+        for (const state of this.sessions.values()) {
+          if (state.record.literature)
+            await this.literature.recover(state.record.id);
+          if (state.record.subagentIds?.length)
+            for (const subagent of await this.subagents().list(state.record.id))
+              this.emitSessionEvent(
+                state,
+                subagent.parentTurnId,
+                "subagent_updated",
+                { subagent },
+              );
+        }
         await this.memory.maintain();
         for (const state of this.sessions.values())
           await this.resumeContextCleanup(state);
@@ -1092,6 +1422,12 @@ export class AgentHost {
         this.persistTimer = null;
       }
       const states = [...this.sessions.values()];
+      for (const state of states) {
+        if (state.record.subagentIds?.length)
+          await this.subagentManager?.cancel(state.record.id);
+        if (state.record.literature)
+          await this.literature.cancel(state.record.id);
+      }
       for (const state of states) {
         state.promptSubmission = (state.promptSubmission ?? 0) + 1;
         state.abort?.abort();
@@ -2006,6 +2342,83 @@ export class AgentHost {
         return this.knowledgeRpcSaveEntry(params);
       case RPC_METHODS.knowledgeDeleteEntry:
         return this.knowledgeRpcDeleteEntry(params);
+      case "subagent/list":
+        return this.subagents().list(String(params.taskId));
+      case "subagent/read":
+        return this.subagents().read(
+          String(params.taskId),
+          String(params.id),
+          Number(params.offset ?? 0),
+          Number(params.limit ?? 20),
+          {
+            ref: params.archiveRef as string | undefined,
+            offset: Number(params.archiveOffset ?? 0),
+            indexOffset: Number(params.archiveIndexOffset ?? 0),
+          },
+        );
+      case "subagent/cancel":
+        return this.subagents().cancel(
+          String(params.taskId),
+          String(params.id),
+        );
+      case "subagent/retry":
+        return this.subagents().retry(String(params.taskId), String(params.id));
+      case "literature/config":
+        return { hasKey: !!getPref("openAlexApiKey") };
+      case "literature/configure": {
+        if (typeof params.key !== "string" || params.key.length > 4096)
+          throw new Error("Invalid OpenAlex key");
+        setPref("openAlexApiKey", params.key.trim());
+        return { hasKey: !!getPref("openAlexApiKey") };
+      }
+      case "literature/test":
+        return this.openAlex.test();
+      case "literature/list":
+        return this.literature.list(String(params.taskId), params);
+      case "literature/get":
+        return this.literature.get(String(params.taskId), String(params.id));
+      case "literature/search":
+        return this.literature.search(
+          String(params.taskId),
+          params as unknown as LiteratureSearch,
+        );
+      case "literature/updateCandidates":
+        return this.literature.updateCandidates(
+          String(params.taskId),
+          Number(params.candidateRevision),
+          params.changes as Array<{
+            id: string;
+            selected: boolean;
+            reason?: string;
+          }>,
+          "user",
+        );
+      case "literature/preview":
+        return this.literature.preview(String(params.taskId));
+      case "literature/confirm":
+        return this.literature.confirm(
+          String(params.taskId),
+          Number(params.candidateRevision),
+        );
+      case "literature/retry":
+        return this.literature.retry(String(params.taskId), String(params.id));
+      case "literature/cancel":
+        return this.literature.cancel(String(params.taskId));
+      case "literature/attach":
+        return this.literature.attach(
+          String(params.taskId),
+          String(params.id),
+          String(params.path),
+        );
+      case "literature/browser": {
+        const work = await this.literature.get(
+          String(params.taskId),
+          String(params.id),
+        );
+        if (!work.landingUrl) throw new Error("No landing page available");
+        Zotero.launchURL(work.landingUrl);
+        return { ok: true };
+      }
       case RPC_METHODS.configGet:
         return this.configGet();
       case RPC_METHODS.configSet:
@@ -2774,7 +3187,7 @@ export class AgentHost {
       ? withLockedContextFingerprint(suppliedLocked)
       : contextCandidate
         ? legacyContextSnapshot(params.context as SessionContext, now)
-        : this.captureLockedContext();
+        : emptyLockedContext();
     const backend = isAgentBackendKind(params.backend)
       ? params.backend
       : "native";
@@ -2901,6 +3314,74 @@ export class AgentHost {
       );
       await forkBranchArtifacts(snapshot, this.artifacts, record.id);
       branch.events = snapshot.events;
+      const terminal = snapshot.events.find(
+        (e) => e.type === "turn_completed" && e.turnId === throughTurnId,
+      );
+      const researchState =
+        terminal?.type === "turn_completed"
+          ? terminal.payload.researchState
+          : undefined;
+      const literatureEvent = [...snapshot.events]
+        .reverse()
+        .find((e) => e.type === "literature_updated");
+      if (researchState || literatureEvent?.type === "literature_updated") {
+        await this.literature.branch(
+          source.record.id,
+          record.id,
+          researchState
+            ? researchState.literatureRevision
+            : literatureEvent!.payload.summary.revision,
+        );
+        branch.record.lockedContext =
+          researchState?.sources ?? literatureEvent!.payload.sources;
+        branch.record.literatureSourceKeys = researchState?.managedSourceKeys;
+        branch.record.context = legacyContextForLocked(
+          branch.record.lockedContext,
+        );
+      }
+      const childResults = new Map<string, string>();
+      for (const event of snapshot.events)
+        if (event.type === "subagent_updated")
+          childResults.set(
+            event.payload.subagent.id,
+            event.payload.subagent.status,
+          );
+      const completedChildren =
+        researchState?.subagentIds ??
+        [...childResults]
+          .filter(([, status]) => status === "completed")
+          .map(([id]) => id);
+      if (completedChildren.length) {
+        const mapping = await this.subagents().branch(
+          source.record.id,
+          record.id,
+          completedChildren,
+        );
+        branch.record.subagentIds = [...mapping.values()].map((r) => r.id);
+        branch.events = branch.events
+          .filter(
+            (e) =>
+              e.type !== "subagent_updated" ||
+              mapping.has(e.payload.subagent.id),
+          )
+          .map((e) =>
+            e.type === "subagent_updated"
+              ? {
+                  ...e,
+                  payload: { subagent: mapping.get(e.payload.subagent.id)! },
+                }
+              : e,
+          );
+        for (const event of branch.events)
+          if (event.type === "turn_completed" && event.payload.researchState)
+            event.payload.researchState.subagentIds =
+              event.payload.researchState.subagentIds.flatMap((id) =>
+                mapping.has(id) ? [mapping.get(id)!.id] : [],
+              );
+      } else
+        branch.events = branch.events.filter(
+          (e) => e.type !== "subagent_updated",
+        );
       branch.messages = snapshot.messages;
       branch.record.artifactIds = snapshot.artifactIds;
       branch.record.permissionMode = source.record.permissionMode;
@@ -2911,7 +3392,9 @@ export class AgentHost {
       branch.record.recoverableTurn = undefined;
       branch.record.run = undefined;
       branch.record.articleSources = (
-        source.record.articleSources ??
+        (researchState || literatureEvent
+          ? contextArticles(branch.record.lockedContext)
+          : source.record.articleSources) ??
         contextArticles(
           source.record.run?.sources ?? source.record.lockedContext,
         )
@@ -3012,6 +3495,9 @@ export class AgentHost {
     const taskId = String(params.taskId ?? params.sessionId ?? "");
     const state = this.requireSession(taskId);
     const follow = params.mode === "follow_reader";
+    if (follow) return state.record;
+    if (state.activeTurnId)
+      throw new Error("Wait for the running research before changing sources");
     // Preserve the original association of legacy tasks before the reader moves.
     state.record.articleSources ??= contextArticles(
       state.record.run?.sources ?? state.record.lockedContext,
@@ -3051,6 +3537,7 @@ export class AgentHost {
       await this.freezeBoundAnnotations(state, nextContext);
     const previousUpdatedAt = state.record.updatedAt;
     state.record.lockedContext = nextContext;
+    state.record.articleSources = contextArticles(nextContext);
     state.driftReportedForLockedFingerprint = undefined;
     state.record.context = legacyContextForLocked(state.record.lockedContext);
     state.record.updatedAt = Date.now();
@@ -3181,6 +3668,10 @@ export class AgentHost {
   }
 
   private async sessionAbort(sessionId: string) {
+    if (this.sessions.get(sessionId)?.record.subagentIds?.length)
+      await this.subagentManager?.cancel(sessionId);
+    if (this.sessions.get(sessionId)?.record.literature)
+      await this.literature.cancel(sessionId);
     const state = this.requireSession(sessionId);
     state.promptSubmission = (state.promptSubmission ?? 0) + 1;
     state.abort?.abort();
@@ -3193,6 +3684,10 @@ export class AgentHost {
   }
 
   private async sessionDelete(sessionId: string) {
+    if (this.sessions.get(sessionId)?.record.subagentIds?.length)
+      await this.subagents().remove(sessionId);
+    if (this.sessions.get(sessionId)?.record.literature)
+      await this.literature.remove(sessionId);
     // Delete persisted side history even if it was never opened this process.
     await this.btwManager?.remove(`btw_task_${sessionId}`);
     const state = this.requireSession(sessionId);
@@ -3454,6 +3949,16 @@ export class AgentHost {
       )
     )
       return;
+    if (state.record.literature && evidence.sourceContent)
+      void this.literature
+        .recordRead(
+          state.record.id,
+          evidence,
+          "main",
+          evidence.contentVersion ?? "unknown",
+          evidence.pages,
+        )
+        .catch(() => undefined);
     this.emitSessionEvent(state, turnId, "source_read_delivered", {
       callId,
       evidence,
@@ -3530,6 +4035,7 @@ export class AgentHost {
             state.latestCheckpoint?.savedAt,
           ]),
       secrets: [
+        String(getPref("openAlexApiKey") || ""),
         ...store.endpoints.map((item) => item.apiKey),
         String(getPref("pairingToken") || ""),
       ],
@@ -3877,6 +4383,11 @@ export class AgentHost {
     lease?: unknown,
     runtimeGateway?: unknown,
   ) {
+    const child = this.subagentManager?.run(taskId);
+    if (child) {
+      this.validateSubagentLease(child, lease);
+      return { tools: child.tools.listTools() };
+    }
     const btw = this.btwManager?.run(taskId);
     if (btw) {
       this.validateBtwLease(btw, lease);
@@ -3885,6 +4396,8 @@ export class AgentHost {
     const state = this.requireSession(taskId);
     this.validatedRuntimeLease(state, lease, runtimeGateway, true);
     const tools = [
+      ...this.literatureTools(state).listTools(),
+      ...this.subagentTools(state).listTools(),
       ...new ZoteroToolProvider(this.tools).listTools(),
       ...this.memoryProvider().listTools(),
       ...advertisedArtifactTools(state.record.run?.requiredArtifactKinds),
@@ -3903,6 +4416,44 @@ export class AgentHost {
   }
 
   private async taskToolCall(params: Record<string, unknown>) {
+    const child = this.subagentManager?.run(String(params.taskId ?? ""));
+    if (child) {
+      const lease = this.validateSubagentLease(child, params.lease),
+        name = String(params.name);
+      if (!child.budget.canRunTools(1))
+        return mcpToolResult({
+          ok: false,
+          toolName: name,
+          code: "unavailable",
+          message: "Parent tool budget exhausted",
+        });
+      child.budget.recordToolCalls(1);
+      await child.save();
+      const args = (params.arguments ?? {}) as Record<string, unknown>;
+      child.event({
+        id: this.ids(),
+        sessionId: child.task.id,
+        turnId: child.task.run!.id,
+        ts: Date.now(),
+        type: "tool_requested",
+        payload: { callId: this.ids(), toolName: name, args },
+      });
+      const result = await child.tools.call(
+        name,
+        args,
+        this.pluginRuntime.leaseSignal(lease),
+        {
+          taskId: child.task.id,
+          turnId: child.task.run!.id,
+          signal: child.abort.signal,
+        },
+      );
+      this.validateSubagentLease(child, lease);
+      const delivered = budgetToolResult(result, CONTEXT_POLICY.readTokens);
+      await child.delivered?.(delivered, args);
+      await child.save();
+      return mcpToolResult(delivered);
+    }
     const btw = this.btwManager?.run(String(params.taskId ?? ""));
     if (btw) {
       const lease = this.validateBtwLease(btw, params.lease);
@@ -4046,19 +4597,25 @@ export class AgentHost {
           message: "Task tool budget exhausted",
         });
       activeRun.budget.toolCallsUsed++;
+      state.runBudget?.restoreMax({
+        toolCallsUsed: activeRun.budget.toolCallsUsed,
+      });
       await this.persistNow();
     }
     if (!current()) return cancelled();
-    const innerProvider: ToolProvider =
-      name.startsWith("memory_") ||
-      name.startsWith("knowledge_base_") ||
-      name.startsWith("conversation_log_")
-        ? this.memoryProvider()
-        : ARTIFACT_TOOL_NAMES.has(name)
-          ? this.artifactProvider(state, turnId)
-          : HISTORY_TOOL_NAMES.has(name)
-            ? this.historyTools(state)
-            : new ZoteroToolProvider(this.tools);
+    const innerProvider: ToolProvider = SUBAGENT_TOOL_NAMES.has(name)
+      ? this.subagentTools(state)
+      : LITERATURE_TOOL_NAMES.has(name)
+        ? this.literatureTools(state)
+        : name.startsWith("memory_") ||
+            name.startsWith("knowledge_base_") ||
+            name.startsWith("conversation_log_")
+          ? this.memoryProvider()
+          : ARTIFACT_TOOL_NAMES.has(name)
+            ? this.artifactProvider(state, turnId)
+            : HISTORY_TOOL_NAMES.has(name)
+              ? this.historyTools(state)
+              : new ZoteroToolProvider(this.tools);
     if (typeof params.operationId === "string")
       executionContext.operationId = `${taskId}:${params.operationId}`;
     const provider = this.execution.wrap(innerProvider, executionContext);
@@ -6052,6 +6609,7 @@ export class AgentHost {
       "Annotation batches persist across follow-ups, retries and Agent changes. Use actual host-returned colors; existing colors at PDF task binding are forbidden for new marks. Only host-verified Confucius Agent annotations may be edited or deleted across tasks/agents; ownership and batch never change. Ordinary work memory can be saved with context_save and may expire. Protected memories require per-item approval to change.",
       `Durable research task: ${task.id}.`,
       CONTEXT_USAGE_GUIDANCE,
+      RESEARCH_INSTRUCTIONS,
       `Preferred task references: ${JSON.stringify(task.references ?? [])}`,
     );
     if (options.researchHandoff !== undefined) {
@@ -6146,9 +6704,14 @@ export class AgentHost {
     );
   }
 
-  private captureRunBudget(state: SessionState): void {
+  private captureRunBudget(state: SessionState, includeExternal = false): void {
     const run = state.record.run;
-    if (!run || !state.runBudget || !run.budget.modelRequestsObservable) return;
+    if (
+      !run ||
+      !state.runBudget ||
+      (!run.budget.modelRequestsObservable && !includeExternal)
+    )
+      return;
     const snapshot = state.runBudget.snapshot();
     run.budget.iterationsUsed = Math.max(
       run.budget.iterationsUsed,
@@ -6362,6 +6925,8 @@ export class AgentHost {
       ).filter((ref) => ref.taskId !== sessionId);
     const submission = (state.promptSubmission ?? 0) + 1;
     state.promptSubmission = submission;
+    if (!resuming && state.record.subagentIds?.length)
+      await this.subagentManager?.cancel(sessionId);
     const previous = state.record.run;
     state.abort?.abort();
     this.rejectPendingApprovals(sessionId, "superseded by a new prompt");
@@ -6390,6 +6955,7 @@ export class AgentHost {
     if (state.promptSubmission !== submission)
       return { sessionId, superseded: true };
     const completedPreset =
+      !state.record.presetPrepared &&
       (!previous ||
         (previous.status === "completed" &&
           previous.templateId === state.record.templateId &&
@@ -6479,6 +7045,7 @@ export class AgentHost {
         ].map((item) => [`${item.libraryID}:${item.key}`, item]),
       ).values(),
     ];
+    delete state.record.presetPrepared;
     state.runBudget = new BudgetAccountant({
       maxIterations: run.budget.maxIterations,
       maxToolCalls: run.budget.maxToolCalls,
@@ -6596,6 +7163,8 @@ export class AgentHost {
         : undefined;
       if (state.record.mode === "plan")
         state.externalToolNames = new Set([
+          ...SUBAGENT_TOOL_NAMES,
+          ...LITERATURE_TOOL_NAMES,
           ...READ_ONLY_TOOL_NAMES,
           ...HISTORY_TOOL_NAMES,
           ...ARTIFACT_TOOL_NAMES,
@@ -6904,6 +7473,11 @@ export class AgentHost {
             budget.promptTokens += event.payload.inputTokens;
             budget.completionTokens += event.payload.outputTokens;
             budget.totalTokens += event.payload.totalTokens;
+            state.runBudget?.recordUsage({
+              promptTokens: event.payload.inputTokens,
+              completionTokens: event.payload.outputTokens,
+              totalTokens: event.payload.totalTokens,
+            });
             for (const key of [
               "cachedInputTokens",
               "cacheWriteInputTokens",
@@ -7197,6 +7771,8 @@ export class AgentHost {
     if (invoked.slug) state.loadedSkills.add(invoked.slug);
     const window = this.nativeWindowContext(state);
     const providers: ToolProvider[] = [
+      this.literatureTools(state),
+      this.subagentTools(state),
       this.historyTools(state, () => window.request()),
       new SkillToolProvider(this.skills, (skill) =>
         state.loadedSkills.add(skill.slug),
@@ -7214,6 +7790,8 @@ export class AgentHost {
       tools = new FilteredToolProvider(
         tools,
         new Set([
+          ...SUBAGENT_TOOL_NAMES,
+          ...LITERATURE_TOOL_NAMES,
           ...READ_ONLY_TOOL_NAMES,
           ...HISTORY_TOOL_NAMES,
           SKILL_TOOL_NAME,
@@ -7300,21 +7878,32 @@ export class AgentHost {
     events.append = (event) => {
       if (!isTerminalRuntimeEvent(event)) callbacks.event(event);
     };
-    const adapter = this.openaiAdapter({
-      stream: getPref("streamResponses") !== false && hostFetchCanStream(),
-      onTextDelta: (delta, attempt) =>
-        emit("text_delta", {
-          text: delta,
-          requestId: attempt?.requestId,
-          attempt: attempt?.attempt,
-        }),
-      onReasoningDelta: (delta, attempt) =>
-        emit("reasoning_delta", {
-          text: delta,
-          requestId: attempt?.requestId,
-          attempt: attempt?.attempt,
-        }),
-    });
+    const nativeEndpoint = this.requireEndpoint();
+    state.nativeExecutionConfig = {
+      endpointId: nativeEndpoint.id,
+      model: nativeEndpoint.model,
+      reasoningEffort: nativeEndpoint.reasoningEffort ?? "auto",
+      capacity: nativeEndpoint.contextWindowTokens || 32768,
+      maxOutput: nativeEndpoint.maxTokens || 4096,
+    };
+    const adapter = this.openaiAdapter(
+      {
+        stream: getPref("streamResponses") !== false && hostFetchCanStream(),
+        onTextDelta: (delta, attempt) =>
+          emit("text_delta", {
+            text: delta,
+            requestId: attempt?.requestId,
+            attempt: attempt?.attempt,
+          }),
+        onReasoningDelta: (delta, attempt) =>
+          emit("reasoning_delta", {
+            text: delta,
+            requestId: attempt?.requestId,
+            attempt: attempt?.attempt,
+          }),
+      },
+      nativeEndpoint,
+    );
     const loop = new TurnLoop({
       context: window,
       model: adapter,
@@ -7610,6 +8199,16 @@ export class AgentHost {
     isCurrent: () => boolean,
   ): Promise<void> {
     if (!isCurrent() || outcome.superseded) return;
+    if (
+      state.record.subagentIds?.length &&
+      outcome.stopReason === "completed"
+    ) {
+      await this.subagentManager
+        ?.wait(state.record.id, undefined, state.abort?.signal)
+        .catch(() => undefined);
+    } else if (state.record.subagentIds?.length)
+      await this.subagentManager?.cancel(state.record.id);
+    if (!isCurrent()) return;
     this.captureRunBudget(state);
     // A finished executor must not accrue idle time until the next host shutdown.
     // Continuation creates a new accountant from the persisted cumulative budget.
@@ -7669,7 +8268,24 @@ export class AgentHost {
         });
     }
     if (completed)
-      emit("turn_completed", { phase: "done", stopReason: outcome.stopReason });
+      emit("turn_completed", {
+        phase: "done",
+        stopReason: outcome.stopReason,
+        researchState: {
+          literatureRevision: state.record.literature?.revision,
+          sources: JSON.parse(JSON.stringify(state.record.lockedContext)),
+          managedSourceKeys: state.record.literatureSourceKeys,
+          subagentIds: [
+            ...new Map(
+              state.events
+                .filter((e) => e.type === "subagent_updated")
+                .map((e) => [e.payload.subagent.id, e.payload.subagent]),
+            ).values(),
+          ]
+            .filter((r) => r.status === "completed")
+            .map((r) => r.id),
+        },
+      });
     else if (outcome.stopReason === "error")
       emit("turn_failed", { message: reason, stopReason: outcome.stopReason });
     else emit("turn_aborted", { reason, stopReason: outcome.stopReason });
@@ -8517,6 +9133,7 @@ export class AgentHost {
       responseLanguageInstruction(configuredUiLanguage()),
       `Durable task: ${options.taskId ?? "current"}.`,
       CONTEXT_USAGE_GUIDANCE,
+      RESEARCH_INSTRUCTIONS,
       `Preferred prior tasks: ${JSON.stringify(options.references ?? [])}. Respect explicit source limits.`,
       "Use tools to inspect the library. Cite items as libraryID:key.",
       ...TOOL_GROUNDING_PROMPT,

@@ -108,6 +108,7 @@ export {
 } from "./research";
 export {
   FEATURED_TASK_TEMPLATES,
+  featuredTemplatesForContext,
   TASK_TEMPLATES,
   taskTemplate,
   templatesForContext,
@@ -339,3 +340,7 @@ export * from "./reportStyle";
 
 export * from "./runtimeModels";
 export * from "./btw";
+
+export * from "./literature";
+
+export * from "./subagents";

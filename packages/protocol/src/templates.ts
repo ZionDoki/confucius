@@ -158,6 +158,18 @@ export const FEATURED_TASK_TEMPLATES: readonly TaskTemplate[] = [
   taskTemplateFromList("synthesis"),
 ];
 
+/** Featured actions require explicitly bound material. */
+export function featuredTemplatesForContext(
+  context?: LockedContextSnapshot,
+): TaskTemplate[] {
+  if (!context) return [];
+  if (context.collection || context.savedSearch || context.items.length > 1)
+    return FEATURED_TASK_TEMPLATES.filter((t) => t.id === "synthesis");
+  if (context.items.length === 1 || context.reader)
+    return FEATURED_TASK_TEMPLATES.filter((t) => t.id !== "synthesis");
+  return [];
+}
+
 function taskTemplateFromList(id: TaskTemplateId): TaskTemplate {
   const template = TASK_TEMPLATES.find((candidate) => candidate.id === id);
   if (!template) {

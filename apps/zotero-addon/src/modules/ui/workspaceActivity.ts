@@ -109,11 +109,34 @@ export function keyedTimeline(
   events: ConfuciusEvent[],
 ): Array<{ key: string; block: TimelineBlock }> {
   const groups: Array<{ id: string; events: ConfuciusEvent[] }> = [];
+  const research = new Set<string>();
+  const children = new Map(
+    events.flatMap((event) =>
+      event.type === "subagent_updated"
+        ? [[event.payload.subagent.id, event.payload.subagent] as const]
+        : [],
+    ),
+  );
   for (const event of events) {
+    const researchKey =
+      event.type === "literature_updated" && event.payload.summary.latestQuery
+        ? `literature:${event.payload.summary.latestQuery.id}`
+        : event.type === "subagent_updated"
+          ? `subagent:${event.payload.subagent.id}`
+          : undefined;
+    if (researchKey && research.has(researchKey)) continue;
+    if (researchKey) research.add(researchKey);
+    const entry =
+      event.type === "subagent_updated"
+        ? {
+            ...event,
+            payload: { subagent: children.get(event.payload.subagent.id)! },
+          }
+        : event;
     const last = groups.at(-1);
     const id = event.turnId ?? last?.id ?? event.id;
-    if (last?.id === id) last.events.push(event);
-    else groups.push({ id, events: [event] });
+    if (last?.id === id) last.events.push(entry);
+    else groups.push({ id, events: [entry] });
   }
   return groups.flatMap((group) => {
     const counts = new Map<string, number>();
@@ -121,13 +144,17 @@ export function keyedTimeline(
       const count = counts.get(block.kind) ?? 0;
       counts.set(block.kind, count + 1);
       const id =
-        block.kind === "artifact"
-          ? `${block.artifact.id}:${block.artifact.revision}`
-          : block.kind === "tools"
-            ? block.calls[0]?.callId
-            : block.kind === "command"
-              ? block.callId
-              : count;
+        block.kind === "literature"
+          ? block.query.id
+          : block.kind === "subagent"
+            ? block.subagent.id
+            : block.kind === "artifact"
+              ? `${block.artifact.id}:${block.artifact.revision}`
+              : block.kind === "tools"
+                ? block.calls[0]?.callId
+                : block.kind === "command"
+                  ? block.callId
+                  : count;
       return { key: `${group.id}:${block.kind}:${id}`, block };
     });
   });
@@ -160,7 +187,13 @@ export function reconcileActivity(
         : null;
       // Generated signatures exclude transient state such as an opened details element.
       const signature = String(fresh.outerHTML);
-      if (waiting && nextWaiting) {
+      if (
+        fresh.dataset.literatureAnchor &&
+        previous.dataset.literatureAnchor === fresh.dataset.literatureAnchor
+      ) {
+        // The literature controller owns this subtree, including its editor.
+        chosen = previous;
+      } else if (waiting && nextWaiting) {
         updateWaitingIndicator(waiting, nextWaiting.dataset.waitingText ?? "");
         chosen = previous;
       } else if (

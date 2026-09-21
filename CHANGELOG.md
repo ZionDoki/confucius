@@ -2,6 +2,73 @@
 
 ## Unreleased
 
+## 0.5.0-beta.1 - 2026-09-21
+
+Confucius becomes a research assistant that starts with a question: discover
+literature through OpenAlex, select candidates, obtain available full text,
+and delegate focused research before synthesizing the evidence.
+
+### Added
+
+- Search OpenAlex from the conversation with year and open-access filters,
+  relevance/date/citation sorting, and cursor paging. Each page fetches up to
+  100 papers; the deduplicated pool and API total hits stay distinct.
+- Review recommended candidates in an inline literature card. When it leaves
+  the viewport, a capsule above the composer opens the same editor without
+  moving the conversation or losing selections, filters, or reading position.
+- Configure, replace, clear, and test an OpenAlex key in Settings. Retrieval
+  uses Zotero's built-in HTTP client and keeps the key out of model context.
+- Confirm an exact candidate batch before import, binding, and download.
+  Reuse existing items and valid PDFs, then try open-access and cached PDFs.
+  Retry failures individually or open the paper in a browser and drop its PDF
+  onto the corresponding item. Login pages and invalid PDFs are rejected.
+- Delegate scoped research to isolated subagents across Native, Codex, and Kimi,
+  with at most two running concurrently, a shared parent budget, durable results,
+  and a read-only progress popup. Closing a popup keeps the work running.
+
+### Changed
+
+- New tasks start without implicit paper bindings. Switching PDFs does not
+  rebind the task. Explicit source edits update its current article grouping.
+  Paper presets appear only for compatible sources and prepare
+  the next request in the current conversation.
+- New installations organize tasks by time; explicit existing choices remain.
+- Preserve pools, candidate decisions, acquisition records, and completed
+  subagent references across restarts and reply branches. Full pools and child
+  archives stay outside the task index and are read through paginated tools.
+- Present Confucius as a research assistant in both READMEs, with an OpenAlex
+  walkthrough and a separate Beta download entry.
+
+### Upgrade notes
+
+- This is a prerelease. Enable **Include prereleases** in Confucius Settings →
+  Update, or install this release's `confucius.xpi`. Stable-only installations
+  remain on the stable channel; disabling Betas does not downgrade an install.
+- Existing tasks, sources, notes, annotations, reports, and history are retained.
+  Literature pools and subagent records are added only when used. Back up both
+  the Zotero library and Confucius runtime data before moving between versions;
+  older releases do not expose the new research records.
+- Configure OpenAlex separately from your model provider. No additional SDK,
+  browser extension, or download service is needed for literature retrieval.
+  Browser-assisted acquisition uses the access you already have; collecting
+  papers alone does not automatically start reading them.
+
+### Validation and known limits
+
+- Automated tests, typecheck, lint, and build pass. Isolated macOS Zotero testing
+  covers prompt-driven search, card/capsule continuity, keyboard and task
+  switching, candidate confirmation, real PDF import/rejection, targeted drops,
+  delegated research, and restart persistence. Anonymous OpenAlex search fetched
+  100 live records. Upgrade from the public 0.4.6 package and window/sidebar
+  hot-update checks also pass, preserving existing tasks, sources, and content.
+- Real authenticated cached-fulltext retrieval and online Native/Codex/Kimi
+  model calls were not exercised: authorized test credentials were unavailable.
+  Model outputs and provider failures use deterministic fixtures. Windows,
+  Linux, other Zotero versions, and real institutional browser login were not
+  revalidated for this Beta.
+- See the [release acceptance record](https://github.com/ZionDoki/confucius/blob/v0.5.0-beta.1/.github/maintainers/acceptance/release-0.5.0-beta.1.md)
+  and [literature acceptance scope](https://github.com/ZionDoki/confucius/blob/v0.5.0-beta.1/.github/maintainers/acceptance/literature-research-2026-09-21.md).
+
 ## 0.4.6 - 2026-09-11
 
 Confucius 0.4.6 adds selection questions across readers and conversations,

@@ -1,3 +1,8 @@
+import { createSubagentEntries, closeSubagentPopup } from "./subagentPopup";
+import {
+  createLiteraturePanel,
+  createOpenAlexSettings,
+} from "./literaturePanel";
 import { renderMemoryProposal } from "./memoryProposalCards";
 import { bindBtwSelection } from "./btwPopup";
 import { artifactWindows } from "./artifactWindow";
@@ -32,11 +37,7 @@ import {
   markScrollContainer,
 } from "./workspaceScrollbars";
 import { createTaskList } from "./workspaceTasks";
-import {
-  contextArticles,
-  followReaderContext,
-  readerAttachmentIdentity,
-} from "../host/TaskSources";
+import { contextArticles, readerAttachmentIdentity } from "../host/TaskSources";
 import { exportTaskTrace } from "./taskTraceExport";
 import {
   keyedTimeline,
@@ -85,7 +86,7 @@ import {
   DEFAULT_UI_FONT,
   DEFAULT_UI_FONT_SIZE,
   DEFAULT_UI_LINE_HEIGHT,
-  FEATURED_TASK_TEMPLATES,
+  featuredTemplatesForContext,
   UI_LINE_HEIGHT_VALUES,
   clampUiFontSize,
   emptyLockedContext,
@@ -1696,6 +1697,15 @@ function bindWorkspace(
   composerCard.appendChild(prompt);
   composerCard.appendChild(composerToolbar);
   composer.appendChild(composerCard);
+  const literaturePanel = createLiteraturePanel(doc, {
+    rpc,
+    viewport: timelinePane,
+    visibilityChanged: () => syncLatest(),
+    changed: () => {
+      void refreshSessions().then(() => renderLists());
+    },
+  });
+  composer.insertBefore(literaturePanel.node, composerCard);
   const latest = button(
     doc,
     "confucius-latest",
@@ -1705,10 +1715,12 @@ function bindWorkspace(
   latest.hidden = true;
   const syncLatest = () => {
     latest.hidden =
+      literaturePanel.docked ||
       timelinePane.scrollHeight -
         timelinePane.scrollTop -
         timelinePane.clientHeight <
-        96 || !state.events.length;
+        96 ||
+      !state.events.length;
   };
   latest.addEventListener("click", () => {
     timelinePane.scrollTop = timelinePane.scrollHeight;
@@ -1905,6 +1917,8 @@ function bindWorkspace(
     };
   });
   layoutCleanups.set(root, () => {
+    literaturePanel.destroy();
+    closeSubagentPopup(doc);
     disposeBtwSelection();
     reportStyleDialog?.close();
     artifactOpenGeneration++;
@@ -3666,6 +3680,12 @@ function bindWorkspace(
     block: TimelineBlock,
     index: number,
   ): HTMLElement | null {
+    if (block.kind === "literature")
+      return literaturePanel.placeholder(block.query);
+    if (block.kind === "subagent")
+      return state.sessionId
+        ? createSubagentEntries(doc, state.sessionId, block.subagent, rpc)
+        : null;
     if (block.kind === "user") {
       const row = renderUserLine(targetDoc, block.text);
       if (state.sessionId)
@@ -4138,13 +4158,11 @@ function bindWorkspace(
     pendingTaskId = null;
     const current = currentTask();
     const initialContext = mentionSources.context()
-      ? mentionSources.context(options.context ?? state.live?.lockedSnapshot)
+      ? mentionSources.context(options.context)
       : options.context;
     const created = (await rpc("task/new", {
       title: options.title ?? "Untitled research task",
-      // With no explicit launch context, let AgentHost capture the live Zotero
-      // state while handling this click's RPC. The polled value can lag a
-      // reader-tab or item-selection change.
+      // Blank tasks bind only explicitly selected materials.
       context: initialContext,
       backend: options.backend ?? current?.backend ?? "native",
       mode: current?.mode ?? state.mode,
@@ -4183,10 +4201,6 @@ function bindWorkspace(
       });
     }
     return created;
-  }
-
-  function taskHasConversation(): boolean {
-    return state.events.some((event) => event.type === "turn_started");
   }
 
   function localizedTemplateTitle(template: TaskTemplate): string {
@@ -4336,12 +4350,7 @@ function bindWorkspace(
       if (state.sessionId !== selectedTaskId) return;
       const existing = currentTask();
       const stagedContext = context ?? existing?.lockedContext;
-      const reuse = Boolean(
-        existing &&
-        !state.running &&
-        !taskHasConversation() &&
-        state.artifacts.length === 0,
-      );
+      const reuse = Boolean(existing);
       let task: ResearchTaskRecord;
       if (reuse && existing) {
         // Changing a preset keeps its current sources. Only an explicit launch
@@ -4482,10 +4491,7 @@ function bindWorkspace(
 
   function attachedContext(): LockedContextSnapshot {
     const task = currentTask();
-    let context =
-      task?.lockedContext ?? state.live?.lockedSnapshot ?? emptyLockedContext();
-    if (task && state.running && state.live?.lockedSnapshot)
-      context = followReaderContext(context, state.live.lockedSnapshot);
+    const context = task?.lockedContext ?? emptyLockedContext();
     return mentionSources.context(context, task?.id ?? null) ?? context;
   }
 
@@ -4694,6 +4700,10 @@ function bindWorkspace(
   }
 
   function renderTemplatePicker(target: HTMLElement): void {
+    const visibleTemplates = featuredTemplatesForContext(
+      currentTask()?.lockedContext ?? mentionSources.context(),
+    );
+    if (!visibleTemplates.length) return;
     const heading = el(doc, "div", {
       marginTop: "22px",
       fontSize: "11px",
@@ -4706,7 +4716,7 @@ function bindWorkspace(
     target.appendChild(heading);
     const grid = el(doc, "div");
     grid.className = "confucius-template-grid";
-    for (const template of FEATURED_TASK_TEMPLATES) {
+    for (const template of visibleTemplates) {
       const templateButton = el(doc, "button", undefined, {
         type: "button",
         "data-template-id": template.id,
@@ -4768,9 +4778,7 @@ function bindWorkspace(
       overview.appendChild(eyebrow);
       overview.appendChild(heading);
       overview.appendChild(copy);
-      const context =
-        mentionSources.context(state.live?.lockedSnapshot) ??
-        emptyLockedContext();
+      const context = mentionSources.context() ?? emptyLockedContext();
       if (context) {
         const source = el(doc, "div", {
           marginTop: "12px",
@@ -5124,6 +5132,10 @@ function bindWorkspace(
   }
 
   function renderLists(): void {
+    literaturePanel.update(
+      state.sessionId ?? undefined,
+      currentTask()?.literature,
+    );
     applyAppearance();
     syncEndpointButton();
     syncPresetChip();
@@ -5140,16 +5152,21 @@ function bindWorkspace(
     const savedViewport = timelineTaskId
       ? timelineViewports.get(timelineTaskId)
       : undefined;
-    const followTimeline = taskChanged
-      ? (savedViewport?.followsBottom ?? true)
-      : timelinePane.scrollHeight -
-          timelinePane.scrollTop -
-          timelinePane.clientHeight <
-        96;
+    const followTimeline =
+      !literaturePanel.floating &&
+      (taskChanged
+        ? (savedViewport?.followsBottom ?? true)
+        : timelinePane.scrollHeight -
+            timelinePane.scrollTop -
+            timelinePane.clientHeight <
+          96);
     const savedTimelineScroll = taskChanged
       ? (savedViewport?.scrollTop ?? 0)
       : timelinePane.scrollTop;
-    if (taskChanged) timelinePane.replaceChildren();
+    if (taskChanged) {
+      closeSubagentPopup(doc);
+      timelinePane.replaceChildren();
+    }
     const session = state.sessions.find((item) => item.id === state.sessionId);
     const activityStream = el(doc, "div");
     activityStream.className = "confucius-activity-shell";
@@ -5270,6 +5287,18 @@ function bindWorkspace(
         (!state.running && !state.sending)
       )
         appendMemoryCard(proposal);
+    const fallbackQuery = literaturePanel.fallbackQuery();
+    if (
+      fallbackQuery &&
+      !timelineBlocks.some(
+        (block) =>
+          block.kind === "literature" && block.query.id === fallbackQuery.id,
+      )
+    ) {
+      const card = literaturePanel.placeholder(fallbackQuery);
+      card.dataset.entryId = `literature:${fallbackQuery.id}`;
+      activityStream.append(card);
+    }
     for (const job of currentTask()?.postProcessing ?? []) {
       if (!job.pending.length || !job.error) continue;
       const row = el(doc, "div");
@@ -5387,6 +5416,7 @@ function bindWorkspace(
       timelinePane.appendChild(initialStream);
     }
     if (initialViewReady) renderedTimelineTaskId = timelineTaskId;
+    literaturePanel.mount();
     timelinePane.scrollTop =
       followTimeline && (state.events.length > 0 || state.pendingUserText)
         ? timelinePane.scrollHeight
@@ -5703,9 +5733,7 @@ function bindWorkspace(
       { taskId: string; afterEventId: string | null } | undefined;
     try {
       if (!state.sessionId) {
-        const lockedContext = mentionSources.context(
-          state.live?.lockedSnapshot,
-        );
+        const lockedContext = mentionSources.context();
         const created = (await rpc("task/new", {
           title: (enteredText || submittedAttachments[0]?.name || text).slice(
             0,
@@ -6154,6 +6182,7 @@ function bindWorkspace(
       target.appendChild(intro);
     };
 
+    runtimeTab.appendChild(createOpenAlexSettings(doc, rpc));
     sectionIntro(runtimeTab, getString("workspace-runtime-help"));
     const runtimeHostRow = el(doc, "label", {
       display: "grid",
@@ -7756,16 +7785,16 @@ function bindWorkspace(
   }
 
   function slashCommands(): SlashCommand[] {
-    const commands: SlashCommand[] = FEATURED_TASK_TEMPLATES.map(
-      (template) => ({
-        label: localizedTemplateTitle(template),
-        description: getString(`workspace-template-${template.id}-help`),
-        kind: "template" as const,
-        group: "templates" as const,
-        templateId: template.id,
-        searchText: `/${template.id}`,
-      }),
-    );
+    const commands: SlashCommand[] = featuredTemplatesForContext(
+      currentTask()?.lockedContext ?? mentionSources.context(),
+    ).map((template) => ({
+      label: localizedTemplateTitle(template),
+      description: getString(`workspace-template-${template.id}-help`),
+      kind: "template" as const,
+      group: "templates" as const,
+      templateId: template.id,
+      searchText: `/${template.id}`,
+    }));
     const utilityCommands: SlashCommand[] = [
       {
         label: "/agent",
@@ -8415,7 +8444,6 @@ function bindWorkspace(
       const references = currentReferences();
       await createTask({
         title: getString("workspace-untitled-task"),
-        context: state.live?.lockedSnapshot,
         backend,
         preserveModelMenu: true,
       });

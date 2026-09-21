@@ -36,6 +36,8 @@ export interface SourceReadEvidence {
   keys: string[];
   attachmentKey?: string;
   sourceContent?: boolean;
+  contentVersion?: string;
+  pages?: number[];
   annotations?: {
     offset: number;
     count: number;
@@ -50,6 +52,8 @@ export type ConfuciusEventType =
   | "model_request_progress"
   | "context_progress"
   | "session_created"
+  | "subagent_updated"
+  | "literature_updated"
   | "session_updated"
   | "turn_started"
   | "plan_updated"
@@ -123,6 +127,11 @@ type EventPayloads = {
   context_window_changed: { window: ContextWindowState };
   history_recalled: { ref: HistoryItemRef; title: string; sourceIds: string[] };
   session_created: { title: string; mode: SessionMode };
+  subagent_updated: { subagent: import("./subagents").SubagentSummary };
+  literature_updated: {
+    summary: import("./literature").LiteratureSummary;
+    sources: import("./research").LockedContextSnapshot;
+  };
   session_updated: { title?: string; mode?: SessionMode };
   turn_started: { userText: string };
   plan_updated: { steps: PlanStep[] };
@@ -170,7 +179,16 @@ type EventPayloads = {
     title?: string;
     total: number;
   };
-  turn_completed: { phase: TurnPhase; stopReason?: string };
+  turn_completed: {
+    phase: TurnPhase;
+    stopReason?: string;
+    researchState?: {
+      literatureRevision?: number;
+      sources: import("./research").LockedContextSnapshot;
+      subagentIds: string[];
+      managedSourceKeys?: string[];
+    };
+  };
   turn_failed: {
     message: string;
     stopReason?: string;

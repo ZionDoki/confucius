@@ -98,7 +98,7 @@ export function createTaskList(
   tabs.setAttribute("role", "tablist");
   tabs.setAttribute("aria-label", options.text("workspace-task-organization"));
   let organization: TaskOrganization =
-    options.organization === "time" ? "time" : "articles";
+    options.organization === "articles" ? "articles" : "time";
   const scrollPositions = { articles: 0, time: 0 };
   for (const mode of ["articles", "time"] as const) {
     const tab = createWorkspaceButton(

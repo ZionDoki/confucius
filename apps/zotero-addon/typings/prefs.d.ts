@@ -40,6 +40,7 @@ declare namespace _ZoteroTypes {
       "pluginRuntimeHost": boolean;
       "codexExecutable": string;
       "kimiExecutable": string;
+      "openAlexApiKey": string;
     };
   }
 }

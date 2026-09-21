@@ -1,3 +1,4 @@
+import { createOpenAlexSettings } from "../ui/literaturePanel";
 import { UI_FONT_STACKS } from "../ui/workspaceTypography";
 import { ensurePaletteStyles, SURFACE_CSS } from "../ui/workspaceSurface";
 import { getPref, setPref } from "../../utils/prefs";
@@ -39,6 +40,28 @@ export async function registerPreferencePane(): Promise<void> {
 
 export function bindPrefsWindow(win: Window): void {
   const doc = win.document;
+  const openAlexTarget = doc.getElementById("confucius-pref-openalex");
+  if (openAlexTarget && !openAlexTarget.childElementCount)
+    openAlexTarget.appendChild(
+      createOpenAlexSettings(doc, async (method, params) => {
+        const host = (
+          Zotero as unknown as {
+            Confucius?: {
+              hooks?: {
+                host?: {
+                  rpc(
+                    method: string,
+                    params: Record<string, unknown>,
+                  ): Promise<unknown>;
+                };
+              };
+            };
+          }
+        ).Confucius?.hooks?.host;
+        if (!host) throw new Error("Confucius host unavailable");
+        return host.rpc(method, params ?? {});
+      }),
+    );
   ensurePaletteStyles(doc);
   bindPreferenceScrollbars(win);
   if (!doc.getElementById("confucius-preferences-style")) {

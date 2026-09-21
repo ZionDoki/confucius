@@ -390,11 +390,8 @@ test("preset templates stage an editable draft and preserve task context", () =>
     view.indexOf("async function stageTemplate"),
     view.indexOf("async function consumeLaunchIntent"),
   );
-  assert.equal(
-    view.includes("for (const template of FEATURED_TASK_TEMPLATES)"),
-    true,
-  );
-  assert.equal(view.includes("FEATURED_TASK_TEMPLATES.map("), true);
+  assert.equal(view.includes("for (const template of visibleTemplates)"), true);
+  assert.equal(view.includes("featuredTemplatesForContext("), true);
   assert.equal(stage.includes("context ?? existing?.lockedContext"), true);
   assert.equal(stage.includes("localizedTemplatePrompt(template)"), true);
   assert.equal(stage.includes('rpc("task/stageTemplate"'), true);

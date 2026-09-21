@@ -4,6 +4,7 @@ Confucius 将文献阅读、研究任务和成果审阅放在 Zotero 工作区�
 
 - [安装与开始使用](../README.zh-CN.md#安装)：安装插件、连接模型、打开工作区。
 - [模型与思考选项](model-selection.md)：选择 Native、Codex 或 Kimi，以及适用的思考设置。
+- [检索文献与委派研究](literature-research.md)：OpenAlex Key、结果池与候选、确认获取全文、浏览器补齐和研究子 Agent。
 - [Codex / Kimi 检测与连接](runtime-discovery.md)：自动查找、手动路径和登录故障处理。
 - [上下文、换窗与归档](context-system.md)：交接流程、维护成本、原文保留和容量不足处理。
 - [划线询问](selection-questions.md)：在 PDF、报告和对话中提问，独立保存旁支上下文。

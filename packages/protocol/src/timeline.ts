@@ -1,6 +1,8 @@
 import type { ConfuciusEvent, PlanStep } from "./events";
 import type { ArtifactSummary } from "./research";
 import type { ToolResult } from "./tools";
+import type { LiteratureSummary } from "./literature";
+import type { SubagentSummary } from "./subagents";
 
 export type ReasoningFold = "preview" | "open" | "compact";
 
@@ -34,6 +36,8 @@ export type TimelineBlock =
       diff?: string;
     }
   | { kind: "artifact"; artifact: ArtifactSummary }
+  | { kind: "literature"; query: NonNullable<LiteratureSummary["latestQuery"]> }
+  | { kind: "subagent"; subagent: SubagentSummary }
   | {
       kind: "status";
       tone: "info" | "memory" | "fail" | "abort";
@@ -169,7 +173,11 @@ export function coalesceTimeline(events: ConfuciusEvent[]): TimelineBlock[] {
     }
     if (event.type === "tool_result") {
       flushText(blocks, text);
-      const existing = attachCall(tools.calls, event.payload.callId);
+      const existing =
+        attachCall(tools.calls, event.payload.callId) ??
+        blocks
+          .flatMap((b) => (b.kind === "tools" ? b.calls : []))
+          .find((c) => c.callId === event.payload.callId);
       if (existing) {
         existing.result = event.payload.result;
         continue;
@@ -183,9 +191,38 @@ export function coalesceTimeline(events: ConfuciusEvent[]): TimelineBlock[] {
       continue;
     }
     if (event.type === "tool_progress") {
-      const existing = attachCall(tools.calls, event.payload.callId);
+      const existing =
+        attachCall(tools.calls, event.payload.callId) ??
+        blocks
+          .flatMap((b) => (b.kind === "tools" ? b.calls : []))
+          .find((c) => c.callId === event.payload.callId);
       if (existing) {
         existing.progress = event.payload.message;
+      }
+      continue;
+    }
+    if (
+      event.type === "literature_updated" &&
+      event.payload.summary.latestQuery
+    ) {
+      const query = event.payload.summary.latestQuery;
+      if (
+        !blocks.some((b) => b.kind === "literature" && b.query.id === query.id)
+      ) {
+        flushAnswer();
+        blocks.push({ kind: "literature", query });
+      }
+      continue;
+    }
+    if (event.type === "subagent_updated") {
+      const subagent = event.payload.subagent;
+      const existing = blocks.find(
+        (b) => b.kind === "subagent" && b.subagent.id === subagent.id,
+      );
+      if (existing?.kind === "subagent") existing.subagent = subagent;
+      else {
+        flushAnswer();
+        blocks.push({ kind: "subagent", subagent });
       }
       continue;
     }
