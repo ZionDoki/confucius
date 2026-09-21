@@ -1698,6 +1698,9 @@ function bindWorkspace(
   composerCard.appendChild(prompt);
   composerCard.appendChild(composerToolbar);
   composer.appendChild(composerCard);
+  const composerDock = el(doc, "div");
+  composerDock.className = "confucius-composer-dock";
+  composerDock.hidden = true;
   const literaturePanel = createLiteraturePanel(doc, {
     rpc,
     viewport: timelinePane,
@@ -1706,30 +1709,34 @@ function bindWorkspace(
       void refreshSessions().then(() => renderLists());
     },
   });
-  composer.insertBefore(literaturePanel.node, composerCard);
+  composerDock.appendChild(literaturePanel.node);
   const latest = button(
     doc,
     "confucius-latest",
     getString("workspace-back-to-latest"),
   );
-  latest.classList.add("confucius-latest");
+  latest.className = "confucius-icon-button confucius-latest";
+  latest.replaceChildren(composerSendIcon(doc));
+  latest.setAttribute("aria-label", getString("workspace-back-to-latest"));
+  latest.title = getString("workspace-back-to-latest");
   latest.hidden = true;
   const syncLatest = () => {
     latest.hidden =
-      literaturePanel.docked ||
       timelinePane.scrollHeight -
         timelinePane.scrollTop -
         timelinePane.clientHeight <
-        96 ||
-      !state.events.length;
+        96 || !state.events.length;
+    composerDock.hidden = !literaturePanel.visible && latest.hidden;
   };
   latest.addEventListener("click", () => {
+    literaturePanel.close();
     timelinePane.scrollTop = timelinePane.scrollHeight;
     rememberTimelineViewport();
     syncLatest();
   });
   timelinePane.addEventListener("scroll", syncLatest, { passive: true });
-  composer.appendChild(latest);
+  composerDock.appendChild(latest);
+  composer.insertBefore(composerDock, composerCard);
   workbenchPane.appendChild(composer);
 
   root.appendChild(topbar);
@@ -1779,6 +1786,8 @@ function bindWorkspace(
     stopBtn.setAttribute("aria-label", stopLabel);
     sendBtn.setAttribute("title", sendLabel);
     stopBtn.setAttribute("title", stopLabel);
+    latest.setAttribute("aria-label", getString("workspace-back-to-latest"));
+    latest.title = getString("workspace-back-to-latest");
     const nextPlusLabel = getString("workspace-plus");
     plusBtn.setAttribute("aria-label", nextPlusLabel);
     plusBtn.setAttribute("title", nextPlusLabel);
@@ -3681,8 +3690,8 @@ function bindWorkspace(
     block: TimelineBlock,
     index: number,
   ): HTMLElement | null {
-    if (block.kind === "literature")
-      return literaturePanel.placeholder(block.query);
+    // Search history remains in tool activity; results share one task-wide capsule.
+    if (block.kind === "literature") return null;
     if (block.kind === "subagent")
       return state.sessionId
         ? createSubagentEntries(doc, state.sessionId, block.subagent, rpc)
@@ -5288,18 +5297,6 @@ function bindWorkspace(
         (!state.running && !state.sending)
       )
         appendMemoryCard(proposal);
-    const fallbackQuery = literaturePanel.fallbackQuery();
-    if (
-      fallbackQuery &&
-      !timelineBlocks.some(
-        (block) =>
-          block.kind === "literature" && block.query.id === fallbackQuery.id,
-      )
-    ) {
-      const card = literaturePanel.placeholder(fallbackQuery);
-      card.dataset.entryId = `literature:${fallbackQuery.id}`;
-      activityStream.append(card);
-    }
     for (const job of currentTask()?.postProcessing ?? []) {
       if (!job.pending.length || !job.error) continue;
       const row = el(doc, "div");
@@ -5417,7 +5414,6 @@ function bindWorkspace(
       timelinePane.appendChild(initialStream);
     }
     if (initialViewReady) renderedTimelineTaskId = timelineTaskId;
-    literaturePanel.mount();
     timelinePane.scrollTop =
       followTimeline && (state.events.length > 0 || state.pendingUserText)
         ? timelinePane.scrollHeight

@@ -564,6 +564,9 @@ confucius-workspace-storage-unsaved = 尚未保存
 
 # Literature discovery and isolated research
 confucius-workspace-literature-title = 文献
+confucius-workspace-literature-task-title = 本任务的文献
+confucius-workspace-literature-capsule = 候选文献：
+confucius-workspace-literature-retrieved = 已检索并去重
 confucius-workspace-literature-query = 关键词或研究问题
 confucius-workspace-literature-from = 起始年份
 confucius-workspace-literature-to = 结束年份

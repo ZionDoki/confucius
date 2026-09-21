@@ -21,8 +21,9 @@ can join the research at any point.
 [Download the latest stable release](https://github.com/ZionDoki/confucius/releases/latest)
 · [User guide](docs/README.md) · [Changelog](CHANGELOG.md) · [Build from source](#build-from-source)
 
-**New in [0.5.0 Beta](https://github.com/ZionDoki/confucius/releases/tag/v0.5.0-beta.1):**
+**New in [0.5.0 Beta](https://github.com/ZionDoki/confucius/releases/tag/v0.5.0-beta.3):**
 OpenAlex discovery, candidate selection, full-text acquisition, and research subagents.
+Beta 3 gathers each task's searches in one capsule with candidate and retrieved-paper counts.
 Install the Beta XPI or enable **Include prereleases** in Confucius Settings → Update.
 
 ## Features

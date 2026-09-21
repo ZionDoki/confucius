@@ -3,6 +3,8 @@
 产品使用说明位于 [`docs/`](../../docs/README.md)。这里保留仍需维护的工程约定与
 验收证据；临时日志、原始模型 trace 和隔离测试库保留在已忽略的 `output/`。
 
+- [0.5.0-beta.3 发布验收](acceptance/release-0.5.0-beta.3.md)：单一文献胶囊、计数与窄窗对齐、候选包安装、热更新及旧版升级。
+- [0.5.0-beta.2 发布验收](acceptance/release-0.5.0-beta.2.md)：模型目录输入筛选、自定义思考设置与公开包升级。
 - [0.5.0-beta.1 发布验收](acceptance/release-0.5.0-beta.1.md)：OpenAlex 科研助手、候选与公开包、隔离升级及 Beta 渠道核验。
 - [版本与发布规范](releases.md)：版号、Beta 渠道、更新说明、产物与发布验收。
 - [任务执行与恢复](runtime.md)：执行、存储、上下文和诊断的维护契约。

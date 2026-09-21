@@ -100,27 +100,47 @@ try {
     true,
   );
   await evaluate(`win.addEventListener('error',e=>qa.errors.push(e.message));win.addEventListener('unhandledrejection',e=>qa.errors.push(String(e.reason)));
-    await host.rpc('config/set',{baseUrl:'http://127.0.0.1:1/v1',apiKey:'synthetic-fixture',model:'research-fixture',maxTokens:4096,contextWindowTokens:32768,historyAutoCleanup:false});
+    await host.rpc('config/set',{baseUrl:'http://127.0.0.1:1/v1',apiKey:'synthetic-fixture',model:'research-fixture',maxTokens:4096,contextWindowTokens:32768,historyAutoCleanup:false,uiTheme:'light'});
     qa.discoveryCalls=0;
     host.openaiAdapter=(options)=>({complete:async request=>{await request.onAttempt?.();const n=++qa.discoveryCalls;
       if(n===1)return {end:'tool_calls',toolCalls:[{id:'search',name:'literature_search',args:{query:'图神经网络 · 分子性质预测',fromYear:2020,toYear:2026}}]};
-      if(n===2)return {end:'tool_calls',toolCalls:[{id:'candidates',name:'literature_update_candidates',args:{candidateRevision:0,changes:[{id:'W900000',selected:true,reason:'方法与研究问题相关'},{id:'W900001',selected:true,reason:'提供可比较的实验设计'}]}}]};
-      const answer='已检索 100 篇文献，推荐 2 篇候选。请在文献卡片中确认；尚未入库或下载全文。\\n\\n'+Array.from({length:12},(_,i)=>(i+1)+'. 这些结果目前仅按元数据和摘要筛选。后续可以比较数据集、实验设计和模型的局限；获得全文后再查证具体结果。').join('\\n\\n');
+      if(n===2)return {end:'tool_calls',toolCalls:[{id:'candidates',name:'literature_update_candidates',args:{candidateRevision:0,changes:Array.from({length:9},(_,i)=>({id:'W'+(900000+i),selected:true,reason:'方法与研究问题相关'}))}}]};
+      const answer='已检索 100 篇文献，推荐 9 篇候选。请在文献胶囊中确认；尚未入库或下载全文。\\n\\n'+Array.from({length:12},(_,i)=>(i+1)+'. 这些结果目前仅按元数据和摘要筛选。后续可以比较数据集、实验设计和模型的局限；获得全文后再查证具体结果。').join('\\n\\n');
       options.onTextDelta?.(answer);return {end:'stop',text:answer};}});
     const prompt=d.getElementById('confucius-prompt');prompt.value='帮我找近几年图神经网络用于分子性质预测的论文，先推荐相关候选。';prompt.dispatchEvent(new win.Event('input',{bubbles:true}));d.getElementById('confucius-send').click();return true;`);
   await wait(
-    `return !host.sessions.get(qa.taskId).activeTurnId && host.sessions.get(qa.taskId).record.literature?.candidates===2 && d.querySelectorAll('.confucius-literature-card').length===1;`,
+    `return !host.sessions.get(qa.taskId).activeTurnId && host.sessions.get(qa.taskId).record.literature?.candidates===9 && !d.querySelector('.confucius-literature-dock').hidden;`,
   );
+  const dockGeometry = () =>
+    evaluate(`
+    const capsule=d.getElementById('confucius-literature-capsule'),latest=d.getElementById('confucius-latest'),composer=d.querySelector('.confucius-composer-card');
+    const c=capsule.getBoundingClientRect(),j=latest.getBoundingClientRect(),i=composer.getBoundingClientRect();
+    const shape=r=>({left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height});
+    return {capsule:shape(c),latest:shape(j),composer:shape(i),latestVisible:!latest.hidden,aligned:Math.abs(c.left-i.left)<1&&Math.abs(j.right-i.right)<1&&Math.abs((c.top+c.bottom)-(j.top+j.bottom))<1,separate:c.right+7<=j.left,ratio:capsule.textContent,iconClass:latest.classList.contains('confucius-icon-button'),cards:d.querySelectorAll('.confucius-literature-card').length,entries:d.querySelectorAll('#confucius-literature-capsule').length};`);
   await evaluate(
-    `const timeline=d.querySelector('.confucius-timeline-pane');timeline.scrollTop=timeline.scrollHeight;return true;`,
+    `const t=d.querySelector('.confucius-timeline-pane');t.scrollTop=0;t.dispatchEvent(new win.Event('scroll'));return true;`,
   );
-  await wait(`return !d.querySelector('.confucius-literature-dock').hidden;`);
+  await wait(`return !d.getElementById('confucius-latest').hidden;`);
+  const normalDock = await dockGeometry();
+  assert.equal(normalDock.cards, 0);
+  assert.equal(normalDock.entries, 1);
+  assert.match(normalDock.ratio, /9 \/ 100/);
+  assert.ok(
+    normalDock.aligned && normalDock.separate && normalDock.iconClass,
+    JSON.stringify(normalDock),
+  );
   await capture("literature-capsule");
   const beforePopup = await evaluate(
-    `const before=d.querySelector('.confucius-timeline-pane').scrollTop;d.getElementById('confucius-literature-capsule').click();return before;`,
+    `const t=d.querySelector('.confucius-timeline-pane'),c=d.getElementById('confucius-literature-capsule'),r=c.getBoundingClientRect();qa.pointer={x:r.left+r.width/2,y:r.top+r.height/2};c.focus({preventScroll:true});win.windowUtils.sendMouseEvent('mousemove',qa.pointer.x,qa.pointer.y,0,0,0);win.windowUtils.sendMouseEvent('mousedown',qa.pointer.x,qa.pointer.y,0,1,0);return t.scrollTop;`,
+  );
+  const pressedDock = await dockGeometry();
+  assert.deepEqual(pressedDock.capsule, normalDock.capsule);
+  assert.deepEqual(pressedDock.latest, normalDock.latest);
+  await evaluate(
+    `win.windowUtils.sendMouseEvent('mouseup',qa.pointer.x,qa.pointer.y,0,1,0);return true;`,
   );
   await wait(
-    `return !d.getElementById('confucius-literature-popup').hidden && d.querySelectorAll('.confucius-literature-row').length===2;`,
+    `return !d.getElementById('confucius-literature-popup').hidden && d.querySelectorAll('.confucius-literature-row').length===9;`,
   );
   assert.equal(
     await evaluate(
@@ -128,8 +148,37 @@ try {
     ),
     beforePopup,
   );
+  assert.deepEqual((await dockGeometry()).capsule, normalDock.capsule);
   await capture("literature-floating");
-  // One editor: tab navigation, selection and scroll position survive docking.
+  await evaluate(
+    `await host.rpc('literature/search',{taskId:qa.taskId,query:'另一轮检索：文献去重'});return true;`,
+  );
+  await wait(
+    `return host.sessions.get(qa.taskId).record.literature.latestQuery.query==='另一轮检索：文献去重';`,
+  );
+  const repeated = await dockGeometry();
+  assert.equal(repeated.cards, 0);
+  assert.equal(repeated.entries, 1);
+  assert.match(repeated.ratio, /9 \/ 100/);
+  assert.equal(
+    await evaluate(
+      `return d.querySelector('.confucius-timeline-pane').scrollTop;`,
+    ),
+    beforePopup,
+  );
+  assert.equal(
+    await evaluate(
+      `return (await host.rpc('literature/list',{taskId:qa.taskId})).queries.length;`,
+    ),
+    2,
+  );
+  // Check candidate changes, then keep two papers for the real acquisition tests below.
+  await evaluate(
+    `await host.rpc('literature/updateCandidates',{taskId:qa.taskId,candidateRevision:host.sessions.get(qa.taskId).record.literature.candidateRevision,changes:Array.from({length:7},(_,i)=>({id:'W'+(900002+i),selected:false}))});return true;`,
+  );
+  await wait(
+    `return d.querySelectorAll('.confucius-literature-row').length===2 && d.getElementById('confucius-literature-capsule').textContent.includes('2 / 100');`,
+  );
   await evaluate(
     `d.getElementById('confucius-literature-candidates-tab').dispatchEvent(new win.KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));return true;`,
   );
@@ -141,7 +190,7 @@ try {
       `const c=d.querySelector('[data-work-id="W900001"] input[type=checkbox]');c.checked=${selected};c.dispatchEvent(new win.Event('change',{bubbles:true}));return true;`,
     );
     await wait(
-      `return host.sessions.get(qa.taskId).record.literature.candidates===${selected ? 2 : 1} && !d.querySelector('.confucius-literature-footer [data-variant=primary]').disabled;`,
+      `return host.sessions.get(qa.taskId).record.literature.candidates===${selected ? 2 : 1} && d.getElementById('confucius-literature-capsule').textContent.includes('${selected ? 2 : 1} / 100') && !d.querySelector('.confucius-literature-footer [data-variant=primary]').disabled;`,
     );
   }
   await evaluate(
@@ -155,7 +204,7 @@ try {
   );
   assert.equal(
     await evaluate(
-      `return d.getElementById('confucius-literature-popup').hidden;`,
+      `return d.getElementById('confucius-literature-popup').hidden && d.activeElement.id==='confucius-literature-capsule';`,
     ),
     true,
   );
@@ -175,39 +224,8 @@ try {
     `return d.querySelectorAll('.confucius-literature-row').length===20;`,
   );
   await evaluate(
-    `[...d.querySelectorAll('.confucius-literature-popup button')].find(b=>b.textContent==='回到对话位置').click();return true;`,
+    `const scroll=d.querySelector('.confucius-literature-scroll');d.querySelector('.confucius-literature-row details').open=true;scroll.scrollTop=64;qa.innerScroll=scroll.scrollTop;d.dispatchEvent(new win.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));return true;`,
   );
-  await wait(`return d.querySelector('.confucius-literature-dock').hidden;`);
-  await capture("literature-card");
-  await evaluate(
-    `d.querySelector('.confucius-literature-card .confucius-literature-footer button').click();return true;`,
-  );
-  await wait(
-    `return !!d.querySelector('.confucius-literature-card .confucius-literature-editor');`,
-  );
-  checks.push({
-    interaction: {
-      promptStartsSearch: true,
-      blankTaskHasNoEntry: true,
-      chronologicalCard: true,
-      capsuleOnlyOffscreen: true,
-      popupPreservesConversationScroll: true,
-      selectionShared: true,
-      keyboardTabs: true,
-      escapeCloses: true,
-      filterSurvivesReopen: true,
-      locateReturnsToCard: true,
-    },
-    pool: 100,
-    apiTotal: 2500,
-    unconfirmedLibraryCount: await evaluate(
-      `return (await Zotero.Items.getAll(Zotero.Libraries.userLibraryID,true,false)).filter(i=>i.isRegularItem()).length;`,
-    ),
-  });
-  await evaluate(
-    `const scroll=d.querySelector('.confucius-literature-scroll');d.querySelector('.confucius-literature-row details').open=true;scroll.scrollTop=64;qa.innerScroll=scroll.scrollTop;const t=d.querySelector('.confucius-timeline-pane');t.scrollTop=t.scrollHeight;return true;`,
-  );
-  await wait(`return !d.querySelector('.confucius-literature-dock').hidden;`);
   const expandedBefore = await evaluate(
     `const t=d.querySelector('.confucius-timeline-pane');return {top:t.scrollTop,height:t.scrollHeight};`,
   );
@@ -221,11 +239,8 @@ try {
     ),
     expandedBefore,
   );
-  assert.equal(
-    await evaluate(
-      `return d.querySelector('.confucius-literature-row details').open && d.querySelector('.confucius-literature-scroll').scrollTop===qa.innerScroll;`,
-    ),
-    true,
+  await wait(
+    `return d.querySelector('.confucius-literature-row details').open && d.querySelector('.confucius-literature-scroll').scrollTop===qa.innerScroll;`,
   );
   await evaluate(
     `const prompt=d.getElementById('confucius-prompt');prompt.dispatchEvent(new win.Event('pointerdown',{bubbles:true}));prompt.focus();return true;`,
@@ -242,28 +257,91 @@ try {
     ),
     expandedBefore,
   );
-  // Switching tasks must close the old UI and never show its pool in a blank task.
+  await evaluate(
+    `d.getElementById('confucius-literature-capsule').click();d.getElementById('confucius-latest').click();return true;`,
+  );
+  await wait(
+    `const t=d.querySelector('.confucius-timeline-pane');return d.getElementById('confucius-literature-popup').hidden && d.getElementById('confucius-latest').hidden && t.scrollHeight-t.scrollTop-t.clientHeight<2;`,
+  );
+  assert.equal(
+    await evaluate(
+      `return !d.querySelector('.confucius-literature-dock').hidden;`,
+    ),
+    true,
+  );
+  assert.equal((await dockGeometry()).capsule.left, normalDock.capsule.left);
+  checks.push({
+    interaction: {
+      promptStartsSearch: true,
+      blankTaskHasNoEntry: true,
+      singleTaskCapsule: true,
+      multipleSearchesDeduplicated: true,
+      candidateRatio: true,
+      latestAndCapsuleAligned: true,
+      pointerPressDoesNotMoveControls: true,
+      popupPreservesConversationScroll: true,
+      keyboardTabs: true,
+      escapeCloses: true,
+      filterSurvivesReopen: true,
+      latestClosesPopupAndScrolls: true,
+    },
+    geometry: normalDock,
+    pool: 100,
+    apiTotal: 2500,
+  });
+  // Switching tasks closes the old editor and never displays its pool in a blank task.
   await evaluate(
     `d.getElementById('confucius-literature-capsule').click();d.getElementById('confucius-new-session').click();return true;`,
   );
   await wait(
-    `return d.querySelector('.confucius-literature-dock').hidden && d.querySelectorAll('.confucius-literature-card').length===0;`,
+    `return d.querySelector('.confucius-literature-dock').hidden && d.querySelector('.confucius-composer-dock').hidden;`,
   );
+  await evaluate(`const empty=await host.rpc('task/new',{title:'零结果检索'});qa.emptyId=empty.id;const transport=host.openAlex.transport;
+    host.openAlex.transport=async()=>({status:200,data:{results:[],meta:{count:0}}});
+    try{await host.rpc('literature/search',{taskId:empty.id,query:'没有匹配文献的查询'});}finally{host.openAlex.transport=transport;}return true;`);
+  await wait(
+    `return !!d.querySelector('[data-task-id="'+qa.emptyId+'"] .confucius-task-open');`,
+  );
+  await evaluate(
+    `d.querySelector('[data-task-id="'+qa.emptyId+'"] .confucius-task-open').click();return true;`,
+  );
+  await wait(
+    `return !d.querySelector('.confucius-literature-dock').hidden && d.getElementById('confucius-literature-capsule').textContent.includes('0 / 0');`,
+  );
+  await evaluate(
+    `d.getElementById('confucius-literature-capsule').click();return true;`,
+  );
+  await wait(
+    `return !d.getElementById('confucius-literature-popup').hidden && d.querySelector('.confucius-literature-scroll').textContent.includes('当前条件下没有文献');`,
+  );
+  assert.equal(
+    await evaluate(
+      `return d.querySelectorAll('.confucius-literature-history > div').length===1 && !d.querySelector('.confucius-literature-history').textContent.includes('另一轮检索') && d.querySelectorAll('.confucius-literature-row').length===0;`,
+    ),
+    true,
+  );
+  checks.push({
+    emptySearch: {
+      capsuleAvailable: true,
+      zeroRatio: true,
+      refinementAvailable: true,
+      noPreviousTaskResults: true,
+    },
+  });
   await evaluate(
     `d.querySelector('[data-task-id="'+qa.taskId+'"] .confucius-task-open').click();return true;`,
   );
   await wait(
-    `return d.querySelectorAll('.confucius-literature-card').length===1;`,
+    `return !d.querySelector('.confucius-literature-dock').hidden && d.getElementById('confucius-literature-capsule').textContent.includes('2 / 100');`,
   );
   await evaluate(
-    `const card=d.querySelector('.confucius-literature-card');card.scrollIntoView({block:'start'});card.querySelector('.confucius-literature-footer button').click();return true;`,
+    `d.getElementById('confucius-literature-capsule').click();return true;`,
   );
   await wait(
-    `return !!d.querySelector('.confucius-literature-card .confucius-literature-editor');`,
+    `return !d.getElementById('confucius-literature-popup').hidden && d.querySelectorAll('.confucius-literature-row').length===2;`,
   );
   checks.push({
     editorContinuity: {
-      expandedCardPlaceholder: true,
       conversationAndListScrollPreserved: true,
       abstractPreserved: true,
       outsideClickKeepsInputFocus: true,
@@ -328,7 +406,7 @@ try {
   );
   assert.equal(await evaluate(`return qa.opened.length;`), 1);
   await evaluate(
-    `await host.rpc('literature/confirm',{taskId:qa.taskId,candidateRevision:3});return true;`,
+    `await host.rpc('literature/confirm',{taskId:qa.taskId,candidateRevision:host.sessions.get(qa.taskId).record.literature.candidateRevision});return true;`,
   );
   assert.equal(
     await evaluate(
@@ -451,10 +529,12 @@ try {
   );
   await wait(`return !!d?.querySelector('.confucius-literature');`);
   await evaluate(
-    `win.resizeTo(420,720);const timeline=d.querySelector('.confucius-timeline-pane');timeline.scrollTop=timeline.scrollHeight;return true;`,
+    `win.resizeTo(420,720);const timeline=d.querySelector('.confucius-timeline-pane');timeline.scrollTop=0;timeline.dispatchEvent(new win.Event('scroll'));return true;`,
   );
   await new Promise((resolve) => setTimeout(resolve, 1000));
-  await wait(`return !d.querySelector('.confucius-literature-dock').hidden;`);
+  await wait(
+    `return !d.querySelector('.confucius-literature-dock').hidden && !d.getElementById('confucius-latest').hidden;`,
+  );
   await evaluate(
     `d.getElementById('confucius-literature-capsule').click();return true;`,
   );
@@ -473,6 +553,27 @@ try {
     `d.querySelector('.confucius-literature-scroll').scrollTop=0;return true;`,
   );
   await capture("literature-dark-narrow");
+  const narrowDock = await dockGeometry();
+  assert.ok(
+    narrowDock.aligned && narrowDock.separate && narrowDock.latestVisible,
+    JSON.stringify(narrowDock),
+  );
+  checks.push({ narrowDock });
+  await evaluate(`win.resizeTo(280,720);return true;`);
+  await wait(`return d.documentElement.clientWidth<=300;`);
+  const smallestDock = await dockGeometry();
+  assert.ok(
+    smallestDock.aligned && smallestDock.separate && smallestDock.latestVisible,
+    JSON.stringify(smallestDock),
+  );
+  assert.equal(
+    await evaluate(
+      `const p=d.getElementById('confucius-literature-popup').getBoundingClientRect(),c=d.querySelector('.confucius-composer-card').getBoundingClientRect();return Math.abs(p.left-c.left)<1&&p.right<=c.right+1&&p.top>=0&&p.bottom<d.getElementById('confucius-literature-capsule').getBoundingClientRect().top;`,
+    ),
+    true,
+  );
+  await capture("literature-dark-280");
+  checks.push({ smallestDock });
   assert.equal(
     await evaluate(
       `return d.documentElement.scrollWidth<=d.documentElement.clientWidth+1;`,

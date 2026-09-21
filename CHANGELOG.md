@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+## 0.5.0-beta.3 - 2026-09-21
+
+### Changed
+
+- Collect each task's literature searches in one persistent capsule above the
+  composer instead of repeating result cards in the conversation. The capsule
+  shows candidate papers / retrieved and deduplicated papers, such as 9 / 100;
+  the denominator is the task's actual pool, not the API's total search hits.
+- Open the shared paper list above the capsule while keeping the conversation
+  in place. Closing and reopening preserves candidate selections, filters,
+  expanded abstracts and list position. Zero-result searches still offer a way
+  to refine the query, and switching tasks clears the previous task's editor.
+
+### Fixed
+
+- Keep the literature capsule and jump-to-latest button in separate spaces on
+  the same row, aligned with the composer. Reuse workspace button feedback and
+  fixed icon slots so hovering, pressing and expanding do not move the controls;
+  narrow windows keep both actions accessible without overlap.
+
+### Upgrade notes
+
+- This is a prerelease. Enable **Include prereleases** in Confucius Settings →
+  Update, or install this release's `confucius.xpi`. Stable-only installations
+  stay on the stable channel; disabling Betas does not downgrade an installation.
+- No data migration or model reconfiguration is required for Beta 2 users.
+  Existing task literature pools and candidate selections remain available from
+  the capsule; previous search activity remains in the conversation.
+
+### Validation and known limits
+
+- All 1,120 automated tests, typecheck, lint, version checks, skill synchronization
+  and build pass. The local Beta 3 candidate passed 17 literature checks, seven
+  window/sidebar hot-update checks and 23 upgrade checks from public Beta 2 in
+  isolated macOS Zotero 10.0.3 installations, including full restarts.
+- Chinese light and English dark windows were checked at 1,100, 420 and 280 px,
+  including pointer feedback, aligned controls, keyboard use, empty results and
+  retained selection/filter/scroll state. Existing Beta 2 literature pools,
+  queries and candidate decisions survive upgrade and another restart.
+- Model outputs and most search results use deterministic fixtures; anonymous
+  OpenAlex retrieval fetched 100 live records. Paid online models, authenticated
+  cached-fulltext retrieval, institutional login, Windows, Linux, other Zotero
+  versions and forced-colors were not revalidated for this Beta.
+- See the [release acceptance record](https://github.com/ZionDoki/confucius/blob/v0.5.0-beta.3/.github/maintainers/acceptance/release-0.5.0-beta.3.md)
+  and [literature guide](https://github.com/ZionDoki/confucius/blob/v0.5.0-beta.3/docs/literature-research.md).
+
 ## 0.5.0-beta.2 - 2026-09-21
 
 ### Added

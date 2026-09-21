@@ -564,6 +564,9 @@ confucius-workspace-storage-unsaved = Not yet saved
 
 # Literature discovery and isolated research
 confucius-workspace-literature-title = Literature
+confucius-workspace-literature-task-title = Papers for this task
+confucius-workspace-literature-capsule = Candidates:
+confucius-workspace-literature-retrieved = Retrieved and deduplicated
 confucius-workspace-literature-query = Keywords or research question
 confucius-workspace-literature-from = From year
 confucius-workspace-literature-to = To year

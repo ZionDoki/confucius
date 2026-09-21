@@ -20,8 +20,9 @@
 [下载最新稳定版](https://github.com/ZionDoki/confucius/releases/latest) ·
 [使用文档](docs/README.md) · [更新记录](CHANGELOG.md) · [从源码构建](#从源码构建)
 
-**[0.5.0 Beta 新增](https://github.com/ZionDoki/confucius/releases/tag/v0.5.0-beta.1)：**
+**[0.5.0 Beta 新增](https://github.com/ZionDoki/confucius/releases/tag/v0.5.0-beta.3)：**
 OpenAlex 检索、候选筛选、全文获取和研究子 Agent。
+Beta 3 将每个任务的检索集中到一个胶囊，显示候选数与已检索去重数量。
 安装 Beta 的 XPI，或在 Confucius 设置 → 更新中打开 **接收测试版更新**。
 
 ## 功能

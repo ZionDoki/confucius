@@ -56,29 +56,25 @@ export function ensurePaletteStyles(doc: Document): void {
 export const SURFACE_CSS = `
 .confucius-literature [hidden],.confucius-literature-dock[hidden],.confucius-literature-popup[hidden],.confucius-subagent-popup [hidden] { display:none !important; }
 .confucius-literature { min-width:0; color:var(--confucius-ink); font-size:13px; line-height:1.5; }
-.confucius-literature-card { margin:16px 0 24px; border:1px solid var(--confucius-line); border-radius:14px; background:var(--confucius-paper); overflow:hidden; }
 .confucius-literature-header { display:flex; align-items:flex-start; gap:12px; padding:16px 20px 12px; }
 .confucius-literature-header > div { flex:1; min-width:0; }
 .confucius-literature h3 { margin:0; font:inherit; font-size:14px; font-weight:600; overflow-wrap:anywhere; }
 .confucius-research-icon { width:18px; height:18px; flex-shrink:0; color:var(--confucius-muted); margin-top:2px; }
-.confucius-literature-status { flex:0 1 auto; color:var(--confucius-muted); font-size:12px; text-align:right; }
-.confucius-literature-preview { display:grid; gap:8px; padding:0 20px 8px 50px; color:var(--confucius-secondary); font-size:12px; }
-.confucius-literature-preview > div { display:flex; gap:16px; justify-content:space-between; }
-.confucius-literature-preview > div > :first-child { white-space:nowrap; text-overflow:ellipsis; overflow:hidden; }
-.confucius-literature-preview > div > :last-child { color:var(--confucius-muted); flex-shrink:0; }
 .confucius-literature-footer { display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between; padding:12px 20px 16px; }
 .confucius-literature-footer > :last-child { margin-left:auto; }
 .confucius-literature .confucius-literature-quiet { background:transparent; color:var(--confucius-secondary); padding-left:8px; padding-right:8px; }
 .confucius-literature .confucius-literature-quiet:hover { background:var(--confucius-surface); }
-.confucius-literature-dock { position:absolute; z-index:12; bottom:100%; left:50%; transform:translateX(-50%); width:calc(100% - 32px); max-width:880px; display:flex; flex-direction:column; align-items:center; gap:8px; padding-bottom:12px; pointer-events:none; }
-.confucius-literature-capsule.confucius-button { pointer-events:auto; display:flex; align-items:center; gap:8px; max-width:100%; min-height:34px; padding:7px 14px; border-radius:24px; background:var(--confucius-elevated); box-shadow:var(--confucius-shadow-soft); color:var(--confucius-secondary); font-size:12px; font-weight:500; }
-.confucius-literature-capsule > span:first-of-type { white-space:nowrap; text-overflow:ellipsis; overflow:hidden; }
-.confucius-literature-capsule .confucius-research-icon { width:15px; height:15px; margin:0; }
-.confucius-literature-capsule[aria-expanded=true] > span:last-child { transform:rotate(180deg); }
-.confucius-literature-popup { pointer-events:auto; width:100%; max-width:680px; border-radius:14px; background:var(--confucius-elevated); box-shadow:var(--confucius-shadow); overflow:hidden; display:flex; }
+.confucius-composer-dock { position:relative; z-index:12; display:grid; grid-template-columns:minmax(0,1fr) 34px; align-items:center; gap:8px; width:100%; max-width:880px; min-width:0; margin:0 auto 8px; }
+.confucius-composer-dock[hidden] { display:none !important; }
+.confucius-literature-dock { grid-column:1; min-width:0; }
+.confucius-literature-capsule.confucius-button { display:flex; align-items:center; gap:8px; max-width:100%; min-height:34px; padding:6px 12px; border-radius:24px; background:var(--confucius-elevated); box-shadow:var(--confucius-shadow-soft); font-size:12px; }
+.confucius-literature-capsule-copy { display:flex; flex-wrap:wrap; align-items:baseline; gap:0 4px; min-width:0; text-align:left; overflow-wrap:anywhere; }
+.confucius-literature-capsule-count { white-space:nowrap; font-variant-numeric:tabular-nums; }
+.confucius-literature-capsule .confucius-research-icon,.confucius-literature-caret { display:block; flex:0 0 16px; width:16px; height:16px; margin:0; }
+.confucius-literature-capsule[aria-expanded=true] .confucius-literature-caret { transform:rotate(180deg); }
+.confucius-literature-popup { position:absolute; bottom:calc(100% + 8px); left:0; width:100%; max-width:680px; box-sizing:border-box; border-radius:14px; background:var(--confucius-elevated); box-shadow:var(--confucius-shadow); overflow:hidden; display:flex; }
 .confucius-literature-editor > :not(.confucius-literature-scroll) { flex-shrink:0; }
 .confucius-literature-editor { display:flex; flex:1; flex-direction:column; min-width:0; min-height:0; max-height:inherit; }
-.confucius-literature-card .confucius-literature-editor { max-height:560px; max-height:min(560px, 65vh); }
 .confucius-literature-tabs { display:flex; gap:4px; padding:0 20px 8px; }
 .confucius-literature-tabs .confucius-button { font-size:12px; background:transparent; color:var(--confucius-muted); padding:6px 10px; }
 .confucius-literature-tabs [aria-selected=true] { color:var(--confucius-ink); background:var(--confucius-surface); }
@@ -124,13 +120,10 @@ export const SURFACE_CSS = `
 @media (max-width:619px) {
  .confucius-literature-header { padding:12px; gap:8px; flex-wrap:wrap; }
  .confucius-literature-header > div { flex-basis:120px; }
- .confucius-literature-header > .confucius-literature-status { margin-left:auto; }
- .confucius-literature-preview { padding:0 12px 8px 38px; }
  .confucius-literature-footer { padding:8px 12px 12px; }
  .confucius-literature-scroll { padding:0 12px; }
  .confucius-literature-tabs { padding:0 12px 8px; }
  .confucius-literature-controls,.confucius-subagent-entries { gap:4px; }
- .confucius-literature-dock { width:calc(100% - 16px); }
  .confucius-subagent-popup { padding:12px; }
 }
 @media (forced-colors:active) { .confucius-literature-popup,.confucius-literature-capsule,.confucius-subagent-popup { border:1px solid CanvasText; } }
@@ -178,8 +171,9 @@ export const SURFACE_CSS = `
 .confucius-approval { margin: 16px 0; padding: 16px; border: 0; border-radius: 12px; background: var(--confucius-warning-surface); }
 .confucius-notice { padding: 12px 16px; margin: 12px 0; border-radius: 12px; background: var(--confucius-surface); color: var(--confucius-accent-text); }
 .confucius-workbench-pane { position: relative; }
-.confucius-latest { position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); z-index: 8; margin-bottom: 12px; border-radius: 20px; background: var(--confucius-elevated); box-shadow: var(--confucius-shadow); white-space: nowrap; }
-.confucius-latest[hidden] { display: none; }
+.confucius-composer-dock > .confucius-latest { grid-column:2; justify-self:end; }
+.confucius-latest svg { transform:rotate(180deg); }
+.confucius-latest[hidden] { display:none !important; }
 .confucius-composer { position: relative; }
 .confucius-dialog { position: absolute; inset: 0; z-index: 1200; display: flex; align-items: center; justify-content: center; padding: 16px; box-sizing: border-box; background: var(--confucius-scrim); backdrop-filter: blur(8px); }
 .confucius-dialog-panel { width: min(720px, 100%); max-height: 100%; min-width: 0; padding: 24px; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; box-sizing: border-box; border: 0; border-radius: 16px; color: var(--confucius-ink); background: var(--confucius-elevated); box-shadow: var(--confucius-shadow); }

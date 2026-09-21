@@ -51,15 +51,7 @@ export function researchIcon(doc: Document, kind: "search" | "agent") {
   return svg;
 }
 
-/** A card is docked only after it is entirely outside the conversation viewport. */
-export function literatureCardOffscreen(
-  card: { top: number; bottom: number },
-  viewport: { top: number; bottom: number },
-): boolean {
-  return card.bottom <= viewport.top || card.top >= viewport.bottom;
-}
-
-/** One editor and one versioned selection, presented inline or above the composer. */
+/** One task-wide pool and editor, anchored above the composer. */
 export function createLiteraturePanel(
   doc: Document,
   options: {
@@ -88,10 +80,26 @@ export function createLiteraturePanel(
   capsule.setAttribute("aria-haspopup", "dialog");
   capsule.setAttribute("aria-controls", popup.id);
   capsule.setAttribute("aria-expanded", "false");
-  const capsuleLabel = node(doc, "span"),
-    caret = node(doc, "span", "⌃");
+  const capsuleLabel = node(doc, "span", text("capsule")),
+    capsuleCount = node(doc, "span"),
+    capsuleCopy = node(doc, "span");
+  capsuleCopy.className = "confucius-literature-capsule-copy";
+  capsuleCount.className = "confucius-literature-capsule-count";
+  capsuleCopy.append(capsuleLabel, capsuleCount);
+  const caret = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
+  caret.classList.add("confucius-literature-caret");
+  caret.setAttribute("viewBox", "0 0 20 20");
   caret.setAttribute("aria-hidden", "true");
-  capsule.append(researchIcon(doc, "search"), capsuleLabel, caret);
+  caret.setAttribute("focusable", "false");
+  const chevron = doc.createElementNS("http://www.w3.org/2000/svg", "path");
+  chevron.setAttribute("d", "m5 12 5-5 5 5");
+  chevron.setAttribute("fill", "none");
+  chevron.setAttribute("stroke", "currentColor");
+  chevron.setAttribute("stroke-width", "1.6");
+  chevron.setAttribute("stroke-linecap", "round");
+  chevron.setAttribute("stroke-linejoin", "round");
+  caret.append(chevron);
+  capsule.append(researchIcon(doc, "search"), capsuleCopy, caret);
   dock.append(popup, capsule);
 
   const editor = node(doc, "div");
@@ -186,36 +194,22 @@ export function createLiteraturePanel(
   confirmation.hidden = true;
   const footer = node(doc, "div");
   footer.className = "confucius-literature-footer";
-  const locate = createWorkspaceButton(doc, "", text("locate"));
-  locate.classList.add("confucius-literature-quiet");
+  const footerStatus = node(doc, "span");
+  footerStatus.className = "confucius-literature-meta";
   const review = createWorkspaceButton(doc, "", text("review"), "primary");
   const cancel = createWorkspaceButton(doc, "", text("cancel-downloads"));
   const actions = node(doc, "div");
   actions.className = "confucius-literature-controls";
   actions.append(cancel, review);
-  footer.append(locate, actions);
+  footer.append(footerStatus, actions);
   scroll.append(controls, count, rows, paging, confirmation);
   editor.append(header, tabs, error, scroll, footer);
   popup.append(editor);
 
-  type Card = {
-    query: Query;
-    root: HTMLElement;
-    compact: HTMLElement;
-    slot: HTMLElement;
-    title: HTMLElement;
-    meta: HTMLElement;
-    status: HTMLElement;
-    preview: HTMLElement;
-    view: HTMLButtonElement;
-    confirm: HTMLButtonElement;
-  };
-  const cards = new Map<string, Card>();
   let taskId: string | undefined,
     summary: LiteratureSummary | undefined,
-    activeId: string | undefined;
-  let inlineId: string | undefined,
-    floating = false,
+    activeQuery: Query | undefined;
+  let floating = false,
     disposed = false;
   let epoch = 0,
     request = 0,
@@ -223,36 +217,23 @@ export function createLiteraturePanel(
     busy = false,
     offset = 0;
   let selection: "auto" | "candidates" | "pool" = "auto";
-  let preview: LiteratureWork[] = [],
-    proposal: LiteratureConfirmation | undefined;
+  let proposal: LiteratureConfirmation | undefined;
+  let savedScrollTop = 0;
   let refreshTimer: number | undefined, frame: number | undefined;
   const selected = () =>
     selection === "candidates" ||
     (selection === "auto" && (summary?.candidates ?? 0) > 0);
-  const active = () => (activeId ? cards.get(activeId) : undefined);
-  function activate(id: string) {
-    if (activeId === id) return;
-    activeId = id;
-    const q = cards.get(id)?.query;
-    if (q) {
-      query.value = q.query;
-      from.value = q.fromYear ? String(q.fromYear) : "";
-      to.value = q.toYear ? String(q.toYear) : "";
-      oa.checked = q.openAccess ?? false;
-    }
+  function activate(q: Query) {
+    if (activeQuery?.id === q.id) return;
+    activeQuery = q;
+    query.value = q.query;
+    from.value = q.fromYear ? String(q.fromYear) : "";
+    to.value = q.toYear ? String(q.toYear) : "";
+    oa.checked = q.openAccess ?? false;
   }
   const message = (e: unknown) => {
     error.textContent = String(e instanceof Error ? e.message : e);
   };
-  const meta = (q: Query) =>
-    [
-      "OpenAlex",
-      q.fromYear || q.toYear ? `${q.fromYear ?? "…"}–${q.toYear ?? "…"}` : "",
-      q.openAccess ? text("oa") : "",
-      `${text("pool")} ${summary?.pool ?? 0}`,
-    ]
-      .filter(Boolean)
-      .join(" · ");
   const status = () =>
     summary?.acquiring
       ? `${text("downloading")} ${summary.acquiring}`
@@ -264,29 +245,13 @@ export function createLiteraturePanel(
             ? `${text("fulltext")} ${summary.available}`
             : text("found");
   function labels() {
-    capsuleLabel.textContent = `${text("title")} · ${text("pool")} ${summary?.pool ?? 0} · ${text("candidates")} ${summary?.candidates ?? 0}${summary?.pendingFulltext && !summary.hasCandidateChanges ? ` · ${text("missing")} ${summary.pendingFulltext}` : ""}`;
-    for (const card of cards.values()) {
-      card.title.textContent = card.query.query;
-      card.meta.textContent = meta(card.query);
-      card.status.textContent = status();
-      card.view.textContent = `${text("view")} · ${text("candidates")} ${summary?.candidates ?? 0}`;
-      card.confirm.hidden =
-        !summary?.hasCandidateChanges && !summary?.awaitingConfirmation;
-      card.confirm.disabled = busy;
-      card.preview.replaceChildren(
-        ...preview.slice(0, 2).map((work) => {
-          const line = node(doc, "div"),
-            label = node(doc, "span", work.title);
-          line.append(
-            label,
-            node(doc, "span", work.year ? String(work.year) : ""),
-          );
-          return line;
-        }),
-      );
-    }
-    title.textContent = active()?.query.query ?? text("title");
-    metadata.textContent = active() ? meta(active()!.query) : "OpenAlex";
+    capsuleCount.textContent = `${summary?.candidates ?? 0} / ${summary?.pool ?? 0}`;
+    const description = `${text("candidates")} ${summary?.candidates ?? 0} · ${text("retrieved")} ${summary?.pool ?? 0}`;
+    capsule.title = `${description} · ${status()}`;
+    capsule.setAttribute("aria-label", description);
+    title.textContent = text("task-title");
+    metadata.textContent = description;
+    footerStatus.textContent = status();
     candidateTab.textContent = `${text("candidates")} ${summary?.candidates ?? 0}`;
     poolTab.textContent = `${text("pool")} ${summary?.pool ?? 0}`;
     for (const tab of [candidateTab, poolTab]) {
@@ -299,7 +264,6 @@ export function createLiteraturePanel(
       selected() ? candidateTab.id : poolTab.id,
     );
     count.textContent = `${text("evaluated")} ${summary?.evaluated ?? 0} · ${text("fulltext")} ${summary?.available ?? 0} · ${text("read")} ${summary?.read ?? 0}`;
-    locate.hidden = !floating;
     cancel.hidden = !summary?.acquiring;
     review.hidden =
       !!proposal ||
@@ -321,131 +285,42 @@ export function createLiteraturePanel(
   function measure() {
     frame = undefined;
     if (disposed) return;
-    const card = active()?.root;
     const viewport = options.viewport.getBoundingClientRect();
-    const outside =
-      !!card?.isConnected &&
-      literatureCardOffscreen(card.getBoundingClientRect(), viewport);
-    if (!outside && floating) hidePopup(false);
-    dock.hidden = !outside;
+    dock.hidden =
+      !taskId ||
+      !summary ||
+      !(summary.pool || summary.latestQuery || activeQuery);
+    if (dock.hidden && floating) hidePopup(false);
+    options.visibilityChanged();
     // The popup stays inside the workbench, even in a short Zotero sidebar.
     const bottom = capsule.getBoundingClientRect().top;
     popup.style.maxHeight = `${Math.max(100, bottom - Math.max(8, viewport.top) - 8)}px`;
-    options.visibilityChanged();
   }
   function scheduleMeasure() {
     if (frame === undefined) frame = win?.requestAnimationFrame(measure);
   }
-  function preserveScroll(work: () => void) {
-    const y = options.viewport.scrollTop,
-      inner = scroll.scrollTop;
-    work();
-    options.viewport.scrollTop = y;
-    scroll.scrollTop = inner;
-  }
   function hidePopup(focus: boolean) {
     if (!floating) return;
+    savedScrollTop = scroll.scrollTop;
     floating = false;
     popup.hidden = true;
     capsule.setAttribute("aria-expanded", "false");
-    const card = inlineId ? cards.get(inlineId) : undefined;
-    if (card)
-      preserveScroll(() => {
-        card.slot.append(editor);
-        card.slot.style.height = "";
-      });
     if (focus && !dock.hidden) capsule.focus({ preventScroll: true });
     labels();
-  }
-  function collapseInline() {
-    const card = inlineId ? cards.get(inlineId) : undefined;
-    if (card) {
-      card.compact.hidden = false;
-      card.slot.style.height = "";
-      popup.append(editor);
-    }
-    inlineId = undefined;
-    scheduleMeasure();
-  }
-  function openInline(id: string, confirm = false) {
-    hidePopup(false);
-    if (inlineId !== id) collapseInline();
-    activate(id);
-    inlineId = id;
-    const card = cards.get(id)!;
-    card.compact.hidden = true;
-    card.slot.append(editor);
-    labels();
-    void refresh()
-      .then(() => {
-        if (activeId !== id || disposed) return;
-        if (confirm) void showConfirmation();
-        else close.focus({ preventScroll: true });
-      })
-      .catch(message);
-    scheduleMeasure();
   }
   function showPopup() {
     if (floating) {
       hidePopup(true);
       return;
     }
-    const card = inlineId ? cards.get(inlineId) : undefined;
-    preserveScroll(() => {
-      if (card)
-        card.slot.style.height = `${card.slot.getBoundingClientRect().height}px`;
-      popup.append(editor);
-      popup.hidden = false;
-      floating = true;
-    });
+    popup.hidden = false;
+    floating = true;
     capsule.setAttribute("aria-expanded", "true");
     labels();
     measure();
+    scroll.scrollTop = savedScrollTop;
     close.focus({ preventScroll: true });
     void refresh().catch(message);
-  }
-  function makeCard(q: Query) {
-    const root = node(doc, "article");
-    root.className = "confucius-literature confucius-literature-card";
-    root.setAttribute("aria-label", `${text("title")}: ${q.query}`);
-    const compact = node(doc, "div"),
-      cardHeader = node(doc, "div");
-    cardHeader.className = "confucius-literature-header";
-    const heading = node(doc, "div"),
-      title = node(doc, "h3"),
-      meta = node(doc, "div"),
-      status = node(doc, "span");
-    meta.className = "confucius-literature-meta";
-    status.className = "confucius-literature-status";
-    heading.append(title, meta);
-    cardHeader.append(researchIcon(doc, "search"), heading, status);
-    const preview = node(doc, "div");
-    preview.className = "confucius-literature-preview";
-    const footer = node(doc, "div");
-    footer.className = "confucius-literature-footer";
-    const view = createWorkspaceButton(doc, "", text("view")),
-      confirm = createWorkspaceButton(doc, "", text("review"), "primary");
-    view.classList.add("confucius-literature-quiet");
-    view.addEventListener("click", () => openInline(q.id));
-    confirm.addEventListener("click", () => openInline(q.id, true));
-    footer.append(view, confirm);
-    compact.append(cardHeader, preview, footer);
-    const slot = node(doc, "div");
-    root.append(compact, slot);
-    const card = {
-      query: q,
-      root,
-      compact,
-      slot,
-      title,
-      meta,
-      status,
-      preview,
-      view,
-      confirm,
-    };
-    cards.set(q.id, card);
-    return card;
   }
   async function refresh() {
     const id = taskId,
@@ -459,20 +334,14 @@ export function createLiteraturePanel(
       filter: filter.value,
       selected: wasSelected ? true : undefined,
     };
-    const fetched = await Promise.all([
-      options.rpc("literature/list", params) as Promise<LiteraturePage>,
-      options.rpc("literature/list", {
-        taskId: id,
-        limit: 2,
-        selected: (summary?.candidates ?? 0) > 0 ? true : undefined,
-      }) as Promise<LiteraturePage>,
-    ]).catch((e: unknown) => {
+    const result = await (
+      options.rpc("literature/list", params) as Promise<LiteraturePage>
+    ).catch((e: unknown) => {
       if (taskId !== id || epoch !== era || stamp !== request || disposed)
         return undefined;
       throw e;
     });
-    if (!fetched) return;
-    const [result, sample] = fetched;
+    if (!result) return;
     if (taskId !== id || epoch !== era || stamp !== request || disposed) return;
     if (summary && result.summary.revision < summary.revision) {
       queueRefresh();
@@ -488,22 +357,16 @@ export function createLiteraturePanel(
       return;
     }
     revision = summary.revision;
-    preview = sample.items;
-    if (!activeId && result.queries[0]) {
-      // Legacy pools may predate the lightweight anchor in event history.
-      makeCard(result.queries[0]);
-      activate(result.queries[0].id);
-      options.changed();
-    }
+    if (!activeQuery && result.queries[0]) activate(result.queries[0]);
     labels();
     renderRows(result);
     scheduleMeasure();
   }
   function queueRefresh() {
-    if (disposed || refreshTimer !== undefined) return;
+    if (disposed || !floating || refreshTimer !== undefined) return;
     refreshTimer = win?.setTimeout(() => {
       refreshTimer = undefined;
-      if (!busy) void refresh().catch(message);
+      if (!busy && floating) void refresh().catch(message);
     }, 100);
   }
   async function act(work: () => Promise<unknown>) {
@@ -538,7 +401,7 @@ export function createLiteraturePanel(
       count.hidden =
       tabs.hidden =
         false;
-    scroll.scrollTop = 0;
+    savedScrollTop = scroll.scrollTop = 0;
     labels();
   }
   async function showConfirmation() {
@@ -643,7 +506,7 @@ export function createLiteraturePanel(
           .workId
       : undefined;
     const focusedAction = focused?.dataset.action;
-    const y = scroll.scrollTop;
+    const y = floating ? scroll.scrollTop : savedScrollTop;
     rows.replaceChildren();
     paging.replaceChildren();
     history.replaceChildren();
@@ -827,6 +690,7 @@ export function createLiteraturePanel(
         candidateTab;
       target.focus({ preventScroll: true });
     }
+    savedScrollTop = y;
     scroll.scrollTop = y;
   }
   for (const tab of [candidateTab, poolTab]) {
@@ -891,25 +755,7 @@ export function createLiteraturePanel(
   );
   review.addEventListener("click", () => void showConfirmation());
   capsule.addEventListener("click", showPopup);
-  close.addEventListener("click", () => {
-    if (floating) hidePopup(true);
-    else {
-      const card = active();
-      collapseInline();
-      card?.view.focus({ preventScroll: true });
-    }
-  });
-  locate.addEventListener("click", () => {
-    hidePopup(false);
-    const card = active();
-    if (!card) return;
-    const y =
-      card.root.getBoundingClientRect().top -
-      options.viewport.getBoundingClientRect().top;
-    options.viewport.scrollTop += y - 16;
-    (inlineId ? close : card.view).focus({ preventScroll: true });
-    measure();
-  });
+  close.addEventListener("click", () => hidePopup(true));
   const outside = (e: Event) => {
     if (floating && !dock.contains(e.target as Node)) hidePopup(false);
   };
@@ -919,17 +765,10 @@ export function createLiteraturePanel(
       e.preventDefault();
       e.stopPropagation();
       hidePopup(true);
-    } else if (inlineId && editor.contains(doc.activeElement)) {
-      e.preventDefault();
-      e.stopPropagation();
-      close.click();
     }
   };
   doc.addEventListener("pointerdown", outside, true);
   doc.addEventListener("keydown", key, true);
-  options.viewport.addEventListener("scroll", scheduleMeasure, {
-    passive: true,
-  });
   win?.addEventListener("resize", scheduleMeasure);
   const observer = win?.ResizeObserver
     ? new win.ResizeObserver(scheduleMeasure)
@@ -938,44 +777,24 @@ export function createLiteraturePanel(
   observer?.observe(dock);
   return {
     node: dock,
-    get docked() {
+    get visible() {
       return !dock.hidden;
     },
     get floating() {
       return floating;
     },
-    placeholder(q: Query) {
-      if (!cards.has(q.id)) makeCard(q);
-      const anchor = node(doc, "div");
-      anchor.dataset.literatureAnchor = q.id;
-      return anchor;
-    },
-    mount() {
-      for (const anchor of Array.from(
-        options.viewport.querySelectorAll("[data-literature-anchor]"),
-      ) as HTMLElement[]) {
-        const card = cards.get(anchor.dataset.literatureAnchor!);
-        if (card && card.root.parentElement !== anchor)
-          anchor.append(card.root);
-        if (card) observer?.observe(card.root);
-      }
-      labels();
-      scheduleMeasure();
-    },
+    close: () => hidePopup(false),
     update(id: string | undefined, value?: LiteratureSummary) {
       if (id !== taskId) {
         epoch++;
         request++;
         busy = false;
         hidePopup(false);
-        collapseInline();
-        for (const card of cards.values()) observer?.unobserve(card.root);
-        cards.clear();
         taskId = id;
         summary = undefined;
-        activeId = undefined;
+        activeQuery = undefined;
         revision = -1;
-        preview = [];
+        savedScrollTop = 0;
         offset = 0;
         selection = "auto";
         filter.value = query.value = from.value = to.value = "";
@@ -985,6 +804,8 @@ export function createLiteraturePanel(
         localFilter.open = false;
         endConfirmation();
         rows.replaceChildren();
+        paging.replaceChildren();
+        history.replaceChildren();
         error.textContent = "";
         dock.hidden = true;
       }
@@ -993,18 +814,10 @@ export function createLiteraturePanel(
           ...value,
           latestQuery: value.latestQuery ?? summary?.latestQuery,
         };
-      if (summary?.latestQuery && !cards.has(summary.latestQuery.id)) {
-        makeCard(summary.latestQuery);
-        if (!floating && !inlineId) activate(summary.latestQuery.id);
-      }
-      if (!activeId && summary?.latestQuery) activate(summary.latestQuery.id);
+      if (summary?.latestQuery && !floating) activate(summary.latestQuery);
       if (summary && revision !== summary.revision && !busy) queueRefresh();
       labels();
       scheduleMeasure();
-    },
-    /** Old histories may predate search-anchor events. */
-    fallbackQuery() {
-      return summary?.latestQuery;
     },
     destroy() {
       disposed = true;
@@ -1015,7 +828,6 @@ export function createLiteraturePanel(
       win?.clearTimeout(refreshTimer);
       doc.removeEventListener("pointerdown", outside, true);
       doc.removeEventListener("keydown", key, true);
-      options.viewport.removeEventListener("scroll", scheduleMeasure);
       win?.removeEventListener("resize", scheduleMeasure);
     },
   };
