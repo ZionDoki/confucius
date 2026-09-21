@@ -20,17 +20,17 @@ describe("modelsListRequest", () => {
   });
 
   it("adds /v1 when the Base URL is only a host", () => {
-    assert.deepEqual(modelsListRequest("https://mirror.lzu.edu.cn"), {
-      url: "https://mirror.lzu.edu.cn/v1/models",
+    assert.deepEqual(modelsListRequest("https://gateway.example.test"), {
+      url: "https://gateway.example.test/v1/models",
       style: "openai",
     });
     assert.equal(
-      modelsListRequest("https://mirror.lzu.edu.cn/").url,
-      "https://mirror.lzu.edu.cn/v1/models",
+      modelsListRequest("https://gateway.example.test/").url,
+      "https://gateway.example.test/v1/models",
     );
     assert.equal(
-      modelsListRequest("https://mirror.lzu.edu.cn/v1/chat/completions").url,
-      "https://mirror.lzu.edu.cn/v1/models",
+      modelsListRequest("https://gateway.example.test/v1/chat/completions").url,
+      "https://gateway.example.test/v1/models",
     );
   });
 
@@ -106,7 +106,7 @@ describe("listEndpointModels", () => {
     let requested = "";
     const result = await listEndpointModels(
       {
-        baseUrl: "https://mirror.lzu.edu.cn",
+        baseUrl: "https://gateway.example.test",
         apiKey: "k",
         model: "MiniMax-M3",
       },
@@ -117,7 +117,7 @@ describe("listEndpointModels", () => {
         });
       }) as unknown as typeof fetch,
     );
-    assert.equal(requested, "https://mirror.lzu.edu.cn/v1/models");
+    assert.equal(requested, "https://gateway.example.test/v1/models");
     assert.deepEqual(result.models, ["MiniMax-M3"]);
     assert.equal(result.error, undefined);
   });

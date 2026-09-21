@@ -218,6 +218,7 @@ import {
   createIdFactory,
   errorMessage,
   listEndpointModels,
+  ModelCatalog,
   type ModelAdapter,
   type ModelMessage,
   type OpenAICompatibleConfig,
@@ -824,6 +825,7 @@ export class AgentHost {
     return lease;
   }
   readonly skills = new SkillStore();
+  private readonly modelCatalog = new ModelCatalog(hostFetch);
   readonly tools = new ZoteroToolHost();
   private readonly openAlex = new OpenAlexClient(() =>
     String(getPref("openAlexApiKey") || ""),
@@ -2425,6 +2427,8 @@ export class AgentHost {
         return this.configSet(params);
       case RPC_METHODS.configListModels:
         return this.configListModels(params);
+      case RPC_METHODS.configModelCatalog:
+        return this.configModelCatalog(params);
       case RPC_METHODS.sessionSetPermissions:
         return this.sessionSetPermissions(params);
       case RPC_METHODS.sessionContext:
@@ -2505,6 +2509,20 @@ export class AgentHost {
       if (timer) {
         Zotero.getMainWindows()[0]?.clearTimeout(timer);
       }
+    }
+  }
+
+  private async configModelCatalog(params: Record<string, unknown>) {
+    const controller = createAbortController();
+    const win = Zotero.getMainWindow();
+    const timer = win.setTimeout(() => controller.abort(), 12_000);
+    try {
+      return await this.modelCatalog.search(
+        String(params.query ?? ""),
+        controller.signal,
+      );
+    } finally {
+      win.clearTimeout(timer);
     }
   }
 
@@ -4011,6 +4029,7 @@ export class AgentHost {
           maxTokens: endpoint.maxTokens,
           reasoningEffort: endpoint.reasoningEffort,
           profile: endpoint.profile,
+          reasoning: endpoint.reasoning,
           timeouts: endpoint.timeouts,
         }
       : undefined;
@@ -8351,6 +8370,9 @@ export class AgentHost {
                     modelReasoning(
                       this.requireEndpoint().model,
                       this.requireEndpoint().baseUrl,
+                      this.requireEndpoint().reasoning?.[
+                        this.requireEndpoint().model
+                      ],
                     ).efforts.find((e) => e !== "auto") ?? "auto",
                   timeouts: {
                     firstByteMs: 60_000,
@@ -9563,6 +9585,7 @@ export class AgentHost {
       maxTokens: endpoint.maxTokens || undefined,
       reasoningEffort: endpoint.reasoningEffort,
       profile: endpoint.profile,
+      reasoning: endpoint.reasoning,
       timeouts: endpoint.timeouts,
       contextWindowTokens: endpoint.contextWindowTokens,
       fetchImpl: hostFetch,

@@ -97,6 +97,7 @@ export const RPC_METHODS = {
   configGet: "config/get",
   configSet: "config/set",
   configListModels: "config/listModels",
+  configModelCatalog: "config/modelCatalog",
   sessionSetPermissions: "session/setPermissions",
   sessionCompact: "session/compact",
   sessionContext: "session/context",
@@ -521,16 +522,8 @@ export interface KnowledgeDeleteEntryParams {
   id: string;
 }
 
-export type ReasoningEffort =
-  | "auto"
-  | "off"
-  | "on"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "max";
+/** Providers may introduce their own effort names; capabilities validate support. */
+export type ReasoningEffort = string;
 
 export const REASONING_EFFORTS: readonly ReasoningEffort[] = [
   "auto",
@@ -546,8 +539,7 @@ export const REASONING_EFFORTS: readonly ReasoningEffort[] = [
 
 export function isReasoningEffort(value: unknown): value is ReasoningEffort {
   return (
-    typeof value === "string" &&
-    (REASONING_EFFORTS as readonly string[]).includes(value)
+    typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(value)
   );
 }
 
@@ -824,7 +816,9 @@ export function validateConfigPatch(
     reasoningEffortRaw !== undefined &&
     !isReasoningEffort(reasoningEffortRaw)
   ) {
-    errors.push("Reasoning effort must be one of auto, off, low, medium, high");
+    errors.push(
+      "Reasoning effort must be a token of 1–64 letters, digits, underscores or hyphens",
+    );
   }
   if (
     patch.memoryConsent !== undefined &&

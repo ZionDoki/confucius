@@ -1,4 +1,8 @@
-import { normalizeModelEffort } from "./modelReasoning";
+import {
+  isModelReasoningOverrides,
+  normalizeModelEffort,
+  type ModelReasoningOverrides,
+} from "./modelReasoning";
 import {
   isReasoningEffort,
   validateConfigPatch,
@@ -30,6 +34,7 @@ export interface ModelEndpoint {
   model: string;
   maxTokens: number;
   reasoningEffort: ReasoningEffort;
+  reasoning?: ModelReasoningOverrides;
   contextWindowTokens: number;
   profile?: EndpointModelProfile;
   timeouts?: EndpointModelTimeouts;
@@ -119,6 +124,9 @@ function coerceEndpoint(entry: unknown): ModelEndpoint | null {
     model: String(raw.model ?? "").trim(),
     maxTokens: Math.max(0, Math.floor(Number(raw.maxTokens) || 0)),
     reasoningEffort: isReasoningEffort(effort) ? effort : "auto",
+    ...(isModelReasoningOverrides(raw.reasoning)
+      ? { reasoning: structuredReasoning(raw.reasoning) }
+      : {}),
     contextWindowTokens:
       Number.isInteger(window) && window >= 1000
         ? window
@@ -196,6 +204,7 @@ export function resolveEndpointStore(
     next.id = active.id;
     next.name = active.name || next.name;
     next.profile = active.profile;
+    next.reasoning = active.reasoning;
     next.timeouts = active.timeouts;
     endpoints = endpoints.map((entry) =>
       entry.id === active.id ? next : entry,
@@ -257,10 +266,13 @@ function mergeEndpoint(
     next.profile = { ...(patch.profile as EndpointModelProfile) };
   if (patch.timeouts !== undefined)
     next.timeouts = { ...(patch.timeouts as EndpointModelTimeouts) };
+  if (isModelReasoningOverrides(patch.reasoning))
+    next.reasoning = structuredReasoning(patch.reasoning);
   next.reasoningEffort = normalizeModelEffort(
     next.model,
     next.baseUrl,
     next.reasoningEffort,
+    next.reasoning?.[next.model],
   );
   if (!next.name) {
     next.name = endpointLabel(next.model, next.baseUrl);
@@ -331,6 +343,16 @@ export function applyEndpointPatch(
     } else {
       const raw = patch.endpoint as Record<string, unknown>;
       errors.push(...compatibilityErrors(raw));
+      if (
+        raw.reasoning !== undefined &&
+        !isModelReasoningOverrides(raw.reasoning)
+      )
+        errors.push("Invalid per-model reasoning settings");
+      if (
+        raw.reasoningEffort !== undefined &&
+        !isReasoningEffort(raw.reasoningEffort)
+      )
+        errors.push("Invalid reasoning effort");
       const id = String(raw.id ?? "").trim();
       const existing = id
         ? endpoints.find((entry) => entry.id === id)
@@ -411,6 +433,17 @@ export function applyEndpointPatch(
     activeId = endpoints[0].id;
   }
   return { ok: true, store: { endpoints, activeEndpointId: activeId } };
+}
+
+function structuredReasoning(
+  value: ModelReasoningOverrides,
+): ModelReasoningOverrides {
+  return Object.fromEntries(
+    Object.entries(value).map(([id, config]) => [
+      id,
+      { ...config, efforts: [...config.efforts] },
+    ]),
+  );
 }
 
 /** Fail unsupported provider settings at config/set, before dispatching a model request. */

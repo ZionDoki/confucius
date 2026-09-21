@@ -20,7 +20,11 @@ import type {
   ModelUsage,
 } from "./ModelAdapter";
 
-import { modelReasoningBody, type ReasoningEffort } from "@confucius/protocol";
+import {
+  modelReasoningBody,
+  type ReasoningEffort,
+  type ModelReasoningOverrides,
+} from "@confucius/protocol";
 import {
   splitThinkTaggedContent,
   ThinkTagStreamParser,
@@ -39,6 +43,7 @@ export interface ModelProfile {
 }
 
 export interface OpenAICompatibleConfig extends ModelTimers {
+  reasoning?: ModelReasoningOverrides;
   profile?: ModelProfile;
   timeouts?: ModelTimeouts;
   createAbortController?: () => AbortController;
@@ -350,6 +355,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         this.config.model,
         this.baseUrl,
         this.config.reasoningEffort,
+        this.config.reasoning?.[this.config.model],
       ),
     );
     if (request.tools && request.tools.length > 0) {
@@ -396,6 +402,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         this.config.model,
         `${this.baseUrl.replace(/\/api\/chat\/?$/, "")}/api/chat`,
         this.config.reasoningEffort,
+        this.config.reasoning?.[this.config.model],
       ),
     );
     if (request.tools && request.tools.length > 0) {

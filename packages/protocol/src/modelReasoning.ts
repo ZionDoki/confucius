@@ -1,15 +1,71 @@
-import type { ReasoningEffort } from "./rpc";
+import { isReasoningEffort, type ReasoningEffort } from "./rpc";
+
+/** An explicit wire format and option list, scoped to one endpoint/model ID. */
+export interface ModelReasoningOverride {
+  transport: "openai" | "thinking" | "ollama";
+  efforts: ReasoningEffort[];
+  thinkingKeep?: "all";
+}
+
+export function isModelReasoningOverride(
+  value: unknown,
+): value is ModelReasoningOverride {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const raw = value as Record<string, unknown>;
+  return (
+    Object.keys(raw).every((key) =>
+      ["transport", "efforts", "thinkingKeep"].includes(key),
+    ) &&
+    ["openai", "thinking", "ollama"].includes(String(raw.transport)) &&
+    Array.isArray(raw.efforts) &&
+    raw.efforts.length <= 32 &&
+    raw.efforts.every(isReasoningEffort) &&
+    new Set(raw.efforts).size === raw.efforts.length &&
+    (raw.thinkingKeep === undefined ||
+      (raw.thinkingKeep === "all" && raw.transport === "thinking"))
+  );
+}
+
+export type ModelReasoningOverrides = Record<string, ModelReasoningOverride>;
+
+export function isModelReasoningOverrides(
+  value: unknown,
+): value is ModelReasoningOverrides {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entries = Object.entries(value);
+  return (
+    entries.length <= 200 &&
+    entries.every(
+      ([id, config]) =>
+        id.length > 0 &&
+        id.length <= 256 &&
+        id === id.trim() &&
+        !["__proto__", "constructor", "prototype"].includes(id) &&
+        isModelReasoningOverride(config),
+    )
+  );
+}
 
 export interface ModelReasoning {
   /** Unknown models keep the provider default; never invent supported controls. */
-  source: "documented" | "unknown";
+  source: "documented" | "custom" | "unknown";
   efforts: readonly ReasoningEffort[];
   transport: "openai" | "thinking" | "ollama" | "none";
   thinkingKeep?: "all";
 }
 
 /** Native API capabilities, independent of CLI catalogs. See docs/model-selection.md. */
-export function modelReasoning(model: string, baseUrl = ""): ModelReasoning {
+export function modelReasoning(
+  model: string,
+  baseUrl = "",
+  override?: ModelReasoningOverride,
+): ModelReasoning {
+  if (isModelReasoningOverride(override))
+    return {
+      ...override,
+      source: "custom",
+      efforts: [...new Set(["auto", ...override.efforts])],
+    };
   const id = model.trim().toLowerCase().split("/").at(-1) ?? "";
   const profile = (
     transport: ModelReasoning["transport"],
@@ -60,8 +116,9 @@ export function normalizeModelEffort(
   model: string,
   baseUrl: string,
   effort: unknown,
+  override?: ModelReasoningOverride,
 ): ReasoningEffort {
-  return modelReasoning(model, baseUrl).efforts.includes(
+  return modelReasoning(model, baseUrl, override).efforts.includes(
     effort as ReasoningEffort,
   )
     ? (effort as ReasoningEffort)
@@ -72,8 +129,9 @@ export function modelReasoningBody(
   model: string,
   baseUrl: string,
   effort?: ReasoningEffort,
+  override?: ModelReasoningOverride,
 ): Record<string, unknown> {
-  const capability = modelReasoning(model, baseUrl);
+  const capability = modelReasoning(model, baseUrl, override);
   if (!effort || effort === "auto" || !capability.efforts.includes(effort))
     return {};
   switch (capability.transport) {

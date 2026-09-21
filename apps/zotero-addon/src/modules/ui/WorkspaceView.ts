@@ -1,5 +1,9 @@
 import { createSubagentEntries, closeSubagentPopup } from "./subagentPopup";
 import {
+  createModelCatalogLookup,
+  createReasoningSettings,
+} from "./modelSettings";
+import {
   createLiteraturePanel,
   createOpenAlexSettings,
 } from "./literaturePanel";
@@ -75,6 +79,9 @@ import type {
   HistoryTask,
   HistoryItemRef,
   SessionContextStats,
+  ModelEndpoint,
+  ModelReasoningOverride,
+  ModelReasoningOverrides,
 } from "@confucius/protocol";
 import {
   modelReasoning,
@@ -281,17 +288,6 @@ type KnowledgeBaseRow = {
 };
 
 type KnowledgeBaseDetail = KnowledgeBaseRow & { entries: KnowledgeEntryRow[] };
-
-type ModelEndpoint = {
-  id: string;
-  name: string;
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  maxTokens: number;
-  reasoningEffort: ReasoningEffort;
-  contextWindowTokens: number;
-};
 
 type ModelConfig = {
   runtimeStoragePath?: string;
@@ -818,7 +814,9 @@ function effortLabel(value: string, fallback = value): string {
     max: getString("workspace-effort-max"),
     ultra: getString("workspace-effort-ultra"),
   };
-  return labels[value] ?? fallback;
+  return Object.prototype.hasOwnProperty.call(labels, value)
+    ? labels[value]
+    : fallback;
 }
 
 /** Settings and the composer use the same model-specific capability resolver. */
@@ -826,6 +824,7 @@ function effortPicker(doc: Document, id: string, value: string) {
   let current: ReasoningEffort = "auto";
   let model = "";
   let baseUrl = "";
+  let override: ModelReasoningOverride | undefined;
   const node = el(
     doc,
     "div",
@@ -834,7 +833,7 @@ function effortPicker(doc: Document, id: string, value: string) {
   );
   const paint = () => {
     node.textContent = "";
-    const options = modelReasoning(model, baseUrl).efforts;
+    const options = modelReasoning(model, baseUrl, override).efforts;
     for (const effort of options) {
       const btn = el(
         doc,
@@ -886,7 +885,7 @@ function effortPicker(doc: Document, id: string, value: string) {
     }
   };
   const setValue = (value: string) => {
-    current = normalizeModelEffort(model, baseUrl, value);
+    current = normalizeModelEffort(model, baseUrl, value, override);
     paint();
   };
   setValue(value);
@@ -898,9 +897,11 @@ function effortPicker(doc: Document, id: string, value: string) {
       nextModel: string,
       nextBaseUrl: string,
       effort: string = current,
+      nextOverride?: ModelReasoningOverride,
     ) => {
       model = nextModel;
       baseUrl = nextBaseUrl;
+      override = nextOverride;
       setValue(effort);
     },
   };
@@ -5553,6 +5554,7 @@ function bindWorkspace(
       active?.model ?? "",
       active?.baseUrl ?? "",
       active?.reasoningEffort,
+      active?.reasoning?.[active.model],
     );
     endpointName.textContent =
       activeEffort !== "auto"
@@ -6138,9 +6140,29 @@ function bindWorkspace(
     });
     effortLabel.textContent = getString("workspace-thinking");
     const effort = effortPicker(doc, "confucius-cfg-effort", "auto");
+    let reasoningOverrides: ModelReasoningOverrides = {};
+    const reasoningSettings = createReasoningSettings(doc, (override) => {
+      effort.setModel(
+        modelInput.value,
+        baseUrlInput.value,
+        effort.getValue(),
+        override,
+      );
+    });
     effortRow.appendChild(effortLabel);
     effortRow.appendChild(effort.node);
+    effortRow.appendChild(reasoningSettings.node);
     modelTab.appendChild(effortRow);
+    const catalog = createModelCatalogLookup(doc, rpc, (entry) => {
+      if (!modelInput.value.trim()) modelInput.value = entry.id;
+      if (entry.contextWindowTokens)
+        contextInput.value = String(entry.contextWindowTokens);
+      if (entry.maxOutputTokens)
+        maxTokensInput.value = String(entry.maxOutputTokens);
+      reasoningSettings.applyCatalog(entry, baseUrlInput.value);
+      advanced.setAttribute("open", "");
+    });
+    modelInput.parentElement!.after(catalog.node);
     const advanced = el(doc, "details");
     advanced.className = "confucius-settings-advanced";
     const advancedTitle = el(doc, "summary");
@@ -7242,10 +7264,26 @@ function bindWorkspace(
     actions.append(errorLine, cancel, save);
     panel.appendChild(actions);
 
-    for (const field of [modelInput, baseUrlInput])
-      field.addEventListener("input", () =>
-        effort.setModel(modelInput.value, baseUrlInput.value),
+    modelInput.addEventListener("input", () => {
+      reasoningSettings.setModel(
+        modelInput.value,
+        baseUrlInput.value,
+        reasoningOverrides[modelInput.value.trim()],
       );
+      catalog.reset(modelInput.value);
+    });
+    baseUrlInput.addEventListener("input", () => {
+      try {
+        reasoningSettings.setModel(
+          modelInput.value,
+          baseUrlInput.value,
+          reasoningSettings.getOverride(),
+        );
+      } catch {
+        /* Keep an invalid draft visible until it is corrected. */
+      }
+      catalog.reset(modelInput.value);
+    });
     const fillForm = (ep?: ModelEndpoint) => {
       nameInput.value = ep?.name ?? "";
       baseUrlInput.value = ep?.baseUrl ?? "";
@@ -7253,11 +7291,19 @@ function bindWorkspace(
       modelInput.value = ep?.model ?? "";
       maxTokensInput.value = String(ep?.maxTokens ?? 0);
       contextInput.value = String(ep?.contextWindowTokens ?? 32768);
+      reasoningOverrides = { ...ep?.reasoning };
       effort.setModel(
         ep?.model ?? "",
         ep?.baseUrl ?? "",
         ep?.reasoningEffort ?? "auto",
+        ep?.reasoning?.[ep.model],
       );
+      reasoningSettings.setModel(
+        modelInput.value,
+        baseUrlInput.value,
+        ep?.reasoning?.[ep.model],
+      );
+      catalog.reset(modelInput.value);
     };
 
     const paintList = () => {
@@ -7446,6 +7492,11 @@ function bindWorkspace(
               throw new Error(getString("workspace-security-confirm-error"));
             }
           }
+          const reasoning = { ...reasoningOverrides };
+          const override = reasoningSettings.getOverride();
+          const modelId = modelInput.value.trim();
+          if (override) reasoning[modelId] = override;
+          else delete reasoning[modelId];
           const endpoint: Record<string, unknown> = {
             name: nameInput.value,
             baseUrl: baseUrlInput.value,
@@ -7454,6 +7505,7 @@ function bindWorkspace(
             maxTokens: Number(maxTokensInput.value) || 0,
             contextWindowTokens: Number(contextInput.value) || 32768,
             reasoningEffort: effort.getValue(),
+            reasoning,
           };
           if (editingId) {
             endpoint.id = editingId;
@@ -8498,6 +8550,7 @@ function bindWorkspace(
             selected.model.id,
             endpoint?.baseUrl ?? "",
             endpoint?.reasoningEffort,
+            endpoint?.reasoning?.[selected.model.id],
           ),
         })) as ModelConfig;
       } else if (selected.model.id) {
@@ -8639,7 +8692,11 @@ function bindWorkspace(
           modelLists.get(endpoint.id)?.models ??
           (endpoint.model ? [endpoint.model] : []);
         for (const id of models) {
-          const capability = modelReasoning(id, endpoint.baseUrl);
+          const capability = modelReasoning(
+            id,
+            endpoint.baseUrl,
+            endpoint.reasoning?.[id],
+          );
           choices.push({
             backend: "native",
             endpointId: endpoint.id,

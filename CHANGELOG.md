@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+## 0.5.0-beta.2 - 2026-09-21
+
+### Added
+
+- Look up reference model IDs, context windows, output limits and reasoning
+  options from the open-source models.dev catalog in Native model settings.
+  Applying an entry preserves the configured gateway address, key and model alias;
+  saved settings and model requests remain usable without the catalog.
+- Customize Native reasoning levels and their request format per endpoint and
+  model, including provider-specific values such as `ultra`. Settings survive
+  restarts and feed the composer and actual requests; switching models does not
+  reuse another model's overrides. Catalog token-budget controls are not imported.
+
+### Fixed
+
+- Filter catalog entries as you type in a styled, scrollable list inside Settings.
+  Keyboard selection and input methods are supported; catalog and reasoning-format
+  choices avoid native popup menus that can overflow Zotero windows.
+- Clear the prior catalog selection when editing the filter, keep late responses
+  from replacing newer results, and allow failed catalog downloads to be retried.
+
+### Upgrade notes
+
+- This is a prerelease. Enable **Include prereleases** in Confucius Settings →
+  Update, or install this release's `confucius.xpi`. Stable-only installations
+  stay on the stable channel; disabling Betas does not downgrade an installation.
+- No library migration or endpoint reconfiguration is required for Beta 1 users.
+  Existing tasks, drafts, sources, credentials, notes, reports and history are
+  retained. Custom reasoning settings are saved separately for each endpoint
+  and exact model ID; Codex and Kimi keep their own model capability lists.
+- Catalog entries are reference metadata, not a universal model ID standard.
+  Check your provider's supported IDs and reasoning format before applying them.
+
+### Validation and known limits
+
+- All 1,120 automated tests, typecheck, lint, version checks and build pass.
+  Isolated macOS Zotero 10.0.3 testing passed nine model-settings checks, seven
+  window/sidebar hot-update checks, and 20 upgrade checks from the public
+  0.5.0-beta.1 package, including task preservation and full restarts.
+- The catalog was fetched from models.dev. Custom `reasoning_effort` forwarding
+  used a deterministic local endpoint; real paid model calls were not exercised.
+  Metadata may differ from a gateway, and token-budget controls are not imported.
+  Windows, Linux, other Zotero versions and forced-colors were not revalidated.
+- See the [release acceptance record](https://github.com/ZionDoki/confucius/blob/v0.5.0-beta.2/.github/maintainers/acceptance/release-0.5.0-beta.2.md)
+  and [model settings guide](https://github.com/ZionDoki/confucius/blob/v0.5.0-beta.2/docs/model-selection.md).
+
 ## 0.5.0-beta.1 - 2026-09-21
 
 Confucius becomes a research assistant that starts with a question: discover

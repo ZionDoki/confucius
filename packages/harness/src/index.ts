@@ -1,6 +1,11 @@
 export { BudgetAccountant } from "./BudgetAccountant";
 export type { BudgetLimits, BudgetSnapshot } from "./BudgetAccountant";
 export {
+  ModelCatalog,
+  MODEL_CATALOG_URL,
+  parseModelCatalog,
+} from "./modelCatalog";
+export {
   compactHistory,
   estimateChars,
   needsCompaction,

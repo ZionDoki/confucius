@@ -11,12 +11,12 @@ import { truncateToolResult } from "./truncate";
 describe("normalizeOpenAICompatibleBaseUrl", () => {
   it("adds /v1 to host-only OpenAI-compatible URLs", () => {
     assert.equal(
-      normalizeOpenAICompatibleBaseUrl("https://mirror.lzu.edu.cn"),
-      "https://mirror.lzu.edu.cn/v1",
+      normalizeOpenAICompatibleBaseUrl("https://gateway.example.test"),
+      "https://gateway.example.test/v1",
     );
     assert.equal(
-      normalizeOpenAICompatibleBaseUrl("https://mirror.lzu.edu.cn/"),
-      "https://mirror.lzu.edu.cn/v1",
+      normalizeOpenAICompatibleBaseUrl("https://gateway.example.test/"),
+      "https://gateway.example.test/v1",
     );
     assert.equal(
       normalizeOpenAICompatibleBaseUrl("https://api.openai.com/v1"),
@@ -24,9 +24,9 @@ describe("normalizeOpenAICompatibleBaseUrl", () => {
     );
     assert.equal(
       normalizeOpenAICompatibleBaseUrl(
-        "https://mirror.lzu.edu.cn/v1/chat/completions",
+        "https://gateway.example.test/v1/chat/completions",
       ),
-      "https://mirror.lzu.edu.cn/v1",
+      "https://gateway.example.test/v1",
     );
     assert.equal(
       normalizeOpenAICompatibleBaseUrl("http://127.0.0.1:11434/api/chat"),
@@ -78,7 +78,7 @@ describe("OpenAICompatibleAdapter", () => {
     let requested = "";
     const adapter = new OpenAICompatibleAdapter({
       apiKey: "sk-test",
-      baseUrl: "https://mirror.lzu.edu.cn",
+      baseUrl: "https://gateway.example.test",
       model: "MiniMax-M3",
       stream: false,
       fetchImpl: (async (input: RequestInfo | URL) => {
@@ -93,7 +93,7 @@ describe("OpenAICompatibleAdapter", () => {
     const turn = await adapter.complete({
       messages: [{ role: "user", content: "ping" }],
     });
-    assert.equal(requested, "https://mirror.lzu.edu.cn/v1/chat/completions");
+    assert.equal(requested, "https://gateway.example.test/v1/chat/completions");
     assert.equal(turn.text, "pong");
   });
 
@@ -518,6 +518,32 @@ describe("reasoning request parameters", () => {
         model,
       );
     }
+  });
+
+  it("sends a configured custom effort to the gateway for the exact model ID", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    for (const model of ["private-alias", "another-alias"]) {
+      const adapter = new OpenAICompatibleAdapter({
+        apiKey: "test",
+        baseUrl: "https://gateway.example.test",
+        model,
+        reasoningEffort: "ultra",
+        stream: false,
+        reasoning: {
+          "private-alias": { transport: "openai", efforts: ["ultra"] },
+        },
+        fetchImpl: async (_url, init) => {
+          bodies.push(JSON.parse(String(init?.body)));
+          return new Response(
+            JSON.stringify({ choices: [{ message: { content: "done" } }] }),
+          );
+        },
+      });
+      await adapter.complete({ messages: [{ role: "user", content: "test" }] });
+    }
+    assert.equal(bodies[0].model, "private-alias");
+    assert.equal(bodies[0].reasoning_effort, "ultra");
+    assert.equal(bodies[1].reasoning_effort, undefined);
   });
 
   for (const [model, effort, expected] of [

@@ -198,6 +198,18 @@ export const SURFACE_CSS = `
 .confucius-settings-field > label { display: block; color: var(--confucius-muted); margin-bottom: 8px; font-size: .92em; }
 .confucius-settings-advanced { margin: 12px 0 20px; }
 .confucius-settings-advanced > summary { cursor: pointer; color: var(--confucius-muted); padding: 8px 0; }
+.confucius-model-catalog [hidden] { display: none !important; }
+.confucius-model-catalog > .confucius-settings-field { margin-bottom: 8px; }
+.confucius-model-catalog [role=status] { margin: 8px 0; font-size: .9em; }
+.confucius-catalog-results { position: relative; box-sizing: border-box; max-width: 100%; max-height: min(280px, 36vh); padding: 4px; margin: 8px 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--confucius-line); border-radius: 8px; background: var(--confucius-paper); scrollbar-gutter: stable; }
+.confucius-catalog-option { margin: 0; }
+.confucius-catalog-option[data-active=true] { background: var(--confucius-surface); outline: 2px solid var(--confucius-focus); outline-offset: -2px; }
+.confucius-catalog-option-copy { display: block; min-width: 0; overflow-wrap: anywhere; }
+.confucius-catalog-option-name { display: block; font-weight: 550; line-height: 1.4; }
+.confucius-catalog-option-meta { display: block; margin-top: 4px; font-size: .9em; line-height: 1.4; color: var(--confucius-muted); }
+.confucius-catalog-preview { margin: 12px 0; line-height: 1.5; }
+.confucius-catalog-actions, .confucius-reasoning-transports { display: flex; flex-wrap: wrap; gap: 8px; }
+.confucius-reasoning-transports .confucius-button { height: auto; min-height: 34px; max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: left; }
 .confucius-endpoint-choice { display: flex; flex: 1; align-items: center; gap: 8px; height: auto; max-height: none; min-width: 0; margin: 0; padding: 4px 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .confucius-endpoint-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin-bottom: 12px; }
 /* Legacy settings controls still carry geometry inline. These surface rules

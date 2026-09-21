@@ -67,6 +67,17 @@ PDF 批注的色块、批注竖线和区域定位框反映实际批注颜色，�
   [workspaceSurface.ts](../apps/zotero-addon/src/modules/ui/workspaceSurface.ts) 与
   [workspaceTheme.ts](../apps/zotero-addon/src/modules/ui/workspaceTheme.ts) 中的公共样式。
 
+## 模型目录选择
+
+- 目录选择使用输入框与对话框内的列表；输入模型 ID、名称或服务商时自动筛选，
+  不使用会在 Zotero chrome 窗口中溢出的原生 `select` 弹出菜单。
+- 条目复用设置的选择行样式，名称与服务商／模型 ID 分两行；长文本允许换行。
+  列表使用公共 `paper` 底色、8px 圆角与结构边界，高度不超过 280px 或视口的
+  36%，内部滚动，不覆盖顶栏、设置页脚或窗口外的内容。
+- 输入焦点保留在筛选框，方向键浏览、Enter 选择，Escape 先关闭候选列表；
+  输入法组字不触发查询或选择。选中后显示配置预览，应用按钮才写入表单。
+- 思考参数格式使用公共按钮组成的单选组，允许换行；同样不使用原生弹出菜单。
+
 ## 阅读页不使用装饰性分割线
 
 - 顶栏无底边线，引用区无顶边线；Markdown `hr` 保留 24px 纵向间距，

@@ -323,6 +323,7 @@ export type {
 export * from "./history";
 
 export * from "./modelReasoning";
+export * from "./modelCatalog";
 
 export * from "./run";
 export * from "./runtimeOutcome";
