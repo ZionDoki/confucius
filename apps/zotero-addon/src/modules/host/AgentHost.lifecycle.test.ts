@@ -77,6 +77,84 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+it("external child gateway records paired tool outcomes, including thrown failures", async () => {
+  const events: ConfuciusEvent[] = [],
+    delivered: ToolResult[] = [];
+  const abort = new AbortController();
+  let fails = false,
+    serial = 0;
+  const child = {
+    task: { id: "child", run: { id: "child-run", generation: 1 } },
+    abort,
+    budget: new BudgetAccountant({ maxIterations: 10, maxToolCalls: 10 }),
+    save: async () => {},
+    event: (event: ConfuciusEvent) => events.push(event),
+    delivered: async (result: ToolResult) => {
+      delivered.push(result);
+    },
+    tools: {
+      call: async (name: string): Promise<ToolResult> => {
+        if (fails) throw new Error("PDF service failed");
+        return {
+          ok: true,
+          toolName: name,
+          data: { text: "Public source evidence" },
+        };
+      },
+    },
+  };
+  const host = Object.create(AgentHost.prototype) as LifecycleHost;
+  Object.assign(host, {
+    subagentManager: {
+      run: (id: string) => (id === "child" ? child : undefined),
+    },
+    ids: () => `gateway-${++serial}`,
+    pluginRuntime: {
+      isCurrentLease: () => true,
+      leaseSignal: () => abort.signal,
+    },
+  });
+  const lease = {
+    taskId: "child",
+    turnId: "child-run",
+    runId: "child-run",
+    generation: 1,
+  };
+  const params = {
+    taskId: "child",
+    name: "get_pages",
+    arguments: { page: 1 },
+    lease,
+  };
+  await host.taskToolCall(params);
+  fails = true;
+  await assert.rejects(host.taskToolCall(params), /PDF service failed/);
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ["tool_requested", "tool_result", "tool_requested", "tool_result"],
+  );
+  for (const offset of [0, 2]) {
+    const request = events[offset],
+      result = events[offset + 1];
+    assert.ok(
+      request.type === "tool_requested" && result.type === "tool_result",
+    );
+    assert.equal(request.payload.callId, result.payload.callId);
+    assert.equal(result.payload.result.ok, offset === 0);
+  }
+  assert.equal(delivered.length, 1);
+  assert.equal(child.budget.toolCallsUsed, 2);
+  await assert.rejects(
+    host.taskToolCall({ ...params, lease: { ...lease, generation: 0 } }),
+    /expired/,
+  );
+  assert.equal(
+    events.length,
+    4,
+    "expired work must not publish into the current attempt",
+  );
+});
+
 interface TestState {
   record: ResearchTaskRecord;
   events: ConfuciusEvent[];

@@ -1,6 +1,8 @@
 import type { AgentBackendKind, LockedContextSnapshot } from "./research";
 import type { RuntimeModelSelection } from "./modelReasoning";
-import type { SourceReadEvidence } from "./events";
+import type { ConfuciusEvent, SourceReadEvidence } from "./events";
+
+export const MAX_CONCURRENT_SUBAGENTS = 3;
 
 export type SubagentStatus =
   "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
@@ -16,6 +18,12 @@ export interface SubagentSummary {
   updatedAt: number;
   attempt: number;
   error?: string;
+  activity?: {
+    kind: "model" | "tool" | "output";
+    toolName?: string;
+    toolCalls: number;
+    at: number;
+  };
 }
 export interface SubagentRecord extends SubagentSummary {
   version: 1;
@@ -42,6 +50,15 @@ export interface SubagentRecord extends SubagentSummary {
   /** External engines may not report internal usage. Never present unknown as zero. */
   usageObservable: boolean;
   allowSearch: boolean;
+}
+export interface SubagentPage {
+  record: SubagentRecord;
+  events: ConfuciusEvent[];
+  totalEvents: number;
+  nextOffset: number | null;
+  archiveRefs: string[];
+  nextArchiveOffset: number | null;
+  passage?: { content: string; nextOffset: number | null };
 }
 export const SUBAGENT_TOOL_NAMES = new Set([
   "subagent_spawn",

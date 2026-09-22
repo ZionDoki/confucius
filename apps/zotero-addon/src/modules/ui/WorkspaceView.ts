@@ -1,4 +1,9 @@
-import { createSubagentEntries, closeSubagentPopup } from "./subagentPopup";
+import {
+  createSubagentEntries,
+  closeSubagentPopup,
+  isSubagentPopupOpen,
+} from "./subagentPopup";
+import { ordinaryTimelineCalls, subagentWaitProgress } from "./subagentTrace";
 import {
   createModelCatalogLookup,
   createReasoningSettings,
@@ -3730,7 +3735,8 @@ function bindWorkspace(
     }
     if (block.kind === "tools") {
       const key = `tools:${block.calls[0]?.callId || index}`;
-      return renderTools(targetDoc, block.calls, key);
+      const calls = ordinaryTimelineCalls(block.calls);
+      return calls.length ? renderTools(targetDoc, calls, key) : null;
     }
     if (block.kind === "artifact") {
       return renderArtifactFileBlock(targetDoc, block.artifact);
@@ -5164,6 +5170,7 @@ function bindWorkspace(
       : undefined;
     const followTimeline =
       !literaturePanel.floating &&
+      !isSubagentPopupOpen(doc) &&
       (taskChanged
         ? (savedViewport?.followsBottom ?? true)
         : timelinePane.scrollHeight -
@@ -8936,6 +8943,15 @@ function bindWorkspace(
       label = stage.payload.message;
     } else if (stage.type === "tool_requested") {
       label = `${getString("workspace-working-tool")} · ${stage.payload.toolName}`;
+      if (stage.payload.toolName === "subagent_wait") {
+        const progress = subagentWaitProgress(
+          events,
+          stage.payload.args.ids as string[] | undefined,
+        );
+        label = `${getString("workspace-subagent-waiting")} · ${progress.settled} / ${progress.total} ${getString("workspace-subagent-settled")}`;
+      } else if (stage.payload.toolName === "subagent_spawn") {
+        label = getString("workspace-subagent-delegating");
+      }
     } else if (stage.type === "tool_result") {
       if (stage.payload.result.effect === "partial") {
         label = "部分完成 · 正在核对剩余项目";

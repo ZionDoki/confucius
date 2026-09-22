@@ -111,12 +111,48 @@ export const SURFACE_CSS = `
 .confucius-literature-paging { padding:8px 0; }
 .confucius-literature-settings { margin-bottom:24px; }
 .confucius-literature-settings .confucius-button { margin:4px; }
-.confucius-subagent-entries { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0 16px; }
-.confucius-subagent-entry.confucius-button { background:transparent; color:var(--confucius-secondary); font-size:13px; font-weight:500; gap:8px; padding:6px 8px; }
-.confucius-subagent-entry .confucius-research-icon { width:16px; height:16px; margin:0; }
-.confucius-subagent-popup { position:fixed; z-index:10000; box-sizing:border-box; max-height:calc(100vh - 16px); overflow:auto; padding:16px 20px; border-radius:14px; background:var(--confucius-elevated); color:var(--confucius-ink); box-shadow:var(--confucius-shadow); font-size:13px; }
-.confucius-subagent-popup h3 { margin:0 0 12px; font-size:14px; overflow-wrap:anywhere; }
-.confucius-subagent-result { white-space:pre-wrap; overflow-wrap:anywhere; margin:16px 0; line-height:1.6; }
+.confucius-subagent-entries { display:flex; width:100%; min-width:0; flex-wrap:wrap; gap:8px; margin:8px 0 16px; }
+.confucius-subagent-entry.confucius-button { width:100%; max-width:100%; gap:12px; padding:10px 12px; text-align:left; font-size:13px; white-space:normal; }
+.confucius-subagent-entry[aria-expanded=true] { background:var(--confucius-hover); }
+.confucius-subagent-entry .confucius-research-icon { width:18px; height:18px; margin:0; }
+.confucius-subagent-entry-copy { display:flex; flex:1; min-width:0; flex-direction:column; gap:4px; overflow-wrap:anywhere; }
+.confucius-subagent-entry-copy strong { font-weight:550; }
+.confucius-subagent-meta { color:var(--confucius-muted); font-size:12px; font-weight:400; overflow-wrap:anywhere; }
+.confucius-subagent-badge { flex-shrink:0; color:var(--confucius-secondary); font-size:12px; font-weight:400; }
+.confucius-subagent-entry[data-status=failed] .confucius-subagent-badge { color:var(--confucius-danger); }
+.confucius-subagent-popup { position:fixed; z-index:10000; left:50%; top:50%; transform:translate(-50%,-50%); box-sizing:border-box; display:flex; flex-direction:column; width:min(680px,calc(100vw - 16px)); height:min(640px,calc(100vh - 16px)); overflow:hidden; border-radius:14px; background:var(--confucius-elevated); color:var(--confucius-ink); box-shadow:var(--confucius-shadow); font-size:13px; line-height:1.5; }
+.confucius-subagent-pane { display:flex; flex-direction:column; flex:1; min-height:0; }
+.confucius-subagent-navigation { display:flex; flex-shrink:0; align-items:center; justify-content:space-between; gap:8px; padding:0 20px 12px; }
+.confucius-subagent-navigation > span { font-variant-numeric:tabular-nums; }
+.confucius-subagent-header { display:flex; flex-shrink:0; align-items:flex-start; gap:12px; padding:16px 20px 12px; }
+.confucius-subagent-header > div { flex:1; min-width:0; }
+.confucius-subagent-header .confucius-button,.confucius-subagent-footer .confucius-button,.confucius-subagent-navigation .confucius-button { min-height:34px; padding:6px 8px; }
+.confucius-subagent-popup h3 { margin:0 0 4px; font-size:14px; font-weight:600; overflow-wrap:anywhere; }
+.confucius-subagent-popup h4 { margin:16px 0 8px; font-size:13px; font-weight:550; }
+.confucius-subagent-popup h5 { margin:12px 0 4px; font-size:12px; font-weight:550; color:var(--confucius-secondary); }
+.confucius-subagent-filter { display:flex; flex-shrink:0; flex-wrap:wrap; align-items:center; gap:8px; padding:0 20px 12px; }
+.confucius-subagent-filter input { flex:1 1 200px; min-width:0; width:100%; box-sizing:border-box; height:34px; padding:6px 8px; margin:0; border:1px solid var(--confucius-line); border-radius:8px; background:var(--confucius-paper); color:var(--confucius-ink); font:inherit; }
+.confucius-subagent-filter input:focus-visible { outline:2px solid var(--confucius-focus); outline-offset:2px; }
+.confucius-subagent-scroll { flex:1; overflow:auto; min-height:0; padding:0 20px; overscroll-behavior:contain; scrollbar-gutter:stable; }
+.confucius-subagent-result { white-space:pre-wrap; overflow-wrap:anywhere; margin:8px 0 16px; line-height:1.6; }
+.confucius-subagent-trace { display:flex; flex-direction:column; gap:8px; margin:12px 0 20px; }
+.confucius-subagent-trace-item { min-width:0; background:var(--confucius-surface); border-radius:8px; }
+.confucius-subagent-trace-item > summary { display:grid; grid-template-columns:8px max-content minmax(0,1fr) auto; gap:8px; align-items:baseline; padding:10px 12px; cursor:pointer; list-style:none; overflow-wrap:anywhere; }
+.confucius-subagent-trace-item > summary::before { content:'›'; color:var(--confucius-muted); transform-origin:center; }
+.confucius-subagent-trace-item[open] > summary::before { transform:rotate(90deg); }
+.confucius-subagent-trace-item > summary:hover { background:var(--confucius-hover); border-radius:8px; }
+.confucius-subagent-trace-item > summary time,.confucius-subagent-trace-item > summary > :last-child { color:var(--confucius-muted); font-size:12px; font-variant-numeric:tabular-nums; }
+.confucius-subagent-trace-item[data-state=failed] > summary > :last-child { color:var(--confucius-danger); }
+.confucius-subagent-trace-item > div { padding:0 12px 12px; }
+.confucius-subagent-popup summary:focus-visible { outline:2px solid var(--confucius-focus); outline-offset:2px; border-radius:4px; }
+.confucius-subagent-popup pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; line-height:1.5; margin:8px 0; }
+.confucius-subagent-details { margin:12px 0; }
+.confucius-subagent-details summary,.confucius-subagent-raw summary { cursor:pointer; color:var(--confucius-secondary); overflow-wrap:anywhere; }
+.confucius-subagent-details > div > details { margin:12px 0; }
+.confucius-subagent-raw { font-size:12px; }
+.confucius-subagent-error { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:8px 0; color:var(--confucius-danger); overflow-wrap:anywhere; }
+.confucius-subagent-footer { display:flex; flex-shrink:0; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; padding:12px 20px 16px; }
+.confucius-subagent-footer .confucius-literature-controls { margin-left:auto; }
 @media (max-width:619px) {
  .confucius-literature-header { padding:12px; gap:8px; flex-wrap:wrap; }
  .confucius-literature-header > div { flex-basis:120px; }
@@ -124,7 +160,13 @@ export const SURFACE_CSS = `
  .confucius-literature-scroll { padding:0 12px; }
  .confucius-literature-tabs { padding:0 12px 8px; }
  .confucius-literature-controls,.confucius-subagent-entries { gap:4px; }
- .confucius-subagent-popup { padding:12px; }
+ .confucius-subagent-header { padding:12px; gap:8px; }
+ .confucius-subagent-filter,.confucius-subagent-navigation { padding:0 12px 8px; }
+ .confucius-subagent-scroll { padding:0 12px; }
+ .confucius-subagent-footer { padding:8px 12px 12px; gap:4px; }
+ .confucius-subagent-trace-item > summary { grid-template-columns:8px minmax(0,1fr) auto; gap:4px 8px; }
+ .confucius-subagent-trace-item > summary time { grid-column:2 / -1; }
+ .confucius-subagent-trace-item > summary::before { grid-row:2; }
 }
 @media (forced-colors:active) { .confucius-literature-popup,.confucius-literature-capsule,.confucius-subagent-popup { border:1px solid CanvasText; } }
 

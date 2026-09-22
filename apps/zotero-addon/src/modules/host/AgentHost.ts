@@ -4059,6 +4059,16 @@ export class AgentHost {
         String(getPref("pairingToken") || ""),
       ],
       sections: {
+        subagents: async () =>
+          Promise.all(
+            (await this.subagents().list(taskId)).map(async (child) => {
+              try {
+                return await this.subagents().trace(taskId, child.id);
+              } catch (error) {
+                return { id: child.id, error: String(error) };
+              }
+            }),
+          ),
         history: () => this.history.exportTask(taskId),
         pendingHistory: async () => pending,
         operations: () => this.execution.listOperations({ taskId }),
@@ -4449,26 +4459,50 @@ export class AgentHost {
       child.budget.recordToolCalls(1);
       await child.save();
       const args = (params.arguments ?? {}) as Record<string, unknown>;
+      const callId = this.ids();
       child.event({
         id: this.ids(),
         sessionId: child.task.id,
         turnId: child.task.run!.id,
         ts: Date.now(),
         type: "tool_requested",
-        payload: { callId: this.ids(), toolName: name, args },
+        payload: { callId, toolName: name, args },
       });
-      const result = await child.tools.call(
-        name,
-        args,
-        this.pluginRuntime.leaseSignal(lease),
-        {
+      const result = await child.tools
+        .call(name, args, this.pluginRuntime.leaseSignal(lease), {
           taskId: child.task.id,
           turnId: child.task.run!.id,
           signal: child.abort.signal,
-        },
-      );
+        })
+        .catch((error: unknown) => {
+          child.event({
+            id: this.ids(),
+            sessionId: child.task.id,
+            turnId: child.task.run!.id,
+            ts: Date.now(),
+            type: "tool_result",
+            payload: {
+              callId,
+              result: {
+                ok: false,
+                toolName: name,
+                code: "unavailable",
+                message: String(error),
+              },
+            },
+          });
+          throw error;
+        });
       this.validateSubagentLease(child, lease);
       const delivered = budgetToolResult(result, CONTEXT_POLICY.readTokens);
+      child.event({
+        id: this.ids(),
+        sessionId: child.task.id,
+        turnId: child.task.run!.id,
+        ts: Date.now(),
+        type: "tool_result",
+        payload: { callId, result: delivered },
+      });
       await child.delivered?.(delivered, args);
       await child.save();
       return mcpToolResult(delivered);

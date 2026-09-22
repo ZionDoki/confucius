@@ -48,7 +48,7 @@ const report=JSON.parse(document.getElementById('confucius-trace-data').textCont
 const add=(tag,parent,text)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=text;parent.append(node);return node};
 const pretty=value=>JSON.stringify(value,null,2);
 const detail=(parent,label,value)=>{const d=add('details',parent);add('summary',d,label);d.addEventListener('toggle',()=>{if(d.open&&!d.querySelector('pre'))add('pre',d,pretty(value))});return d};
-const labels={state:'任务、预算与恢复检查点',history:'跨窗口历史与工作笔记',pendingHistory:'待持久化历史',operations:'操作 intent 与 receipt',annotationProposals:'批注候选',artifacts:'成果与版本',environment:'运行环境与配置'};
+const labels={state:'任务、预算与恢复检查点',history:'跨窗口历史与工作笔记',pendingHistory:'待持久化历史',operations:'操作 intent 与 receipt',annotationProposals:'批注候选',artifacts:'成果与版本',subagents:'子 Agent 的公开过程、结果与证据归档',environment:'运行环境与配置'};
 const analysis=report.analysis;
 const diagnosis=document.getElementById('diagnosis');
 add('p',diagnosis,'成果 '+analysis.work.artifacts+' · 保存回执中的批注 '+analysis.work.savedAnnotations+' · 未完成 '+(analysis.work.missing.join('、')||'无已知缺项'));

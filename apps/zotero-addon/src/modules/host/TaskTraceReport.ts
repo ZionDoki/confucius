@@ -182,6 +182,11 @@ export async function collectTaskTrace(input: {
       (issue) => `annotationProposals: ${issue}`,
     ),
   );
+  const children = sections.subagents?.data as
+    Array<{ id?: string; error?: string }> | undefined;
+  for (const child of children ?? []) {
+    if (child.error) issues.push(`subagent ${child.id}: ${child.error}`);
+  }
   const report: TaskTraceReport = {
     kind: "confucius-task-trace",
     schemaVersion: 1,
@@ -194,6 +199,11 @@ export async function collectTaskTrace(input: {
     },
     coverage: [
       "Includes retained host events, full available history bodies, working note revisions, checkpoints, prepared operations and receipts, proposals and artifact revisions.",
+      ...(children
+        ? [
+            "Includes each available subagent's public events, result and full tool/source evidence archive in the subagents section; private model context and internal reasoning are excluded.",
+          ]
+        : []),
       "Older tasks may predate event archiving; missing historical events cannot be reconstructed. UI event retention is not proof of a complete trace.",
       `Recovered ${journalCount} events from diagnostic history batches.`,
       "External engine private context, internal model requests and raw transport packets are not recorded. PDF files and binary image payloads are not bundled.",

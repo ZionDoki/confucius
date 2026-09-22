@@ -21,9 +21,10 @@ can join the research at any point.
 [Download the latest stable release](https://github.com/ZionDoki/confucius/releases/latest)
 · [User guide](docs/README.md) · [Changelog](CHANGELOG.md) · [Build from source](#build-from-source)
 
-**New in [0.5.0 Beta](https://github.com/ZionDoki/confucius/releases/tag/v0.5.0-beta.3):**
+**New in [0.5.0 Beta](https://github.com/ZionDoki/confucius/releases/tag/v0.5.0-beta.4):**
 OpenAlex discovery, candidate selection, full-text acquisition, and research subagents.
-Beta 3 gathers each task's searches in one capsule with candidate and retrieved-paper counts.
+Beta 4 shows subagents in full-width chat cards with one centered trace viewer,
+preserves reading state when switching children, and runs up to three children concurrently.
 Install the Beta XPI or enable **Include prereleases** in Confucius Settings → Update.
 
 ## Features
@@ -57,11 +58,11 @@ history and citations. Ordinary replies remain in the activity view.
 
 1. Add an **OpenAlex API Key** in Confucius Settings → Runtimes, or in
    Zotero → Settings → Confucius. [Get a key](https://openalex.org/settings/api).
-2. Ask your question in the conversation. The Agent searches OpenAlex and shows
-   a literature card with the fetched pool and recommended candidates.
+2. Ask your question in the conversation. The Agent searches OpenAlex; a capsule
+   above the composer shows candidate and retrieved-paper counts.
 3. Review abstracts and selection reasons, check or uncheck candidates, or refine
-   the selection in your next prompt. When the card scrolls out of view, a capsule
-   above the composer opens it without moving your reading position.
+   the selection in your next prompt. Open the capsule to review the shared list
+   without moving your reading position in the conversation.
 4. Choose **Review selection → Confirm and acquire full text**. Confucius reuses
    matching Zotero items and valid attachments, then tries open-access PDFs and
    OpenAlex cached PDFs where available.

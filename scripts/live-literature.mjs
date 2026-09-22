@@ -442,7 +442,7 @@ try {
   await wait(`return !!d.getElementById('confucius-subagent-popup');`);
   assert.equal(
     await evaluate(
-      `return d.getElementById('confucius-subagent-popup').querySelectorAll('input,textarea').length;`,
+      `return d.getElementById('confucius-subagent-popup').querySelectorAll('input:not([type=search]),textarea').length;`,
     ),
     0,
   );
@@ -475,7 +475,7 @@ try {
   );
   assert.equal(
     await evaluate(
-      `const bubble=d.getElementById('confucius-subagent-popup').getBoundingClientRect(),anchor=d.querySelector('.confucius-subagent-entry').getBoundingClientRect();return Math.abs(bubble.left-anchor.left)<16 && bubble.top>=8 && bubble.bottom<=win.innerHeight-8;`,
+      `const bubble=d.getElementById('confucius-subagent-popup').getBoundingClientRect();return Math.abs((bubble.left+bubble.right)/2-win.innerWidth/2)<1 && Math.abs((bubble.top+bubble.bottom)/2-win.innerHeight/2)<1 && bubble.top>=8 && bubble.bottom<=win.innerHeight-8;`,
     ),
     true,
   );
@@ -485,7 +485,7 @@ try {
   checks.push({
     subagentCompletionBubble: {
       latestResult: true,
-      anchorSurvivesTimelineUpdate: true,
+      centerSurvivesTimelineUpdate: true,
     },
   });
   await evaluate(

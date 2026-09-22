@@ -2,6 +2,7 @@ import {
   initialContextWindow,
   contextTextSlice,
   withLockedContextFingerprint,
+  MAX_CONCURRENT_SUBAGENTS,
   type SubagentRecord,
   type SubagentSummary,
   type ResearchTaskRecord,
@@ -82,6 +83,7 @@ export function subagentSummary(record: SubagentRecord): SubagentSummary {
     updatedAt,
     attempt,
     error,
+    activity,
   } = record;
   return {
     id,
@@ -95,6 +97,7 @@ export function subagentSummary(record: SubagentRecord): SubagentSummary {
     updatedAt,
     attempt,
     error,
+    activity: activity ? { ...activity } : undefined,
   };
 }
 const copy = <T>(v: T): T => JSON.parse(JSON.stringify(v));
@@ -175,6 +178,7 @@ export class SubagentManager {
     return {
       record: copy(doc.record),
       events: copy(doc.events.slice(start, start + count)),
+      totalEvents: doc.events.length,
       nextOffset: start + count < doc.events.length ? start + count : null,
       archiveRefs: refs.slice(archiveStart, archiveStart + 10),
       nextArchiveOffset:
@@ -183,6 +187,21 @@ export class SubagentManager {
         ? contextTextSlice(doc.archive[archive.ref], 2000, archive.offset ?? 0)
         : undefined,
     };
+  }
+  /** Full public process for diagnostics; private model context is not exported. */
+  async trace(parent: string, id: string) {
+    const doc = await this.document(id);
+    if (doc.record.parentTaskId !== parent)
+      throw new Error("Subagent belongs to another task");
+    return copy({
+      record: doc.record,
+      events: doc.events,
+      archive: Object.fromEntries(
+        Object.entries(doc.archive).filter(([ref]) =>
+          /^(tool:|literature:)/.test(ref),
+        ),
+      ),
+    });
   }
   async spawn(parentId: string, input: SubagentSpawn) {
     if (this.removedParents.has(parentId))
@@ -280,7 +299,10 @@ export class SubagentManager {
     if (this.scheduling) return;
     this.scheduling = true;
     try {
-      while (this.running.size < 2 && this.queued.length) {
+      while (
+        this.running.size < MAX_CONCURRENT_SUBAGENTS &&
+        this.queued.length
+      ) {
         const id = this.queued.shift()!,
           doc = await this.document(id),
           r = doc.record;
@@ -323,8 +345,36 @@ export class SubagentManager {
             await this.save(doc);
           },
           event: (event) => {
-            if (run.abort.signal.aborted || !this.options.current(r)) return;
+            if (
+              this.running.get(r.id) !== run ||
+              r.status !== "running" ||
+              run.abort.signal.aborted ||
+              !this.options.current(r)
+            )
+              return;
             if (event.type === "reasoning_delta") return;
+            if (event.type === "tool_requested")
+              r.activity = {
+                kind: "tool",
+                toolName: event.payload.toolName,
+                toolCalls: (r.activity?.toolCalls ?? 0) + 1,
+                at: event.ts,
+              };
+            else if (
+              event.type === "model_request_progress" &&
+              event.payload.status === "started"
+            )
+              r.activity = {
+                kind: "model",
+                toolCalls: r.activity?.toolCalls ?? 0,
+                at: event.ts,
+              };
+            else if (event.type === "text_delta")
+              r.activity = {
+                kind: "output",
+                toolCalls: r.activity?.toolCalls ?? 0,
+                at: event.ts,
+              };
             if (
               event.type === "text_delta" &&
               event.payload.phase !== "commentary"
@@ -347,16 +397,25 @@ export class SubagentManager {
               );
           },
         };
-        run.tools = this.options.tools(run);
-        this.running.set(id, run);
-        r.status = "running";
-        r.result = "";
-        if (r.backend !== "native") {
-          run.budget.recordIteration();
-          run.budget.recordModelAttempt();
+        try {
+          run.tools = this.options.tools(run);
+          this.running.set(id, run);
+          r.status = "running";
+          r.result = "";
+          if (r.backend !== "native") {
+            run.budget.recordIteration();
+            run.budget.recordModelAttempt();
+          }
+          await run.save();
+          void this.perform(run);
+        } catch (error) {
+          // A failed setup must release its slot and wake a parent's wait.
+          this.running.delete(id);
+          r.status = "failed";
+          r.error = String(error);
+          await this.save(doc).catch(() => undefined);
+          for (const wake of this.waiters) wake();
         }
-        await run.save();
-        void this.perform(run);
       }
     } finally {
       this.scheduling = false;
@@ -398,6 +457,7 @@ export class SubagentManager {
           : all;
         if (ids?.some((id) => !all.some((r) => r.id === id)))
           throw new Error("Unknown subagent");
+        if (signal?.aborted) throw new Error("Subagent wait cancelled");
         if (selected.every((r) => !["queued", "running"].includes(r.status)))
           return selected;
         await changed;

@@ -42,6 +42,43 @@ const collect = (overrides) =>
     ...overrides,
   });
 
+test("child trace exports retain full public receipts, redact secrets and report missing children", async () => {
+  const report = await collect({
+    secrets: ["test-secret-credential"],
+    sections: {
+      subagents: async () => [
+        {
+          record: { id: "child", result: "Full result" },
+          events: [event(1, "child")],
+          archive: {
+            "tool:receipt": "Evidence ".repeat(4000),
+            "literature:query": JSON.stringify({
+              apiKey: "test-secret-credential",
+              text: "Public metadata",
+            }),
+          },
+        },
+        { id: "missing-child", error: "Record is missing" },
+      ],
+    },
+  });
+  const children = report.sections.subagents.data;
+  assert.equal(children[0].archive["tool:receipt"].length, 36000);
+  assert.equal(children[0].events[0].sessionId, "child");
+  assert.match(children[0].archive["literature:query"], /REDACTED/);
+  assert.equal(
+    JSON.stringify(report).includes("test-secret-credential"),
+    false,
+  );
+  assert.ok(report.issues.some((issue) => issue.includes("missing-child")));
+  assert.ok(report.coverage.some((line) => line.includes("subagent")));
+  assert.deepEqual(
+    report.events,
+    [],
+    "child events do not masquerade as parent activity",
+  );
+});
+
 test("trace export follows durable arrival sequence across clock reversals and retained/journal overlap", async () => {
   const saved = { ...event(2), ts: 420000, sequence: 41 };
   const receipt = { ...event(3), ts: 1000, sequence: 42 };

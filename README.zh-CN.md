@@ -20,9 +20,9 @@
 [下载最新稳定版](https://github.com/ZionDoki/confucius/releases/latest) ·
 [使用文档](docs/README.md) · [更新记录](CHANGELOG.md) · [从源码构建](#从源码构建)
 
-**[0.5.0 Beta 新增](https://github.com/ZionDoki/confucius/releases/tag/v0.5.0-beta.3)：**
+**[0.5.0 Beta 新增](https://github.com/ZionDoki/confucius/releases/tag/v0.5.0-beta.4)：**
 OpenAlex 检索、候选筛选、全文获取和研究子 Agent。
-Beta 3 将每个任务的检索集中到一个胶囊，显示候选数与已检索去重数量。
+Beta 4 的子 Agent 卡片与聊天等宽，共用居中的 trace 浮层，切换保留阅读状态，最多并行三个。
 安装 Beta 的 XPI，或在 Confucius 设置 → 更新中打开 **接收测试版更新**。
 
 ## 功能
@@ -51,9 +51,9 @@ Beta 3 将每个任务的检索集中到一个胶囊，显示候选数与已检�
 
 1. 在 **Confucius 设置 → 运行时**，或 Zotero → Settings → Confucius 中填写
    **OpenAlex API Key**。[获取 Key](https://openalex.org/settings/api)。
-2. 在对话中提出研究问题，Agent 调用 OpenAlex 后，文献卡片显示实际检索结果池和推荐候选。
-3. 查看摘要与筛选理由，勾选候选，或继续通过 prompt 调整。卡片滚出可视范围后会收成
-   输入框上方的胶囊，点击原位展开，不打断当前阅读位置。
+2. 在对话中提出研究问题，Agent 调用 OpenAlex 后，输入框上方的胶囊显示候选数与实际检索去重数量。
+3. 点击胶囊展开共用文献列表，查看摘要与筛选理由，勾选候选，或继续通过 prompt 调整，
+   不打断对话中的当前阅读位置。
 4. 点击 **确认候选 → 确认并获取全文**，批量保存到个人文库并绑定任务。优先复用已有
    条目和有效附件，再尝试开放获取 PDF 与可用的 OpenAlex 缓存 PDF。
 5. 获取不到的全文可通过 **从浏览器获取** 打开论文页面，使用已有访问权限下载，

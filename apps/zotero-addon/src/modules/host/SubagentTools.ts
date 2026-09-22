@@ -36,7 +36,7 @@ const string = { type: "string" },
 const definitions = [
   def(
     "subagent_spawn",
-    "Delegate a bounded research question to an isolated read-only child. Inherits this request's engine, model, reasoning and shared budget. Max two run concurrently. Explicit sourceIds are pool IDs or libraryID:itemKey from the current source scope; no recursive delegation.",
+    "Delegate a bounded research question to an isolated read-only child. Inherits this request's engine, model, reasoning and shared budget. Max three run concurrently; additional children queue. Explicit sourceIds are pool IDs or libraryID:itemKey from the current source scope; no recursive delegation.",
     { title: string, goal: string, sourceIds: strings, background: string },
     ["goal", "sourceIds"],
   ),

@@ -122,15 +122,16 @@ const goal = {
   sourceIds: ["1:PAPER"],
   background: "Only this explicitly passed evidence",
 };
-test("two children execute concurrently, remaining work queues, settings and context are isolated", async () => {
+test("three children execute concurrently, remaining work queues, settings and context are isolated", async () => {
   const f = fixture();
   const first = await f.manager.spawn("parent", goal),
     second = await f.manager.spawn("parent", goal),
-    third = await f.manager.spawn("parent", goal);
+    third = await f.manager.spawn("parent", goal),
+    fourth = await f.manager.spawn("parent", goal);
   await setImmediate();
-  assert.equal(f.pending.length, 2);
+  assert.equal(f.pending.length, 3);
   assert.equal(
-    (await f.manager.read("parent", third.id)).record.status,
+    (await f.manager.read("parent", fourth.id)).record.status,
     "queued",
   );
   assert.equal(f.pending[0].run.task.runtimeModel.modelId, "inherited-model");
@@ -144,14 +145,15 @@ test("two children execute concurrently, remaining work queues, settings and con
   assert.equal(f.pending[0].run.task.lockedContext.items[0].title, "Paper");
   f.pending[0].resolve({ text: "result one" });
   await setImmediate();
-  assert.equal(f.pending.length, 3);
+  assert.equal(f.pending.length, 4);
   f.pending[1].resolve({ text: "result two" });
   f.pending[2].resolve({ text: "result three" });
+  f.pending[3].resolve({ text: "result four" });
   await f.manager.wait("parent");
   assert.equal(
     (await f.manager.list("parent")).filter((r) => r.status === "completed")
       .length,
-    3,
+    4,
   );
   assert.equal(
     (await f.manager.read("parent", first.id)).record.result,
@@ -161,10 +163,15 @@ test("two children execute concurrently, remaining work queues, settings and con
     (await f.manager.read("parent", second.id)).record.background,
     goal.background,
   );
+  assert.equal(
+    (await f.manager.read("parent", third.id)).record.result,
+    "result three",
+  );
 });
 test("parent cancellation stops queued and running work; stale completions cannot publish a result", async () => {
   const f = fixture();
   const a = await f.manager.spawn("parent", goal);
+  await f.manager.spawn("parent", goal);
   await f.manager.spawn("parent", goal);
   await f.manager.spawn("parent", goal);
   await setImmediate();
@@ -173,20 +180,20 @@ test("parent cancellation stops queued and running work; stale completions canno
   await setImmediate();
   const all = await f.manager.list("parent");
   assert.ok(all.every((r) => r.status === "cancelled"));
-  assert.equal(f.pending.length, 2);
+  assert.equal(f.pending.length, 3);
   assert.equal((await f.manager.read("parent", a.id)).record.result, "");
 });
 
 test("deleting a parent removes queued work and prevents late archives from being recreated", async () => {
   const f = fixture();
   const records = [];
-  for (let n = 0; n < 3; n++)
+  for (let n = 0; n < 4; n++)
     records.push(await f.manager.spawn("parent", goal));
   await setImmediate();
   await f.manager.remove("parent");
   await setImmediate();
   assert.deepEqual(await f.manager.list("parent"), []);
-  assert.equal(f.pending.length, 2);
+  assert.equal(f.pending.length, 3);
   for (const record of records)
     assert.equal(await f.storage.read(record.id), null);
   await assert.rejects(f.manager.spawn("parent", goal), /deleted/);
@@ -431,3 +438,126 @@ test("native retry resumes its checkpoint and preserves prior archive identifier
   assert.equal(f.budget.iterationsUsed, 2);
   assert.equal(recovered.record.result, "Recovered conclusion");
 });
+
+test(
+  "startup failure releases its slot and resolves wait, including a failed initial save",
+  { timeout: 3000 },
+  async () => {
+    for (const step of ["tools", "charge"]) {
+      let failures = 0;
+      const f = fixture("native", {
+        [step]: () => {
+          if (failures++ === 0) throw new Error(`Cannot initialize ${step}`);
+          return emptyTools;
+        },
+      });
+      const failed = await f.manager.spawn("parent", goal);
+      const outcome = await f.manager.wait("parent", [failed.id]);
+      assert.equal(outcome[0].status, "failed");
+      assert.match(outcome[0].error, /Cannot initialize/);
+      assert.equal(f.manager.run(failed.id), undefined);
+      for (let n = 0; n < 3; n++) await f.manager.spawn("parent", goal);
+      await setImmediate();
+      assert.equal(f.pending.length, 3);
+      await f.manager.cancel("parent");
+    }
+  },
+);
+
+test(
+  "wait settles only after every selected child, and cancellation wakes a pending wait",
+  { timeout: 3000 },
+  async () => {
+    const f = fixture();
+    const a = await f.manager.spawn("parent", goal);
+    await f.manager.spawn("parent", goal);
+    await setImmediate();
+    let finished = false;
+    const all = f.manager.wait("parent").then((rows) => {
+      finished = true;
+      return rows;
+    });
+    f.pending[0].resolve({ text: "First result" });
+    await f.manager.wait("parent", [a.id]);
+    assert.equal(finished, false);
+    const abort = new globalThis.AbortController();
+    const cancelled = assert.rejects(
+      f.manager.wait("parent", undefined, abort.signal),
+      /cancelled/,
+    );
+    abort.abort();
+    await cancelled;
+    await f.manager.cancel("parent");
+    assert.deepEqual(
+      (await all).map((r) => r.status),
+      ["completed", "cancelled"],
+    );
+    await assert.rejects(f.manager.wait("parent", ["unknown"]), /Unknown/);
+  },
+);
+
+test(
+  "retry rejects late callbacks from the old attempt and keeps public activity complete",
+  { timeout: 3000 },
+  async () => {
+    const f = fixture();
+    const child = await f.manager.spawn("parent", goal);
+    await setImmediate();
+    const previous = f.pending[0].run;
+    const event = (id, type, payload) => ({
+      id,
+      type,
+      payload,
+      sessionId: child.id,
+      turnId: "child-turn",
+      ts: Date.now(),
+    });
+    for (let i = 0; i < 70; i++)
+      previous.event(
+        event(`tool${i}`, "tool_requested", {
+          callId: `call${i}`,
+          toolName: "get_pages",
+          args: { page: i },
+        }),
+      );
+    previous.event(
+      event("model", "model_request_progress", {
+        requestId: "model-1",
+        attempt: 1,
+        status: "started",
+      }),
+    );
+    previous.document.archive["tool:full"] = "Full source content".repeat(5000);
+    previous.document.archive["h:private"] = "Internal model context";
+    const page = await f.manager.read("parent", child.id, 50, 25);
+    assert.equal(page.totalEvents, 71);
+    assert.equal(page.events.length, 21);
+    assert.equal(page.events.at(-1).id, "model");
+    assert.equal(page.nextOffset, null);
+    assert.equal(page.record.activity.kind, "model");
+    assert.equal(page.record.activity.toolCalls, 70);
+    const trace = await f.manager.trace("parent", child.id);
+    assert.equal(trace.events.length, 71);
+    assert.deepEqual(Object.keys(trace.archive), ["tool:full"]);
+    assert.equal(trace.archive["tool:full"].length, 95000);
+    await assert.rejects(f.manager.trace("other", child.id), /another task/);
+    await f.manager.cancel("parent");
+    await setImmediate();
+    await f.manager.retry("parent", child.id);
+    await setImmediate();
+    previous.event(event("late", "text_delta", { text: "Stale result" }));
+    f.pending[1].run.event(
+      event("new", "text_delta", {
+        text: "Current result",
+        phase: "final_answer",
+      }),
+    );
+    const current = await f.manager.read("parent", child.id, 70, 25);
+    assert.equal(current.record.result, "Current result");
+    assert.equal(current.record.attempt, 2);
+    assert.equal(current.record.activity.kind, "output");
+    assert.equal(current.totalEvents, 72);
+    f.pending[1].resolve({ text: "Current result" });
+    await f.manager.wait("parent");
+  },
+);

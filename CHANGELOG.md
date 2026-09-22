@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+## 0.5.0-beta.4 - 2026-09-22
+
+### Changed
+
+- Present delegated research as full-width chat entries with live activity and tool
+  counts. One shared, fixed-center bubble shows a searchable public trace, grouped tool
+  inputs and results, model activity, conclusions and full evidence receipts.
+  Switch children from their entries or the bubble's previous/next controls;
+  filters, expanded records, loaded receipts and reading positions are retained
+  per child while the bubble stays in place.
+- Run up to three research subagents concurrently and queue additional work.
+  Parent waiting status shows how many children have finished, and diagnostic
+  exports include each available child's public process and evidence archive.
+
+### Fixed
+
+- Release the concurrency slot and end parent waiting when a subagent fails to
+  initialize. Ignore late callbacks from a stopped attempt after a retry, and
+  retain external subagent tool results alongside their inputs in the trace.
+
+### Upgrade notes
+
+- This is a prerelease. Enable **Include prereleases** in Confucius Settings →
+  Update, or install this release's `confucius.xpi`. Stable-only installations
+  remain on the stable channel; disabling Betas does not downgrade an installation.
+- No data migration or model reconfiguration is required for Beta 3 users.
+  Existing child results and recorded public events remain readable alongside
+  task history, literature pools and candidate decisions. Missing events from
+  older executions cannot be reconstructed.
+
+### Validation and known limits
+
+- All 1,130 automated tests, typecheck, lint, version checks, skill synchronization
+  and build pass. The local Beta 4 candidate passed 17 subagent interaction checks,
+  17 literature checks, seven window/sidebar hot-update checks and 26 upgrade
+  checks from public Beta 3 in isolated macOS Zotero 10.0.3 installations.
+- Chinese and English, light and dark themes, 1,120/420/280 px windows and a short
+  window were checked. Switching children preserves the same centered bubble
+  and each child's reading state; late responses cannot replace another child's
+  trace. Old child results, public events and research data survive full restarts.
+- Model outputs and most searches use deterministic fixtures; anonymous OpenAlex
+  retrieval fetched 100 live records. Paid online models, external Codex/Kimi
+  end-to-end execution, authenticated full-text retrieval, Windows, Linux, other
+  Zotero versions and forced-colors were not revalidated for this Beta.
+- See the [release acceptance record](https://github.com/ZionDoki/confucius/blob/v0.5.0-beta.4/.github/maintainers/acceptance/release-0.5.0-beta.4.md)
+  and [subagent guide](https://github.com/ZionDoki/confucius/blob/v0.5.0-beta.4/docs/literature-research.md).
+
 ## 0.5.0-beta.3 - 2026-09-21
 
 ### Changed
