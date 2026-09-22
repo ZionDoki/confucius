@@ -77,3 +77,38 @@ node output/release-0.5.0-beta.4/upgrade.mjs
 Linux、其他 Zotero 版本、大型个人文库或 forced-colors。更新器自动化回归覆盖
 Beta 转同基础稳定版、渠道比较、自动检查及网络／HTTP／资产／摘要失败；未做
 真实公网故障注入。公开 CI 安装包的下载校验及升级须在发布后另行记录。
+
+## 公开发布与安装验收
+
+`v0.5.0-beta.4` 指向提交 `9a072b9699b102774f4410f2bc6a325b8e3ec79f`，于
+2026-09-22 08:04:49 UTC [公开发布](https://github.com/ZionDoki/confucius/releases/tag/v0.5.0-beta.4)。
+`draft=false`、`prerelease=true`；Latest 仍为 `v0.4.6`，稳定版资产 ID、大小和摘要未改变。
+
+- [tag CI](https://github.com/ZionDoki/confucius/actions/runs/35702642082) 的 Node.js
+  22／24 验证及发布任务全部通过；[发布提交主干 CI](https://github.com/ZionDoki/confucius/actions/runs/35702641999)
+  也全部通过。发布正文与 CHANGELOG 提取结果一致。
+- 公开资产仅有 `confucius.xpi` 与 `update-beta.json`，均为 uploaded；实际下载大小、
+  GitHub SHA-256、manifest 插件 ID／版本、Zotero 范围、更新链接和 SHA-512 全部一致。
+- 公开 XPI：703,386 bytes，SHA-256：
+  `d7a7672493dae8b0013c135e9dcf4aa2cfa0244ab03392ab8c4e5fd8122dea5b`。
+- 公开更新 JSON：587 bytes，SHA-256：
+  `8a253a302eec6691d9308d62060babb19335af0075055c05171716107e3ef264`。
+- 公开 XPI 在新的隔离 Zotero 10.0.3 profile 中通过全部 17 组子 Agent 交互检查，
+  包括并发与排队、完整 trace／归档、共享居中浮层、阅读状态、迟到响应、窄窗和焦点。
+
+通过真实 Confucius 更新器，从公开 **0.5.0-beta.3** 和 **0.4.6** 分别升级到公开
+Beta 4：Beta 路径 **33 项**、稳定版路径 **27 项** 检查全部通过。
+
+- Zotero 全局自动更新关闭时，Confucius 手动检查正常；关闭测试版渠道不提供 Beta，
+  开启后发现 Beta 4，完成公开资产下载、校验、安装及完整重启。
+- Beta 3 的已完成子任务身份、结果与全部公开事件保留，新版诊断导出可读取旧子任务；
+  文献池、查询历史与候选决定在升级及再次重启后保持完整。
+- 任务、草稿、来源、批注、笔记、报告版本、记忆、待审提案与预算保留；Beta 路径
+  40 份、稳定版路径 28 份原始历史／工作笔记正文逐文件摘要一致。继续任务未重复写笔记。
+- 安装后的 XPI 与公开资产摘要相同；当前版本不重复提供更新，关闭测试版渠道不降级，
+  重启后显式渠道选择保持。
+
+原始结果为 `public-package.json`、`public-subagents/report.json`、`public-upgrade-beta.json`
+和 `public-upgrade-stable.json`，位于本次已忽略的 `output/` 目录。所有验收进程均已退出，
+未安装到日常 profile。上述平台与模型验证限制仍适用；本节补充发布后事实，不修改
+tag、Release 正文或已公开安装包。
