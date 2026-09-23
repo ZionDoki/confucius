@@ -106,3 +106,14 @@ node output/release-0.5.0-beta.5/upgrade.mjs
 原始证据为 `public-package.json`、`public-literature/result.json`、
 `public-direct-upgrade-beta.json`、`public-direct-upgrade-stable.json`、失败的
 `public-upgrade-*.json`、匿名列表响应和日志，均在本次被忽略的 `output/` 目录。
+
+### 下载入口修正
+
+2026-09-23 用户反馈看不到 XPI 后，匿名读取 Release 的展开附件页确认有两个附件。
+之前排查发布同步时补充的标签使页面显示「Confucius 0.5.0-beta.5」，隐藏了实际文件名
+`confucius.xpi`；已清空两个显示标签，恢复真实文件名，并在 CHANGELOG 和由其生成的
+Release 正文顶部加入 XPI 直接下载链接。
+
+本轮从浏览器下载地址匿名请求得到 HTTP 200、707,978 bytes，SHA-256 与原公开包
+完全一致；解压 manifest 确认版本 `0.5.0-beta.5`。只修正展示和文档，没有替换资产或
+移动 tag。应用内更新的列表限制与浏览器直接下载是两项独立检查，本节不将其改记为通过。

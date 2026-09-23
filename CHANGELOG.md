@@ -4,6 +4,8 @@
 
 ## 0.5.0-beta.5 - 2026-09-23
 
+**Download:** [confucius.xpi](https://github.com/ZionDoki/confucius/releases/download/v0.5.0-beta.5/confucius.xpi)
+
 ### Changed
 
 - Let research continue with abstracts before importing papers, or accept current
