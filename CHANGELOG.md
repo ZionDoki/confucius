@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.5.0-beta.7 - 2026-09-23
+
+**Download:** [confucius.xpi](https://github.com/ZionDoki/confucius/releases/download/v0.5.0-beta.7/confucius.xpi)
+
+### Fixed
+
+- Require consecutive complete anonymous release-list responses and verify the
+  asset API download used by installed older updaters, as well as the release-page
+  download. An intermittent good response no longer passes publication checks.
+- Add a repeatable isolated-Zotero acceptance check that installs the original
+  published old XPI, uses its unchanged updater, and verifies the upgraded package,
+  saved task, draft and channel settings after full restarts.
+
+### Upgrade notes
+
+- This is a prerelease containing the Beta 5 research improvements and Beta 6
+  updater recovery. Enable **Include prereleases** in Confucius Settings → Update
+  to check for it; stable-only installations remain on the stable channel.
+- No data migration or model reconfiguration is required. Beta 5 and Beta 6 tags
+  and installation packages remain unchanged; this release uses a new version and
+  package so already installed versions can select a higher update.
+
+### Validation and known limits
+
+- All 1,159 automated tests, typecheck, lint, version checks, skill synchronization
+  and build pass. New publication tests reject intermittent incomplete lists,
+  incompatible download addresses and mismatched bytes from the asset API.
+- In isolated macOS Zotero 10.0.3, direct installation of the local candidate from
+  public Beta 4, Beta 5 and stable 0.4.6 passed 26, 26 and 20 checks, including full
+  restarts and preserved research data. These are local installation checks;
+  anonymous public discovery and unchanged old-client online upgrades are separate
+  post-publication checks and are not inferred from these results.
+- This release changes publication verification and the product version. Paid
+  models, authenticated fulltext retrieval, Windows, Linux and other Zotero
+  versions were not revalidated.
+- See the [release acceptance record](https://github.com/ZionDoki/confucius/blob/v0.5.0-beta.7/.github/maintainers/acceptance/release-0.5.0-beta.7.md).
+
 ## 0.5.0-beta.6 - 2026-09-23
 
 **Download:** [confucius.xpi](https://github.com/ZionDoki/confucius/releases/download/v0.5.0-beta.6/confucius.xpi)

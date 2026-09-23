@@ -112,32 +112,17 @@ function api(path, missing = false) {
   return JSON.parse(result.stdout);
 }
 
-async function main() {
-  const [tag, mode, rawId] = process.argv.slice(2);
-  const { version } = JSON.parse(readFileSync("package.json", "utf8"));
-  assert.equal(tag, `v${version}`, "Tag must match the product version");
-  if (mode === "--guard") {
-    const existing = api(`releases/tags/${tag}`, true);
-    if (existing) assertRelease(existing, tag, true);
-    console.log("Published-release overwrite guard passed");
-    return;
-  }
-  const expected = localAssets("apps/zotero-addon/.scaffold/build", version);
-  if (mode === "--draft") {
-    const id = Number(rawId);
-    assert.ok(Number.isSafeInteger(id) && id > 0, "Invalid release ID");
-    assertRelease(api(`releases/${id}`), tag, true);
-    assertAssets(api(`releases/${id}/assets?per_page=100`), expected);
-    console.log("Draft assets match the validated build; safe to publish");
-    return;
-  }
-  assert.equal(mode, "--public", "Expected --guard, --draft ID or --public");
-  // Use the same anonymous list as installed clients, not an authenticated asset
-  // endpoint that can succeed while ordinary users still see an empty release.
+/** Verify the contract used by already installed, list-only updaters. */
+export async function verifyPublicAssets(
+  tag,
+  expected,
+  { request = fetch, pause = delay, attempts = 12, consecutive = 3 } = {},
+) {
   let last;
-  for (let attempt = 0; attempt < 12; attempt++) {
+  let complete = 0;
+  for (let attempt = 0; attempt < attempts; attempt++) {
     try {
-      const response = await fetch(
+      const response = await request(
         `https://api.github.com/repos/${repository}/releases?per_page=100`,
         {
           headers: {
@@ -153,25 +138,83 @@ async function main() {
       assert.ok(release, "Release is not yet in the public update list");
       assertRelease(release, tag, false);
       assertAssets(release.assets, expected);
-      const download = await fetch(
-        `https://github.com/${repository}/releases/download/${tag}/confucius.xpi`,
-        { signal: AbortSignal.timeout(30_000) },
+      const asset = release.assets.find((a) => a.name === "confucius.xpi");
+      assert.match(
+        asset.url,
+        /^https:\/\/api\.github\.com\/repos\/ZionDoki\/confucius\/releases\/assets\/[1-9]\d*$/,
+        "Old clients require a valid asset API download address",
       );
-      assert.equal(download.status, 200, "Public XPI download failed");
-      const bytes = Buffer.from(await download.arrayBuffer());
-      const xpi = expected.find((f) => f.name === "confucius.xpi");
-      assert.equal(bytes.length, xpi.size);
-      assert.equal(digest(bytes), xpi.sha256);
-      console.log(
-        "Anonymous update discovery and public XPI download verified",
-      );
-      return;
+      complete++;
+      if (complete >= consecutive) {
+        const xpi = expected.find((f) => f.name === "confucius.xpi");
+        // The in-app updater downloads via the asset API, while the release page
+        // uses the browser URL. Both must deliver the same validated package.
+        for (const url of [
+          asset.url,
+          `https://github.com/${repository}/releases/download/${tag}/confucius.xpi`,
+        ]) {
+          const download = await request(url, {
+            headers: {
+              Accept: "application/octet-stream",
+              "Cache-Control": "no-cache",
+            },
+            signal: AbortSignal.timeout(30_000),
+          });
+          assert.equal(download.status, 200, "Public XPI download failed");
+          const bytes = Buffer.from(await download.arrayBuffer());
+          assert.equal(bytes.length, xpi.size, "Public XPI size mismatch");
+          assert.equal(
+            digest(bytes),
+            xpi.sha256,
+            "Public XPI checksum mismatch",
+          );
+        }
+        return;
+      }
     } catch (error) {
       last = error;
-      if (attempt < 11) await delay(10_000);
+      complete = 0;
     }
+    if (attempt < attempts - 1) await pause(10_000);
   }
-  throw last;
+  throw last ?? new Error("Public release list did not remain complete");
+}
+
+async function main() {
+  const [tag, mode, argument] = process.argv.slice(2);
+  const { version } = JSON.parse(readFileSync("package.json", "utf8"));
+  assert.equal(tag, `v${version}`, "Tag must match the product version");
+  if (mode === "--guard") {
+    const existing = api(`releases/tags/${tag}`, true);
+    if (existing) assertRelease(existing, tag, true);
+    console.log("Published-release overwrite guard passed");
+    return;
+  }
+  const expected = localAssets(
+    mode === "--public" && argument
+      ? argument
+      : "apps/zotero-addon/.scaffold/build",
+    version,
+  );
+  if (mode === "--draft") {
+    const id = Number(argument);
+    assert.ok(Number.isSafeInteger(id) && id > 0, "Invalid release ID");
+    assertRelease(api(`releases/${id}`), tag, true);
+    assertAssets(api(`releases/${id}/assets?per_page=100`), expected);
+    console.log("Draft assets match the validated build; safe to publish");
+    return;
+  }
+  assert.equal(
+    mode,
+    "--public",
+    "Expected --guard, --draft ID or --public [directory]",
+  );
+  // Use the same anonymous list as installed clients, not an authenticated asset
+  // endpoint that can succeed while ordinary users still see an empty release.
+  await verifyPublicAssets(tag, expected);
+  console.log(
+    "Consecutive anonymous discovery and both XPI download paths verified",
+  );
 }
 
 if (
