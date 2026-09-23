@@ -93,14 +93,23 @@ the 0.5.0 Beta series.
   windows, keyboard input, themes and reordered responses. A synthetic 4,131-event
   child trace loaded, filtered and exposed its final receipt in about 333 ms;
   idle polling made no trace DOM changes. Anonymous OpenAlex search also passed.
-- These prepublication installation tests use the local candidate. CI publication
-  separately gates anonymous discovery and downloads of the actual public XPI;
-  old-client online upgrades are checked against that public package after release.
+- [Release CI](https://github.com/ZionDoki/confucius/actions/runs/35881927529)
+  passed on Node.js 22 and 24 and published all three assets as the latest stable
+  release. Consecutive anonymous discovery and both XPI download paths passed in
+  CI and local verification. The public XPI's 25 extracted files are byte-identical
+  to the locally tested candidate; its ZIP checksum was verified separately.
+- Ten unchanged published clients (0.4.3–0.4.6 and 0.5.0 Beta 1–6) upgraded through
+  their own real GitHub updater to the public 0.5.0 XPI, passing 166 checks without
+  retries or manual installation. Stable and Beta channel selections, installed
+  package hashes, saved drafts and restarts passed. The 0.4.6 and Beta 5 online
+  migrations additionally preserved the complete research-data fixtures described
+  above. An already-current installation was not offered again, and disabling
+  Betas did not downgrade it.
 - Windows, Linux, other Zotero versions, paid model calls, external Codex/Kimi
   end-to-end execution and authenticated fulltext retrieval were not revalidated
   for this stable release. Model and most metadata checks use controlled fixtures;
   abstract coverage and available PDFs still depend on their providers.
-- See the [0.5.0 acceptance record](https://github.com/ZionDoki/confucius/blob/v0.5.0/.github/maintainers/acceptance/release-0.5.0.md)
+- See the [0.5.0 prepublication acceptance record](https://github.com/ZionDoki/confucius/blob/v0.5.0/.github/maintainers/acceptance/release-0.5.0.md)
   and [literature guide](https://github.com/ZionDoki/confucius/blob/v0.5.0/docs/literature-research.md).
 
 ## 0.5.0-beta.7 - 2026-09-23
