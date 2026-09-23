@@ -40,6 +40,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -52,14 +54,25 @@ jobs:
         run: node scripts/release-notes.mjs "$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-notes.md"
       - name: Build Zotero xpi
         run: npm run build --workspace @confucius/zotero-addon
+      - name: Reject overwriting published releases
+        run: node scripts/release-assets.mjs "$GITHUB_REF_NAME" --guard
       - uses: softprops/action-gh-release@v2
+        id: upload
         with:
           name: Confucius ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
+          draft: true
+          overwrite_files: false
           prerelease: ${{ contains(github.ref_name, '-') }}
-          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
+          make_latest: "false"
           body_path: ${{ runner.temp }}/release-notes.md
           fail_on_unmatched_files: true
           files: |
             apps/zotero-addon/.scaffold/build/confucius.xpi
             apps/zotero-addon/.scaffold/build/update*.json
+      - name: Verify uploaded draft assets
+        run: node scripts/release-assets.mjs "$GITHUB_REF_NAME" --draft "${{ steps.upload.outputs.id }}"
+      - name: Publish complete release
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease=${{ contains(github.ref_name, '-') }} --latest=${{ !contains(github.ref_name, '-') }}
+      - name: Verify anonymous update discovery and download
+        run: node scripts/release-assets.mjs "$GITHUB_REF_NAME" --public

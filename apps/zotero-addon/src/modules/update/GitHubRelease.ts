@@ -58,11 +58,11 @@ function record(value: unknown): Record<string, unknown> {
     : {};
 }
 
-export function selectUpdate(
+function latestRelease(
   data: unknown,
   currentVersion: string,
   includePrerelease: boolean,
-): ReleaseUpdate | null {
+) {
   parseVersion(currentVersion);
   if (!Array.isArray(data) || !data.length)
     throw new Error(
@@ -87,10 +87,23 @@ export function selectUpdate(
     )
       latest = release;
   }
-  if (!latest) return null;
-  const asset = (Array.isArray(latest.assets) ? latest.assets : [])
+  return latest;
+}
+
+function installationAsset(release: Record<string, unknown>) {
+  return (Array.isArray(release.assets) ? release.assets : [])
     .map(record)
     .find((item) => item.name === "confucius.xpi" && item.state === "uploaded");
+}
+
+export function selectUpdate(
+  data: unknown,
+  currentVersion: string,
+  includePrerelease: boolean,
+): ReleaseUpdate | null {
+  const latest = latestRelease(data, currentVersion, includePrerelease);
+  if (!latest) return null;
+  const asset = installationAsset(latest);
   if (!asset)
     throw new Error(
       `Release ${String(latest.tag_name)} has no Confucius installation package yet. Please try again later.`,
@@ -124,8 +137,37 @@ export function selectUpdate(
   };
 }
 
-export async function fetchReleases(): Promise<unknown> {
-  const response = await Zotero.HTTP.request("GET", RELEASES_URL, {
+/** A release-list snapshot can omit already uploaded assets. Check only the
+ * newest eligible release before treating a missing package as an error. */
+export async function resolveUpdate(
+  data: unknown,
+  currentVersion: string,
+  includePrerelease: boolean,
+  loadAssets: (releaseId: number) => Promise<unknown> = fetchReleaseAssets,
+): Promise<ReleaseUpdate | null> {
+  const latest = latestRelease(data, currentVersion, includePrerelease);
+  if (!latest) return null;
+  let complete = latest;
+  if (
+    !installationAsset(latest) &&
+    typeof latest.id === "number" &&
+    Number.isSafeInteger(latest.id) &&
+    latest.id > 0
+  ) {
+    const assets = await loadAssets(latest.id);
+    if (!Array.isArray(assets))
+      throw new Error(
+        "GitHub returned invalid release assets. Please try again.",
+      );
+    complete = { ...latest, assets };
+  }
+  // Reuse all channel, address, size and checksum checks; never accept an older
+  // version or an unchecked browser download when the selected release is broken.
+  return selectUpdate([complete], currentVersion, includePrerelease);
+}
+
+async function githubJson(url: string): Promise<unknown> {
+  const response = await Zotero.HTTP.request("GET", url, {
     responseType: "json",
     headers: {
       Accept: "application/vnd.github+json",
@@ -134,4 +176,17 @@ export async function fetchReleases(): Promise<unknown> {
     timeout: 30_000,
   });
   return response.response;
+}
+
+export function fetchReleases(): Promise<unknown> {
+  return githubJson(RELEASES_URL);
+}
+
+export function fetchReleaseAssets(releaseId: number): Promise<unknown> {
+  if (!Number.isSafeInteger(releaseId) || releaseId <= 0)
+    throw new Error("Invalid GitHub release ID.");
+  // Construct the URL ourselves; do not follow an assets_url from response data.
+  return githubJson(
+    `https://api.github.com/repos/${REPOSITORY}/releases/${releaseId}/assets?per_page=100`,
+  );
 }

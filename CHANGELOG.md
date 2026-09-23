@@ -1,6 +1,44 @@
 # Changelog
 
-## Unreleased
+## 0.5.0-beta.6 - 2026-09-23
+
+**Download:** [confucius.xpi](https://github.com/ZionDoki/confucius/releases/download/v0.5.0-beta.6/confucius.xpi)
+
+### Fixed
+
+- Recover update discovery when GitHub's release list omits an already uploaded
+  XPI by checking the selected release's asset endpoint. Keep checksum, size,
+  channel and timeout safeguards, and preserve actionable errors on real failures.
+- Upload and verify all release files in a draft before publishing. Check the
+  anonymous update list and actual XPI download before completing the release job;
+  prevent overwriting published releases and keep asset filenames visible.
+
+### Upgrade notes
+
+- This is a prerelease. Enable **Include prereleases** in Confucius Settings →
+  Update and check again to receive Beta 6. Stable-only installations remain on
+  the stable channel; disabling Betas does not downgrade an installation.
+- Beta 5's published package is unchanged. This replacement release includes the
+  update-discovery fix and all Beta 5 research improvements. No data migration or
+  model reconfiguration is required; existing tasks and research data are retained.
+- If an older updater still cannot discover a package, install this release's
+  `confucius.xpi` from the download link above. Source-code archives are not
+  installable Zotero extensions.
+
+### Validation and known limits
+
+- All 1,155 automated tests, typecheck, lint, version checks, skill synchronization
+  and build pass. Tests cover omitted assets, channel selection, invalid files,
+  retryable network errors and a deadline covering both discovery requests.
+- In isolated macOS Zotero 10.0.3, the installed candidate passed three live
+  discovery checks against GitHub, 26 upgrade checks from public Beta 5 including
+  full restarts, and seven window/sidebar hot-update checks. The discovery probe
+  temporarily presented an older current version to reproduce Beta 5's missing
+  list assets and used the real anonymous asset endpoint to recover them.
+- This repair targets update discovery and publication. Paid model execution,
+  authenticated fulltext retrieval, Windows, Linux and other Zotero versions
+  were not revalidated. Public-package upgrade results are recorded after release.
+- See the [release acceptance record](https://github.com/ZionDoki/confucius/blob/v0.5.0-beta.6/.github/maintainers/acceptance/release-0.5.0-beta.6.md).
 
 ## 0.5.0-beta.5 - 2026-09-23
 

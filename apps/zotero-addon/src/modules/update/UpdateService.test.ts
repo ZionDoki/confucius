@@ -5,6 +5,8 @@ import { UpdateService, type UpdateServiceOptions } from "./UpdateService";
 import {
   compareVersions,
   selectUpdate,
+  resolveUpdate,
+  fetchReleaseAssets,
   type ReleaseUpdate,
 } from "./GitHubRelease";
 import {
@@ -131,6 +133,136 @@ describe("release selection", () => {
 });
 
 describe("UpdateService", () => {
+  it("checks the release asset endpoint when the list omits a published XPI, then installs it", async () => {
+    const ids: number[] = [];
+    const { service, installs } = fixture({
+      loadReleases: async () => [{ ...release(), id: 42, assets: [] }],
+      loadReleaseAssets: async (id) => {
+        ids.push(id);
+        return release().assets;
+      },
+    });
+    const status = await service.check();
+    assert.equal(status.state, "available");
+    assert.equal(status.availableVersion, "0.3.8");
+    assert.deepEqual(ids, [42]);
+    assert.equal(installs(), 0);
+    assert.equal((await service.install()).state, "ready");
+    assert.equal(installs(), 1);
+  });
+  it("only resolves missing assets for the newest release in the chosen channel", async () => {
+    const ids: number[] = [];
+    const data = [
+      { ...release("9.0.0"), id: 1, draft: true, assets: [] },
+      { ...release("0.4.0-beta.2"), id: 2, assets: [] },
+      { ...release("0.4.0-beta.1"), id: 3, assets: [] },
+      { ...release("0.3.7"), id: 4, assets: [] },
+      release(),
+    ];
+    const load = async (id: number) => {
+      ids.push(id);
+      return release().assets;
+    };
+    assert.equal(
+      (await resolveUpdate(data, "0.3.6", false, load))?.version,
+      "0.3.8",
+    );
+    assert.equal(await resolveUpdate(data, "0.4.0-beta.2", true, load), null);
+    assert.deepEqual(ids, []);
+    assert.equal(
+      (await resolveUpdate(data, "0.3.6", true, load))?.version,
+      "0.4.0-beta.2",
+    );
+    assert.deepEqual(ids, [2]);
+  });
+  it("keeps missing or malformed fetched assets as errors and never falls back to an older release", async () => {
+    const data = [{ ...release(), id: 42, assets: [] }, release("0.3.7")];
+    for (const assets of [
+      [],
+      {},
+      [{ ...release().assets[0], state: "new" }],
+      [{ ...release().assets[0], digest: null }],
+      [{ ...release().assets[0], size: 0 }],
+      [{ ...release().assets[0], url: "https://example.org/package.xpi" }],
+    ]) {
+      await assert.rejects(
+        resolveUpdate(data, "0.3.6", false, async () => assets),
+      );
+    }
+  });
+  it("does not follow supplied asset URLs or request invalid release IDs", async () => {
+    for (const id of [undefined, -1, 1.5, "42", Number.MAX_SAFE_INTEGER + 1]) {
+      await assert.rejects(
+        resolveUpdate(
+          [
+            {
+              ...release(),
+              id,
+              assets: [],
+              assets_url: "https://example.org/assets",
+            },
+          ],
+          "0.3.6",
+          false,
+          async () => {
+            assert.fail("must not request an invalid release ID");
+          },
+        ),
+      );
+    }
+    assert.throws(() => fetchReleaseAssets(-1), /Invalid GitHub release ID/);
+    let called = false;
+    await resolveUpdate(
+      [
+        {
+          ...release(),
+          id: 42,
+          assets: [],
+          assets_url: "https://example.org/assets",
+        },
+      ],
+      "0.3.6",
+      false,
+      async (id) => {
+        assert.equal(id, 42);
+        called = true;
+        return release().assets;
+      },
+    );
+    assert.equal(called, true);
+  });
+  it("keeps failed asset lookups visible and retries on the next user check", async () => {
+    let fail = true;
+    const { service } = fixture({
+      loadReleases: async () => [{ ...release(), id: 42, assets: [] }],
+      loadReleaseAssets: async () => {
+        if (fail) throw new Error("HTTP 403: rate limited");
+        return release().assets;
+      },
+    });
+    const failed = await service.check();
+    assert.equal(failed.state, "error");
+    assert.equal(failed.canInstall, false);
+    assert.match(failed.message ?? "", /HTTP 403/);
+    fail = false;
+    assert.equal((await service.check()).state, "available");
+  });
+  it("bounds asset lookups within the overall check deadline and ignores their late results", async () => {
+    let finish!: (data: unknown) => void;
+    const { service } = fixture({
+      checkTimeoutMs: 5,
+      loadReleases: async () => [{ ...release(), id: 42, assets: [] }],
+      loadReleaseAssets: () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    });
+    assert.equal((await service.check()).state, "error");
+    finish(release().assets);
+    await setImmediate();
+    assert.equal((await service.status()).canInstall, false);
+    assert.equal((await service.status()).state, "error");
+  });
   it("reports its own preference and version without consulting Zotero's updater", async () => {
     const { service } = fixture();
     assert.deepEqual(await service.status(), {

@@ -1,7 +1,7 @@
 import type { UpdateStatus } from "@confucius/protocol";
 import {
   fetchReleases,
-  selectUpdate,
+  resolveUpdate,
   type ReleaseUpdate,
 } from "./GitHubRelease";
 import { installRelease, type ReleaseInstallResult } from "./ReleaseInstaller";
@@ -14,6 +14,7 @@ export interface UpdateServiceOptions {
   getIncludePrerelease: () => boolean;
   setIncludePrerelease: (enabled: boolean) => void;
   loadReleases?: () => Promise<unknown>;
+  loadReleaseAssets?: (releaseId: number) => Promise<unknown>;
   installRelease?: (
     release: ReleaseUpdate,
     addonId: string,
@@ -133,8 +134,15 @@ export class UpdateService {
     this.last = { state: "checking", canInstall: false };
     let timer: unknown;
     try {
-      const data = await Promise.race([
-        (this.options.loadReleases ?? fetchReleases)(),
+      const release = await Promise.race([
+        (this.options.loadReleases ?? fetchReleases)().then((data) =>
+          resolveUpdate(
+            data,
+            this.currentVersion,
+            this.options.getIncludePrerelease(),
+            this.options.loadReleaseAssets,
+          ),
+        ),
         new Promise<never>((_, reject) => {
           timer = this.scheduleTimeout(
             () =>
@@ -146,11 +154,6 @@ export class UpdateService {
         }),
       ]);
       if (this.disposed) return this.status();
-      const release = selectUpdate(
-        data,
-        this.currentVersion,
-        this.options.getIncludePrerelease(),
-      );
       this.pendingRelease = release;
       this.last = {
         state: release ? "available" : "up-to-date",
