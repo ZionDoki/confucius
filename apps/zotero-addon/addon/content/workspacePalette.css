@@ -153,7 +153,8 @@
   --confucius-shadow-hover: 0 8px 22px #00000047;
 }
 
-@media (forced-colors: active) {
+/* Zotero chrome surfaces expose system contrast via prefers-contrast. */
+@media (forced-colors: active), (prefers-contrast: more) {
   :where(
     [data-confucius-window],
     .confucius-workspace-root,

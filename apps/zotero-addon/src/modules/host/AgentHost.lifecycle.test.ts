@@ -1056,9 +1056,12 @@ describe("AgentHost lifecycle ownership", () => {
     Reflect.set(globalThis, "Zotero", previousZotero);
   });
 
-  it("retains articles from submitted turns when the next message changes sources", async () => {
+  it("keeps the initial article grouping when later messages change sources", async () => {
     const { host, state } = fixture();
     for (const key of ["ARTICLE_A", "ARTICLE_B", "ARTICLE_A"]) {
+      // Also cover a legacy record without a frozen origin. Its completed run
+      // still identifies ARTICLE_A when the next prompt binds ARTICLE_B.
+      if (key === "ARTICLE_B") delete state.record.createdFrom;
       state.record.lockedContext = {
         version: 1,
         capturedAt: Date.now(),
@@ -1077,8 +1080,8 @@ describe("AgentHost lifecycle ownership", () => {
       await waitFor(() => state.activeTurnId === null);
     }
     assert.deepEqual(
-      state.record.articleSources?.map((item) => item.key),
-      ["ARTICLE_A", "ARTICLE_B"],
+      state.record.createdFrom?.map((item) => item.key),
+      ["ARTICLE_A"],
     );
   });
 

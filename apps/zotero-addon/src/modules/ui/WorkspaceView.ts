@@ -3,6 +3,10 @@ import {
   closeSubagentPopup,
   isSubagentPopupOpen,
 } from "./subagentPopup";
+import {
+  createConversationRenderer,
+  type LocateTarget,
+} from "./conversationTimeline";
 import { ordinaryTimelineCalls, subagentWaitProgress } from "./subagentTrace";
 import {
   createModelCatalogLookup,
@@ -107,14 +111,9 @@ import {
   isUiTheme,
   isUiLanguage,
   isUiLineHeight,
-  nextReasoningFold,
   parseMindMapOutline,
   renderMarkdownHtml,
-  toolLineStatus,
-  toolsSummary,
-  type ReasoningFold,
   type TimelineBlock,
-  type TimelineToolCall,
   type MindMapNode,
   type UiFont,
   type UiTheme,
@@ -479,76 +478,6 @@ function tuiBlock(doc: Document, extra?: Styles): HTMLElement {
     background: "transparent",
     ...extra,
   });
-}
-
-function formatToolResult(call: TimelineToolCall): string {
-  if (!call.result) {
-    return call.progress || "";
-  }
-  if (
-    call.result.ok &&
-    !call.result.warnings?.length &&
-    call.result.effect !== "partial"
-  ) {
-    return JSON.stringify(call.result.data, null, 2).slice(0, 4000);
-  }
-  return JSON.stringify(call.result, null, 2).slice(0, 4000);
-}
-
-type LocateTarget = {
-  libraryID?: number;
-  key: string;
-  pageIndex?: number;
-  annotationKey?: string;
-  selectItem?: boolean;
-};
-
-/**
- * Pull a jump target out of a tool result payload: anything that names an
- * attachment (attachmentKey/key) plus a way to land on a spot in it
- * (pageIndex, position.pageIndex or annotationKey).
- */
-function locateFromData(data: unknown): LocateTarget | null {
-  if (!data || typeof data !== "object") {
-    return null;
-  }
-  const record = data as Record<string, unknown>;
-  const attachmentKey =
-    typeof record.attachmentKey === "string" ? record.attachmentKey.trim() : "";
-  const key =
-    attachmentKey || (typeof record.key === "string" ? record.key.trim() : "");
-  if (!key) {
-    return null;
-  }
-  const annotationKey =
-    typeof record.annotationKey === "string" ? record.annotationKey.trim() : "";
-  let pageIndex: number | undefined;
-  if (
-    typeof record.pageIndex === "number" &&
-    Number.isInteger(record.pageIndex)
-  ) {
-    pageIndex = record.pageIndex;
-  } else {
-    const position = record.position as
-      { pageIndex?: unknown } | null | undefined;
-    if (
-      position &&
-      typeof position === "object" &&
-      typeof position.pageIndex === "number"
-    ) {
-      pageIndex = position.pageIndex;
-    }
-  }
-  if (!annotationKey && pageIndex === undefined) {
-    return null;
-  }
-  return {
-    libraryID:
-      typeof record.libraryID === "number" ? record.libraryID : undefined,
-    key,
-    pageIndex,
-    annotationKey: annotationKey || undefined,
-  };
 }
 
 /** Approval cards only carry args; derive a jump target for write-back tools. */
@@ -1256,9 +1185,10 @@ function bindWorkspace(
     error: string;
   };
   const modelLists = new Map<string, ModelListCache>();
-  const reasoningFold = new Map<string, ReasoningFold>();
-  const toolsOpen = new Set<string>();
-  const toolOpen = new Set<string>();
+  const conversation = createConversationRenderer({
+    fillAnswerHtml,
+    locateLink,
+  });
   let endpointMenuOpen = false;
   type ComposerModelChoice = {
     backend: AgentBackendKind;
@@ -3259,13 +3189,6 @@ function bindWorkspace(
     doc.querySelector(".confucius-knowledge-editor")?.prepend(error);
   }
 
-  function renderUserLine(targetDoc: Document, text: string): HTMLElement {
-    const row = el(targetDoc, "div");
-    row.className = "confucius-user-message";
-    row.textContent = text;
-    return row;
-  }
-
   async function copyAnswerText(
     targetDoc: Document,
     text: string,
@@ -3305,20 +3228,11 @@ function bindWorkspace(
     text: string,
     turnId?: string,
   ): HTMLElement {
-    const shell = tuiBlock(targetDoc, {
-      color: "var(--confucius-ink)",
-      fontSize: "1.08em",
-      lineHeight: "1.7",
-      margin: "6px 0 14px",
-      padding: "2px 4px",
-      maxWidth: "78ch",
-    });
-    shell.classList.add("confucius-answer-shell");
-    if (turnId) shell.setAttribute("data-turn-id", turnId);
-    const body = el(targetDoc, "div");
-    body.classList.add("tui-answer");
-    fillAnswerHtml(body, text);
-    shell.appendChild(body);
+    const shell = conversation.render(
+      targetDoc,
+      { kind: "text", text, turnId },
+      turnId ?? "answer",
+    )!;
 
     const actions = el(targetDoc, "div", undefined, {
       role: "group",
@@ -3435,54 +3349,6 @@ function bindWorkspace(
     return shell;
   }
 
-  function renderReasoning(
-    targetDoc: Document,
-    text: string,
-    key: string,
-    label = getString("workspace-tui-thinking"),
-  ): HTMLElement {
-    const fold = reasoningFold.get(key) ?? "preview";
-    const row = tuiBlock(targetDoc, {
-      color: "var(--confucius-muted)",
-      fontSize: "0.93em",
-      cursor: "pointer",
-      margin: "0 0 8px",
-      padding: "0 4px",
-    });
-    const head = el(targetDoc, "div", {
-      fontSize: "0.85em",
-      letterSpacing: "0.04em",
-      textTransform: "uppercase",
-      color: "var(--confucius-muted)",
-      marginBottom: "2px",
-    });
-    head.textContent = `${fold === "open" ? "▾" : "▸"} ${label}`;
-    const clamp =
-      fold === "preview" ? "4.4em" : fold === "compact" ? "1.45em" : "";
-    const body = el(targetDoc, "div", {
-      overflow: clamp ? "hidden" : "visible",
-      maxHeight: clamp || "",
-      display: "flex",
-      flexDirection: "column",
-      justifyContent: "flex-end",
-    });
-    if (clamp) {
-      const fade = "linear-gradient(180deg, transparent 0%, #000 45%)";
-      body.style.setProperty("-webkit-mask-image", fade);
-      body.style.setProperty("mask-image", fade);
-    }
-    const inner = el(targetDoc, "div", { whiteSpace: "pre-wrap" });
-    inner.textContent = text;
-    body.appendChild(inner);
-    row.appendChild(head);
-    row.appendChild(body);
-    row.addEventListener("click", () => {
-      reasoningFold.set(key, nextReasoningFold(fold));
-      renderLists();
-    });
-    return row;
-  }
-
   function renderWaiting(
     targetDoc: Document,
     events: ConfuciusEvent[],
@@ -3530,87 +3396,6 @@ function bindWorkspace(
       });
     });
     return link;
-  }
-
-  function renderTools(
-    targetDoc: Document,
-    calls: TimelineToolCall[],
-    key: string,
-  ): HTMLElement {
-    const open = toolsOpen.has(key);
-    const wrap = tuiBlock(targetDoc, {
-      color: "var(--confucius-muted)",
-      fontSize: "0.93em",
-      fontFamily: UI_FONT_STACKS.mono,
-      margin: "0 0 8px",
-      background: "var(--confucius-hover)",
-      borderRadius: "8px",
-      padding: "6px 10px",
-    });
-    const head = el(targetDoc, "div", {
-      cursor: "pointer",
-      padding: "2px 0",
-      marginBottom: "2px",
-    });
-    const names = toolsSummary(calls);
-    head.textContent = `${open ? "▾" : "▸"} ${calls.length} ${getString("workspace-tui-tools")}${
-      names ? `  ${names}` : ""
-    }`;
-    head.addEventListener("click", () => {
-      if (open) {
-        toolsOpen.delete(key);
-      } else {
-        toolsOpen.add(key);
-      }
-      renderLists();
-    });
-    wrap.appendChild(head);
-    if (open) {
-      for (const call of calls) {
-        const expanded = toolOpen.has(call.callId);
-        const line = el(targetDoc, "div", {
-          cursor: "pointer",
-          padding: "1px 0 1px 12px",
-        });
-        line.textContent = `${expanded ? "▾" : "▸"} ${call.toolName}  ${toolLineStatus(call)}`;
-        line.addEventListener("click", (event) => {
-          event.stopPropagation();
-          if (expanded) {
-            toolOpen.delete(call.callId);
-          } else {
-            toolOpen.add(call.callId);
-          }
-          renderLists();
-        });
-        wrap.appendChild(line);
-        if (expanded) {
-          const result = el(targetDoc, "pre", {
-            margin: "2px 0 6px 24px",
-            padding: "6px 8px",
-            fontSize: "0.85em",
-            color: "var(--confucius-secondary)",
-            background: "var(--confucius-paper)",
-            borderRadius: "6px",
-            whiteSpace: "pre-wrap",
-          });
-          result.textContent = formatToolResult(call);
-          wrap.appendChild(result);
-          const locate =
-            call.result && call.result.ok
-              ? locateFromData(call.result.data)
-              : null;
-          if (locate) {
-            wrap.appendChild(
-              locateLink(targetDoc, locate, {
-                display: "block",
-                margin: "0 0 6px 24px",
-              }),
-            );
-          }
-        }
-      }
-    }
-    return wrap;
   }
 
   function renderArtifactFileBlock(
@@ -3694,15 +3479,19 @@ function bindWorkspace(
     targetDoc: Document,
     block: TimelineBlock,
     index: number,
+    key: string,
   ): HTMLElement | null {
     // Search history remains in tool activity; results share one task-wide capsule.
     if (block.kind === "literature") return null;
     if (block.kind === "subagent")
       return state.sessionId
-        ? createSubagentEntries(doc, state.sessionId, block.subagent, rpc)
+        ? createSubagentEntries(doc, state.sessionId, block.subagent, rpc, {
+            fillAnswerHtml,
+            locateLink,
+          })
         : null;
     if (block.kind === "user") {
-      const row = renderUserLine(targetDoc, block.text);
+      const row = conversation.render(targetDoc, block, key)!;
       if (state.sessionId)
         row.dataset.btwSource = JSON.stringify({
           kind: "conversation",
@@ -3722,96 +3511,16 @@ function bindWorkspace(
         });
       return row;
     }
-    if (block.kind === "reasoning") {
-      return renderReasoning(targetDoc, block.text, `reasoning:${index}`);
-    }
-    if (block.kind === "commentary") {
-      return renderReasoning(
-        targetDoc,
-        block.text,
-        `commentary:${index}`,
-        getString("workspace-tui-progress"),
-      );
-    }
     if (block.kind === "tools") {
-      const key = `tools:${block.calls[0]?.callId || index}`;
       const calls = ordinaryTimelineCalls(block.calls);
-      return calls.length ? renderTools(targetDoc, calls, key) : null;
+      return calls.length
+        ? conversation.render(targetDoc, { ...block, calls }, key)
+        : null;
     }
     if (block.kind === "artifact") {
       return renderArtifactFileBlock(targetDoc, block.artifact);
     }
-    if (block.kind === "plan") {
-      const plan = el(targetDoc, "div");
-      plan.className = "confucius-plan";
-      const heading = el(targetDoc, "div", {
-        marginBottom: "4px",
-        color: "var(--confucius-muted)",
-        fontSize: "11px",
-        fontWeight: "700",
-        textTransform: "uppercase",
-      });
-      heading.textContent = getString("workspace-activity-plan");
-      plan.appendChild(heading);
-      for (const step of block.steps) {
-        const row = el(targetDoc, "div", {
-          padding: "2px 0",
-          color:
-            step.status === "failed"
-              ? "var(--confucius-danger)"
-              : "var(--confucius-secondary)",
-        });
-        row.textContent = `${
-          step.status === "done"
-            ? "✓"
-            : step.status === "running"
-              ? "→"
-              : step.status === "failed"
-                ? "!"
-                : "·"
-        } ${step.label}`;
-        plan.appendChild(row);
-      }
-      return plan;
-    }
-    if (block.kind === "command" || block.kind === "file") {
-      const action = el(targetDoc, "div");
-      action.className = "confucius-command";
-      const heading = el(targetDoc, "div", {
-        color:
-          block.status === "failed" || block.status === "rejected"
-            ? "var(--confucius-danger)"
-            : "var(--confucius-secondary)",
-      });
-      heading.textContent =
-        block.kind === "command"
-          ? `$ ${block.command} · ${block.status}`
-          : `${block.path} · ${block.status}`;
-      action.appendChild(heading);
-      const detail = block.kind === "command" ? block.output : block.diff;
-      if (detail) {
-        const pre = el(targetDoc, "pre", {
-          maxHeight: "180px",
-          margin: "5px 0 0",
-          overflowX: "scroll",
-          overflowY: "auto",
-          whiteSpace: "pre-wrap",
-        });
-        pre.textContent = detail;
-        action.appendChild(pre);
-      }
-      return action;
-    }
-    const row = tuiBlock(targetDoc, {
-      color:
-        block.tone === "fail"
-          ? "var(--confucius-danger)"
-          : "var(--confucius-muted)",
-      fontSize: "0.93em",
-      padding: "0 4px",
-    });
-    row.textContent = block.text;
-    return row;
+    return conversation.render(targetDoc, block, key);
   }
 
   function applyAppearance(): void {
@@ -5136,7 +4845,7 @@ function bindWorkspace(
       state.sessions
         .map(
           (item) =>
-            `${item.id}:${item.title ?? ""}:${item.status}:${item.backend}:${item.templateId ?? ""}:${item.lockedContext.fingerprint}:${item.updatedAt}:${JSON.stringify(item.articleSources)}`,
+            `${item.id}:${item.title ?? ""}:${item.status}:${item.backend}:${item.templateId ?? ""}:${item.lockedContext.fingerprint}:${item.updatedAt}:${JSON.stringify(item.createdFrom ?? item.articleSources)}:${item.literature?.id ?? ""}`,
         )
         .join("|"),
       state.artifacts
@@ -5223,7 +4932,13 @@ function bindWorkspace(
       activityStream.appendChild(banner);
     }
     if (state.pendingUserText) {
-      activityStream.appendChild(renderUserLine(doc, state.pendingUserText));
+      activityStream.appendChild(
+        conversation.render(
+          doc,
+          { kind: "user", text: state.pendingUserText },
+          "pending",
+        )!,
+      );
     }
     if (
       state.sendError &&
@@ -5282,7 +4997,12 @@ function bindWorkspace(
       // The task overview already provides the starting actions.
     } else {
       timelineBlocks.forEach((block, index) => {
-        const node = renderTimelineBlock(doc, block, index);
+        const node = renderTimelineBlock(
+          doc,
+          block,
+          index,
+          keyedBlocks[index].key,
+        );
         if (node) {
           node.dataset.entryId = keyedBlocks[index].key;
           activityStream.appendChild(node);

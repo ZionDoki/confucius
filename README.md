@@ -21,11 +21,12 @@ can join the research at any point.
 [Download the latest stable release](https://github.com/ZionDoki/confucius/releases/latest)
 · [User guide](docs/README.md) · [Changelog](CHANGELOG.md) · [Build from source](#build-from-source)
 
-**New in [0.5.0 Beta](https://github.com/ZionDoki/confucius/releases/tag/v0.5.0-beta.4):**
-OpenAlex discovery, candidate selection, full-text acquisition, and research subagents.
-Beta 4 shows subagents in full-width chat cards with one centered trace viewer,
-preserves reading state when switching children, and runs up to three children concurrently.
-Install the Beta XPI or enable **Include prereleases** in Confucius Settings → Update.
+**New in [0.5.0](https://github.com/ZionDoki/confucius/releases/tag/v0.5.0):**
+OpenAlex discovery, a shared literature capsule, and up to three research subagents
+with a centered trace viewer. Continue with abstracts or currently available papers,
+keep conversations grouped by their creation sources, and customize model reasoning
+with optional models.dev reference metadata. Stable and Beta installations can
+receive this stable release through Confucius Settings → Update.
 
 ## Features
 

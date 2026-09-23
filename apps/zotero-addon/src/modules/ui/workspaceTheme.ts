@@ -3,6 +3,18 @@ import { REPORT_STYLE_CSS } from "./reportStyleStyles";
 
 export const TUI_CSS = `
 ${REPORT_STYLE_CSS}
+.confucius-reasoning-toggle { appearance:none; border:0; background:transparent; color:var(--confucius-muted); font:inherit; font-size:1em; text-align:left; letter-spacing:.04em; margin:0 0 2px; padding:0; cursor:pointer; }
+.confucius-reasoning-body { display:flex; flex-direction:column; justify-content:flex-end; }
+.confucius-tools { min-width:0; margin:0 0 8px; padding:6px 10px; border-radius:8px; background:var(--confucius-hover); color:var(--confucius-muted); font-size:.93em; overflow-wrap:anywhere; }
+.confucius-tools summary { cursor:pointer; padding:2px 0; }
+.confucius-tools > summary { margin-bottom:2px; }
+.confucius-tool-call { margin-left:12px; }
+.confucius-tool-call[data-state=failed] > summary { color:var(--confucius-danger); }
+.confucius-tool-call > div { padding:2px 0 6px 12px; }
+.confucius-tool-label { font-size:1em; margin:4px 0; }
+.confucius-tool-call pre { margin:2px 0 6px; padding:6px 8px; font-size:1em; color:var(--confucius-secondary); background:var(--confucius-paper); border-radius:6px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.confucius-reasoning-toggle:focus-visible,.confucius-tools summary:focus-visible { outline:2px solid var(--confucius-focus); outline-offset:2px; border-radius:4px; }
+
 .confucius-citation-link {
   display: inline; margin: 0 2px; padding: 1px 5px;
   border: 1px solid var(--confucius-line); border-radius: 4px;
@@ -127,7 +139,7 @@ ${REPORT_STYLE_CSS}
   letter-spacing: .02em;
 }
 .tui-waiting-elapsed[hidden] { display: none; }
-@media (prefers-reduced-motion: reduce), (forced-colors: active) {
+@media (prefers-reduced-motion: reduce), (forced-colors: active), (prefers-contrast: more) {
   .tui-waiting-metal, .tui-waiting-shine {
     display: none;
   }

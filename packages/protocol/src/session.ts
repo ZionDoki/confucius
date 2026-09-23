@@ -141,7 +141,9 @@ export interface ResearchTaskRecord extends SessionRecord {
   status: TaskStatus;
   activeKnowledgeBaseId?: string;
   lockedContext: LockedContextSnapshot;
-  /** Articles selected at creation or used by submitted turns; independent of the live reader. */
+  /** Sidebar origin, captured at creation; later research never changes it. */
+  createdFrom?: LockedItemContext[];
+  /** Legacy sidebar associations, which could also contain acquired research papers. */
   articleSources?: LockedItemContext[];
   artifactIds: string[];
   recoverableTurn?: RecoverableTurn;
@@ -217,6 +219,12 @@ export function migrateSessionRecord(
         items: candidate.articleSources,
       })
         ? candidate.articleSources
+        : undefined,
+      createdFrom: isLockedContextSnapshot({
+        ...emptyLockedContext(now),
+        items: candidate.createdFrom,
+      })
+        ? candidate.createdFrom
         : undefined,
       artifactIds: Array.isArray(candidate.artifactIds)
         ? [

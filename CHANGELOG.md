@@ -2,11 +2,106 @@
 
 ## Unreleased
 
+## 0.5.0 - 2026-09-23
+
+Confucius 0.5.0 brings literature discovery and delegated research to the stable
+channel, together with model configuration and conversation improvements from
+the 0.5.0 Beta series.
+
+### Added
+
+- Search OpenAlex from a research question with year, open-access and sorting
+  controls. One persistent literature capsule shows selected candidates against
+  the retrieved, deduplicated pool; its editor retains selections and reading
+  position across searches and reopening.
+- Confirm paper imports and fulltext acquisition, reuse existing Zotero items
+  and valid PDFs, retry individual failures, or open a paper and attach its PDF.
+  Continue using abstracts or currently available papers while remaining downloads
+  finish. Missing abstracts can be looked up from Zotero, OpenAlex and Crossref
+  with bounded waits, cached attempts and source labels.
+- Delegate scoped work to up to three concurrent research subagents, with
+  additional work queued and a shared parent budget. Full-width entries open one
+  centered viewer with the main conversation's Markdown, progress, tool inputs
+  and complete receipts; filters, expanded records and position survive switching.
+- Use the optional models.dev catalog for reference model IDs and capabilities,
+  and customize reasoning levels and request formats for each Native endpoint
+  and model. Applying reference metadata preserves the gateway, key and model
+  alias; saved configuration remains usable without the catalog.
+
+### Changed
+
+- New tasks start without implicit paper bindings and default to time grouping.
+  Article grouping follows the task's creation sources; research started without
+  an article has a separate category. Acquired papers remain evidence without
+  multiplying sidebar entries.
+- After accepting research material, hide the prominent acquisition action;
+  missing fulltext remains available through a secondary link. New candidate
+  changes still require review, and abstracts are not presented as read fulltext.
+- Keep the literature capsule and jump-to-latest action aligned with the composer,
+  and share conversation controls, keyboard behavior and high-contrast colors
+  with the child viewer. Long traces load in batches and unchanged content stays
+  in place while polling.
+
 ### Fixed
 
-- Withdraw a newly published release to draft if anonymous old-client discovery
-  or package verification fails. Preserve its tag and original assets instead of
-  continuing to advertise an unverified update.
+- End parent waiting and release capacity when a child fails to initialize;
+  stopped or retried attempts cannot publish late results into their successor.
+  Restored executions no longer leave unfinished tool calls looking active.
+- Show current tool results after reopening a collapsed group. Ignore obsolete
+  disclosure events and out-of-order archive pages, preserve selection and
+  focus during updates, and defer filtering until input composition completes.
+- Honor the user's decision to continue research despite repeated acquisition
+  calls. Late previews, searches and downloads cannot undo that decision or
+  restart stale waiting; completed confirmations cannot steal another control's
+  focus after task switches or further interaction.
+- Recover missing release-list attachments through the selected release's asset
+  endpoint, retaining channel, timeout, size and checksum validation. Publication
+  verifies the anonymous contract used by older updaters and withdraws an
+  unverified release to draft while retaining its original tag and files.
+
+### Upgrade notes
+
+- This is a stable release, higher than every 0.5.0 Beta. Stable and Beta users
+  can receive it through Confucius Settings → Update; enabling Betas is not
+  required. Explicit channel and automatic-check preferences remain independent
+  and survive upgrade, and disabling Betas never downgrades an installation.
+- Existing tasks, drafts, papers, annotations, reports, memories, candidate
+  decisions and recorded child traces are retained. Creation sources are frozen
+  when older tasks load, excluding identifiable acquired papers. Complete
+  original grouping and missing historical trace events cannot be reconstructed
+  when earlier versions did not record them.
+- No model or endpoint reconfiguration is required. OpenAlex settings are
+  independent of model credentials. Catalog entries are reference metadata;
+  provider-specific IDs and reasoning formats can differ.
+- Installation restores an open workspace and its draft when hot update is
+  supported; use the update page's actual restart status. Interrupted downloads
+  remain retryable, and upgrading does not automatically restart research.
+
+### Validation and known limits
+
+- All 1,165 tests, type checking, lint, workspace-version checks, skill-sync
+  checks and the production build passed for 0.5.0. The candidate XPI manifest,
+  both update files, download URLs and SHA-512 were verified together.
+- In isolated macOS Zotero 10.0.4, normal installations upgraded from the original
+  0.4.6 and Beta 5 packages to the candidate and passed 20 and 26 migration checks.
+  Tasks, Chinese drafts, notes, annotations, report revisions, memory, saved
+  execution budgets and all 28/40 original history files survived full restarts;
+  Beta research selections and child traces also survived. Seven hot-update
+  checks passed for workspace restoration, sidebar state and closed windows.
+- Native interaction checks passed for literature research (29), subagents (25),
+  sidebar navigation (29; 615 clicks) and model settings (9), including narrow
+  windows, keyboard input, themes and reordered responses. A synthetic 4,131-event
+  child trace loaded, filtered and exposed its final receipt in about 333 ms;
+  idle polling made no trace DOM changes. Anonymous OpenAlex search also passed.
+- These prepublication installation tests use the local candidate. CI publication
+  separately gates anonymous discovery and downloads of the actual public XPI;
+  old-client online upgrades are checked against that public package after release.
+- Windows, Linux, other Zotero versions, paid model calls, external Codex/Kimi
+  end-to-end execution and authenticated fulltext retrieval were not revalidated
+  for this stable release. Model and most metadata checks use controlled fixtures;
+  abstract coverage and available PDFs still depend on their providers.
+- See the [0.5.0 acceptance record](https://github.com/ZionDoki/confucius/blob/v0.5.0/.github/maintainers/acceptance/release-0.5.0.md)
+  and [literature guide](https://github.com/ZionDoki/confucius/blob/v0.5.0/docs/literature-research.md).
 
 ## 0.5.0-beta.7 - 2026-09-23
 

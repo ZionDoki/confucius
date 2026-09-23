@@ -38,12 +38,25 @@ export function contextArticles(
   return [...articles.values()];
 }
 
-/** Navigation uses committed article associations, never the live PDF preview. */
+/** Creation owns navigation; acquired papers remain evidence, not sidebar folders. */
 export function taskArticles(task: ResearchTaskRecord): LockedItemContext[] {
+  if (task.createdFrom) return task.createdFrom;
+  // Older records mixed confirmed literature into their navigation sources.
+  // Managed keys exclude material that was explicitly bound before acquisition.
+  const acquired = new Set(task.literatureSourceKeys ?? []);
   return (
     task.articleSources ??
     contextArticles(task.run?.sources ?? task.lockedContext)
-  );
+  ).filter((item) => !acquired.has(`${item.libraryID}:${item.key}`));
+}
+
+export function taskCategory(
+  task: ResearchTaskRecord,
+): "articles" | "research" | "unfiled" {
+  if (taskArticles(task).length) return "articles";
+  return task.literature?.latestQuery || task.literature?.pool
+    ? "research"
+    : "unfiled";
 }
 
 /** Replace only the reader's automatic source; explicit library sources survive. */

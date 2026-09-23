@@ -13,6 +13,7 @@ const workspaceSource = () =>
     "workspaceTasks",
     "workspaceComposer",
     "workspaceActivity",
+    "conversationTimeline",
     "workspaceSourcePicker",
     "workspaceMenus",
     "workspaceControls",
@@ -426,7 +427,7 @@ test("settings are tabbed with font appearance controls", () => {
   assert.equal(prefs.includes('pref("uiLanguage", "")'), true);
   assert.equal(prefs.includes('pref("uiLineHeight", "standard")'), true);
   assert.equal(view.includes('"--confucius-reading-line-height"'), true);
-  assert.equal(view.includes("renderReasoning"), true);
+  assert.equal(view.includes("confucius-reasoning-toggle"), true);
   assert.equal(view.includes("mask-image"), true);
 });
 
@@ -486,7 +487,7 @@ test("timeline is TUI-style: foldable thinking/tools, unfolded answers", () => {
   assert.equal(view.includes("nextReasoningFold"), true);
   assert.equal(view.includes("renderAnswer"), true);
   assert.equal(view.includes("tui-tools") || view.includes("toolsOpen"), true);
-  assert.equal(view.includes("renderReasoning"), true);
+  assert.equal(view.includes("confucius-reasoning-toggle"), true);
   assert.equal(view.includes("justifyContent"), true);
   assert.equal(view.includes("renderMarkdownHtml"), true);
   assert.equal(view.includes("tui-waiting"), true);
@@ -979,7 +980,7 @@ test("zotero uri links render as underlined anchors and navigate on click", () =
 
   // Answers render markdown (fillAnswerHtml) and anchors get prominent
   // underlined styling inside the workspace root.
-  assert.equal(view.includes("fillAnswerHtml(body, text)"), true);
+  assert.equal(view.includes("fillAnswerHtml(body, block.text)"), true);
   assert.equal(view.includes(".confucius-workspace-root a {"), true);
   assert.equal(view.includes("text-decoration: underline"), true);
 

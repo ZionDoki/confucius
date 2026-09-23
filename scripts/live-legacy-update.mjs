@@ -6,10 +6,11 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { IsolatedZotero } from "./lib/zotero-live.mjs";
 
-const [oldPath, targetPath, outputPath] = process.argv.slice(2);
+const [oldPath, targetPath, outputPath, requestedChannel] =
+  process.argv.slice(2);
 assert.ok(
   oldPath && targetPath && outputPath,
-  "Usage: node scripts/live-legacy-update.mjs old.xpi target.xpi report.json",
+  "Usage: node scripts/live-legacy-update.mjs old.xpi target.xpi report.json [stable|beta]",
 );
 const root = resolve(import.meta.dirname, "..");
 const old = resolve(oldPath),
@@ -25,13 +26,19 @@ const manifest = (path) =>
   );
 const from = manifest(old).version,
   to = manifest(target).version;
-assert.ok(to.includes("-beta."), "This probe expects a Beta target");
+const channel = requestedChannel ?? (to.includes("-beta.") ? "beta" : "stable");
+assert.ok(["stable", "beta"].includes(channel), "Invalid update channel");
+assert.ok(
+  !to.includes("-beta.") || channel === "beta",
+  "Betas require the beta channel",
+);
 assert.notEqual(from, to, "Use an actual older installed version");
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const report = {
   startedAt: new Date().toISOString(),
   from,
   to,
+  channel,
   checks: [],
   oldSha256: sha(await readFile(old)),
   targetSha256: sha(await readFile(target)),
@@ -81,9 +88,18 @@ try {
     stable.state !== "error" && !stable.availableVersion?.includes("-"),
     stable,
   );
-  report.discovery = await instance.rpc("update/setPrerelease", {
-    enabled: true,
-  });
+  if (!to.includes("-beta."))
+    check(
+      "Stable target is available with Betas disabled",
+      stable.state === "available" &&
+        stable.availableVersion === to &&
+        stable.canInstall,
+      stable,
+    );
+  report.discovery =
+    channel === "stable"
+      ? stable
+      : await instance.rpc("update/setPrerelease", { enabled: true });
   check(
     "Old updater discovers the published target",
     report.discovery.state === "available" &&
@@ -115,6 +131,12 @@ try {
   check(
     "Task and Chinese draft survive",
     (await instance.rpc("task/load", { taskId: task.id })).draft.text === draft,
+  );
+  check(
+    "Explicit channel selection survives upgrade",
+    await evaluate(
+      `return Zotero.Prefs.get('extensions.zotero.confucius.updateChannel',true)===${JSON.stringify(channel)};`,
+    ),
   );
   const current = await instance.rpc("update/check");
   check(

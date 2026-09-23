@@ -7,7 +7,7 @@ import type {
   LockedItemContext,
   ResearchTaskRecord,
 } from "@confucius/protocol";
-import { taskArticles } from "../host/TaskSources";
+import { taskArticles, taskCategory } from "../host/TaskSources";
 const NS = "http://www.w3.org/1999/xhtml";
 
 export type TaskOrganization = "articles" | "time";
@@ -26,7 +26,7 @@ function newestFirst(a: ResearchTaskRecord, b: ResearchTaskRecord): number {
   );
 }
 
-/** Only creation/submission associates articles; browsing another PDF cannot regroup tasks. */
+/** Only creation associates articles; later source changes cannot regroup tasks. */
 export function articleTaskGroups(
   tasks: readonly ResearchTaskRecord[],
 ): ArticleTaskGroup[] {
@@ -149,7 +149,7 @@ export function createTaskList(
       meta: HTMLElement;
     }
   >();
-  const expandedArticles = new Set<string>(["unfiled"]);
+  const expandedArticles = new Set<string>(["unfiled", "research"]);
   const groups = new Map<
     string,
     {
@@ -359,6 +359,18 @@ export function createTaskList(
     );
     const children: HTMLElement[] = [];
     if (organization === "articles") {
+      const research = filtered
+        .filter((task) => taskCategory(task) === "research")
+        .sort(newestFirst);
+      if (research.length)
+        children.push(
+          groupNode(
+            "research",
+            options.text("workspace-tasks-research"),
+            research,
+            preserveOrder,
+          ),
+        );
       for (const group of articleTaskGroups(filtered)) {
         children.push(
           groupNode(
@@ -371,7 +383,7 @@ export function createTaskList(
         );
       }
       const unfiled = filtered
-        .filter((task) => !taskArticles(task).length)
+        .filter((task) => taskCategory(task) === "unfiled")
         .sort(newestFirst);
       if (unfiled.length)
         children.push(
@@ -427,6 +439,7 @@ export function createTaskList(
       if (
         key.startsWith("articles/") &&
         key !== "articles/unfiled" &&
+        key !== "articles/research" &&
         !articleIds.has(key.slice(9))
       )
         groups.delete(key);
@@ -492,6 +505,7 @@ export function createTaskList(
         task.status,
         task.updatedAt,
         taskArticles(task),
+        taskCategory(task),
       ]),
       selected,
       new Date().toDateString(),

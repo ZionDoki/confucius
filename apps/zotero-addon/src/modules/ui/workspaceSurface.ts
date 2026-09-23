@@ -78,6 +78,8 @@ export const SURFACE_CSS = `
 .confucius-literature-editor { display:flex; flex:1; flex-direction:column; min-width:0; min-height:0; max-height:inherit; }
 .confucius-literature-tabs { display:flex; gap:4px; padding:0 20px 8px; }
 .confucius-literature-tabs .confucius-button { font-size:12px; background:transparent; color:var(--confucius-muted); padding:6px 10px; }
+.confucius-button[data-variant=link] { background:transparent; box-shadow:none; color:var(--confucius-secondary); text-decoration:underline; text-underline-offset:3px; font-weight:400; }
+.confucius-button[data-variant=link]:hover:not(:disabled) { background:var(--confucius-hover); color:var(--confucius-ink); }
 .confucius-literature-tabs [aria-selected=true] { color:var(--confucius-ink); background:var(--confucius-surface); }
 .confucius-literature-scroll { flex:1 1 auto; min-height:0; overflow:auto; overscroll-behavior:contain; padding:0 20px; scrollbar-width:thin; }
 .confucius-literature-tools { display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px 16px; margin:0 0 8px; }
@@ -135,18 +137,11 @@ export const SURFACE_CSS = `
 .confucius-subagent-filter input { flex:1 1 200px; min-width:0; width:100%; box-sizing:border-box; height:34px; padding:6px 8px; margin:0; border:1px solid var(--confucius-line); border-radius:8px; background:var(--confucius-paper); color:var(--confucius-ink); font:inherit; }
 .confucius-subagent-filter input:focus-visible { outline:2px solid var(--confucius-focus); outline-offset:2px; }
 .confucius-subagent-scroll { flex:1; overflow:auto; min-height:0; padding:0 20px; overscroll-behavior:contain; scrollbar-gutter:stable; }
-.confucius-subagent-result { white-space:pre-wrap; overflow-wrap:anywhere; margin:8px 0 16px; line-height:1.6; }
-.confucius-subagent-trace { display:flex; flex-direction:column; gap:8px; margin:12px 0 20px; }
-.confucius-subagent-trace-item { min-width:0; background:var(--confucius-surface); border-radius:8px; }
-.confucius-subagent-trace-item > summary { display:grid; grid-template-columns:8px max-content minmax(0,1fr) auto; gap:8px; align-items:baseline; padding:10px 12px; cursor:pointer; list-style:none; overflow-wrap:anywhere; }
-.confucius-subagent-trace-item > summary::before { content:'›'; color:var(--confucius-muted); transform-origin:center; }
-.confucius-subagent-trace-item[open] > summary::before { transform:rotate(90deg); }
-.confucius-subagent-trace-item > summary:hover { background:var(--confucius-hover); border-radius:8px; }
-.confucius-subagent-trace-item > summary time,.confucius-subagent-trace-item > summary > :last-child { color:var(--confucius-muted); font-size:12px; font-variant-numeric:tabular-nums; }
-.confucius-subagent-trace-item[data-state=failed] > summary > :last-child { color:var(--confucius-danger); }
-.confucius-subagent-trace-item > div { padding:0 12px 12px; }
+.confucius-subagent-trace { margin:12px 0 20px; }
+.confucius-subagent-trace-item { min-width:0; overflow-wrap:anywhere; }
+.confucius-subagent-popup .confucius-answer-shell { max-width:100%; }
 .confucius-subagent-popup summary:focus-visible { outline:2px solid var(--confucius-focus); outline-offset:2px; border-radius:4px; }
-.confucius-subagent-popup pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; line-height:1.5; margin:8px 0; }
+.confucius-subagent-details pre,.confucius-subagent-raw pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; line-height:1.5; margin:8px 0; }
 .confucius-subagent-details { margin:12px 0; }
 .confucius-subagent-details summary,.confucius-subagent-raw summary { cursor:pointer; color:var(--confucius-secondary); overflow-wrap:anywhere; }
 .confucius-subagent-details > div > details { margin:12px 0; }
@@ -165,11 +160,8 @@ export const SURFACE_CSS = `
  .confucius-subagent-filter,.confucius-subagent-navigation { padding:0 12px 8px; }
  .confucius-subagent-scroll { padding:0 12px; }
  .confucius-subagent-footer { padding:8px 12px 12px; gap:4px; }
- .confucius-subagent-trace-item > summary { grid-template-columns:8px minmax(0,1fr) auto; gap:4px 8px; }
- .confucius-subagent-trace-item > summary time { grid-column:2 / -1; }
- .confucius-subagent-trace-item > summary::before { grid-row:2; }
 }
-@media (forced-colors:active) { .confucius-literature-popup,.confucius-literature-capsule,.confucius-subagent-popup { border:1px solid CanvasText; } }
+@media (forced-colors:active), (prefers-contrast:more) { .confucius-literature-popup,.confucius-literature-capsule,.confucius-subagent-popup { border:1px solid CanvasText; } }
 
 /* Zotero's native button height limits are intended for single-line controls.
    Let text controls grow with their content; explicit icon/composer sizes win. */

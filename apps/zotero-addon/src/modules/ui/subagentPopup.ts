@@ -3,10 +3,20 @@ import type {
   SubagentPage,
   SubagentRecord,
   SubagentSummary,
+  TimelineBlock,
 } from "@confucius/protocol";
+import { visibleModelEvents } from "@confucius/protocol";
 import { createWorkspaceButton } from "./workspaceControls";
 import { researchIcon } from "./literaturePanel";
-import { subagentTraceGroups, type SubagentTraceGroup } from "./subagentTrace";
+import {
+  createConversationRenderer,
+  type ConversationPresentation,
+} from "./conversationTimeline";
+import {
+  keyedTimeline,
+  reconcileActivity,
+  createWaitingIndicator,
+} from "./workspaceActivity";
 import { getString } from "../../utils/locale";
 type Rpc = (
   method: string,
@@ -50,6 +60,7 @@ export function createSubagentEntries(
   taskId: string,
   record: SubagentSummary,
   rpc: Rpc,
+  presentation: ConversationPresentation,
 ) {
   const root = node(doc, "div");
   root.className = "confucius-subagent-entries";
@@ -84,7 +95,7 @@ export function createSubagentEntries(
   copy.append(title, detail);
   button.append(researchIcon(doc, "agent"), copy, badge);
   button.addEventListener("click", () =>
-    openSubagentPopup(doc, taskId, record.id, button, rpc),
+    openSubagentPopup(doc, taskId, record.id, button, rpc, presentation),
   );
   root.append(button);
   return root;
@@ -102,6 +113,7 @@ function openSubagentPopup(
   id: string,
   anchor: HTMLElement,
   rpc: Rpc,
+  presentation: ConversationPresentation,
 ) {
   const previous = active.get(doc);
   if (previous?.taskId === taskId) {
@@ -141,6 +153,7 @@ function openSubagentPopup(
   (doc.body ?? doc.documentElement)?.append(popup);
   let closed = false,
     listing = false,
+    lastListing = 0,
     selectedId = "",
     records: SubagentSummary[] = [];
   const panes = new Map<string, ReturnType<typeof createSubagentPane>>();
@@ -163,8 +176,9 @@ function openSubagentPopup(
     next.title = records[position + 1]?.title ?? text("next");
   };
   const refreshNavigation = async () => {
-    if (closed || listing) return;
+    if (closed || listing || Date.now() - lastListing < 1000) return;
     listing = true;
+    lastListing = Date.now();
     try {
       const value = (await rpc("subagent/list", {
         taskId,
@@ -197,20 +211,29 @@ function openSubagentPopup(
     status.textContent = text("loading");
     let pane = panes.get(selectedId);
     if (!pane) {
-      pane = createSubagentPane(doc, taskId, selectedId, rpc, (record) => {
-        heading.textContent = record.title;
-        const elapsed = Math.max(
-          0,
-          Math.floor(
-            ((working(record) ? Date.now() : record.updatedAt) -
-              record.createdAt) /
-              1000,
-          ),
-        );
-        status.textContent = `${activity(record)} · ${text("attempt")} ${record.attempt} · ${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`;
-        popup.dataset.status = record.status;
-        void refreshNavigation();
-      });
+      pane = createSubagentPane(
+        doc,
+        taskId,
+        selectedId,
+        rpc,
+        presentation,
+        (record) => {
+          if (heading.textContent !== record.title)
+            heading.textContent = record.title;
+          const elapsed = Math.max(
+            0,
+            Math.floor(
+              ((working(record) ? Date.now() : record.updatedAt) -
+                record.createdAt) /
+                1000,
+            ),
+          );
+          const value = `${activity(record)} · ${text("attempt")} ${record.attempt} · ${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`;
+          if (status.textContent !== value) status.textContent = value;
+          popup.dataset.status = record.status;
+        },
+        refreshNavigation,
+      );
       panes.set(selectedId, pane);
     }
     popup.append(pane.root);
@@ -273,7 +296,9 @@ function createSubagentPane(
   taskId: string,
   id: string,
   rpc: Rpc,
+  presentation: ConversationPresentation,
   onRecord: (record: SubagentRecord) => void,
+  onRefresh: () => Promise<void>,
 ) {
   const win = doc.defaultView;
   const root = node(doc, "div");
@@ -291,11 +316,6 @@ function createSubagentPane(
     recordBody = node(doc, "pre");
   details.className = "confucius-subagent-details";
   details.append(node(doc, "summary", text("assignment")), recordBody);
-  const result = node(doc, "section"),
-    output = node(doc, "div");
-  output.className = "confucius-subagent-result";
-  result.append(node(doc, "h4", text("result")), output);
-  result.hidden = true;
   const toolbar = node(doc, "div"),
     filter = node(doc, "input"),
     count = node(doc, "span");
@@ -315,7 +335,12 @@ function createSubagentPane(
   archives.append(node(doc, "summary", text("receipts")), archiveList, more);
   const coverage = node(doc, "p", text("coverage"));
   coverage.className = "confucius-subagent-meta";
-  scroll.append(error, details, result, timeline, archives, coverage);
+  const raw = node(doc, "details"),
+    rawTitle = node(doc, "summary"),
+    rawBody = node(doc, "pre");
+  raw.className = "confucius-subagent-raw";
+  raw.append(rawTitle, rawBody);
+  scroll.append(error, details, timeline, raw, archives, coverage);
   const footer = node(doc, "footer"),
     tail = createWorkspaceButton(doc, "", text("latest"));
   footer.className = "confucius-subagent-footer";
@@ -333,31 +358,38 @@ function createSubagentPane(
     timer: number | undefined,
     request = 0;
   let cursor = 0,
+    totalEvents = 0,
     archiveCursor = 0,
     nextArchive: number | null = null,
     record: SubagentRecord | undefined,
     mutating = false;
   const events: ConfuciusEvent[] = [],
     refs = new Set<string>();
-  const rows = new Map<
-    string,
-    { root: HTMLDetailsElement; signature: string }
-  >();
-  const label = (group: SubagentTraceGroup) =>
-    group.kind === "tool"
-      ? group.label
-      : group.kind === "model"
-        ? text("model-request")
-        : group.kind === "message"
-          ? text(group.label === "commentary" ? "progress" : "output")
-          : ((
-              {
-                turn_started: text("started"),
-                turn_completed: text("completed"),
-                turn_failed: text("failed"),
-                turn_aborted: text("cancelled"),
-              } as Record<string, string>
-            )[group.label] ?? group.label);
+  const conversation = createConversationRenderer(presentation);
+  let builtRevision = "",
+    renderedRevision = "",
+    composing = false,
+    appliedQuery = "",
+    blocks: ReturnType<typeof keyedTimeline> = [];
+  const searchable = new WeakMap<object, string>();
+  const searchText = (value: object) => {
+    let result = searchable.get(value);
+    if (result === undefined) {
+      result = JSON.stringify(value).toLocaleLowerCase();
+      searchable.set(value, result);
+    }
+    return result;
+  };
+  const updateTail = () => {
+    tail.hidden =
+      scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop < 48;
+  };
+  scroll.addEventListener("scroll", updateTail, { passive: true });
+  scroll.addEventListener(
+    "toggle",
+    () => win?.requestAnimationFrame(updateTail),
+    true,
+  );
   const render = () => {
     if (!record || closed || !isActive) return;
     const y = scroll.scrollTop,
@@ -368,117 +400,134 @@ function createSubagentPane(
       record.status,
     );
     stop.disabled = retry.disabled = mutating;
-    const selected = doc.getSelection()?.toString();
-    if (!selected) {
-      output.textContent = record.error
-        ? `${record.error}\n\n${record.result}`
-        : record.result;
-      recordBody.textContent = JSON.stringify(
-        {
-          goal: record.goal,
-          background: record.background,
-          sources: record.sources,
-          backend: record.backend,
-          model: record.runtimeModel ?? record.nativeConfig,
-          evidence: record.evidence,
-        },
-        null,
-        2,
-      );
-    }
-    result.hidden = working(record) || !output.textContent;
-    const groups = subagentTraceGroups(events),
-      query = filter.value.trim().toLocaleLowerCase();
-    let visible = 0;
-    for (const group of groups) {
-      let row = rows.get(group.key);
-      if (!row) {
-        const root = node(doc, "details");
-        root.className = "confucius-subagent-trace-item";
-        root.dataset.traceKey = group.key;
-        root.append(node(doc, "summary"), node(doc, "div"));
-        row = { root, signature: "" };
-        rows.set(group.key, row);
-        timeline.append(root);
+    const selection = doc.getSelection();
+    const selected =
+      !!selection?.toString() &&
+      root.contains(selection.anchorNode) &&
+      doc.activeElement !== filter;
+    const query = composing
+      ? appliedQuery
+      : filter.value.trim().toLocaleLowerCase();
+    appliedQuery = query;
+    const contentRevision = JSON.stringify([
+      events.length,
+      record.updatedAt,
+      record.status,
+      record.attempt,
+      cursor >= totalEvents,
+    ]);
+    const viewRevision = JSON.stringify([contentRevision, query]);
+    if (!selected && renderedRevision !== viewRevision) {
+      if (builtRevision !== contentRevision) {
+        const value = JSON.stringify(
+          {
+            goal: record.goal,
+            background: record.background,
+            sources: record.sources,
+            backend: record.backend,
+            model: record.runtimeModel ?? record.nativeConfig,
+            evidence: record.evidence,
+          },
+          null,
+          2,
+        );
+        if (recordBody.textContent !== value) recordBody.textContent = value;
+        blocks = keyedTimeline(
+          events,
+          !working(record) && cursor >= totalEvents,
+        );
+        if (!blocks.some(({ block }) => block.kind === "user"))
+          blocks.unshift({
+            key: "assignment",
+            block: { kind: "user", text: record.goal },
+          });
+        // A stored result is a fallback for old/non-streaming executors, not a second answer.
+        const lastStart = events.findLastIndex(
+          (event) => event.type === "turn_started",
+        );
+        const current = events.slice(Math.max(0, lastStart));
+        const hasAnswer = visibleModelEvents(current).some(
+          (event) =>
+            event.type === "text_delta" &&
+            event.payload.phase !== "commentary" &&
+            event.payload.text.trim(),
+        );
+        if (!working(record) && record.result && !hasAnswer)
+          blocks.push({
+            key: "result",
+            block: { kind: "text", text: record.result },
+          });
+        if (
+          record.error &&
+          !current.some(
+            (event) =>
+              event.type === "turn_failed" &&
+              event.payload.message === record!.error,
+          )
+        )
+          blocks.push({
+            key: "error",
+            block: { kind: "status", tone: "fail", text: record.error },
+          });
+        builtRevision = contentRevision;
       }
-      const visibleGroup =
-        !query || JSON.stringify(group).toLocaleLowerCase().includes(query);
-      row.root.hidden = !visibleGroup;
-      if (visibleGroup) visible++;
-      const signature = `${group.events.length}:${group.events.at(-1)?.id}:${record.status}`;
-      if (
-        row.signature === signature ||
-        (selected && row.root.contains(doc.getSelection()?.anchorNode ?? null))
-      )
-        continue;
-      row.signature = signature;
-      row.root.dataset.kind = group.kind;
-      row.root.dataset.state =
-        group.state === "running" && !working(record)
-          ? "interrupted"
-          : group.state;
-      const summary = row.root.firstElementChild!;
-      const time = node(
-        doc,
-        "time",
-        new Date(group.events[0].ts).toLocaleTimeString([], { hour12: false }),
-      );
-      summary.replaceChildren(
-        time,
-        node(doc, "span", label(group)),
-        node(doc, "span", text(row.root.dataset.state)),
-      );
-      const body = row.root.lastElementChild!,
-        rawOpen = !!body.querySelector<HTMLDetailsElement>(
-          ".confucius-subagent-raw",
-        )?.open;
-      body.replaceChildren();
-      if (group.text) {
-        const prose = node(doc, "div", group.text);
-        prose.className = "confucius-subagent-result";
-        body.append(prose);
-      }
-      const raw = node(doc, "details");
-      raw.className = "confucius-subagent-raw";
-      raw.append(
-        node(doc, "summary", `${text("raw")} · ${group.events.length}`),
-      );
-      raw.addEventListener("toggle", () => {
-        if (raw.open && !raw.querySelector("pre"))
-          raw.append(node(doc, "pre", JSON.stringify(group.events, null, 2)));
-      });
-      raw.open = rawOpen;
-      if (group.kind === "tool") {
-        for (const event of group.events) {
-          if (event.type === "tool_requested" || event.type === "tool_result") {
-            body.append(
-              node(
-                doc,
-                "h5",
-                text(event.type === "tool_requested" ? "arguments" : "receipt"),
-              ),
-              node(
-                doc,
-                "pre",
-                JSON.stringify(
-                  event.type === "tool_requested"
-                    ? event.payload.args
-                    : event.payload.result,
-                  null,
-                  2,
-                ),
-              ),
+      const next = node(doc, "div");
+      let visible = 0;
+      for (const { key, block } of blocks) {
+        let shown: TimelineBlock = block;
+        if (query) {
+          if (block.kind === "tools") {
+            const calls = block.calls.filter((call) =>
+              searchText(call).includes(query),
             );
-          }
+            if (!calls.length) continue;
+            shown = { ...block, calls };
+          } else if (!searchText(block).includes(query)) continue;
         }
+        const row = conversation.render(doc, shown, key);
+        if (!row) continue;
+        row.dataset.entryId = key;
+        row.dataset.kind = block.kind;
+        row.classList.add("confucius-subagent-trace-item");
+        if (block.kind === "text")
+          row.classList.add("confucius-subagent-result");
+        next.append(row);
+        visible++;
       }
-      body.append(raw);
+      if (working(record) && !query) {
+        const waiting = node(doc, "div");
+        waiting.dataset.entryId = "waiting";
+        waiting.append(createWaitingIndicator(doc, activity(record)));
+        next.append(waiting);
+      }
+      reconcileActivity(timeline, next, doc.activeElement !== filter);
+      renderedRevision = viewRevision;
+      count.textContent = `${visible} / ${blocks.length} · ${events.length < totalEvents ? `${events.length} / ${totalEvents}` : events.length} ${text("events")}`;
+      rawTitle.textContent = `${text("raw")} · ${events.length}`;
     }
-    count.textContent = `${visible} / ${groups.length} · ${events.length} ${text("events")}`;
+    if (
+      !selected &&
+      raw.open &&
+      rawBody.dataset.count !== String(events.length)
+    ) {
+      rawBody.textContent = JSON.stringify(events, null, 2);
+      rawBody.dataset.count = String(events.length);
+    }
     scroll.scrollTop =
       follow && !selected && !filter.value ? scroll.scrollHeight : y;
+    updateTail();
   };
-  const addArchives = (page: SubagentPage) => {
+  raw.addEventListener("toggle", () => {
+    if (raw.open) render();
+  });
+  const selectionChanged = () => {
+    if (isActive && !doc.getSelection()?.toString()) render();
+  };
+  doc.addEventListener("selectionchange", selectionChanged);
+  const addArchives = (page: SubagentPage, start: number) => {
+    // Polls and the manual "more" request can finish in either order. Only
+    // advance the contiguous index; an older page must not restore an old cursor.
+    if (start !== archiveCursor) return;
     for (const ref of page.archiveRefs) {
       if (refs.has(ref)) continue;
       refs.add(ref);
@@ -522,7 +571,7 @@ function createSubagentPane(
       });
       loadMore.addEventListener("click", () => void read());
     }
-    archiveCursor = refs.size;
+    archiveCursor = start + page.archiveRefs.length;
     nextArchive = page.nextArchiveOffset;
     more.hidden = nextArchive === null;
   };
@@ -536,28 +585,35 @@ function createSubagentPane(
     const sequence = ++request;
     try {
       let target: number | undefined,
-        total = cursor;
+        pages = 0;
       do {
+        const archiveStart = archiveCursor;
         const page = (await rpc("subagent/read", {
           taskId,
           id,
           offset: cursor,
           limit: 25,
-          archiveIndexOffset: archiveCursor,
+          archiveIndexOffset: archiveStart,
         })) as SubagentPage;
         if (closed || sequence !== request) return;
         record = page.record;
         target ??= page.totalEvents;
-        total = page.totalEvents;
+        totalEvents = page.totalEvents;
         events.push(...page.events);
         cursor += page.events.length;
-        addArchives(page);
+        addArchives(page, archiveStart);
         if (!page.events.length || page.nextOffset === null) break;
-      } while (cursor < target);
+      } while (++pages < 4 && cursor < target);
       error.hidden = true;
       render();
-      if (record && (working(record) || cursor < total))
-        timer = win?.setTimeout(() => void load(), 1000);
+      void onRefresh();
+      // Show the first page promptly and yield between batches so large traces
+      // remain usable while loading. Polling a caught-up trace reuses its DOM.
+      if (record && (working(record) || cursor < totalEvents))
+        timer = win?.setTimeout(
+          () => void load(),
+          cursor < totalEvents ? 0 : 1000,
+        );
     } catch (e) {
       if (!closed && sequence === request) errorMessage(e);
     }
@@ -579,22 +635,33 @@ function createSubagentPane(
   stop.addEventListener("click", () => void action("subagent/cancel"));
   retry.addEventListener("click", () => void action("subagent/retry"));
   reload.addEventListener("click", () => void load());
-  filter.addEventListener("input", render);
+  filter.addEventListener("input", (event) => {
+    if ((event as InputEvent).isComposing) composing = true;
+    if (!composing) render();
+  });
+  filter.addEventListener("compositionstart", () => {
+    composing = true;
+  });
+  filter.addEventListener("compositionend", () => {
+    composing = false;
+    render();
+  });
   tail.addEventListener("click", () => {
     scroll.scrollTop = scroll.scrollHeight;
   });
   more.addEventListener("click", () => {
-    if (nextArchive === null) return;
+    if (nextArchive === null || more.disabled) return;
+    const archiveStart = archiveCursor;
     more.disabled = true;
     void rpc("subagent/read", {
       taskId,
       id,
       offset: cursor,
       limit: 1,
-      archiveIndexOffset: archiveCursor,
+      archiveIndexOffset: archiveStart,
     })
       .then((value) => {
-        if (!closed) addArchives(value as SubagentPage);
+        if (!closed) addArchives(value as SubagentPage, archiveStart);
       })
       .catch((e) => {
         if (!closed) errorMessage(e);
@@ -606,6 +673,7 @@ function createSubagentPane(
   const pause = () => {
     savedScroll = scroll.scrollTop;
     isActive = false;
+    composing = false;
     request++;
     win?.clearTimeout(timer);
   };
@@ -621,6 +689,7 @@ function createSubagentPane(
     dispose() {
       pause();
       closed = true;
+      doc.removeEventListener("selectionchange", selectionChanged);
     },
   };
 }

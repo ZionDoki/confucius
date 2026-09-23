@@ -424,6 +424,33 @@ try {
       ),
     },
   });
+  assert.deepEqual(
+    await evaluate(`return host.sessions.get(qa.taskId).record.createdFrom;`),
+    [],
+  );
+  await evaluate(
+    `d.getElementById('confucius-tasks-articles').click();return true;`,
+  );
+  await wait(
+    `return !!d.querySelector('[data-group-id="research"] [data-task-id="'+qa.taskId+'"]');`,
+  );
+  assert.equal(
+    await evaluate(
+      `return d.querySelectorAll('[data-task-id="'+qa.taskId+'"]').length;`,
+    ),
+    1,
+  );
+  assert.equal(
+    await evaluate(
+      `return [...d.querySelectorAll('.confucius-task-group')].filter(g=>!['research','unfiled'].includes(g.dataset.groupId)).length;`,
+    ),
+    0,
+  );
+  await capture("literature-sidebar-group");
+  await evaluate(
+    `d.getElementById('confucius-tasks-time').click();return true;`,
+  );
+  checks.push({ acquiredPapersDoNotRegroupConversation: true });
   await capture("literature-light");
   await evaluate(`await host.rpc('config/set',{baseUrl:'http://127.0.0.1:1/v1',apiKey:'synthetic-fixture',model:'research-fixture',maxTokens:4096,contextWindowTokens:32768,historyAutoCleanup:false});
     host.openaiAdapter=(options)=>({complete:async(request)=>{qa.requests.push({task:request.messages[0].content,tools:request.tools.map(t=>t.name)});await request.onAttempt?.();return new Promise(resolve=>qa.pending.push({resolve,emit:options.onTextDelta,child:request.messages[0].content.includes('You are an isolated research subagent')}));}});
@@ -552,7 +579,7 @@ try {
   await capture("literature-continue-abstracts");
   // A preview started before Continue must not reopen after the user proceeds.
   await evaluate(`qa.originalRpc=host.rpc;
-    host.rpc=async function(method,params){const value=await qa.originalRpc.call(this,method,params);if(method==='literature/preview'&&params.taskId===qa.abstractTask)await new Promise(resolve=>{qa.finishPreview=resolve;});return value;};
+    host.rpc=async function(method,params){const value=await qa.originalRpc.call(this,method,params);if(params?.taskId===qa.abstractTask){if(method==='literature/preview')await new Promise(resolve=>{qa.finishPreview=resolve;});if(method==='literature/continue')qa.deferContinueList=true;if(method==='literature/list'&&qa.deferContinueList){qa.deferContinueList=false;await new Promise(resolve=>{qa.finishContinueList=resolve;});}}return value;};
     qa.previewButton=[...d.querySelectorAll('.confucius-literature-footer button')].find(b=>b.textContent==='确认候选');qa.previewButton.click();return true;`);
   await wait(`return !!qa.finishPreview;`);
   assert.equal(
@@ -564,8 +591,36 @@ try {
   await evaluate(
     `d.getElementById('confucius-literature-continue').click();return true;`,
   );
+  await wait(`return !!qa.finishContinueList;`);
   await wait(`return !host.sessions.get(qa.abstractTask).activeTurnId;`);
-  await evaluate(`qa.finishPreview();host.rpc=qa.originalRpc;return true;`);
+  // Switch and interact with another viewer while the old Continue refresh is
+  // delayed. The old completion must not focus the new viewer's close button.
+  await evaluate(
+    `d.querySelector('[data-task-id="'+qa.taskId+'"] .confucius-task-open').click();return true;`,
+  );
+  await wait(
+    `return d.querySelector('[data-task-id="'+qa.taskId+'"]').dataset.active==='true' && !d.getElementById('confucius-literature-dock')?.hidden;`,
+  );
+  await evaluate(
+    `d.getElementById('confucius-literature-capsule').click();qa.continuationFocus=d.querySelector('.confucius-literature-tabs button');qa.continuationFocus.focus();qa.finishContinueList();qa.finishPreview();host.rpc=qa.originalRpc;return true;`,
+  );
+  await evaluate(
+    `await new Promise(resolve=>win.setTimeout(resolve,250));return true;`,
+  );
+  assert.equal(
+    await evaluate(`return d.activeElement===qa.continuationFocus;`),
+    true,
+  );
+  checks.push({ lateContinuationDoesNotStealFocus: true });
+  await evaluate(
+    `d.querySelector('[data-task-id="'+qa.abstractTask+'"] .confucius-task-open').click();return true;`,
+  );
+  await wait(
+    `return d.querySelector('[data-task-id="'+qa.abstractTask+'"]').dataset.active==='true';`,
+  );
+  await evaluate(
+    `d.getElementById('confucius-literature-capsule').click();return true;`,
+  );
   await wait(`return !qa.previewButton.disabled;`);
   assert.equal(
     await evaluate(`return !d.querySelector('[data-confirm]');`),
@@ -590,6 +645,18 @@ try {
     guidanceDelivered: true,
   });
   checks.push({ abstractsOnly });
+  await wait(
+    `return d.getElementById('confucius-literature-review').dataset.variant==='link';`,
+  );
+  assert.equal(
+    await evaluate(
+      `const b=d.getElementById('confucius-literature-review');return !b.hidden && b.textContent==='补充获取全文' && win.getComputedStyle(b).backgroundColor==='rgba(0, 0, 0, 0)' && d.getElementById('confucius-literature-continue').hidden;`,
+    ),
+    true,
+  );
+  await capture("literature-accepted-link");
+  checks.push({ acceptedMaterialHasSecondaryLink: true });
+
   await evaluate(`host.openAlex.transport=qa.baseTransport;
     const task=await host.rpc('task/new',{title:'按当前获取结果继续'});qa.partialTask=task.id;qa.partialCalls=0;
     await host.rpc('literature/search',{taskId:task.id,query:'partial continuation'});
@@ -652,9 +719,20 @@ try {
     ),
     true,
   );
+  await evaluate(`qa.beforePartialRpc=host.rpc;host.rpc=async function(method,params){const value=await qa.beforePartialRpc.call(this,method,params);if(params?.taskId===qa.partialTask){if(method==='literature/continue')qa.deferPartialList=true;if(method==='literature/list'&&qa.deferPartialList){qa.deferPartialList=false;await new Promise(resolve=>qa.finishPartialList=resolve);}}return value;};
+    d.querySelector('.confucius-literature-header button').focus();d.getElementById('confucius-literature-continue').click();return true;`);
+  await wait(`return !!qa.finishPartialList;`);
   await evaluate(
-    `d.getElementById('confucius-literature-continue').click();return true;`,
+    `qa.partialFocus=d.querySelector('.confucius-literature-filter');qa.partialFocus.closest('details').open=true;qa.partialFocus.focus();qa.finishPartialList();host.rpc=qa.beforePartialRpc;return true;`,
   );
+  await evaluate(
+    `await new Promise(resolve=>win.setTimeout(resolve,250));return true;`,
+  );
+  assert.equal(
+    await evaluate(`return d.activeElement===qa.partialFocus;`),
+    true,
+  );
+  checks.push({ continuationPreservesNewFocusWithinViewer: true });
   await wait(`return !host.sessions.get(qa.partialTask).activeTurnId;`);
   const partial = await evaluate(
     `const p=await host.literature.load(qa.partialTask),s=host.sessions.get(qa.partialTask).record.literature;return {choice:p.continuation.mode,available:s.available,acquiring:s.acquiring,waiting:s.awaitingFulltext,read:s.read,repeatedCallRespected:qa.partialCalls===3};`,
@@ -679,6 +757,8 @@ try {
     ),
     true,
   );
+  await wait(`return d.getElementById('confucius-literature-review').hidden;`);
+  checks.push({ noAcquisitionLinkWhenComplete: true });
   checks.push({
     partialContinuation: partial,
     lateDownloadDoesNotRestart: true,

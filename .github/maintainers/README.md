@@ -3,12 +3,13 @@
 产品使用说明位于 [`docs/`](../../docs/README.md)。这里保留仍需维护的工程约定与
 验收证据；临时日志、原始模型 trace 和隔离测试库保留在已忽略的 `output/`。
 
+- [0.5.0 正式版验收](acceptance/release-0.5.0.md)：候选包检查、稳定版与 Beta 数据升级、交互和热更新验证，以及公开旧包在线升级流程。
 - [0.5.0-beta.3 发布验收](acceptance/release-0.5.0-beta.3.md)：单一文献胶囊、计数与窄窗对齐、候选包安装、热更新及旧版升级。
 - [0.5.0-beta.2 发布验收](acceptance/release-0.5.0-beta.2.md)：模型目录输入筛选、自定义思考设置与公开包升级。
 - [0.5.0-beta.1 发布验收](acceptance/release-0.5.0-beta.1.md)：OpenAlex 科研助手、候选与公开包、隔离升级及 Beta 渠道核验。
 - [版本与发布规范](releases.md)：版号、Beta 渠道、更新说明、产物与发布验收。
 - [任务执行与恢复](runtime.md)：执行、存储、上下文和诊断的维护契约。
-- [文献研究领域与子 Agent](literature-research.md)：OpenAlex、候选确认、全文获取、独立委派与持久化；[开发版验收](acceptance/literature-research-2026-09-21.md)。
+- [文献研究领域与子 Agent](literature-research.md)：OpenAlex、候选确认、全文获取、独立委派与持久化；[开发版验收](acceptance/literature-research-2026-09-21.md)、[交互稳健性验收](acceptance/research-interactions-2026-09-23.md)。
 - [上下文与记忆管理](context-memory-refactor.md)：可靠交接、读取预算、本地归档与独立保留策略；[最新优化验收](acceptance/context-optimization-2026-09-08.md)、[完整修复验收](acceptance/context-system-repair-2026-09-08.md)、[基础验收](acceptance/context-memory-refactor-2026-09-08.md)与[专项实测及复现脚本](acceptance/context-memory-stress-2026-09-08.md)。
 - [请求恢复、标注批次与记忆审批验收](acceptance/request-recovery-batches-memory-2026-09-07.md)：请求恢复与记忆审批的自动回归、隔离 Zotero 操作与验证边界。
 - [界面设计准则](../../docs/design.md)：配色、边距与按钮规范，以 APP 为准；artifact 阅读界面无装饰性分割线。

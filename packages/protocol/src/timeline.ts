@@ -12,6 +12,8 @@ export interface TimelineToolCall {
   args: Record<string, unknown>;
   result?: ToolResult;
   progress?: string;
+  /** The enclosing execution ended without a receipt for this call. */
+  interrupted?: boolean;
 }
 
 export type TimelineBlock =
@@ -93,13 +95,6 @@ function flushPending(
   }
 }
 
-function attachCall(
-  tools: TimelineToolCall[],
-  callId: string,
-): TimelineToolCall | undefined {
-  return tools.find((call) => call.callId === callId);
-}
-
 /**
  * Collapse a live event stream into TUI blocks. Formal answers stay
  * unfolded; thinking and tool calls each fold into a single group until
@@ -132,6 +127,18 @@ export function coalesceTimeline(events: ConfuciusEvent[]): TimelineBlock[] {
   const commentary: { text: string; itemId?: string } = { text: "" };
   const text: { value: string; turnId?: string } = { value: "" };
   const tools: { calls: TimelineToolCall[] } = { calls: [] };
+  // Results may arrive after their group was flushed by text or a plan. Index
+  // by execution instead of repeatedly scanning every preceding tool group.
+  const callsByTurn = new Map<
+    string | undefined,
+    Map<string, TimelineToolCall>
+  >();
+  let currentTurn: string | undefined;
+  const callIndex = (turnId = currentTurn) => {
+    let calls = callsByTurn.get(turnId);
+    if (!calls) callsByTurn.set(turnId, (calls = new Map()));
+    return calls;
+  };
 
   const flushAnswer = () => {
     flushPending(blocks, reasoning, tools, commentary);
@@ -164,38 +171,35 @@ export function coalesceTimeline(events: ConfuciusEvent[]): TimelineBlock[] {
     }
     if (event.type === "tool_requested") {
       flushText(blocks, text);
-      tools.calls.push({
+      const call = {
         callId: event.payload.callId,
         toolName: event.payload.toolName,
         args: event.payload.args,
-      });
+      };
+      tools.calls.push(call);
+      callIndex(event.turnId).set(call.callId, call);
       continue;
     }
     if (event.type === "tool_result") {
       flushText(blocks, text);
-      const existing =
-        attachCall(tools.calls, event.payload.callId) ??
-        blocks
-          .flatMap((b) => (b.kind === "tools" ? b.calls : []))
-          .find((c) => c.callId === event.payload.callId);
+      const calls = callIndex(event.turnId);
+      const existing = calls.get(event.payload.callId);
       if (existing) {
         existing.result = event.payload.result;
         continue;
       }
-      tools.calls.push({
+      const call = {
         callId: event.payload.callId,
         toolName: event.payload.result.toolName,
         args: {},
         result: event.payload.result,
-      });
+      };
+      tools.calls.push(call);
+      calls.set(call.callId, call);
       continue;
     }
     if (event.type === "tool_progress") {
-      const existing =
-        attachCall(tools.calls, event.payload.callId) ??
-        blocks
-          .flatMap((b) => (b.kind === "tools" ? b.calls : []))
-          .find((c) => c.callId === event.payload.callId);
+      const existing = callIndex(event.turnId).get(event.payload.callId);
       if (existing) {
         existing.progress = event.payload.message;
       }
@@ -228,6 +232,10 @@ export function coalesceTimeline(events: ConfuciusEvent[]): TimelineBlock[] {
     }
     if (event.type === "turn_started") {
       flushAnswer();
+      currentTurn = event.turnId;
+      // A retry can reuse both turn and call IDs; its receipts belong only to
+      // the new attempt. Distinct turns still accept their own late receipts.
+      callsByTurn.set(currentTurn, new Map());
       blocks.push({ kind: "user", text: event.payload.userText });
       continue;
     }

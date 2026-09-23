@@ -20,10 +20,11 @@
 [下载最新稳定版](https://github.com/ZionDoki/confucius/releases/latest) ·
 [使用文档](docs/README.md) · [更新记录](CHANGELOG.md) · [从源码构建](#从源码构建)
 
-**[0.5.0 Beta 新增](https://github.com/ZionDoki/confucius/releases/tag/v0.5.0-beta.4)：**
-OpenAlex 检索、候选筛选、全文获取和研究子 Agent。
-Beta 4 的子 Agent 卡片与聊天等宽，共用居中的 trace 浮层，切换保留阅读状态，最多并行三个。
-安装 Beta 的 XPI，或在 Confucius 设置 → 更新中打开 **接收测试版更新**。
+**[0.5.0 新增](https://github.com/ZionDoki/confucius/releases/tag/v0.5.0)：**
+OpenAlex 检索、共享文献胶囊、最多并行三个的研究子 Agent 与居中 trace 浮层。
+可先用摘要或当前论文继续调研；会话按创建来源归类，模型思考强度可自定义，
+并可从 models.dev 选取参考配置。正式版和 Beta 用户均可在 Confucius 设置 → 更新中
+获取本次正式版。
 
 ## 功能
 

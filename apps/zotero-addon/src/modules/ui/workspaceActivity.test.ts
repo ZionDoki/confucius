@@ -3,6 +3,7 @@ import { it } from "node:test";
 import type { ConfuciusEvent } from "@confucius/protocol";
 import {
   contextActivity,
+  keyedTimeline,
   retryActivity,
   turnAwaitingReply,
   waitingTextParts,
@@ -242,4 +243,80 @@ it("keeps loading visible through reasoning, retries and recovery and clears it 
   assert.equal(retryActivity(events, false), undefined);
   add("turn_started", { userText: "continue" }, "next");
   assert.equal(retryActivity(events, false), undefined);
+});
+
+it("child retries with reused turn/call IDs keep separate receipts and stable timeline keys", () => {
+  const event = (id: string, type: string, payload: unknown) =>
+    ({
+      id,
+      sessionId: "child",
+      turnId: "same-turn",
+      ts: 1,
+      type,
+      payload,
+    }) as ConfuciusEvent;
+  const first = [
+    event("start1", "turn_started", { userText: "Research" }),
+    event("tool1", "tool_requested", {
+      callId: "same-call",
+      toolName: "get_pages",
+      args: { page: 1 },
+    }),
+    event("failed", "turn_failed", { message: "Interrupted" }),
+  ];
+  const retried = [
+    ...first,
+    event("start2", "turn_started", { userText: "Research" }),
+    event("tool2", "tool_requested", {
+      callId: "same-call",
+      toolName: "get_pages",
+      args: { page: 2 },
+    }),
+    event("receipt", "tool_result", {
+      callId: "same-call",
+      result: { ok: true, toolName: "get_pages", data: { text: "Evidence" } },
+    }),
+    event("answer", "text_delta", {
+      text: "## Findings\nEvidence",
+      phase: "final_answer",
+    }),
+  ];
+  const original = keyedTimeline(first),
+    blocks = keyedTimeline(retried);
+  assert.deepEqual(blocks.slice(0, original.length), original);
+  assert.equal(new Set(blocks.map((entry) => entry.key)).size, blocks.length);
+  const tools = blocks.flatMap(({ block }) =>
+    block.kind === "tools" ? block.calls : [],
+  );
+  assert.equal(tools[0].result, undefined);
+  assert.equal(tools[0].interrupted, true);
+  assert.equal(tools[1].result?.ok, true);
+  assert.equal(blocks.at(-1)?.block.kind, "text");
+});
+
+it("marks missing receipts as interrupted after crash recovery or a superseding attempt", () => {
+  const events = [
+    { id: "start", type: "turn_started", payload: { userText: "Research" } },
+    {
+      id: "call",
+      type: "tool_requested",
+      payload: { callId: "c", toolName: "get_pages", args: {} },
+    },
+  ].map((e) => ({
+    ...e,
+    sessionId: "s",
+    turnId: "t",
+    ts: 1,
+  })) as ConfuciusEvent[];
+  const calls = (ended = false) =>
+    keyedTimeline(events, ended).flatMap(({ block }) =>
+      block.kind === "tools" ? block.calls : [],
+    );
+  assert.equal(calls()[0].interrupted, undefined);
+  assert.equal(calls(true)[0].interrupted, true);
+  events.push({ ...events[0], id: "retry" });
+  events.push({ ...events[1], id: "newcall" });
+  assert.equal(calls()[0].interrupted, true);
+  assert.equal(calls()[1].interrupted, undefined);
+  assert.equal(calls(true)[1].interrupted, true);
 });

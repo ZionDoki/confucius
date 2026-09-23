@@ -34,6 +34,85 @@ describe("nextReasoningFold", () => {
 });
 
 describe("coalesceTimeline", () => {
+  it("attaches out-of-order receipts across flushed groups without crossing reused turn IDs", () => {
+    const events = [event("turn_started", { userText: "First" })];
+    for (let i = 0; i < 1000; i++) {
+      events.push(
+        event("tool_requested", {
+          callId: `c${i}`,
+          toolName: "get_pages",
+          args: { page: i },
+        }),
+      );
+      events.push(event("text_delta", { text: `Reading ${i}` }));
+    }
+    for (let i = 999; i >= 0; i--) {
+      events.push(
+        event("tool_progress", { callId: `c${i}`, message: `Page ${i}` }),
+      );
+      events.push(
+        event("tool_result", {
+          callId: `c${i}`,
+          result: { ok: true, toolName: "get_pages", data: i },
+        }),
+      );
+    }
+    events.push(event("turn_started", { userText: "Retry" }));
+    events.push(
+      event("tool_requested", {
+        callId: "c0",
+        toolName: "get_pages",
+        args: { page: "retry" },
+      }),
+    );
+    events.push(
+      event("tool_result", {
+        callId: "c0",
+        result: { ok: true, toolName: "get_pages", data: "new attempt" },
+      }),
+    );
+    const calls = coalesceTimeline(events).flatMap((b) =>
+      b.kind === "tools" ? b.calls : [],
+    );
+    assert.equal(calls.length, 1001);
+    for (let i = 0; i < 1000; i++) {
+      assert.deepEqual(calls[i].args, { page: i });
+      assert.equal(calls[i].progress, `Page ${i}`);
+      const receipt = calls[i].result;
+      assert.equal(receipt?.ok && receipt.data, i);
+    }
+    assert.equal(
+      calls[1000].result?.ok && calls[1000].result.data,
+      "new attempt",
+    );
+  });
+
+  it("accepts a previous turn's late receipt even when the active turn reuses its call ID", () => {
+    const events = [
+      event("turn_started", { userText: "First" }),
+      event("tool_requested", {
+        callId: "same",
+        toolName: "get_pages",
+        args: { page: 1 },
+      }),
+      event("turn_started", { userText: "Second" }, { turnId: "second" }),
+      event(
+        "tool_requested",
+        { callId: "same", toolName: "get_pages", args: { page: 2 } },
+        { turnId: "second" },
+      ),
+      event("tool_result", {
+        callId: "same",
+        result: { ok: true, toolName: "get_pages", data: "late first" },
+      }),
+    ];
+    const calls = coalesceTimeline(events).flatMap((b) =>
+      b.kind === "tools" ? b.calls : [],
+    );
+    assert.equal(calls[0].result?.ok && calls[0].result.data, "late first");
+    assert.equal(calls[1].result, undefined);
+  });
+
   for (const backend of ["kimi", "codex"] as const) {
     it(`${backend} runtime snapshots stay out of live and reopened conversations`, () => {
       const runtime = (turnId: string, model?: string) =>

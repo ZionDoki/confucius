@@ -56,6 +56,10 @@ test("PDF host resolution selects all and only article-associated tasks and free
   };
   try {
     const host = hostFixture();
+    // Research papers still resolve their evidence context even when the task
+    // belongs to the standalone research group rather than this paper's folder.
+    host.sessions.get("latest").record.createdFrom = [];
+    host.sessions.get("latest").record.literatureSourceKeys = ["1:PAPER1"];
     const resolved = await host.resolveBtwContext(pdf);
     assert.deepEqual(
       resolved.tasks.map((t) => t.record.id),

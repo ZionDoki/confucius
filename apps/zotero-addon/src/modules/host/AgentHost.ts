@@ -738,7 +738,7 @@ export class AgentHost {
         throw new Error("The PDF's parent item changed; select the text again");
       const key = parentKey ?? source.attachmentKey;
       states = [...this.sessions.values()].filter((state) =>
-        taskArticles(state.record).some(
+        contextArticles(state.record.lockedContext).some(
           (item) => item.libraryID === source.libraryID && item.key === key,
         ),
       );
@@ -856,6 +856,7 @@ export class AgentHost {
     },
     bind: async (id, items, removed) => {
       const state = this.requireSession(id);
+      state.record.createdFrom ??= taskArticles(state.record);
       const key = (item: { libraryID: number; key: string }) =>
         `${item.libraryID}:${item.key}`;
       const managed = new Set(state.record.literatureSourceKeys ?? []);
@@ -904,7 +905,6 @@ export class AgentHost {
         );
       }
       state.record.context = legacyContextForLocked(state.record.lockedContext);
-      state.record.articleSources = contextArticles(state.record.lockedContext);
       await this.persistNow();
       this.emitSessionEvent(state, undefined, "context_updated", {
         context: state.record.context,
@@ -1573,10 +1573,8 @@ export class AgentHost {
           entry.loadedSkills ?? (entry.skillSlug ? [entry.skillSlug] : []),
         );
         const record = migrateSessionRecord(entry.record);
-        if (!record.articleSources) {
-          record.articleSources = contextArticles(
-            record.run?.sources ?? record.lockedContext,
-          );
+        if (!record.createdFrom) {
+          record.createdFrom = taskArticles(record);
           repaired = true;
         }
         if (
@@ -3249,7 +3247,7 @@ export class AgentHost {
           ? params.activeKnowledgeBaseId
           : undefined,
       lockedContext,
-      articleSources: contextArticles(lockedContext),
+      createdFrom: contextArticles(lockedContext),
       artifactIds: [],
       capabilityProfile: capabilities.capabilityProfile,
       workingDirectory: capabilities.workingDirectory,
@@ -3425,14 +3423,9 @@ export class AgentHost {
       branch.record.status = "ready";
       branch.record.recoverableTurn = undefined;
       branch.record.run = undefined;
-      branch.record.articleSources = (
-        (researchState || literatureEvent
-          ? contextArticles(branch.record.lockedContext)
-          : source.record.articleSources) ??
-        contextArticles(
-          source.record.run?.sources ?? source.record.lockedContext,
-        )
-      ).map((item) => ({ ...item }));
+      branch.record.createdFrom = taskArticles(source.record).map((item) => ({
+        ...item,
+      }));
       branch.record.externalSessionId = undefined;
       branch.record.externalTurnId = undefined;
       await this.persistNow();
@@ -3533,9 +3526,7 @@ export class AgentHost {
     if (state.activeTurnId)
       throw new Error("Wait for the running research before changing sources");
     // Preserve the original association of legacy tasks before the reader moves.
-    state.record.articleSources ??= contextArticles(
-      state.record.run?.sources ?? state.record.lockedContext,
-    );
+    state.record.createdFrom ??= taskArticles(state.record);
     // A running turn keeps its source/approval boundary. The UI can preview the
     // next attachment; the next idle poll or Send applies it to the task.
     if (follow && state.activeTurnId) return state.record;
@@ -3571,7 +3562,6 @@ export class AgentHost {
       await this.freezeBoundAnnotations(state, nextContext);
     const previousUpdatedAt = state.record.updatedAt;
     state.record.lockedContext = nextContext;
-    state.record.articleSources = contextArticles(nextContext);
     state.driftReportedForLockedFingerprint = undefined;
     state.record.context = legacyContextForLocked(state.record.lockedContext);
     state.record.updatedAt = Date.now();
@@ -6994,6 +6984,8 @@ export class AgentHost {
       ).filter((ref) => ref.taskId !== sessionId);
     const submission = (state.promptSubmission ?? 0) + 1;
     state.promptSubmission = submission;
+    // Materialize legacy navigation before replacing/mutating the previous run.
+    state.record.createdFrom ??= taskArticles(state.record);
     if (!resuming && state.record.subagentIds?.length)
       await this.subagentManager?.cancel(sessionId);
     const previous = state.record.run;
@@ -7105,15 +7097,6 @@ export class AgentHost {
           .map((artifact) => [artifact.id, reportContent(artifact)]),
       );
     }
-    // Keep article navigation stable after the live reader follows another PDF.
-    state.record.articleSources = [
-      ...new Map(
-        [
-          ...(state.record.articleSources ?? []),
-          ...contextArticles(run.sources),
-        ].map((item) => [`${item.libraryID}:${item.key}`, item]),
-      ).values(),
-    ];
     delete state.record.presetPrepared;
     state.runBudget = new BudgetAccountant({
       maxIterations: run.budget.maxIterations,

@@ -12,6 +12,8 @@ import {
   contextArticles,
   followReaderContext,
   readerAttachmentIdentity,
+  taskArticles,
+  taskCategory,
 } from "./TaskSources";
 import { articleTaskGroups, timeTaskGroups } from "../ui/workspaceTasks";
 
@@ -155,8 +157,65 @@ it("host never rebinds a task when PDF tabs change, while explicit additions per
   state.activeTurnId = null;
   await host.taskSetContext({ taskId: record.id, mode: "add", context: live });
   assert.deepEqual(
-    record.articleSources?.map((item) => item.key),
+    record.lockedContext.items.map((item) => item.key),
     ["A", "B"],
+  );
+  assert.deepEqual(record.createdFrom, []);
+});
+
+it("captures navigation before explicit source additions without moving a blank task", () => {
+  const blank = task("blank", pdf("B"));
+  blank.createdFrom = [];
+  assert.deepEqual(taskArticles(blank), []);
+  assert.equal(taskCategory(blank), "unfiled");
+});
+
+it("research evidence never adds article folders and old acquired associations are repaired", () => {
+  const research = task("research", pdf("ACQUIRED"));
+  research.articleSources = pdf("ACQUIRED").items;
+  research.literatureSourceKeys = ["1:ACQUIRED"];
+  research.literature = {
+    id: "pool",
+    revision: 1,
+    candidateRevision: 1,
+    pool: 100,
+    evaluated: 9,
+    candidates: 9,
+    pendingFulltext: 8,
+    available: 1,
+    read: 0,
+    awaitingConfirmation: false,
+  };
+  const article = {
+    ...research,
+    id: "article",
+    createdFrom: pdf("ORIGIN").items,
+  };
+  assert.equal(taskCategory(research), "research");
+  assert.equal(taskCategory(article), "articles");
+  assert.deepEqual(
+    articleTaskGroups([research, article]).map((group) => group.id),
+    ["1:ORIGIN"],
+  );
+  assert.deepEqual(
+    research.lockedContext.items.map((item) => item.key),
+    ["ACQUIRED"],
+  );
+  // Persisted empty origins and removed/changed research candidates cannot regroup a task.
+  research.createdFrom = taskArticles(research);
+  research.literatureSourceKeys = [];
+  assert.deepEqual(taskArticles(research), []);
+  assert.deepEqual(migrateSessionRecord(research).createdFrom, []);
+  assert.deepEqual(
+    migrateSessionRecord(article).createdFrom,
+    article.createdFrom,
+  );
+  assert.equal(
+    migrateSessionRecord({
+      ...article,
+      createdFrom: [{ key: "bad" }],
+    } as unknown as ResearchTaskRecord).createdFrom,
+    undefined,
   );
 });
 

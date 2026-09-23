@@ -206,7 +206,12 @@ export function createLiteraturePanel(
     "",
   );
   proceed.setAttribute("aria-describedby", continueHelp.id);
-  const review = createWorkspaceButton(doc, "", text("review"), "primary");
+  const review = createWorkspaceButton(
+    doc,
+    "confucius-literature-review",
+    text("review"),
+    "primary",
+  );
   const cancel = createWorkspaceButton(doc, "", text("cancel-downloads"));
   const actions = node(doc, "div");
   actions.className = "confucius-literature-controls";
@@ -331,7 +336,12 @@ export function createLiteraturePanel(
           summary.pendingFulltext &&
           !summary.acquiring
         ));
-    review.textContent = text(summary?.continuation ? "acquire" : "review");
+    const accepted =
+      !!summary?.continuation &&
+      !summary.hasCandidateChanges &&
+      !summary.awaitingConfirmation;
+    review.textContent = text(accepted ? "acquire-later" : "review");
+    review.dataset.variant = accepted ? "link" : "primary";
     review.disabled = busy || continuing;
     search.disabled = busy;
     if (proposal) {
@@ -445,7 +455,7 @@ export function createLiteraturePanel(
       await work();
       if (epoch !== era || disposed) return;
       await refresh();
-      options.changed();
+      if (epoch === era && !disposed) options.changed();
     } catch (e) {
       if (epoch !== era || disposed) return;
       message(e);
@@ -461,7 +471,8 @@ export function createLiteraturePanel(
   async function continueResearch() {
     if (!taskId || !summary || continuing || proceed.disabled) return;
     const id = taskId,
-      era = epoch;
+      era = epoch,
+      focused = doc.activeElement;
     const candidateRevision =
       proposal?.candidateRevision ?? summary.candidateRevision;
     confirmationGeneration++;
@@ -477,7 +488,10 @@ export function createLiteraturePanel(
       if (epoch !== era || disposed) return;
       endConfirmation();
       await refresh();
-      close.focus({ preventScroll: true });
+      if (epoch !== era || disposed) return;
+      // The user may close/switch the viewer while the list refresh is pending.
+      if (floating && doc.activeElement === focused && popup.contains(focused))
+        close.focus({ preventScroll: true });
       options.changed();
     } catch (e) {
       if (epoch === era && !disposed) {

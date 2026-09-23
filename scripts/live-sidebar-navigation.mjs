@@ -87,7 +87,17 @@ try {
   const initial = await evaluate(
     `return {mode:d.getElementById('confucius-session-pane').dataset.organization,groups:d.querySelectorAll('.confucius-task-group').length,recent:d.querySelector('[data-task-group="recent"]')!==null};`,
   );
-  assert.deepEqual(initial, { mode: "articles", groups: 5, recent: false });
+  assert.deepEqual(initial, { mode: "time", groups: 5, recent: false });
+  check("a fresh profile defaults to time organization");
+  await evaluate(
+    `d.getElementById('confucius-tasks-articles').click();return true;`,
+  );
+  assert.equal(
+    await evaluate(
+      `return d.querySelectorAll('.confucius-task-group').length;`,
+    ),
+    5,
+  );
   check(
     "article mode includes all 48 tasks, including 8 without an article, with no Recent section",
   );
@@ -368,7 +378,7 @@ try {
     `return qa.requests.filter(r=>r.method==='task/new').length===qa.beforeFocus.newTasks+1 && !qa.tasks.some(task=>task.id===qa.selected()) && d.querySelector('.confucius-article-new')?.disabled===false;`,
   );
   const focus = await evaluate(
-    `const task=await qa.original('task/load',{taskId:qa.selected()});return {focused:Services.focus.activeWindow===qa.beforeFocus.active,focusRequests:qa.mainFocusRequests,tab:Zotero.getMainWindow().Zotero_Tabs.selectedID,originalTab:qa.beforeFocus.tab,readers:qa.requests.filter(r=>r.method==='reader/open').length-qa.beforeFocus.readers,articles:task.articleSources.map(item=>item.libraryID+':'+item.key)};`,
+    `const task=await qa.original('task/load',{taskId:qa.selected()});return {focused:Services.focus.activeWindow===qa.beforeFocus.active,focusRequests:qa.mainFocusRequests,tab:Zotero.getMainWindow().Zotero_Tabs.selectedID,originalTab:qa.beforeFocus.tab,readers:qa.requests.filter(r=>r.method==='reader/open').length-qa.beforeFocus.readers,articles:task.createdFrom.map(item=>item.libraryID+':'+item.key)};`,
   );
   result.creationFocus = focus;
   assert.equal(focus.focused, true);

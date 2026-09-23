@@ -107,8 +107,14 @@ export function updateWaitingIndicator(
 /** Keys are local to a durable turn, so new text and earlier tool results do not replace unrelated turns. */
 export function keyedTimeline(
   events: ConfuciusEvent[],
+  executionEnded = false,
 ): Array<{ key: string; block: TimelineBlock }> {
-  const groups: Array<{ id: string; events: ConfuciusEvent[] }> = [];
+  const groups: Array<{
+    id: string;
+    turnId: string;
+    events: ConfuciusEvent[];
+  }> = [];
+  const starts = new Set<string>();
   const research = new Set<string>();
   const children = new Map(
     events.flatMap((event) =>
@@ -134,13 +140,33 @@ export function keyedTimeline(
           }
         : event;
     const last = groups.at(-1);
-    const id = event.turnId ?? last?.id ?? event.id;
-    if (last?.id === id) last.events.push(entry);
-    else groups.push({ id, events: [entry] });
+    const turnId = event.turnId ?? last?.turnId ?? event.id;
+    if (last?.turnId === turnId && event.type !== "turn_started")
+      last.events.push(entry);
+    else {
+      const id = starts.has(turnId) ? `${turnId}:${event.id}` : turnId;
+      starts.add(turnId);
+      groups.push({ id, turnId, events: [entry] });
+    }
   }
-  return groups.flatMap((group) => {
+  const lastStart = groups.findLastIndex(
+    (group) => group.events[0]?.type === "turn_started",
+  );
+  return groups.flatMap((group, index) => {
     const counts = new Map<string, number>();
+    const ended =
+      executionEnded ||
+      index < lastStart ||
+      group.events.some(
+        (event) =>
+          event.type === "turn_completed" ||
+          event.type === "turn_failed" ||
+          event.type === "turn_aborted",
+      );
     return coalesceTimeline(group.events).map((block) => {
+      if (ended && block.kind === "tools")
+        for (const call of block.calls)
+          if (!call.result) call.interrupted = true;
       const count = counts.get(block.kind) ?? 0;
       counts.set(block.kind, count + 1);
       const id =
@@ -160,11 +186,26 @@ export function keyedTimeline(
   });
 }
 
+// A closed disclosure's DOM does not contain its pending/received tool data.
+// Keep semantic signatures outside the DOM so full receipts aren't duplicated
+// into attributes, and so reconciliation cannot retain a stale lazy closure.
+const activitySignatures = new WeakMap<HTMLElement, string>();
+export function setActivitySignature(node: HTMLElement, signature: string) {
+  activitySignatures.set(node, signature);
+}
+function activitySignature(node: HTMLElement): string {
+  return activitySignatures.get(node) ?? String(node.outerHTML);
+}
+
 /** Keep unchanged DOM, open details, selection, and focused controls while the stream grows. */
 export function reconcileActivity(
   current: HTMLElement,
   next: HTMLElement,
+  preserveSelection = true,
 ): void {
+  const focused = current.ownerDocument?.activeElement as HTMLElement | null;
+  const selection = current.ownerDocument?.getSelection?.();
+  let restoreFocus: HTMLElement | undefined;
   const old = new Map(
     Array.from(current.children).map((node) => [
       (node as HTMLElement).dataset.entryId,
@@ -186,7 +227,13 @@ export function reconcileActivity(
         ? fresh.querySelector<HTMLElement>(".tui-waiting")
         : null;
       // Generated signatures exclude transient state such as an opened details element.
-      const signature = String(fresh.outerHTML);
+      const signature = activitySignature(fresh);
+      const conversationControl =
+        focused &&
+        previous.contains(focused) &&
+        ((focused.matches("summary") &&
+          focused.parentElement?.getAttribute("data-disclosure-key")) ||
+          focused.matches(".confucius-reasoning-toggle"));
       if (
         fresh.dataset.literatureAnchor &&
         previous.dataset.literatureAnchor === fresh.dataset.literatureAnchor
@@ -197,8 +244,12 @@ export function reconcileActivity(
         updateWaitingIndicator(waiting, nextWaiting.dataset.waitingText ?? "");
         chosen = previous;
       } else if (
-        previous.dataset.renderSignature === signature ||
-        (previous.contains(current.ownerDocument?.activeElement ?? null) &&
+        activitySignatures.get(previous) === signature ||
+        (preserveSelection &&
+          selection?.toString() &&
+          previous.contains(selection.anchorNode)) ||
+        (!conversationControl &&
+          previous.contains(focused) &&
           previous.dataset.proposalStatus === fresh.dataset.proposalStatus)
       ) {
         chosen = previous;
@@ -207,13 +258,35 @@ export function reconcileActivity(
         fresh
           .querySelectorAll("details")
           .forEach((detail: HTMLDetailsElement, index: number) => {
+            // Shared conversation disclosures restore by call identity, not row order.
+            if (detail.dataset.disclosureKey) return;
             detail.open =
               (details[index] as HTMLDetailsElement | undefined)?.open ??
               detail.open;
           });
-        fresh.dataset.renderSignature = signature;
+        activitySignatures.set(fresh, signature);
+        if (conversationControl) {
+          const key = focused?.parentElement?.getAttribute(
+            "data-disclosure-key",
+          );
+          restoreFocus = key
+            ? (
+                Array.from(fresh.querySelectorAll("summary")) as HTMLElement[]
+              ).find(
+                (summary) =>
+                  summary.parentElement?.getAttribute("data-disclosure-key") ===
+                  key,
+              )
+            : (fresh.querySelector<HTMLElement>(
+                ".confucius-reasoning-toggle",
+              ) ?? undefined);
+          // The top-level tools disclosure is itself the activity row.
+          if (key === fresh.dataset.disclosureKey)
+            restoreFocus =
+              fresh.querySelector<HTMLElement>(":scope > summary") ?? undefined;
+        }
       }
-    } else fresh.dataset.renderSignature = String(fresh.outerHTML);
+    } else activitySignatures.set(fresh, activitySignature(fresh));
     desired.push(chosen);
   }
   // Remove replaced rows before placing their successors. Leaving them at the
@@ -227,6 +300,7 @@ export function reconcileActivity(
     if (chosen !== cursor) current.insertBefore(chosen, cursor);
     cursor = chosen.nextSibling;
   }
+  if (restoreFocus?.isConnected) restoreFocus.focus({ preventScroll: true });
 }
 
 export function turnAwaitingReply(events: readonly ConfuciusEvent[]): boolean {
