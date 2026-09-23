@@ -15,15 +15,18 @@
 
 ### Upgrade notes
 
-- This is a prerelease. Enable **Include prereleases** in Confucius Settings →
-  Update and check again to receive Beta 6. Stable-only installations remain on
-  the stable channel; disabling Betas does not downgrade an installation.
+- **One manual installation is currently required for Beta 5 and earlier.**
+  GitHub still omits the uploaded files from its public release list, so those
+  older updaters cannot obtain this repair automatically. Download the XPI above
+  and use Zotero → Tools → Plugins → gear menu → Install Plugin From File.
+- This is a prerelease. **Include prereleases** in Confucius Settings → Update
+  controls future Beta discovery. Stable-only installations remain on the stable
+  channel; disabling Betas does not downgrade an installation.
 - Beta 5's published package is unchanged. This replacement release includes the
   update-discovery fix and all Beta 5 research improvements. No data migration or
   model reconfiguration is required; existing tasks and research data are retained.
-- If an older updater still cannot discover a package, install this release's
-  `confucius.xpi` from the download link above. Source-code archives are not
-  installable Zotero extensions.
+- Source-code archives are not installable Zotero extensions. Installing the XPI
+  preserves existing tasks, papers, settings and research history.
 
 ### Validation and known limits
 
@@ -37,7 +40,16 @@
   list assets and used the real anonymous asset endpoint to recover them.
 - This repair targets update discovery and publication. Paid model execution,
   authenticated fulltext retrieval, Windows, Linux and other Zotero versions
-  were not revalidated. Public-package upgrade results are recorded after release.
+  were not revalidated.
+- Publication check on September 23: the public XPI passed direct installation
+  upgrades from Beta 4, Beta 5 and stable 0.4.6 (26, 26 and 20 checks), including
+  full restarts and preserved data. The installed public Beta 6 code passed real
+  asset-endpoint discovery, download, checksum verification and installation;
+  the probe temporarily reported an older current version to exercise that path.
+- Node.js 22/24 verification and draft-package checks passed, but the release job's
+  legacy-client discovery gate failed because the anonymous list still omits
+  assets. Actual old-version updater checks also failed; these are not counted
+  as successful automatic upgrades. The XPI and both checksum checks passed.
 - See the [release acceptance record](https://github.com/ZionDoki/confucius/blob/v0.5.0-beta.6/.github/maintainers/acceptance/release-0.5.0-beta.6.md).
 
 ## 0.5.0-beta.5 - 2026-09-23

@@ -64,5 +64,48 @@ node output/release-0.5.0-beta.6/upgrade.mjs
 模型输出使用本地确定性服务，未调用付费模型。Windows、Linux、其他 Zotero 版本、
 外部 Codex／Kimi 端到端和带凭据全文获取未重验。本轮未改变研究交互组件。
 
-公开 Release、匿名列表、公共下载及从旧版实际更新器升级的结果在发布后补充；
-本地候选验证不代表这些步骤已经完成。
+## 公开发布与安装验收
+
+`v0.5.0-beta.6` 指向 `71d1d44544bff1b22b8fbba4093ffdb5f7c80ee9`。
+[源码主干 CI](https://github.com/ZionDoki/confucius/actions/runs/35841595401) 成功。
+[tag CI](https://github.com/ZionDoki/confucius/actions/runs/35841595570) 的 Node.js
+22／24 验证、草稿上传及资产校验成功，随后公开 Release；最后的旧客户端匿名列表
+检查失败，所以 **tag CI 整体失败，不记作全部通过**。
+
+- [公开 Release](https://github.com/ZionDoki/confucius/releases/tag/v0.5.0-beta.6)
+  发布于 2026-09-23 09:15:12 UTC，保持 prerelease；Latest 仍为 `v0.4.6`，
+  稳定版资产及 Beta 5 的 tag、安装包未替换。
+- 公开 XPI 为 708,242 bytes，SHA-256：
+  `ffa8d61b20079551d1be1d64c64023fafc099975f83d4d1d333a148034285866`。
+- 公开更新 JSON 为 587 bytes，SHA-256：
+  `9354e358501ad1bcf179fe6cfba8f5368b526aa8e90b200e6ebe22914716d5f0`。
+- 匿名浏览器下载两份文件成功；大小、GitHub SHA-256、manifest 插件 ID／版本、
+  兼容范围、更新链接及 SHA-512 一致。文件名直接可见。Release 正文从 CHANGELOG
+  生成，发布后补充实测结果和一次手动安装说明。
+- 从公开 Beta 4、Beta 5 和稳定版 0.4.6 **直接安装公开 XPI**，分别 26／26／20 项
+  通过。完整重启保留任务、来源、预算、中文草稿、论文、批注、报告、记忆和待审提案；
+  Beta 的文献池与子任务也保留。40／40／28 份历史及工作笔记正文逐文件一致，继续
+  执行没有重复写笔记或新分配预算。
+- 公开 Beta 6 的发现探针 3 项通过，访问真实匿名列表和独立资产接口；关闭 Beta
+  后不请求该版资产。人为清空列表资产的情形也通过。
+- 公开 Beta 6 的完整更新探针 4 项通过：仅将已安装新版更新服务中的当前版本暂设为
+  Beta 5，真实发现 Beta 6、从资产 API 下载、校验并正常安装；完整重启后包摘要与
+  公开 XPI 相同，中文草稿保留，当前版本不再重复提供，关闭 Beta 不降级且跨重启保留。
+  这是对已修复更新器的实测，**不是旧版更新器自动升级成功的证据**。
+
+### 旧版本需要手动安装一次
+
+GitHub 的公开列表和按 tag 查询仍给 Beta 6 返回空 `assets`，按 Release ID／独立
+资产接口则返回完整的两个 uploaded 文件。草稿先上传未消除这项服务端不一致；CI
+新增的最后检查捕获并报告了它，没有放宽验收或重复上传已发布文件来使结果变绿。
+
+从 Beta 4、Beta 5 和 0.4.6 实际旧版更新器开启 Beta，三条路径均在发现安装包时失败，
+没有记为成功升级。旧代码无法通过这次失败的发现过程下载自身修复，因此目前需从
+Release 下载 Beta 6 的 `confucius.xpi`，在 Zotero 的插件管理页选择从文件安装。
+安装后使用的是已验证的资产补查逻辑；用户无需重新配置模型或迁移文库。
+
+原始证据包括 `public-package.json`（包校验通过、旧列表检查失败分别记录）、
+`public-discovery/report.json`、`fixed-updater-install.json`、
+`public-direct-upgrade-{beta4,beta5,stable}.json`、失败的
+`public-upgrade-{beta4,beta5,stable}.json` 和 `tag-ci-failed.log`，均在忽略的 `output/`
+目录。公开安装包、Git tag 和源码提交没有因补充验收文档而改变。
