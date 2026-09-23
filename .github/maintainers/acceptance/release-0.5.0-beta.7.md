@@ -74,3 +74,7 @@ Beta 的文献池、候选决定、子任务结果与公开 trace 保留；40／
 原始证据：`public-package.json`、`tag-ci-failed.log`、`legacy-beta5.json`、
 `legacy-beta5-after-refresh.json`、`after-name-refresh.log` 和
 `previous-assets-unchanged.json`，均位于忽略的 `output/release-0.5.0-beta.7/`。
+
+Beta 7 撤下后，多个原版客户端已完成在线升级到公开 Beta 6；但同一原版 Beta 5
+连续复验仍有 3／8 次缺附件错误，不能认定发布接口稳定恢复。完整结果追加于
+[Beta 6 验收记录](release-0.5.0-beta.6.md)，Beta 7 仍保持 draft，没有重新发布。

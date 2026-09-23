@@ -66,11 +66,11 @@
 
 ### Upgrade notes
 
-- **Online updates from Beta 5 and earlier remain blocked.**
-  GitHub still omits the uploaded files from its public release list, so those
-  older updaters cannot obtain this repair automatically. This is an unresolved
-  publication-compatibility defect, not a successful upgrade path. Requiring
-  users to install the updater repair manually is not an adequate resolution.
+- **Old-version online updates have succeeded, but discovery remains
+  intermittent.** Use Confucius Settings → Update to check and install; a manual
+  XPI installation is not a prerequisite. GitHub can still omit uploaded assets
+  from its list, causing a retryable missing-package error. This remaining
+  publication-compatibility defect has not passed stability acceptance.
 - This is a prerelease. **Include prereleases** in Confucius Settings → Update
   controls future Beta discovery. Stable-only installations remain on the stable
   channel; disabling Betas does not downgrade an installation.
@@ -100,8 +100,15 @@
   the probe temporarily reported an older current version to exercise that path.
 - Node.js 22/24 verification and draft-package checks passed, but the release job's
   legacy-client discovery gate failed because the anonymous list still omits
-  assets. Actual old-version updater checks also failed; these are not counted
-  as successful automatic upgrades. The XPI and both checksum checks passed.
+  assets. Initial old-version updater checks failed; these earlier failures are
+  retained separately from the later successful checks below.
+- Subsequent unchanged Beta 4, Beta 5 and stable 0.4.6 installations completed real
+  online upgrades to this public package (33, 33 and 27 checks), preserving data
+  through full restarts. Original Beta 1, Beta 3 and stable 0.4.3–0.4.5 also passed
+  11 checks each. Beta 2 discovered the package but its download hit a network error.
+- A continuous check in one unchanged Beta 5 installation returned five available
+  updates and three missing-package errors across eight repeat checks. Successful
+  upgrades therefore do not establish that discovery is consistently repaired.
 - See the [release acceptance record](https://github.com/ZionDoki/confucius/blob/v0.5.0-beta.6/.github/maintainers/acceptance/release-0.5.0-beta.6.md).
 
 ## 0.5.0-beta.5 - 2026-09-23
@@ -159,7 +166,8 @@
   omitted this release's uploaded assets. In-app update discovery could not pass
   acceptance. This remains a publication-compatibility defect for older installed
   clients; a manual XPI installation does not establish that online upgrading is
-  fixed. Subsequent Beta 6 and Beta 7 publication checks did not resolve it.
+  fixed. Later original-client upgrades to Beta 6 succeeded, but discovery still
+  intermittently omits assets; Beta 7 was withdrawn after failed acceptance.
 
 ## 0.5.0-beta.4 - 2026-09-22
 
