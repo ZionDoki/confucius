@@ -79,4 +79,7 @@ jobs:
         run: node scripts/release-assets.mjs "$GITHUB_REF_NAME" --public
       - name: Withdraw a release that installed clients cannot verify
         if: ${{ failure() && steps.verify_public.outcome == 'failure' }}
-        run: gh release edit "$GITHUB_REF_NAME" --draft=true
+        run: >-
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/${{ steps.upload.outputs.id }}"
+          -f tag_name="$GITHUB_REF_NAME" -F draft=true
+          -F prerelease=${{ contains(github.ref_name, '-') }} -f make_latest=false

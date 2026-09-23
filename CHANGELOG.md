@@ -10,7 +10,7 @@
 
 ## 0.5.0-beta.7 - 2026-09-23
 
-**Download:** [confucius.xpi](https://github.com/ZionDoki/confucius/releases/download/v0.5.0-beta.7/confucius.xpi)
+**Withheld:** This release remains a draft after failed online-upgrade acceptance.
 
 ### Fixed
 
