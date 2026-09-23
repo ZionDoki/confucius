@@ -157,6 +157,17 @@ export class OpenAlexClient {
     await this.request("https://api.openalex.org/rate-limit");
     return { ok: true, hasKey: !!this.key() };
   }
+  async abstract(work: LiteratureWork, signal?: AbortSignal) {
+    const id = work.openAlexIds.find((id) => /^W\d+$/.test(id));
+    if (!id) return undefined;
+    const response = await this.request(
+      `https://api.openalex.org/works/${id}`,
+      signal,
+    );
+    const found = response && openAlexWork(response, work.queryIds[0] ?? "");
+    if (!found || !work.openAlexIds.includes(found.id)) return undefined;
+    return found.abstract;
+  }
   private async request(url: string, signal?: AbortSignal) {
     if (signal?.aborted) throw new LiteratureError("cancelled", "Cancelled");
     let response: OpenAlexResponse;

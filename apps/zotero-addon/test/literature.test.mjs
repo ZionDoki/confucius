@@ -9,6 +9,10 @@ import {
 } from "../src/modules/host/OpenAlexClient.ts";
 import { LiteratureService } from "../src/modules/host/LiteratureService.ts";
 import { LiteratureToolProvider } from "../src/modules/host/LiteratureToolProvider.ts";
+import {
+  LiteratureAbstracts,
+  abstractText,
+} from "../src/modules/host/LiteratureAbstracts.ts";
 import { memoryJsonStorage } from "../src/modules/host/RuntimeStorage.ts";
 import {
   validPdf,
@@ -86,6 +90,473 @@ function fixture(options = {}) {
     summaries,
   };
 }
+async function selectOne(f) {
+  await f.service.search("task", { query: "research" });
+  await f.service.updateCandidates(
+    "task",
+    0,
+    [{ id: "W1000", selected: true }],
+    "agent",
+  );
+}
+test(
+  "slow searches do not block continuing, and late pages preserve newer user decisions",
+  { timeout: 2000 },
+  async () => {
+    const f = fixture();
+    await selectOne(f);
+    let finish;
+    f.client.search = () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      });
+    const searching = f.service.search("task", { query: "slow remote query" });
+    await setImmediate();
+    let continued = false;
+    const choosing = f.service.continue("task", 1, "abstracts").then(() => {
+      continued = true;
+    });
+    await setImmediate();
+    const immediate = continued;
+    if (immediate) {
+      await f.service.updateCandidates(
+        "task",
+        1,
+        [{ id: "W1001", selected: true, reason: "New user choice" }],
+        "user",
+      );
+      await f.service.continue("task", 2, "abstracts");
+    }
+    finish({ works: [openAlexWork(raw(1), "remote")], total: 1, cursor: null });
+    await Promise.all([searching, choosing]);
+    assert.equal(
+      immediate,
+      true,
+      "Continue must not wait for the remote search",
+    );
+    const work = await f.service.get("task", "W1001");
+    assert.equal(work.decision.actor, "user");
+    assert.equal(work.decision.selected, true);
+    assert.equal(
+      (await f.service.list("task")).summary.continuation,
+      "abstracts",
+    );
+  },
+);
+test("a failed confirmation remains reviewable and cannot be mistaken for applied sources", async () => {
+  let fail = true;
+  const f = fixture({
+    bind: async () => {
+      if (fail) throw new Error("binding failed");
+    },
+  });
+  await selectOne(f);
+  await assert.rejects(f.service.confirm("task", 1), /binding failed/);
+  const failed = await f.service.list("task");
+  assert.equal(failed.summary.awaitingConfirmation, true);
+  assert.deepEqual((await f.service.load("task")).confirmedIds, []);
+  assert.equal(f.downloads.length, 0);
+  fail = false;
+  await f.service.confirm("task", 1);
+  await f.service.cancel("task");
+  assert.equal(
+    (await f.service.list("task")).summary.awaitingConfirmation,
+    false,
+  );
+  assert.deepEqual((await f.service.load("task")).confirmedIds, ["W1000"]);
+  assert.equal(f.items.length, 1);
+});
+test(
+  "a user can continue with abstracts, without import, binding, downloads or repeated waits",
+  { timeout: 2000 },
+  async () => {
+    const f = fixture();
+    await selectOne(f);
+    const tool = new LiteratureToolProvider(f.service, "task");
+    let pauses = 0,
+      resumes = 0;
+    const pending = tool.call(
+      "literature_acquire",
+      { waitForFulltext: true },
+      undefined,
+      {
+        runId: "run1",
+        executionScope: { pause: () => pauses++, resume: () => resumes++ },
+      },
+    );
+    await setImmediate();
+    await f.service.continue("task", 1, "abstracts");
+    const result = await pending;
+    assert.equal(result.ok, true);
+    assert.equal(pauses, 1);
+    assert.equal(resumes, 1);
+    assert.equal(result.data.continuation.mode, "abstracts");
+    assert.deepEqual(result.data.continuation.ids, ["W1000"]);
+    assert.equal(result.data.items.length, 1);
+    assert.equal(result.data.summary.awaitingConfirmation, false);
+    assert.equal(result.data.summary.awaitingFulltext, false);
+    assert.equal(result.data.summary.hasCandidateChanges, false);
+    assert.equal(result.data.summary.abstracts, 1);
+    assert.equal(result.data.summary.read, 0);
+    assert.match(result.data.guidance, /Do not wait/);
+    assert.equal(
+      (await tool.call("literature_acquire", { waitForFulltext: true })).ok,
+      true,
+    );
+    assert.deepEqual(f.items, []);
+    assert.deepEqual(f.bindings, []);
+    assert.deepEqual(f.downloads, []);
+    assert.deepEqual((await f.service.load("task")).confirmedIds, []);
+  },
+);
+test(
+  "early continue is durable, stale choices are rejected, and new candidates require a new decision",
+  { timeout: 2000 },
+  async () => {
+    const f = fixture();
+    await selectOne(f);
+    await assert.rejects(
+      f.service.continue("task", 0, "abstracts"),
+      /revision conflict/,
+    );
+    await assert.rejects(f.service.continue("task", 1, "invalid"), /Invalid/);
+    await f.service.continue("task", 1, "abstracts");
+    await f.service.recover("task");
+    await f.service.requestConfirmation("task");
+    await f.service.waitForConfirmation("task", 1);
+    await f.service.waitForFulltext("task", "run");
+    assert.equal((await f.service.load("task")).continuation.mode, "abstracts");
+    await f.service.updateCandidates(
+      "task",
+      1,
+      [{ id: "W1001", selected: true }],
+      "user",
+    );
+    const next = await f.service.requestConfirmation("task");
+    assert.equal(next.candidateRevision, 2);
+    assert.equal(
+      (await f.service.list("task")).summary.continuation,
+      undefined,
+    );
+    assert.equal(
+      (await f.service.list("task")).summary.awaitingConfirmation,
+      true,
+    );
+    await f.service.continue("task", 2, "abstracts");
+    await f.service.confirm("task", 2);
+    assert.equal((await f.service.load("task")).continuation, undefined);
+    await f.service.cancel("task");
+    assert.equal(f.items.length, 2);
+  },
+);
+test(
+  "accepting current results releases the tool while a PDF download is still pending",
+  { timeout: 2000 },
+  async () => {
+    let finish;
+    const f = fixture({
+      acquire: {
+        ensureItem: async (w) => ({
+          id: w.id,
+          libraryID: 1,
+          key: w.id,
+          title: w.title,
+          source: "library",
+        }),
+        acquire: () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      },
+    });
+    await selectOne(f);
+    await f.service.confirm("task", 1);
+    const tool = new LiteratureToolProvider(f.service, "task");
+    const pending = tool.call(
+      "literature_acquire",
+      { waitForFulltext: true },
+      undefined,
+      { runId: "run1" },
+    );
+    await setImmediate();
+    assert.equal((await f.service.list("task")).summary.awaitingFulltext, true);
+    await f.service.continue("task", 1, "current");
+    const result = await pending;
+    assert.equal(result.ok, true);
+    assert.equal(result.data.summary.awaitingFulltext, false);
+    assert.equal(result.data.summary.available, 0);
+    assert.equal(result.data.summary.acquiring, 1);
+    assert.equal(result.data.continuation.mode, "current");
+    finish({ attachmentKey: "PDF", stage: "open_access" });
+    await setImmediate();
+    assert.equal(
+      (await f.service.get("task", "W1000")).acquisition.status,
+      "available",
+    );
+    assert.equal((await f.service.list("task")).summary.read, 0);
+    assert.equal(
+      (await f.service.list("task")).summary.awaitingFulltext,
+      false,
+    );
+    await f.service.cancel("task");
+  },
+);
+test(
+  "failed and stopped downloads can be accepted, and abort clears the live fulltext wait",
+  { timeout: 2000 },
+  async () => {
+    const f = fixture({
+      acquire: {
+        ensureItem: async (w) => ({
+          id: w.id,
+          libraryID: 1,
+          key: w.id,
+          title: w.title,
+          source: "library",
+        }),
+        acquire: async () => {
+          throw new Error("offline");
+        },
+      },
+    });
+    await selectOne(f);
+    await f.service.confirm("task", 1);
+    await f.service.cancel("task");
+    const abort = new globalThis.AbortController();
+    const wait = f.service.waitForFulltext("task", "run1", abort.signal);
+    await setImmediate();
+    abort.abort();
+    await assert.rejects(wait, /cancelled/);
+    assert.equal(
+      (await f.service.list("task")).summary.awaitingFulltext,
+      false,
+    );
+    const retry = f.service.waitForFulltext("task", "run2");
+    await setImmediate();
+    await f.service.continue("task", 1, "current");
+    assert.equal((await retry).summary.continuation, "current");
+  },
+);
+test(
+  "replacing a fulltext waiter does not let the old waiter clear the new one",
+  { timeout: 2000 },
+  async () => {
+    const f = fixture();
+    await selectOne(f);
+    const p = await f.service.load("task");
+    p.confirmedIds = ["W1000"];
+    await f.storage.write("task", p);
+    const old = f.service.waitForFulltext("task", "run");
+    const rejected = assert.rejects(old, /replaced/);
+    await setImmediate();
+    const latest = f.service.waitForFulltext("task", "run");
+    await rejected;
+    assert.equal((await f.service.list("task")).summary.awaitingFulltext, true);
+    await f.service.continue("task", 1, "current");
+    await latest;
+  },
+);
+test(
+  "missing abstract lookup is cached and never blocks continuing or alters selection/read evidence",
+  { timeout: 2000 },
+  async () => {
+    let finish,
+      lookups = 0;
+    const f = fixture({
+      abstracts: {
+        resolve: async () => {
+          lookups++;
+          return new Promise((resolve) => {
+            finish = resolve;
+          });
+        },
+      },
+    });
+    await selectOne(f);
+    const p = await f.service.load("task");
+    delete p.works[0].abstract;
+    await f.storage.write("task", p);
+    const tool = new LiteratureToolProvider(f.service, "task", true);
+    const lookup = tool.call("literature_get", { id: "W1000" });
+    await setImmediate();
+    const before = await f.service.continue("task", 1, "abstracts");
+    assert.equal(before.summary.continuation, "abstracts");
+    finish({
+      abstract: "Retrieved abstract",
+      abstractLookup: {
+        status: "available",
+        source: "crossref",
+        checkedAt: Date.now(),
+      },
+    });
+    const result = await lookup;
+    assert.equal(result.ok, true);
+    assert.equal(result.data.abstract, "Retrieved abstract");
+    assert.equal(result.data.acquisition.status, "missing");
+    assert.equal(result.data.decision.revision, 1);
+    assert.equal((await f.service.list("task")).summary.read, 0);
+    await tool.call("literature_get", { id: "W1000" });
+    assert.equal(lookups, 1);
+    assert.deepEqual(f.items, []);
+    assert.deepEqual(f.downloads, []);
+  },
+);
+test("unsuccessful metadata lookups have a cooldown and cancellation is not cached", async () => {
+  let attempts = 0;
+  const controller = new globalThis.AbortController();
+  const f = fixture({
+    abstracts: {
+      resolve: async () => {
+        attempts++;
+        if (attempts === 1) controller.abort();
+        return {
+          abstractLookup: { status: "unavailable", checkedAt: Date.now() },
+        };
+      },
+    },
+  });
+  await selectOne(f);
+  const p = await f.service.load("task");
+  delete p.works[0].abstract;
+  await f.storage.write("task", p);
+  await assert.rejects(
+    f.service.getWithAbstract("task", "W1000", controller.signal),
+    /Cancelled/,
+  );
+  assert.equal(
+    (await f.service.get("task", "W1000")).abstractLookup,
+    undefined,
+  );
+  await f.service.getWithAbstract("task", "W1000");
+  await f.service.getWithAbstract("task", "W1000");
+  assert.equal(attempts, 2);
+  assert.equal((await f.service.get("task", "W1000")).abstract, undefined);
+});
+test("abstract fallback prefers exact local metadata and then OpenAlex before Crossref", async () => {
+  const work = openAlexWork(raw(0), "q");
+  const called = [];
+  let local = "Local abstract",
+    openalex;
+  const resolver = new LiteratureAbstracts(
+    {
+      abstract: async () => {
+        called.push("openalex");
+        return openalex;
+      },
+    },
+    async () => local,
+    async (url, key) => {
+      called.push("crossref");
+      assert.equal(key, "");
+      assert.match(url, /10\.1234%2Fp0$/);
+      return {
+        status: 200,
+        data: {
+          message: {
+            DOI: "10.1234/P0",
+            abstract: "<jats:p>Crossref &amp; evidence &#x3b1;.</jats:p>",
+          },
+        },
+      };
+    },
+  );
+  assert.equal((await resolver.resolve(work)).abstractLookup.source, "zotero");
+  assert.deepEqual(called, []);
+  local = undefined;
+  openalex = "OpenAlex abstract";
+  assert.equal(
+    (await resolver.resolve(work)).abstractLookup.source,
+    "openalex",
+  );
+  openalex = undefined;
+  const result = await resolver.resolve(work);
+  assert.equal(result.abstractLookup.source, "crossref");
+  assert.equal(result.abstract, "Crossref & evidence α.");
+});
+test(
+  "abstract lookups time out even for an uncooperative transport and can still use the next source",
+  { timeout: 2000 },
+  async () => {
+    let aborted = false;
+    const resolver = new LiteratureAbstracts(
+      {
+        abstract: (work, signal) => {
+          signal.addEventListener("abort", () => {
+            aborted = true;
+          });
+          return new Promise(() => {});
+        },
+      },
+      async () => undefined,
+      async () => ({
+        status: 200,
+        data: { message: { DOI: "10.1234/p0", abstract: "Fallback" } },
+      }),
+      10,
+    );
+    const result = await resolver.resolve(openAlexWork(raw(0), "q"));
+    assert.equal(aborted, true);
+    assert.equal(result.abstract, "Fallback");
+    const absent = new LiteratureAbstracts(
+      { abstract: async () => undefined },
+      async () => undefined,
+      async () => ({
+        status: 200,
+        data: { message: { DOI: "10.1234/WRONG", abstract: "Not this paper" } },
+      }),
+    );
+    assert.equal(
+      (await absent.resolve(openAlexWork(raw(0), "q"))).abstract,
+      undefined,
+    );
+  },
+);
+test(
+  "aborting abstract retrieval stops fallback and never returns stale data",
+  { timeout: 2000 },
+  async () => {
+    const controller = new globalThis.AbortController();
+    let next = 0;
+    const resolver = new LiteratureAbstracts(
+      {
+        abstract: async () => {
+          controller.abort();
+          return "late";
+        },
+      },
+      async () => undefined,
+      async () => {
+        next++;
+        return { status: 404 };
+      },
+    );
+    await assert.rejects(
+      resolver.resolve(openAlexWork(raw(0), "q"), controller.signal),
+      /Cancelled/,
+    );
+    assert.equal(next, 0);
+  },
+);
+test("single-work OpenAlex abstract refresh checks identity and cleans Crossref JATS as text", async () => {
+  let value = raw(0);
+  const client = new OpenAlexClient(
+    () => "key",
+    async (url, key) => {
+      assert.equal(url, "https://api.openalex.org/works/W1000");
+      assert.equal(key, "key");
+      return { status: 200, data: value };
+    },
+  );
+  assert.equal(await client.abstract(openAlexWork(raw(0), "q")), "hello world");
+  value = raw(1);
+  assert.equal(await client.abstract(openAlexWork(raw(0), "q")), undefined);
+  assert.equal(
+    abstractText(
+      "<jats:p>A &lt; B &#945;</jats:p><script>bad()</script><!-- hidden --><p>C</p>",
+    ),
+    "A < B α C",
+  );
+});
 test("100 fetched papers, dedup, provenance, paging, independent candidates and API total", async () => {
   const f = fixture();
   let page = await f.service.search("task", { query: "research" });

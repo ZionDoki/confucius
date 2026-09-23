@@ -54,32 +54,54 @@ const itemRef = (item: Zotero.Item): LockedItemContext => ({
 const locks = new ResourceLocks();
 export class ZoteroLiteratureAcquirer implements LiteratureAcquirer {
   constructor(private readonly key: () => string) {}
+  private async findItem(work: LiteratureWork, needsAbstract = false) {
+    const libraryID = Zotero.Libraries.userLibraryID;
+    for (const [field, value] of [
+      ...work.openAlexIds.map((id) => ["extra", `OpenAlex: ${id}`]),
+      ...(work.doi ? [["DOI", work.doi]] : []),
+    ]) {
+      const search = new Zotero.Search();
+      search.addCondition("libraryID", "is", String(libraryID));
+      search.addCondition(field, "contains", value);
+      for (const id of await search.search()) {
+        const existing = await Zotero.Items.getAsync(id);
+        if (
+          existing &&
+          !existing.deleted &&
+          existing.isRegularItem() &&
+          (!needsAbstract ||
+            String(existing.getField("abstractNote") || "").trim()) &&
+          ((field === "extra" &&
+            String(existing.getField("extra"))
+              .split(/\r?\n/)
+              .some((line) => line.trim() === value)) ||
+            (field === "DOI" &&
+              normalizeDoi(existing.getField("DOI")) === work.doi))
+        )
+          return existing;
+      }
+    }
+    return undefined;
+  }
+  async abstract(work: LiteratureWork): Promise<string | undefined> {
+    const ref = work.acquisition.item;
+    const bound =
+      ref && Zotero.Items.getByLibraryAndKey(ref.libraryID, ref.key);
+    const value =
+      bound &&
+      !bound.deleted &&
+      String(bound.getField("abstractNote") || "").trim();
+    if (value) return value;
+    const item = await this.findItem(work, true);
+    return item
+      ? String(item.getField("abstractNote") || "").trim() || undefined
+      : undefined;
+  }
   async ensureItem(work: LiteratureWork): Promise<LockedItemContext> {
     return locks.run([`paper:${work.doi ?? work.id}`], async () => {
       const libraryID = Zotero.Libraries.userLibraryID;
-      for (const [field, value] of [
-        ["extra", `OpenAlex: ${work.id}`],
-        ...(work.doi ? [["DOI", work.doi]] : []),
-      ]) {
-        const search = new Zotero.Search();
-        search.addCondition("libraryID", "is", String(libraryID));
-        search.addCondition(field, "contains", value);
-        for (const id of await search.search()) {
-          const existing = await Zotero.Items.getAsync(id);
-          if (
-            existing &&
-            !existing.deleted &&
-            existing.isRegularItem() &&
-            ((field === "extra" &&
-              String(existing.getField("extra"))
-                .split(/\r?\n/)
-                .some((line) => line.trim() === value)) ||
-              (field === "DOI" &&
-                normalizeDoi(existing.getField("DOI")) === work.doi))
-          )
-            return itemRef(existing);
-        }
-      }
+      const existing = await this.findItem(work);
+      if (existing) return itemRef(existing);
       const item = new Zotero.Item("journalArticle");
       item.libraryID = libraryID;
       item.setField("title", work.title);

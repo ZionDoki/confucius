@@ -196,12 +196,23 @@ export function createLiteraturePanel(
   footer.className = "confucius-literature-footer";
   const footerStatus = node(doc, "span");
   footerStatus.className = "confucius-literature-meta";
+  const footerCopy = node(doc, "div"),
+    continueHelp = node(doc, "p");
+  continueHelp.className = "confucius-literature-meta";
+  continueHelp.id = "confucius-literature-continue-help";
+  const proceed = createWorkspaceButton(
+    doc,
+    "confucius-literature-continue",
+    "",
+  );
+  proceed.setAttribute("aria-describedby", continueHelp.id);
   const review = createWorkspaceButton(doc, "", text("review"), "primary");
   const cancel = createWorkspaceButton(doc, "", text("cancel-downloads"));
   const actions = node(doc, "div");
   actions.className = "confucius-literature-controls";
-  actions.append(cancel, review);
-  footer.append(footerStatus, actions);
+  actions.append(cancel, proceed, review);
+  footerCopy.append(footerStatus, continueHelp);
+  footer.append(footerCopy, actions);
   scroll.append(controls, count, rows, paging, confirmation);
   editor.append(header, tabs, error, scroll, footer);
   popup.append(editor);
@@ -212,14 +223,21 @@ export function createLiteraturePanel(
   let floating = false,
     disposed = false;
   let epoch = 0,
+    confirmationGeneration = 0,
     request = 0,
     revision = -1,
     busy = false,
+    continuing = false,
     offset = 0;
   let selection: "auto" | "candidates" | "pool" = "auto";
   let proposal: LiteratureConfirmation | undefined;
   let savedScrollTop = 0;
   let refreshTimer: number | undefined, frame: number | undefined;
+  const abstractRequests = new Set<string>();
+  const continuationMode = () =>
+    summary?.hasCandidateChanges || summary?.awaitingConfirmation
+      ? ("abstracts" as const)
+      : ("current" as const);
   const selected = () =>
     selection === "candidates" ||
     (selection === "auto" && (summary?.candidates ?? 0) > 0);
@@ -239,11 +257,13 @@ export function createLiteraturePanel(
       ? `${text("downloading")} ${summary.acquiring}`
       : summary?.hasCandidateChanges || summary?.awaitingConfirmation
         ? text("draft")
-        : summary?.pendingFulltext
-          ? `${text("missing")} ${summary.pendingFulltext}`
-          : summary?.available
-            ? `${text("fulltext")} ${summary.available}`
-            : text("found");
+        : summary?.continuation
+          ? text("continued")
+          : summary?.pendingFulltext
+            ? `${text("missing")} ${summary.pendingFulltext}`
+            : summary?.available
+              ? `${text("fulltext")} ${summary.available}`
+              : text("found");
   function labels() {
     capsuleCount.textContent = `${summary?.candidates ?? 0} / ${summary?.pool ?? 0}`;
     const description = `${text("candidates")} ${summary?.candidates ?? 0} · ${text("retrieved")} ${summary?.pool ?? 0}`;
@@ -251,7 +271,14 @@ export function createLiteraturePanel(
     capsule.setAttribute("aria-label", description);
     title.textContent = text("task-title");
     metadata.textContent = description;
-    footerStatus.textContent = status();
+    const activeStatus =
+      summary &&
+      (summary.acquiring ||
+        summary.hasCandidateChanges ||
+        summary.awaitingConfirmation ||
+        summary.continuation ||
+        summary.pendingFulltext);
+    footerStatus.textContent = `${activeStatus ? `${status()} · ` : ""}${text("fulltext-count")} ${Math.max(0, (summary?.candidates ?? 0) - (summary?.pendingFulltext ?? 0))} / ${summary?.candidates ?? 0} · ${text("abstracts")} ${summary?.abstracts ?? 0} / ${summary?.candidates ?? 0}`;
     candidateTab.textContent = `${text("candidates")} ${summary?.candidates ?? 0}`;
     poolTab.textContent = `${text("pool")} ${summary?.pool ?? 0}`;
     for (const tab of [candidateTab, poolTab]) {
@@ -265,17 +292,56 @@ export function createLiteraturePanel(
     );
     count.textContent = `${text("evaluated")} ${summary?.evaluated ?? 0} · ${text("fulltext")} ${summary?.available ?? 0} · ${text("read")} ${summary?.read ?? 0}`;
     cancel.hidden = !summary?.acquiring;
+    proceed.hidden =
+      !!summary?.continuation ||
+      !(
+        summary?.awaitingConfirmation ||
+        summary?.awaitingFulltext ||
+        ((summary?.candidates ?? 0) > 0 &&
+          (summary?.hasCandidateChanges || summary?.pendingFulltext))
+      );
+    proceed.textContent = text(
+      continuationMode() === "abstracts"
+        ? "continue-abstracts"
+        : "continue-current",
+    );
+    proceed.dataset.variant =
+      continuationMode() === "current" ? "primary" : "quiet";
+    // Continuing must remain reachable during searches, retries and PDF imports.
+    proceed.disabled =
+      continuing ||
+      (!!proposal && proposal.candidateRevision !== summary?.candidateRevision);
+    proceed.title = continuing
+      ? text("continuing")
+      : proceed.disabled
+        ? text("stale")
+        : "";
+    continueHelp.textContent = text(
+      continuationMode() === "abstracts"
+        ? "continue-abstracts-help"
+        : "continue-current-help",
+    );
+    continueHelp.hidden = proceed.hidden;
     review.hidden =
       !!proposal ||
-      (!summary?.hasCandidateChanges && !summary?.awaitingConfirmation);
-    review.disabled = busy;
+      (!summary?.hasCandidateChanges &&
+        !summary?.awaitingConfirmation &&
+        !(
+          summary?.continuation &&
+          summary.pendingFulltext &&
+          !summary.acquiring
+        ));
+    review.textContent = text(summary?.continuation ? "acquire" : "review");
+    review.disabled = busy || continuing;
     search.disabled = busy;
     if (proposal) {
       const apply =
         confirmation.querySelector<HTMLButtonElement>("[data-confirm]");
       if (apply)
         apply.disabled =
-          busy || proposal.candidateRevision !== summary?.candidateRevision;
+          busy ||
+          continuing ||
+          proposal.candidateRevision !== summary?.candidateRevision;
       const warning = confirmation.querySelector<HTMLElement>("[data-stale]");
       if (warning)
         warning.hidden =
@@ -370,7 +436,7 @@ export function createLiteraturePanel(
     }, 100);
   }
   async function act(work: () => Promise<unknown>) {
-    if (busy || !taskId || disposed) return;
+    if (busy || continuing || !taskId || disposed) return;
     const era = epoch;
     busy = true;
     error.textContent = "";
@@ -388,10 +454,45 @@ export function createLiteraturePanel(
       if (epoch === era && !disposed) {
         busy = false;
         labels();
+        if (revision !== summary?.revision) queueRefresh();
+      }
+    }
+  }
+  async function continueResearch() {
+    if (!taskId || !summary || continuing || proceed.disabled) return;
+    const id = taskId,
+      era = epoch;
+    const candidateRevision =
+      proposal?.candidateRevision ?? summary.candidateRevision;
+    confirmationGeneration++;
+    continuing = true;
+    error.textContent = "";
+    labels();
+    try {
+      await options.rpc("literature/continue", {
+        taskId: id,
+        candidateRevision,
+        mode: continuationMode(),
+      });
+      if (epoch !== era || disposed) return;
+      endConfirmation();
+      await refresh();
+      close.focus({ preventScroll: true });
+      options.changed();
+    } catch (e) {
+      if (epoch === era && !disposed) {
+        message(e);
+        await refresh().catch(() => undefined);
+      }
+    } finally {
+      if (epoch === era && !disposed) {
+        continuing = false;
+        labels();
       }
     }
   }
   function endConfirmation() {
+    confirmationGeneration++;
     proposal = undefined;
     confirmation.hidden = true;
     confirmation.replaceChildren();
@@ -406,12 +507,15 @@ export function createLiteraturePanel(
   }
   async function showConfirmation() {
     const id = taskId,
-      era = epoch;
+      era = epoch,
+      generation = ++confirmationGeneration;
     if (!id) return;
     await act(async () => {
       const value = (await options.rpc("literature/preview", {
         taskId: id,
       })) as LiteratureConfirmation;
+      if (epoch !== era || disposed || generation !== confirmationGeneration)
+        return;
       const ids = [
         ...new Set([...value.added, ...value.removed, ...value.acquire]),
       ];
@@ -424,7 +528,8 @@ export function createLiteraturePanel(
             }) as Promise<LiteratureWork>,
         ),
       );
-      if (epoch !== era) return;
+      if (epoch !== era || disposed || generation !== confirmationGeneration)
+        return;
       proposal = value;
       confirmation.replaceChildren();
       confirmation.append(
@@ -471,7 +576,8 @@ export function createLiteraturePanel(
               taskId: id,
               candidateRevision: value.candidateRevision,
             });
-            if (epoch === era) endConfirmation();
+            if (epoch === era && generation === confirmationGeneration)
+              endConfirmation();
           }),
       );
       back.addEventListener("click", endConfirmation);
@@ -530,7 +636,7 @@ export function createLiteraturePanel(
         labelText = node(doc, "span", work.title);
       label.append(check, labelText);
       check.addEventListener("change", () => {
-        if (busy) {
+        if (busy || continuing) {
           check.checked = work.decision.selected;
           return;
         }
@@ -566,8 +672,67 @@ export function createLiteraturePanel(
       details.open = opened.has(work.id);
       details.append(
         node(doc, "summary", text("abstract")),
-        node(doc, "p", work.abstract ?? text("no-abstract")),
+        node(
+          doc,
+          "p",
+          work.abstract ??
+            text(
+              work.abstractLookup?.status === "unavailable"
+                ? "abstract-unavailable"
+                : work.abstractLookup?.status === "missing"
+                  ? "abstract-missing"
+                  : "no-abstract",
+            ),
+        ),
       );
+      if (work.abstract && work.abstractLookup?.source) {
+        const source = node(
+          doc,
+          "div",
+          `${text("abstract-source")} · ${work.abstractLookup.source}`,
+        );
+        source.className = "confucius-literature-meta";
+        details.append(source);
+      }
+      if (!work.abstract) {
+        const fetching = abstractRequests.has(work.id);
+        const lookup = createWorkspaceButton(
+          doc,
+          "",
+          text(fetching ? "abstract-loading" : "abstract-fetch"),
+        );
+        lookup.dataset.action = "abstract";
+        lookup.disabled =
+          fetching ||
+          !!(
+            work.abstractLookup &&
+            Date.now() - work.abstractLookup.checkedAt < 300_000
+          );
+        lookup.title = fetching
+          ? text("abstract-loading")
+          : lookup.disabled
+            ? text("abstract-cooldown")
+            : "";
+        lookup.addEventListener("click", async () => {
+          abstractRequests.add(work.id);
+          lookup.disabled = true;
+          lookup.textContent = text("abstract-loading");
+          try {
+            await options.rpc("literature/abstract", {
+              taskId: id,
+              id: work.id,
+            });
+          } catch (e) {
+            if (epoch === era && !disposed) message(e);
+          } finally {
+            if (epoch === era && !disposed) {
+              abstractRequests.delete(work.id);
+              await refresh().catch(message);
+            }
+          }
+        });
+        details.append(lookup);
+      }
       const status = node(
         doc,
         "div",
@@ -754,6 +919,7 @@ export function createLiteraturePanel(
     () => void act(() => options.rpc("literature/cancel", { taskId })),
   );
   review.addEventListener("click", () => void showConfirmation());
+  proceed.addEventListener("click", () => void continueResearch());
   capsule.addEventListener("click", showPopup);
   close.addEventListener("click", () => hidePopup(true));
   const outside = (e: Event) => {
@@ -789,6 +955,8 @@ export function createLiteraturePanel(
         epoch++;
         request++;
         busy = false;
+        continuing = false;
+        abstractRequests.clear();
         hidePopup(false);
         taskId = id;
         summary = undefined;

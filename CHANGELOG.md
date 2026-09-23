@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+## 0.5.0-beta.5 - 2026-09-23
+
+### Changed
+
+- Let research continue with abstracts before importing papers, or accept current
+  results while remaining fulltext downloads finish in the background. The
+  literature panel shows separate fulltext and abstract coverage among candidates.
+- Fill missing abstracts on demand from local Zotero, OpenAlex and Crossref, with
+  bounded waits, cached attempts and source labels. Abstract-only evidence remains
+  separate from actually read fulltext.
+
+### Fixed
+
+- Let users release research from fulltext waiting even when downloads fail or no
+  PDFs are available. Repeated acquisition calls honor the same candidate decision;
+  cancelled waits and late downloads cannot leave or restart a stale wait.
+- Keep Continue responsive while remote searches are pending, preserve newer
+  candidate decisions when search pages arrive, and discard confirmation previews
+  that finish after continuing. Failed confirmations remain reviewable and retryable.
+
+### Upgrade notes
+
+- This is a prerelease. Enable **Include prereleases** in Confucius Settings →
+  Update, or install this release's `confucius.xpi`. Stable-only installations
+  stay on the stable channel; disabling Betas does not downgrade an installation.
+- No data migration or model reconfiguration is required for Beta 4 users.
+  Existing papers, candidate decisions, child results, task history, drafts and
+  saved settings remain available. Background downloads interrupted by a restart
+  remain retryable; research does not restart automatically.
+
+### Validation and known limits
+
+- All 1,144 automated tests, typecheck, lint, version checks, skill synchronization
+  and build pass. The local Beta 5 candidate passed 24 literature checks, 17 subagent
+  checks, nine model-settings checks, seven window/sidebar hot-update checks and
+  26 upgrade checks from public Beta 4 in isolated macOS Zotero 10.0.3 installations.
+- Chinese and English, light and dark themes, standard/narrow windows and full
+  restarts were checked. Slow preview, search and abstract responses cannot undo
+  the user's decision to continue. The model picker passed a complete isolated
+  rerun after an initial check encountered a collapsed list.
+- Model responses and most metadata use controlled fixtures. Anonymous OpenAlex
+  returned 100 live papers and the models.dev catalog loaded online. Crossref
+  fallback and deadlines were tested with injected responses; real abstract
+  coverage, paid models, external Codex/Kimi end-to-end execution, authenticated
+  fulltext retrieval, Windows, Linux, other Zotero versions and forced-colors
+  were not revalidated for this Beta.
+- See the [release acceptance record](https://github.com/ZionDoki/confucius/blob/v0.5.0-beta.5/.github/maintainers/acceptance/release-0.5.0-beta.5.md)
+  and [literature guide](https://github.com/ZionDoki/confucius/blob/v0.5.0-beta.5/docs/literature-research.md).
+
 ## 0.5.0-beta.4 - 2026-09-22
 
 ### Changed

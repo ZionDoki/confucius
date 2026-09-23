@@ -122,6 +122,52 @@ const goal = {
   sourceIds: ["1:PAPER"],
   background: "Only this explicitly passed evidence",
 };
+test("children enrich only scoped abstracts and source-only research does not go online", async () => {
+  const f = fixture();
+  await f.manager.spawn("parent", goal);
+  await setImmediate();
+  const run = f.pending[0].run;
+  run.document.record.allowSearch = true;
+  const paper = {
+    id: "W1000",
+    title: "Scoped paper",
+    acquisition: { status: "missing" },
+  };
+  run.document.archive["literature:W1000"] = JSON.stringify(paper);
+  let lookups = 0;
+  const tools = new SubagentResearchTools(run, emptyTools, {
+    getWithAbstract: async (taskId, id) => {
+      lookups++;
+      assert.equal(id, "W1000");
+      return {
+        abstract: "Scoped abstract",
+        abstractLookup: {
+          status: "available",
+          source: "crossref",
+          checkedAt: 1,
+        },
+        acquisition: { status: "available" },
+      };
+    },
+  });
+  assert.equal(
+    (await tools.call("literature_get", { id: "W9999" })).code,
+    "permission_denied",
+  );
+  assert.equal(lookups, 0);
+  const found = await tools.call("literature_get", { id: "W1000" });
+  assert.equal(found.data.abstract, "Scoped abstract");
+  assert.equal(found.data.acquisition.status, "missing");
+  assert.equal(run.document.record.evidence.length, 0);
+  run.document.record.allowSearch = false;
+  run.document.archive["literature:W1000"] = JSON.stringify(paper);
+  assert.equal(
+    (await tools.call("literature_get", { id: "W1000" })).data.abstract,
+    undefined,
+  );
+  assert.equal(lookups, 1);
+  await f.manager.cancel("parent");
+});
 test("three children execute concurrently, remaining work queues, settings and context are isolated", async () => {
   const f = fixture();
   const first = await f.manager.spawn("parent", goal),

@@ -60,6 +60,8 @@ export const RPC_METHODS = {
   literatureCandidates: "literature/updateCandidates",
   literaturePreview: "literature/preview",
   literatureConfirm: "literature/confirm",
+  literatureContinue: "literature/continue",
+  literatureAbstract: "literature/abstract",
   literatureRetry: "literature/retry",
   literatureCancel: "literature/cancel",
   literatureAttach: "literature/attach",

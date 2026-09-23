@@ -5,6 +5,7 @@ import type {
   LiteraturePage,
   LiteratureSummary,
   LiteratureConfirmation,
+  LiteratureContinuation,
   LockedItemContext,
 } from "@confucius/protocol";
 import {
@@ -16,6 +17,10 @@ import { LiteratureError, type OpenAlexClient } from "./OpenAlexClient";
 import { createAbortController } from "../../utils/webPlatform";
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
+const continuation = (pool: LiteraturePool) =>
+  pool.continuation?.candidateRevision === pool.candidateRevision
+    ? pool.continuation
+    : undefined;
 export function literatureSummary(pool: LiteraturePool): LiteratureSummary {
   const selected = pool.works.filter((w) => w.decision.selected);
   const latest = pool.queries.at(-1);
@@ -44,10 +49,13 @@ export function literatureSummary(pool: LiteraturePool): LiteratureSummary {
       openAccess: latest.openAccess,
     },
     hasCandidateChanges:
+      !continuation(pool) &&
       (pool.confirmedRevision ?? 0) !== pool.candidateRevision,
     acquiring: pool.works.filter((w) =>
       ["queued", "downloading"].includes(w.acquisition.status),
     ).length,
+    abstracts: selected.filter((w) => w.abstract?.trim()).length,
+    continuation: continuation(pool)?.mode,
   };
 }
 export interface LiteratureAcquirer {
@@ -64,6 +72,15 @@ export interface LiteratureAcquirer {
 }
 interface Options {
   client: OpenAlexClient;
+  abstracts?: {
+    resolve(
+      work: LiteratureWork,
+      signal?: AbortSignal,
+    ): Promise<{
+      abstract?: string;
+      abstractLookup: NonNullable<LiteratureWork["abstractLookup"]>;
+    }>;
+  };
   storage?: JsonStorage;
   acquire: LiteratureAcquirer;
   /** Must reject during active research; user confirmation is an execution boundary. */
@@ -90,6 +107,9 @@ export class LiteratureService {
     string,
     { runId?: string; signal?: AbortSignal }
   >();
+  private readonly fulltextWaits = new Map<string, object>();
+  private readonly abstractLocks = new ResourceLocks();
+  private readonly searchLocks = new ResourceLocks();
   private readonly removed = new Set<string>();
   constructor(private readonly options: Options) {
     this.storage = options.storage ?? runtimeJsonStorage("literature");
@@ -177,9 +197,32 @@ export class LiteratureService {
     if (!work) throw new Error("Paper is not in this task's pool");
     return work;
   }
+  async getWithAbstract(taskId: string, id: string, signal?: AbortSignal) {
+    // A metadata lookup must never hold the pool lock and block a user's Continue.
+    return this.abstractLocks.run([`${taskId}:${id}`], async () => {
+      const work = await this.get(taskId, id);
+      if (signal?.aborted) throw new LiteratureError("cancelled", "Cancelled");
+      if (
+        work.abstract?.trim() ||
+        !this.options.abstracts ||
+        (work.abstractLookup &&
+          Date.now() - work.abstractLookup.checkedAt < 300_000)
+      )
+        return work;
+      const result = await this.options.abstracts.resolve(clone(work), signal);
+      if (signal?.aborted) throw new LiteratureError("cancelled", "Cancelled");
+      await this.mutate(taskId, (p) => {
+        const latest = p.works.find(
+          (w) => w.id === work.id || w.openAlexIds.includes(id),
+        );
+        if (latest && !latest.abstract?.trim()) Object.assign(latest, result);
+      });
+      return this.get(taskId, id);
+    });
+  }
   async search(taskId: string, input: LiteratureSearch, signal?: AbortSignal) {
-    // Serialize page requests so repeated load-more clicks cannot skip a cursor.
-    await this.locks.run([taskId], async () => {
+    // Serialize page cursors without holding up user choices or download progress.
+    await this.searchLocks.run([taskId], async () => {
       const pool = await this.load(taskId);
       const existing = input.queryId
         ? pool.queries.find((q) => q.id === input.queryId)
@@ -197,71 +240,80 @@ export class LiteratureService {
       );
       this.assert(taskId);
       if (signal?.aborted) throw new LiteratureError("cancelled", "Cancelled");
-      for (const incoming of result.works) {
-        const same = pool.works.filter(
-          (w) =>
-            w.openAlexIds.some((i) => incoming.openAlexIds.includes(i)) ||
-            (incoming.doi && w.doi === incoming.doi),
-        );
-        const found = same.sort(
-          (a, b) =>
-            Number(b.decision.actor === "user") -
-              Number(a.decision.actor === "user") ||
-            b.decision.revision - a.decision.revision,
-        )[0];
-        if (found) {
-          for (const duplicate of same.filter((w) => w !== found)) {
-            found.queryIds.push(...duplicate.queryIds);
-            found.openAlexIds.push(...duplicate.openAlexIds);
-            found.pdfUrls.push(...duplicate.pdfUrls);
-            found.reads = [...(found.reads ?? []), ...(duplicate.reads ?? [])];
-            if (
-              !found.acquisition.item ||
-              duplicate.acquisition.status === "available"
-            )
-              found.acquisition = duplicate.acquisition;
-            pool.confirmedIds = [
-              ...new Set(
-                pool.confirmedIds.map((id) =>
-                  id === duplicate.id ? found.id : id,
+      await this.mutate(taskId, (pool) => {
+        // Merge into the current pool: selections and acquisitions may have changed
+        // while the network request was in flight.
+        const existing = pool.queries.find((q) => q.id === id);
+        for (const incoming of result.works) {
+          const same = pool.works.filter(
+            (w) =>
+              w.openAlexIds.some((i) => incoming.openAlexIds.includes(i)) ||
+              (incoming.doi && w.doi === incoming.doi),
+          );
+          const found = same.sort(
+            (a, b) =>
+              Number(b.decision.actor === "user") -
+                Number(a.decision.actor === "user") ||
+              b.decision.revision - a.decision.revision,
+          )[0];
+          if (found) {
+            for (const duplicate of same.filter((w) => w !== found)) {
+              found.queryIds.push(...duplicate.queryIds);
+              found.openAlexIds.push(...duplicate.openAlexIds);
+              found.pdfUrls.push(...duplicate.pdfUrls);
+              found.reads = [
+                ...(found.reads ?? []),
+                ...(duplicate.reads ?? []),
+              ];
+              if (
+                !found.acquisition.item ||
+                duplicate.acquisition.status === "available"
+              )
+                found.acquisition = duplicate.acquisition;
+              pool.confirmedIds = [
+                ...new Set(
+                  pool.confirmedIds.map((id) =>
+                    id === duplicate.id ? found.id : id,
+                  ),
                 ),
-              ),
+              ];
+              if (pool.waitingFulltext)
+                pool.waitingFulltext.ids = pool.waitingFulltext.ids.map((id) =>
+                  id === duplicate.id ? found.id : id,
+                );
+              pool.works = pool.works.filter((w) => w !== duplicate);
+              pool.candidateRevision++;
+            }
+            found.doi = incoming.doi ?? found.doi;
+            found.queryIds = [...new Set([...found.queryIds, id])];
+            found.openAlexIds = [
+              ...new Set([...found.openAlexIds, ...incoming.openAlexIds]),
             ];
-            if (pool.waitingFulltext)
-              pool.waitingFulltext.ids = pool.waitingFulltext.ids.map((id) =>
-                id === duplicate.id ? found.id : id,
-              );
-            pool.works = pool.works.filter((w) => w !== duplicate);
-            pool.candidateRevision++;
-          }
-          found.doi = incoming.doi ?? found.doi;
-          found.queryIds = [...new Set([...found.queryIds, id])];
-          found.openAlexIds = [
-            ...new Set([...found.openAlexIds, ...incoming.openAlexIds]),
-          ];
-          found.pdfUrls = [...new Set([...found.pdfUrls, ...incoming.pdfUrls])];
-          found.cachedPdfUrl ??= incoming.cachedPdfUrl;
-          found.abstract ??= incoming.abstract;
-          // Identity joins never replace a user decision or durable acquisition.
-        } else pool.works.push(incoming);
-      }
-      if (existing)
-        Object.assign(existing, {
-          total: result.total,
-          cursor: result.cursor,
-          pages: existing.pages + 1,
-        });
-      else
-        pool.queries.push({
-          ...input,
-          queryId: undefined,
-          id,
-          createdAt: Date.now(),
-          total: result.total,
-          cursor: result.cursor,
-          pages: 1,
-        });
-      await this.save(pool);
+            found.pdfUrls = [
+              ...new Set([...found.pdfUrls, ...incoming.pdfUrls]),
+            ];
+            found.cachedPdfUrl ??= incoming.cachedPdfUrl;
+            found.abstract ??= incoming.abstract;
+            // Identity joins never replace a user decision or durable acquisition.
+          } else pool.works.push(incoming);
+        }
+        if (existing)
+          Object.assign(existing, {
+            total: result.total,
+            cursor: result.cursor,
+            pages: existing.pages + 1,
+          });
+        else
+          pool.queries.push({
+            ...input,
+            queryId: undefined,
+            id,
+            createdAt: Date.now(),
+            total: result.total,
+            cursor: result.cursor,
+            pages: 1,
+          });
+      });
     });
     return this.list(taskId);
   }
@@ -319,7 +371,10 @@ export class LiteratureService {
   }
   async requestConfirmation(taskId: string) {
     await this.mutate(taskId, (p) => {
-      if (p.confirmedRevision !== p.candidateRevision || p.waiting)
+      if (
+        !continuation(p) &&
+        (p.confirmedRevision !== p.candidateRevision || p.waiting)
+      )
         p.waiting = {
           candidateRevision: p.candidateRevision,
           requestedAt: Date.now(),
@@ -348,8 +403,9 @@ export class LiteratureService {
         try {
           const p = await this.load(taskId);
           if (
-            p.confirmedRevision !== undefined &&
-            p.confirmedRevision >= revision &&
+            ((p.confirmedRevision !== undefined &&
+              p.confirmedRevision >= revision) ||
+              (continuation(p) && p.candidateRevision >= revision)) &&
             !p.waiting
           )
             return this.list(taskId);
@@ -371,50 +427,113 @@ export class LiteratureService {
     return !!owner && owner.runId === runId && !owner.signal?.aborted;
   }
   async waitForFulltext(taskId: string, runId?: string, signal?: AbortSignal) {
-    await this.mutate(taskId, (p) => {
-      p.waitingFulltext = {
-        ids: [...p.confirmedIds],
-        runId,
-        requestedAt: Date.now(),
-      };
-    });
-    while (!signal?.aborted) {
-      let wake!: () => void;
-      const changed = new Promise<void>((resolve) => {
-        wake = resolve;
-      });
-      const listeners = this.listeners.get(taskId) ?? new Set();
-      this.listeners.set(taskId, listeners);
-      listeners.add(wake);
-      signal?.addEventListener("abort", wake, { once: true });
-      try {
-        const p = await this.load(taskId),
-          waiting = p.waitingFulltext;
-        if (!waiting || waiting.runId !== runId)
+    const owner = {};
+    this.fulltextWaits.set(taskId, owner);
+    try {
+      await this.mutate(taskId, (p) => {
+        if (this.fulltextWaits.get(taskId) !== owner)
           throw new Error("Fulltext wait was replaced");
-        if (
-          waiting.ids.every(
-            (id) =>
-              !p.confirmedIds.includes(id) ||
-              p.works.find((w) => w.id === id)?.acquisition.status ===
-                "available",
+        if (!signal?.aborted && !continuation(p))
+          p.waitingFulltext = {
+            ids: [...p.confirmedIds],
+            runId,
+            requestedAt: Date.now(),
+          };
+      });
+      while (!signal?.aborted) {
+        let wake!: () => void;
+        const changed = new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+        const listeners = this.listeners.get(taskId) ?? new Set();
+        this.listeners.set(taskId, listeners);
+        listeners.add(wake);
+        signal?.addEventListener("abort", wake, { once: true });
+        try {
+          const p = await this.load(taskId),
+            waiting = p.waitingFulltext;
+          if (this.fulltextWaits.get(taskId) !== owner)
+            throw new Error("Fulltext wait was replaced");
+          if (continuation(p)) break;
+          if (!waiting || waiting.runId !== runId)
+            throw new Error("Fulltext wait was replaced");
+          if (
+            waiting.ids.every(
+              (id) =>
+                !p.confirmedIds.includes(id) ||
+                p.works.find((w) => w.id === id)?.acquisition.status ===
+                  "available",
+            )
           )
-        ) {
-          await this.mutate(taskId, (p) => {
-            delete p.waitingFulltext;
-          });
-          return this.list(taskId);
+            break;
+          // Abort can arrive while the pool is being read, before we await the event.
+          if (!signal?.aborted) await changed;
+        } finally {
+          listeners.delete(wake);
+          signal?.removeEventListener("abort", wake);
         }
-        await changed;
-      } finally {
-        listeners.delete(wake);
-        signal?.removeEventListener("abort", wake);
+      }
+      if (signal?.aborted)
+        throw new LiteratureError(
+          "cancelled",
+          "Fulltext wait cancelled; saved papers remain available",
+        );
+    } finally {
+      if (this.fulltextWaits.get(taskId) === owner) {
+        try {
+          if (!this.removed.has(taskId) && this.options.exists(taskId))
+            await this.mutate(taskId, (p) => {
+              if (
+                this.fulltextWaits.get(taskId) === owner &&
+                p.waitingFulltext?.runId === runId
+              )
+                delete p.waitingFulltext;
+            });
+        } finally {
+          if (this.fulltextWaits.get(taskId) === owner)
+            this.fulltextWaits.delete(taskId);
+        }
       }
     }
-    throw new LiteratureError(
-      "cancelled",
-      "Fulltext wait cancelled; saved papers remain available",
-    );
+    return this.list(taskId);
+  }
+  /** User input resolves waiting immediately; background downloads may finish later. */
+  async continue(
+    taskId: string,
+    revision: number,
+    mode: LiteratureContinuation["mode"],
+  ) {
+    if (mode !== "abstracts" && mode !== "current")
+      throw new Error("Invalid continuation mode");
+    await this.mutate(taskId, (p) => {
+      if (p.candidateRevision !== revision)
+        throw new Error(
+          "Candidate revision conflict; review the changed selection before continuing",
+        );
+      p.continuation = {
+        candidateRevision: revision,
+        mode,
+        ids: p.works.filter((w) => w.decision.selected).map((w) => w.id),
+        at: Date.now(),
+      };
+      delete p.waiting;
+      delete p.waitingFulltext;
+    });
+    return this.list(taskId);
+  }
+  async acquisitionResult(taskId: string) {
+    // Keep the user's choice and the returned candidate revision in one snapshot.
+    return this.locks.run([taskId], async () => {
+      const pool = await this.load(taskId);
+      const choice = continuation(pool);
+      return {
+        ...(await this.list(taskId, { selected: true })),
+        continuation: choice,
+        guidance: choice
+          ? "The user chose to continue now. Do not wait for or request missing PDFs again for this candidate revision. Use available fulltext and abstracts; call literature_get for missing abstracts (bounded best effort). Label abstract-only and metadata-only claims, report coverage gaps, and never mark them as fulltext read. Any authorized downloads may finish in the background."
+          : "Use literature_get to obtain missing abstracts. Available PDFs still require actual reading; metadata and abstracts are not fulltext evidence.",
+      };
+    });
   }
   async recordRead(
     taskId: string,
@@ -465,6 +584,8 @@ export class LiteratureService {
         // A durable confirmation precedes every library write. Save each item receipt
         // before attempting the next item, so a partial batch is restartable.
         p.confirmedRevision = revision;
+        p.waiting = { candidateRevision: revision, requestedAt: Date.now() };
+        delete p.continuation;
         await this.save(p);
         for (const w of selected) {
           this.assert(taskId);
@@ -670,6 +791,7 @@ export class LiteratureService {
   }
   async recover(taskId: string) {
     await this.mutate(taskId, (p) => {
+      delete p.waitingFulltext;
       for (const w of p.works)
         if (
           w.acquisition.status === "downloading" ||

@@ -337,6 +337,22 @@ export class SubagentResearchTools implements ToolProvider {
       const rows = await this.metadata();
       if (name === "literature_get") {
         const work = rows.find((w) => w.id === args.id);
+        if (
+          work &&
+          !work.abstract?.trim() &&
+          this.run.document.record.allowSearch
+        ) {
+          const enriched = await this.literature.getWithAbstract(
+            this.run.document.record.parentTaskId,
+            work.id,
+            signal ?? this.run.abort.signal,
+          );
+          // Only fill abstract metadata; the child's source/acquisition snapshot stays fixed.
+          work.abstract = enriched.abstract;
+          work.abstractLookup = enriched.abstractLookup;
+          this.run.document.archive[`literature:${work.id}`] =
+            JSON.stringify(work);
+        }
         result = work
           ? { ok: true, toolName: name, data: work }
           : {

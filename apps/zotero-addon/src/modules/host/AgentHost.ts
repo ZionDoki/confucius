@@ -8,6 +8,7 @@ import { SUBAGENT_TOOL_NAMES } from "@confucius/protocol";
 import { LiteratureService } from "./LiteratureService";
 import { OpenAlexClient } from "./OpenAlexClient";
 import { ZoteroLiteratureAcquirer } from "./LiteratureAcquisition";
+import { LiteratureAbstracts } from "./LiteratureAbstracts";
 import { LiteratureToolProvider } from "./LiteratureToolProvider";
 import {
   LITERATURE_TOOL_NAMES,
@@ -830,10 +831,14 @@ export class AgentHost {
   private readonly openAlex = new OpenAlexClient(() =>
     String(getPref("openAlexApiKey") || ""),
   );
+  private readonly literatureAcquirer = new ZoteroLiteratureAcquirer(() =>
+    String(getPref("openAlexApiKey") || ""),
+  );
   private readonly literature = new LiteratureService({
     client: this.openAlex,
-    acquire: new ZoteroLiteratureAcquirer(() =>
-      String(getPref("openAlexApiKey") || ""),
+    acquire: this.literatureAcquirer,
+    abstracts: new LiteratureAbstracts(this.openAlex, (work) =>
+      this.literatureAcquirer.abstract(work),
     ),
     exists: (id) => this.sessions.has(id),
     canConfirm: (id) => {
@@ -2379,6 +2384,11 @@ export class AgentHost {
         return this.literature.list(String(params.taskId), params);
       case "literature/get":
         return this.literature.get(String(params.taskId), String(params.id));
+      case "literature/abstract":
+        return this.literature.getWithAbstract(
+          String(params.taskId),
+          String(params.id),
+        );
       case "literature/search":
         return this.literature.search(
           String(params.taskId),
@@ -2401,6 +2411,12 @@ export class AgentHost {
         return this.literature.confirm(
           String(params.taskId),
           Number(params.candidateRevision),
+        );
+      case "literature/continue":
+        return this.literature.continue(
+          String(params.taskId),
+          Number(params.candidateRevision),
+          params.mode as "abstracts" | "current",
         );
       case "literature/retry":
         return this.literature.retry(String(params.taskId), String(params.id));

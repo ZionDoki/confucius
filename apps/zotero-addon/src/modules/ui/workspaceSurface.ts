@@ -61,7 +61,8 @@ export const SURFACE_CSS = `
 .confucius-literature h3 { margin:0; font:inherit; font-size:14px; font-weight:600; overflow-wrap:anywhere; }
 .confucius-research-icon { width:18px; height:18px; flex-shrink:0; color:var(--confucius-muted); margin-top:2px; }
 .confucius-literature-footer { display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between; padding:12px 20px 16px; }
-.confucius-literature-footer > :last-child { margin-left:auto; }
+.confucius-literature-footer > :first-child { flex:1 1 220px; min-width:0; overflow-wrap:anywhere; }
+.confucius-literature-footer > :last-child { margin-left:auto; justify-content:flex-end; }
 .confucius-literature .confucius-literature-quiet { background:transparent; color:var(--confucius-secondary); padding-left:8px; padding-right:8px; }
 .confucius-literature .confucius-literature-quiet:hover { background:var(--confucius-surface); }
 .confucius-composer-dock { position:relative; z-index:12; display:grid; grid-template-columns:minmax(0,1fr) 34px; align-items:center; gap:8px; width:100%; max-width:880px; min-width:0; margin:0 auto 8px; }

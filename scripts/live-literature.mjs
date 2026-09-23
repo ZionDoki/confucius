@@ -521,6 +521,175 @@ try {
   checks.push({
     confirmationContinuation: { sameRequest: true, scopedChildCompleted: true },
   });
+  // A user may decline fulltext entirely, including a model that asks twice.
+  await evaluate(`const task=await host.rpc('task/new',{title:'先用摘要调研'});qa.abstractTask=task.id;qa.abstractCalls=0;
+    await host.rpc('literature/search',{taskId:task.id,query:'abstract continuation'});
+    await host.rpc('literature/updateCandidates',{taskId:task.id,candidateRevision:0,changes:[{id:'W900000',selected:true,reason:'Abstract review'}]});
+    const pool=await host.literature.load(task.id);delete pool.works[0].abstract;await host.literature.storage.write(task.id,pool);
+    qa.baseTransport=host.openAlex.transport;
+    host.openAlex.transport=async(url,...args)=>url.includes('/works/W900000')?{status:200,data:{id:'https://openalex.org/W900000',abstract_inverted_index:{Recovered:[0],abstract:[1]}}}:qa.baseTransport(url,...args);
+    host.openaiAdapter=()=>({complete:async request=>{if(request.messages[0]?.content?.startsWith('Generate a concise title'))return {end:'stop',text:'摘要调研'};await request.onAttempt?.();const n=++qa.abstractCalls;
+      if(n<=2)return {end:'tool_calls',toolCalls:[{id:'abstract_acquire_'+n,name:'literature_acquire',args:{waitForFulltext:true}}]};
+      if(n===3)return {end:'tool_calls',toolCalls:[{id:'abstract_get',name:'literature_get',args:{id:'W900000'}}]};
+      qa.abstractMessages=JSON.stringify(request.messages);return {end:'stop',text:'基于摘要继续；未将摘要当作全文。'};}});
+    qa.regularItemsBefore=(await Zotero.Items.getAll(Zotero.Libraries.userLibraryID,true,false)).filter(i=>i.isRegularItem()).length;
+    await host.rpc('task/prompt',{taskId:task.id,text:'先按摘要调研，不必等全文'});return true;`);
+  await wait(
+    `return host.sessions.get(qa.abstractTask).record.literature?.awaitingConfirmation && !!d.querySelector('[data-task-id="'+qa.abstractTask+'"] .confucius-task-open');`,
+  );
+  await evaluate(
+    `d.querySelector('[data-task-id="'+qa.abstractTask+'"] .confucius-task-open').click();return true;`,
+  );
+  await wait(
+    `return d.getElementById('confucius-literature-capsule').textContent.includes('1 / 100');`,
+  );
+  await evaluate(
+    `d.getElementById('confucius-literature-capsule').click();return true;`,
+  );
+  await wait(
+    `return !d.getElementById('confucius-literature-continue').hidden && d.getElementById('confucius-literature-continue').textContent==='仅用摘要继续';`,
+  );
+  await capture("literature-continue-abstracts");
+  // A preview started before Continue must not reopen after the user proceeds.
+  await evaluate(`qa.originalRpc=host.rpc;
+    host.rpc=async function(method,params){const value=await qa.originalRpc.call(this,method,params);if(method==='literature/preview'&&params.taskId===qa.abstractTask)await new Promise(resolve=>{qa.finishPreview=resolve;});return value;};
+    qa.previewButton=[...d.querySelectorAll('.confucius-literature-footer button')].find(b=>b.textContent==='确认候选');qa.previewButton.click();return true;`);
+  await wait(`return !!qa.finishPreview;`);
+  assert.equal(
+    await evaluate(
+      `return !d.getElementById('confucius-literature-continue').disabled;`,
+    ),
+    true,
+  );
+  await evaluate(
+    `d.getElementById('confucius-literature-continue').click();return true;`,
+  );
+  await wait(`return !host.sessions.get(qa.abstractTask).activeTurnId;`);
+  await evaluate(`qa.finishPreview();host.rpc=qa.originalRpc;return true;`);
+  await wait(`return !qa.previewButton.disabled;`);
+  assert.equal(
+    await evaluate(`return !d.querySelector('[data-confirm]');`),
+    true,
+  );
+  checks.push({ lateConfirmationPreviewIgnored: true });
+  const abstractsOnly =
+    await evaluate(`const p=await host.literature.load(qa.abstractTask);return {
+    repeatedCallRespected:qa.abstractCalls===4,choice:p.continuation.mode,confirmed:p.confirmedIds.length,sources:host.sessions.get(qa.abstractTask).record.lockedContext.items.length,
+    libraryUntouched:qa.regularItemsBefore===(await Zotero.Items.getAll(Zotero.Libraries.userLibraryID,true,false)).filter(i=>i.isRegularItem()).length,
+    abstract:p.works[0].abstract,source:p.works[0].abstractLookup.source,read:host.sessions.get(qa.abstractTask).record.literature.read,
+    guidanceDelivered:qa.abstractMessages.includes('Do not wait for or request missing PDFs again')};`);
+  assert.deepEqual(abstractsOnly, {
+    repeatedCallRespected: true,
+    choice: "abstracts",
+    confirmed: 0,
+    sources: 0,
+    libraryUntouched: true,
+    abstract: "Recovered abstract",
+    source: "openalex",
+    read: 0,
+    guidanceDelivered: true,
+  });
+  checks.push({ abstractsOnly });
+  await evaluate(`host.openAlex.transport=qa.baseTransport;
+    const task=await host.rpc('task/new',{title:'按当前获取结果继续'});qa.partialTask=task.id;qa.partialCalls=0;
+    await host.rpc('literature/search',{taskId:task.id,query:'partial continuation'});
+    await host.rpc('literature/updateCandidates',{taskId:task.id,candidateRevision:0,changes:[0,1].map(i=>({id:'W'+(900000+i),selected:true,reason:'Partial evidence'}))});
+    qa.originalAcquire=host.literatureAcquirer.acquire;
+    host.literatureAcquirer.acquire=async function(work,signal,stage){if(work.id==='W900001')return new Promise(resolve=>{qa.finishPartial=resolve;});return qa.originalAcquire.call(this,work,signal,stage);};
+    host.openaiAdapter=()=>({complete:async request=>{if(request.messages[0]?.content?.startsWith('Generate a concise title'))return {end:'stop',text:'部分文献调研'};await request.onAttempt?.();const n=++qa.partialCalls;if(n<=2)return {end:'tool_calls',toolCalls:[{id:'partial_acquire_'+n,name:'literature_acquire',args:{waitForFulltext:true}}]};qa.partialMessages=JSON.stringify(request.messages);return {end:'stop',text:'按当前全文与摘要继续，缺失全文列为限制。'};}});
+    await host.rpc('task/prompt',{taskId:task.id,text:'获取论文并调研'});return true;`);
+  await wait(
+    `return host.sessions.get(qa.partialTask).record.literature?.awaitingConfirmation && !!d.querySelector('[data-task-id="'+qa.partialTask+'"] .confucius-task-open');`,
+  );
+  await evaluate(
+    `d.querySelector('[data-task-id="'+qa.partialTask+'"] .confucius-task-open').click();return true;`,
+  );
+  await wait(
+    `return d.getElementById('confucius-literature-capsule').textContent.includes('2 / 100');`,
+  );
+  await evaluate(
+    `d.getElementById('confucius-literature-capsule').click();return true;`,
+  );
+  await wait(
+    `return [...d.querySelectorAll('.confucius-literature-footer button')].some(b=>b.textContent==='确认候选'&&!b.disabled);`,
+  );
+  await evaluate(
+    `[...d.querySelectorAll('.confucius-literature-footer button')].find(b=>b.textContent==='确认候选').click();return true;`,
+  );
+  await wait(`return !!d.querySelector('[data-confirm]:not(:disabled)');`);
+  await evaluate(`d.querySelector('[data-confirm]').click();return true;`);
+  await wait(
+    `const s=host.sessions.get(qa.partialTask).record.literature;return s.awaitingFulltext && s.available===1 && s.acquiring===1 && d.getElementById('confucius-literature-continue').textContent==='按当前结果继续' && d.querySelector('.confucius-literature-footer').textContent.includes('全文 1 / 2');`,
+  );
+  await capture("literature-continue-partial");
+  for (const width of [420, 280]) {
+    await evaluate(`win.resizeTo(${width},720);return true;`);
+    await wait(`return win.innerWidth<=${width};`);
+    const geometry = await evaluate(
+      `const p=d.getElementById('confucius-literature-popup').getBoundingClientRect(),b=d.getElementById('confucius-literature-continue').getBoundingClientRect();return {width:win.innerWidth,inside:b.left>=p.left&&b.right<=p.right&&b.top>=p.top&&b.bottom<=p.bottom,buttonHeight:b.height,popupHeight:p.height,popupHidden:d.getElementById('confucius-literature-popup').hidden,buttonHidden:d.getElementById('confucius-literature-continue').hidden,visible:b.height>=28,overflow:d.documentElement.scrollWidth>d.documentElement.clientWidth+1};`,
+    );
+    await capture(`literature-continue-${width}`);
+    assert.ok(
+      geometry.inside && geometry.visible && !geometry.overflow,
+      JSON.stringify(geometry),
+    );
+    checks.push({ continueGeometry: geometry });
+  }
+  await evaluate(`win.resizeTo(1120,820);return true;`);
+  // Continue remains enabled even when a row's abstract lookup is in flight.
+  await evaluate(`const p=await host.literature.load(qa.partialTask);delete p.works[1].abstract;const item=Zotero.Items.getByLibraryAndKey(p.works[1].acquisition.item.libraryID,p.works[1].acquisition.item.key);item.setField('abstractNote','');await item.saveTx();await host.literature.save(p);
+    host.openAlex.transport=async(url,...args)=>url.includes('/works/W900001')?new Promise(resolve=>{qa.finishAbstract=resolve;}):qa.baseTransport(url,...args);return true;`);
+  await wait(
+    `return !!d.querySelector('[data-work-id="W900001"] [data-action="abstract"]');`,
+  );
+  await evaluate(
+    `d.querySelector('[data-work-id="W900001"] details').open=true;d.querySelector('[data-work-id="W900001"] [data-action="abstract"]').click();return true;`,
+  );
+  await wait(`return !!qa.finishAbstract;`);
+  assert.equal(
+    await evaluate(
+      `return !d.getElementById('confucius-literature-continue').disabled;`,
+    ),
+    true,
+  );
+  await evaluate(
+    `d.getElementById('confucius-literature-continue').click();return true;`,
+  );
+  await wait(`return !host.sessions.get(qa.partialTask).activeTurnId;`);
+  const partial = await evaluate(
+    `const p=await host.literature.load(qa.partialTask),s=host.sessions.get(qa.partialTask).record.literature;return {choice:p.continuation.mode,available:s.available,acquiring:s.acquiring,waiting:s.awaitingFulltext,read:s.read,repeatedCallRespected:qa.partialCalls===3};`,
+  );
+  assert.deepEqual(partial, {
+    choice: "current",
+    available: 1,
+    acquiring: 1,
+    waiting: false,
+    read: 0,
+    repeatedCallRespected: true,
+  });
+  await evaluate(
+    `qa.finishAbstract({status:200,data:{id:'https://openalex.org/W900001',abstract_inverted_index:{Partial:[0],abstract:[1]}}});qa.finishPartial({attachmentKey:(await host.literature.get(qa.taskId,'W900001')).acquisition.attachmentKey,stage:'existing'});return true;`,
+  );
+  await wait(
+    `return host.sessions.get(qa.partialTask).record.literature.available===2 && !host.sessions.get(qa.partialTask).record.literature.acquiring;`,
+  );
+  assert.equal(
+    await evaluate(
+      `return qa.partialCalls===3 && !host.sessions.get(qa.partialTask).activeTurnId;`,
+    ),
+    true,
+  );
+  checks.push({
+    partialContinuation: partial,
+    lateDownloadDoesNotRestart: true,
+    continueDuringAbstractLookup: true,
+  });
+  await evaluate(
+    `host.openAlex.transport=qa.baseTransport;host.literatureAcquirer.acquire=qa.originalAcquire;d.querySelector('[data-task-id="'+qa.taskId+'"] .confucius-task-open').click();return true;`,
+  );
+  await wait(
+    `return d.getElementById('confucius-literature-capsule').textContent.includes('2 / 100');`,
+  );
   await evaluate(
     `await host.rpc('config/set',{uiTheme:'dark',uiLanguage:'en-US'});win.close();return true;`,
   );
@@ -553,6 +722,13 @@ try {
     `d.querySelector('.confucius-literature-scroll').scrollTop=0;return true;`,
   );
   await capture("literature-dark-narrow");
+  await evaluate(
+    `const p=await host.literature.load(qa.taskId);await host.rpc('literature/updateCandidates',{taskId:qa.taskId,candidateRevision:p.candidateRevision,changes:[{id:'W900002',selected:true,reason:'English layout check'}]});return true;`,
+  );
+  await wait(
+    `return !d.getElementById('confucius-literature-continue').hidden && d.getElementById('confucius-literature-continue').textContent==='Continue with abstracts';`,
+  );
+  await capture("literature-continue-dark-420");
   const narrowDock = await dockGeometry();
   assert.ok(
     narrowDock.aligned && narrowDock.separate && narrowDock.latestVisible,
@@ -573,6 +749,13 @@ try {
     true,
   );
   await capture("literature-dark-280");
+  assert.equal(
+    await evaluate(
+      `const p=d.getElementById('confucius-literature-popup').getBoundingClientRect(),b=d.getElementById('confucius-literature-continue').getBoundingClientRect();return b.width>0&&b.height>=28&&b.left>=p.left&&b.right<=p.right&&b.top>=p.top&&b.bottom<=p.bottom;`,
+    ),
+    true,
+  );
+  checks.push({ englishContinueAt280: true });
   checks.push({ smallestDock });
   assert.equal(
     await evaluate(
@@ -584,6 +767,9 @@ try {
   assert.deepEqual(checks.at(-1).uiErrors, []);
   await evaluate(`await host.persistNow();return true;`);
   const savedTask = await evaluate(`return qa.taskId;`);
+  const continuedTasks = await evaluate(
+    `return [qa.abstractTask,qa.partialTask];`,
+  );
   await instance.stop({ graceful: true });
   await instance.launch();
   const restored = await instance.rpc("task/load", { taskId: savedTask });
@@ -592,6 +778,16 @@ try {
   assert.equal(page.summary.pool, 100);
   assert.equal(page.summary.available, 2);
   checks.push({ restart: { pool: 100, available: 2, bound: 2 } });
+  for (const [i, taskId] of continuedTasks.entries()) {
+    const continued = await instance.rpc("literature/list", { taskId });
+    assert.equal(
+      continued.summary.continuation,
+      i === 0 ? "abstracts" : "current",
+    );
+    assert.equal(continued.summary.awaitingFulltext, false);
+    assert.equal(continued.summary.read, 0);
+  }
+  checks.push({ continuedChoicesSurviveRestart: true });
   try {
     const live = await instance.rpc("task/new", {
       title: "OpenAlex anonymous connection check",

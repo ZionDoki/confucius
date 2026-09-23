@@ -54,7 +54,7 @@ const definitions: ToolDefinition[] = [
   ),
   definition(
     "literature_get",
-    "Read one pooled paper, abstract, provenance, candidate reason and fulltext status.",
+    "Read one pooled paper, abstract, provenance, candidate reason and fulltext status. When its abstract is missing, try local Zotero, OpenAlex and Crossref metadata with bounded deadlines and cached attempts. This never imports papers or downloads PDFs; unavailable abstracts remain explicitly missing.",
     { id: { type: "string" } },
     ["id"],
   ),
@@ -82,7 +82,7 @@ const definitions: ToolDefinition[] = [
   ),
   definition(
     "literature_acquire",
-    "Wait for user confirmation of the candidate batch in the Literature panel. Only that UI confirmation authorizes import, binding and download. Do not poll; this call waits on a host event. Confirmation applies the new source snapshot at this paused execution boundary, so research can continue in the same request. Set waitForFulltext only if the user requested research that must await these files; collection alone must leave it false.",
+    "Wait for the user's candidate decision in the Literature capsule. Users may confirm import/download, continue with abstracts without importing, or continue with currently available results before downloads finish. Honor that choice; never repeatedly request the same missing PDFs. Do not poll; this call waits on a host event. Only import confirmation applies sources at this paused execution boundary. Set waitForFulltext only if the user explicitly needs these files; abstracts and partial evidence are sufficient for ordinary discovery/screening. Collection alone leaves it false.",
     { waitForFulltext: { type: "boolean" } },
   ),
 ];
@@ -142,7 +142,11 @@ export class LiteratureToolProvider implements ToolProvider {
       else if (name === "literature_list")
         data = await this.service.list(this.taskId, args);
       else if (name === "literature_get")
-        data = await this.service.get(this.taskId, String(args.id));
+        data = await this.service.getWithAbstract(
+          this.taskId,
+          String(args.id),
+          signal,
+        );
       else if (name === "literature_update_candidates")
         data = await this.service.updateCandidates(
           this.taskId,
@@ -158,18 +162,19 @@ export class LiteratureToolProvider implements ToolProvider {
         const preview = await this.service.requestConfirmation(this.taskId);
         context?.executionScope?.pause?.();
         try {
-          data = await this.service.waitForConfirmation(
+          await this.service.waitForConfirmation(
             this.taskId,
             preview.candidateRevision,
             signal,
             context?.runId,
           );
           if (args.waitForFulltext === true)
-            data = await this.service.waitForFulltext(
+            await this.service.waitForFulltext(
               this.taskId,
               context?.runId,
               signal,
             );
+          data = await this.service.acquisitionResult(this.taskId);
         } finally {
           context?.executionScope?.resume?.();
         }
