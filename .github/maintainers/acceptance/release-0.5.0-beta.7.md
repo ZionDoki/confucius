@@ -47,3 +47,30 @@ Beta 的文献池、候选决定、子任务结果与公开 trace 保留；40／
 使用隔离文库与合成数据，模型输出来自本地确定性服务，不调用付费模型。本次只改变
 发布验证、验收脚本与产品版本；没有新增文库迁移或研究交互变更。Windows、Linux、
 其他 Zotero 版本、付费模型、外部引擎及带凭据全文获取未重验。
+
+## 公开发布验收失败并撤下
+
+源码提交 `1ed2068d77fd59d3c88e35a8bdc9ca7febeee529`，tag 对象
+`5a840e7f0dd69870c88dc376864dbf8b7faeb4f3`。2026-09-23 10:14:10 UTC
+首次公开 Release `394534115`，始终为 Beta，稳定版 Latest 仍为 `v0.4.6`。
+
+- [tag CI](https://github.com/ZionDoki/confucius/actions/runs/35847381130) 的 Node.js
+  22／24 验证、上传和草稿资产检查通过；公开列表检查经过 12 次尝试仍得到空
+  `assets`，整体失败，不能记作发布成功。
+- 公开 XPI：708,242 bytes，资产 ID `583514505`，SHA-256
+  `45b06351242d954cb430a4fd83502b45844ab12e2a4f17e46dbfa49d1548698d`。
+- 公开更新 JSON：587 bytes，资产 ID `583514506`，SHA-256
+  `26b5762cac1f612870950f667dc6fe314811e41d10cc9708d9d35c9cbb8e00bd`。
+- 两个浏览器下载均成功；包大小、SHA-256、manifest、版本、插件 ID、兼容范围、
+  更新链接和 SHA-512 一致。原版 Beta 5 通过自身更新器仍在发现阶段失败，未安装
+  新包；刷新附件名称并恢复后再次失败。没有把直接安装的成功计作在线更新成功。
+- Beta 5／6 的原 tag、资产 ID、大小和摘要未变；Beta 7 的名称刷新也没有替换字节
+  或资产 ID。认证列表偶尔返回完整数据，不代表旧客户端的匿名请求稳定可用。
+
+本次 Release 恢复为 draft，从公开更新列表撤下；保留 tag、源码、原 XPI 与更新文件，
+不重建或覆盖相同版本。当前没有完成旧版在线更新修复。后续工作流也会在公开验收
+失败时撤下本次 Release，避免把“已上传包”误报为“旧版可以更新”。
+
+原始证据：`public-package.json`、`tag-ci-failed.log`、`legacy-beta5.json`、
+`legacy-beta5-after-refresh.json`、`after-name-refresh.log` 和
+`previous-assets-unchanged.json`，均位于忽略的 `output/release-0.5.0-beta.7/`。

@@ -93,19 +93,26 @@ node output/release-0.5.0-beta.6/upgrade.mjs
   公开 XPI 相同，中文草稿保留，当前版本不再重复提供，关闭 Beta 不降级且跨重启保留。
   这是对已修复更新器的实测，**不是旧版更新器自动升级成功的证据**。
 
-### 旧版本需要手动安装一次
+### 初次发布时旧版在线升级失败
 
 GitHub 的公开列表和按 tag 查询仍给 Beta 6 返回空 `assets`，按 Release ID／独立
 资产接口则返回完整的两个 uploaded 文件。草稿先上传未消除这项服务端不一致；CI
 新增的最后检查捕获并报告了它，没有放宽验收或重复上传已发布文件来使结果变绿。
 
 从 Beta 4、Beta 5 和 0.4.6 实际旧版更新器开启 Beta，三条路径均在发现安装包时失败，
-没有记为成功升级。旧代码无法通过这次失败的发现过程下载自身修复，因此目前需从
-Release 下载 Beta 6 的 `confucius.xpi`，在 Zotero 的插件管理页选择从文件安装。
-安装后使用的是已验证的资产补查逻辑；用户无需重新配置模型或迁移文库。
+没有记为成功升级。旧代码无法通过这次失败的发现过程下载自身修复。此前提供的
+手动安装建议只绕过了发现故障，没有满足旧版直接在线升级的要求，因此撤回“手动
+安装一次即可视为修复”的结论。该发布端兼容性问题仍未解决。
 
 原始证据包括 `public-package.json`（包校验通过、旧列表检查失败分别记录）、
 `public-discovery/report.json`、`fixed-updater-install.json`、
 `public-direct-upgrade-{beta4,beta5,stable}.json`、失败的
 `public-upgrade-{beta4,beta5,stable}.json` 和 `tag-ci-failed.log`，均在忽略的 `output/`
 目录。公开安装包、Git tag 和源码提交没有因补充验收文档而改变。
+
+2026-09-23 后续复验：调整 Release 元数据、草稿状态与附件名称后，列表仍存在空
+附件响应。一次读到完整列表不能证明恢复；未修改的 Beta 4、Beta 5、0.4.6 复验仍
+失败。原始 `legacy-fixed-upgrade-{beta4,beta5,stable}.json` 和
+`legacy-endpoint-probe.json` 保留失败证据。Beta 5／6 的 tag、XPI、更新 JSON 及其
+资产 ID 和摘要未替换。新版本 Beta 7 同样在公开列表门禁和原版 Beta 5 实测中失败，
+继续升版没有解决此问题。

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Withdraw a newly published release to draft if anonymous old-client discovery
+  or package verification fails. Preserve its tag and original assets instead of
+  continuing to advertise an unverified update.
+
 ## 0.5.0-beta.7 - 2026-09-23
 
 **Download:** [confucius.xpi](https://github.com/ZionDoki/confucius/releases/download/v0.5.0-beta.7/confucius.xpi)
@@ -15,9 +23,11 @@
 
 ### Upgrade notes
 
+- **Online-upgrade acceptance failed; this release is withheld from the update
+  list.** The uploaded XPI is valid, but GitHub's anonymous list omits its assets.
+  Releasing another version did not repair discovery for already installed users.
 - This is a prerelease containing the Beta 5 research improvements and Beta 6
-  updater recovery. Enable **Include prereleases** in Confucius Settings → Update
-  to check for it; stable-only installations remain on the stable channel.
+  updater recovery. Stable-only installations remain on the stable channel.
 - No data migration or model reconfiguration is required. Beta 5 and Beta 6 tags
   and installation packages remain unchanged; this release uses a new version and
   package so already installed versions can select a higher update.
@@ -35,6 +45,10 @@
 - This release changes publication verification and the product version. Paid
   models, authenticated fulltext retrieval, Windows, Linux and other Zotero
   versions were not revalidated.
+- The Node.js 22/24 checks and draft-asset validation passed, but the public
+  discovery gate failed after all retries. An unchanged, normally installed
+  Beta 5 also failed discovery before and after asset metadata refresh. These
+  failures are not counted as successful online upgrades.
 - See the [release acceptance record](https://github.com/ZionDoki/confucius/blob/v0.5.0-beta.7/.github/maintainers/acceptance/release-0.5.0-beta.7.md).
 
 ## 0.5.0-beta.6 - 2026-09-23
@@ -52,10 +66,11 @@
 
 ### Upgrade notes
 
-- **One manual installation is currently required for Beta 5 and earlier.**
+- **Online updates from Beta 5 and earlier remain blocked.**
   GitHub still omits the uploaded files from its public release list, so those
-  older updaters cannot obtain this repair automatically. Download the XPI above
-  and use Zotero → Tools → Plugins → gear menu → Install Plugin From File.
+  older updaters cannot obtain this repair automatically. This is an unresolved
+  publication-compatibility defect, not a successful upgrade path. Requiring
+  users to install the updater repair manually is not an adequate resolution.
 - This is a prerelease. **Include prereleases** in Confucius Settings → Update
   controls future Beta discovery. Stable-only installations remain on the stable
   channel; disabling Betas does not downgrade an installation.
@@ -142,8 +157,9 @@
 - Publication check on September 23: the public XPI passed direct installation
   upgrades from Beta 4 and stable 0.4.6, but GitHub's anonymous release-list response
   omitted this release's uploaded assets. In-app update discovery could not pass
-  acceptance. If the updater reports that the package is not ready, download and
-  install `confucius.xpi` from this release manually.
+  acceptance. This remains a publication-compatibility defect for older installed
+  clients; a manual XPI installation does not establish that online upgrading is
+  fixed. Subsequent Beta 6 and Beta 7 publication checks did not resolve it.
 
 ## 0.5.0-beta.4 - 2026-09-22
 

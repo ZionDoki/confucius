@@ -75,4 +75,8 @@ jobs:
       - name: Publish complete release
         run: gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease=${{ contains(github.ref_name, '-') }} --latest=${{ !contains(github.ref_name, '-') }}
       - name: Verify anonymous update discovery and download
+        id: verify_public
         run: node scripts/release-assets.mjs "$GITHUB_REF_NAME" --public
+      - name: Withdraw a release that installed clients cannot verify
+        if: ${{ failure() && steps.verify_public.outcome == 'failure' }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=true
