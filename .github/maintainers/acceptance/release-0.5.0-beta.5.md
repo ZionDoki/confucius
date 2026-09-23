@@ -67,3 +67,42 @@ node output/release-0.5.0-beta.5/upgrade.mjs
 带密钥全文获取、Windows、Linux、其他 Zotero 版本、大型个人文库或 forced-colors。
 自动化覆盖 Beta 转同基础稳定版、渠道独立设置、网络／限流／资产／摘要失败，未注入
 真实公网故障。公开发布、资产及真实更新器升级结果在发布后补充。
+
+## 公开发布与安装验收
+
+`v0.5.0-beta.5` 指向 `b9c375eadb0d0ed6981a3de6cc32c92b59601d9f`。
+[tag CI](https://github.com/ZionDoki/confucius/actions/runs/35836941562) 的 Node.js
+22／24 验证及发布任务全部成功；[源码提交主干 CI](https://github.com/ZionDoki/confucius/actions/runs/35836941578)
+成功。Release 保持 prerelease，Latest 仍为 `v0.4.6`，稳定版资产未改变。
+
+- [公开 Release](https://github.com/ZionDoki/confucius/releases/tag/v0.5.0-beta.5)
+  首次发布于 2026-09-23 08:26:52 UTC；为处理列表资产同步问题，08:32:08 UTC
+  刷新公开状态，随后补充资产标签。tag、源码及两个资产的 ID、字节和摘要均未替换。
+- 公开 XPI 为 707,978 bytes，SHA-256：
+  `065cde112e78f262ccf79c5efc6c371b23ed98b72d3dcb6c2e4279c5c6472af9`。
+- 更新 JSON 为 587 bytes，SHA-256：
+  `ff6d6e6c3cd9d28d1bd36d2669770a2cbe957b7ebc23c513ccee55b78580eb07`。
+- Release 资产接口、按 ID 读取 Release 及 GraphQL 都返回两个 uploaded 资产；下载
+  后大小、GitHub SHA-256、manifest 插件 ID／版本、兼容范围、更新链接及 SHA-512 一致。
+- 公开 XPI 正常安装后，文献交互全部检查通过。24 组结果中的匿名 OpenAlex 联网探测
+  返回限流／额度错误，未计作检索成功；此前本地候选的在线探测取得 100 条记录。
+  受控检索、PDF、摘要继续、迟到预览、窄窗与重启验证均通过，无 UI 错误。
+- 从公开 Beta 4 和稳定版 0.4.6 **直接安装公开 XPI 升级**，分别 26／20 项通过。
+  完整重启保留任务、来源、预算、草稿、批注、报告、记忆和待审提案；Beta 的文献池和
+  子任务也保留。40／28 份历史与工作笔记正文摘要一致，继续执行没有重复写笔记。
+
+### 应用内更新尚未验收通过
+
+2026-09-23 发布检查时，GitHub 的匿名 `releases?per_page=100` 列表及按 tag 查询仍
+给本版返回空的 `assets`，与同一 Release ID／资产接口不一致。开启 Beta 后实际更新器
+因此不能提供安装包，两条真实更新器升级检查均失败，**未记作通过**。刷新 Release
+正文／公开状态及资产标签后，认证列表已显示资产，但匿名列表仍未同步；没有为绕过此
+问题覆盖 tag 或上传另一份同版本安装包。
+
+目前可从 Release 下载 XPI 手动安装；自动检查、下载、安装这一整条公网路径需要在
+匿名列表恢复后重新验收。直接安装升级通过不代表应用内更新已经通过。发布说明同步
+记录这一限制，不能仅因 CI 和包校验通过就声称发布后所有场景通过。
+
+原始证据为 `public-package.json`、`public-literature/result.json`、
+`public-direct-upgrade-beta.json`、`public-direct-upgrade-stable.json`、失败的
+`public-upgrade-*.json`、匿名列表响应和日志，均在本次被忽略的 `output/` 目录。

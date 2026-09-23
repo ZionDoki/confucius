@@ -50,6 +50,11 @@
   were not revalidated for this Beta.
 - See the [release acceptance record](https://github.com/ZionDoki/confucius/blob/v0.5.0-beta.5/.github/maintainers/acceptance/release-0.5.0-beta.5.md)
   and [literature guide](https://github.com/ZionDoki/confucius/blob/v0.5.0-beta.5/docs/literature-research.md).
+- Publication check on September 23: the public XPI passed direct installation
+  upgrades from Beta 4 and stable 0.4.6, but GitHub's anonymous release-list response
+  omitted this release's uploaded assets. In-app update discovery could not pass
+  acceptance. If the updater reports that the package is not ready, download and
+  install `confucius.xpi` from this release manually.
 
 ## 0.5.0-beta.4 - 2026-09-22
 
