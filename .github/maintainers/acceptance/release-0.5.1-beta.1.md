@@ -6,7 +6,7 @@
 - 源码为该 tag 的发布提交，基于 `f67231c`，包含缺总任务索引时的自动恢复修复。
 - 环境：macOS、Zotero 10.0.4、Node.js 23.10.0；普通 XPI 安装、隔离配置与合成文库。
 - 模型回复使用本机确定性服务，无个人文库、凭据或付费模型调用。
-- 本记录在打 tag 前写入；候选验收与发布后原始 CI 包的在线验收分开记录。
+- 本记录的候选部分在打 tag 前写入；文末另记发布后原始 CI 包的在线验收。
   [此前开发验证](runtime-recovery-2026-09-29.md) 使用不同安装包，不能替代本次结果。
 
 ## 自动检查与产物
@@ -106,3 +106,46 @@ trace 与完整回答去重、分阶段中断重试由自动测试覆盖。Windo
 
 原始日志、JSON 报告、截图及隔离配置位于已忽略的 `output/` 和 `.scaffold/`；
 本记录不包含机器绝对路径、用户资料或凭据。
+
+## 发布后实测（2026-09-29 UTC）
+
+源码提交 `1979a3799770afb7aa9e3ff831f4e57b9ffe3cc6`，tag `v0.5.1-beta.1`。
+[发布 CI](https://github.com/ZionDoki/confucius/actions/runs/36575302327) 的 Node.js 22、
+24 验证和发布任务均通过。Release `399178111` 于 `2026-09-29T13:30:38Z` 公开，
+`draft=false`、`prerelease=true`，标题 `Confucius v0.5.1-beta.1`。
+`releases/latest` 仍返回稳定版 `v0.5.0`。
+
+| 原始公开附件 | 字节数 | SHA-256 |
+| --- | ---: | --- |
+| `confucius.xpi` | 714254 | `81c2d21e90b11cd199d7821e39dcdce9c022b3aac065f0a3fc2b0cf7daa3a10d` |
+| `update-beta.json` | 587 | `b0951b1c065b8d836c373c1e55d5e8c1ad576597572c1fd5ce78f6f73c42f6a7` |
+
+CI 与本机均通过连续三次匿名列表、资产 API 下载及浏览器下载后的字节与摘要核验。
+公开更新 JSON 与 manifest 版本、兼容范围、tag 下载地址和 SHA-512 一致，附件状态
+均为 `uploaded`。公开 XPI 的 25 个解压文件与候选逐字节相同；ZIP 摘要不同，
+在线测试始终使用原始公开 ZIP，未重建、覆盖附件或移动 tag。
+
+### 未修改旧客户端的在线更新
+
+三个场景均普通安装原始旧包，通过旧包自己的更新器访问真实 GitHub，未替换版本、
+更新器或网络响应。共 58 项检查，三个在线运行均首轮通过，无重试。
+
+| 原始安装及场景 | 脚本 | 检查数 | 结果 |
+| --- | --- | ---: | --- |
+| 已发生缺索引错误的 `0.5.0` | `live-runtime-recovery.mjs --public` | 19 | 通过 |
+| 有完整研究数据的 `0.5.0` | `live-release-upgrade.mjs --public` | 27 | 通过 |
+| `0.5.0-beta.6` 的 Beta 渠道 | `live-legacy-update.mjs` | 12 | 通过 |
+
+缺索引场景先确认旧包实际报错；存储失败仍可检查更新，关闭 Beta 不显示测试版，
+开启后能发现、下载、校验和安装 `0.5.1-beta.1`。之后自动恢复任务、草稿、标题、
+历史、笔记和报告，新任务可用，源文件与备份摘要保持不变，两次完整重启无重复导入。
+过程中无需手工移动、删除或修复任何数据文件。
+
+完整数据升级保留 28 个原始历史文件及研究实体、报告修订、预算、记忆和审批记录。
+Beta 6 场景保留中文草稿和显式渠道，实际安装返回 `restartRequired=false`。
+重启后的安装版本、原始公开 XPI 摘要均匹配；已安装版本不重复提供，关闭 Beta 不降级，
+渠道与独立自动检查设置在重启后仍保留。实机范围仍为 macOS / Zotero 10.0.4。
+
+原始报告位于 `output/release-0.5.1-beta.1/`：`public-recovery/results.json`、
+`public-upgrade-0.5.0.json`、`public-legacy-0.5.0-beta.6.json` 和 `public/receipt.json`；
+公开下载、CI 状态及运行日志保留在同目录的 `logs/`。

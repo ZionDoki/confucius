@@ -41,11 +41,22 @@
   20 and 26 checks, retaining all 28/40 original history files, research records
   and consumed execution budgets. Seven hot-update checks passed for workspace,
   draft, sidebar and settings restoration, including already-closed windows.
+- [Release CI](https://github.com/ZionDoki/confucius/actions/runs/36575302327)
+  passed on Node.js 22 and 24 and published both assets as a prerelease; Latest
+  remains 0.5.0. Consecutive anonymous discovery and both XPI download paths passed
+  in CI and local verification. All 25 extracted public-XPI files match the
+  tested candidate; the original public ZIP checksum was verified separately.
+- Unchanged 0.5.0 and Beta 6 clients upgraded through their own real GitHub
+  updaters to the public package, passing 58 checks: 19 for a 0.5.0 installation
+  already failing with the missing-index error, 27 for complete research-data
+  preservation, and 12 for Beta-channel upgrading. Recovery required no manual
+  file changes; saved drafts, installed hashes, restarts and no-downgrade behavior
+  passed. All three online runs passed without retries.
 - Windows and POSIX paths are covered by automated storage tests. Native Windows,
   Linux, other Zotero versions, paid model calls and external Codex/Kimi execution
   were not revalidated. Unreadable files or unverifiable backups remain protected
   and are retried; missing data with no surviving local copy cannot be rebuilt.
-- See the [Beta acceptance record](https://github.com/ZionDoki/confucius/blob/v0.5.1-beta.1/.github/maintainers/acceptance/release-0.5.1-beta.1.md)
+- See the [prepublication Beta acceptance record](https://github.com/ZionDoki/confucius/blob/v0.5.1-beta.1/.github/maintainers/acceptance/release-0.5.1-beta.1.md)
   and [automatic recovery guide](https://github.com/ZionDoki/confucius/blob/v0.5.1-beta.1/docs/tasks-and-data.md).
 
 ## 0.5.0 - 2026-09-23
