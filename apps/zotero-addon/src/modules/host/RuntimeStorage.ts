@@ -1,6 +1,7 @@
 import { schedule } from "../tools/Deadline";
 import type { ToolExecutionScope } from "@confucius/protocol";
 import { runInScope } from "./ExecutionScope";
+import { recoverMissingTaskIndex } from "./RuntimeRecovery";
 /** IOUtils on Windows still applies MAX_PATH unless given an extended path. */
 export function runtimeIoPath(path: string): string {
   if (/^[A-Za-z]:[\\/]/.test(path))
@@ -237,6 +238,7 @@ interface MigrationManifest {
   source: string;
   state: "copying" | "active";
   files: Record<string, string>;
+  recovery?: { kind: "missing-task-index"; startedAt: number };
 }
 export async function migrateRuntimeStorage(
   source = PathUtils.join(Zotero.DataDirectory.dir, "confucius"),
@@ -255,41 +257,67 @@ export async function migrateRuntimeStorage(
       !["copying", "active"].includes(previous.state) ||
       !previous.files ||
       typeof previous.files !== "object" ||
-      Array.isArray(previous.files))
+      Array.isArray(previous.files) ||
+      (previous.recovery &&
+        (previous.recovery.kind !== "missing-task-index" ||
+          !Number.isFinite(previous.recovery.startedAt) ||
+          previous.recovery.startedAt <= 0)))
   )
     throw new Error(
       "Runtime storage belongs to another data directory or its migration manifest is damaged",
     );
   if (previous?.state === "active") return;
+  const sourcePath = (relative: string): string => {
+    const parts = relative.split("/");
+    if (
+      parts.some(
+        (part) => !part || part === "." || part === ".." || part.includes("\\"),
+      )
+    )
+      throw new Error("Unsafe runtime migration path");
+    if (parts.length > 32)
+      throw new Error("Runtime directory nesting exceeds migration limit");
+    return fs.join(source, ...parts);
+  };
+  const hasHistoryFiles = async (relative: string): Promise<boolean> => {
+    const path = sourcePath(relative);
+    if (!(await fs.directory(path))) return !relative.endsWith(".tmp");
+    for (const child of await fs.children(path))
+      if (await hasHistoryFiles(`${relative}/${fs.basename(child)}`))
+        return true;
+    return false;
+  };
+  const statePath = fs.join(source, "state.json");
   const historyRoot = fs.join(source, "history");
-  if (
-    !(await fs.exists(fs.join(source, "state.json"))) &&
+  // Verified cleanup removes files, but leaves directories in the old data
+  // directory. A fresh profile must distinguish those shells from saved history.
+  // Match the copy pass's temporary-file rule; unreadable paths still fail closed.
+  const missingTaskIndex =
+    !(await fs.exists(statePath)) &&
     (await fs.exists(historyRoot)) &&
-    (await fs.children(historyRoot)).length
-  )
-    throw new Error(
-      "Existing history has no task index; migration was not activated as an empty state",
-    );
+    (await hasHistoryFiles("history"));
   const manifest: MigrationManifest = previous ?? {
     version: 1,
     source,
     state: "copying",
     files: {},
   };
+  if (missingTaskIndex || manifest.recovery) {
+    manifest.recovery ??= { kind: "missing-task-index", startedAt: Date.now() };
+    await fs.write(manifestPath, JSON.stringify(manifest));
+    await recoverMissingTaskIndex(
+      source,
+      destination,
+      fs,
+      manifest.recovery.startedAt,
+    );
+    manifest.state = "active";
+    await fs.write(manifestPath, JSON.stringify(manifest));
+    return;
+  }
   await fs.write(manifestPath, JSON.stringify(manifest));
   const walk = async (relative: string): Promise<void> => {
-    if (
-      relative
-        .split("/")
-        .some(
-          (part) =>
-            !part || part === "." || part === ".." || part.includes("\\"),
-        )
-    )
-      throw new Error("Unsafe runtime migration path");
-    if (relative.split("/").length > 32)
-      throw new Error("Runtime directory nesting exceeds migration limit");
-    const from = fs.join(source, ...relative.split("/")),
+    const from = sourcePath(relative),
       to = fs.join(destination, ...relative.split("/"));
     if (await fs.directory(from)) {
       await fs.mkdir(to);
@@ -383,6 +411,9 @@ export async function clearMigratedContextCopies(
     Array.isArray(manifest.files)
   )
     throw new Error("Invalid migration cleanup manifest");
+  // Recovered archives are evidence, not verified redundant copies of a full
+  // task index. Keep their source and recovery backup even after a task is deleted.
+  if (manifest.recovery) return;
   const copies: Array<{ relative: string; original: string }> = [];
   for (const [relative, digest] of Object.entries(manifest.files)) {
     if (!(

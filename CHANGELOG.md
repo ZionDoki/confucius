@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+## 0.5.1-beta.1 - 2026-09-29
+
+### Fixed
+
+- Automatically recover legacy history when a Zotero reinstall or profile move
+  leaves it without a task index. Keep verified backups, rebuild available
+  conversations, notes and report links, and reuse saved titles and drafts without
+  asking users to move files. Empty directory remnants no longer block startup.
+- Resume interrupted recovery without duplicating tasks or overwriting newer
+  local work. Damaged history records remain backed up; deleted history stays
+  deleted, and recovered archives do not replay tools or restore execution grants.
+
+### Upgrade notes
+
+- This is a Beta release. Enable “Include prereleases” in Confucius Settings →
+  Update to receive it from 0.5.0 or an older Beta. Disabling Betas never downgrades
+  the installed version, and automatic checking remains a separate preference.
+- Recovery runs automatically at startup; no file moves, directory cleanup or
+  model reconfiguration are required. Original files and verified recovery
+  backups remain available. New work is saved in the local runtime directory;
+  downgrading does not reverse that migration.
+- Recovered tasks stay interrupted until the user explicitly continues them.
+  Missing content without a local copy cannot be recreated. Use the update page's
+  actual restart status after installation.
+
+### Validation and known limits
+
+- All 1,179 tests, type checking, lint, workspace-version and skill-sync checks,
+  and the production build passed. The Beta XPI manifest, update file, download
+  URL, compatibility bounds and SHA-512 were verified together.
+- In isolated macOS Zotero 10.0.4, the original 0.5.0 package reproduced the
+  missing-task-index error. Installing the candidate passed 16 recovery checks:
+  history, notes, reports, titles and Chinese drafts returned automatically;
+  original files and backups retained their hashes; new messages and full
+  restarts worked without duplicate imports or automatic model calls.
+- Complete data upgrades from the original 0.5.0 and 0.5.0 Beta 6 packages passed
+  20 and 26 checks, retaining all 28/40 original history files, research records
+  and consumed execution budgets. Seven hot-update checks passed for workspace,
+  draft, sidebar and settings restoration, including already-closed windows.
+- Windows and POSIX paths are covered by automated storage tests. Native Windows,
+  Linux, other Zotero versions, paid model calls and external Codex/Kimi execution
+  were not revalidated. Unreadable files or unverifiable backups remain protected
+  and are retried; missing data with no surviving local copy cannot be rebuilt.
+- See the [Beta acceptance record](https://github.com/ZionDoki/confucius/blob/v0.5.1-beta.1/.github/maintainers/acceptance/release-0.5.1-beta.1.md)
+  and [automatic recovery guide](https://github.com/ZionDoki/confucius/blob/v0.5.1-beta.1/docs/tasks-and-data.md).
+
 ## 0.5.0 - 2026-09-23
 
 Confucius 0.5.0 brings literature discovery and delegated research to the stable
