@@ -72,6 +72,15 @@
   20 and 26 checks, retaining all 28/40 original history files, research records
   and consumed execution budgets. Seven hot-update checks passed for workspace,
   draft, sidebar and settings restoration, including already-closed windows.
+- [Release CI](https://github.com/ZionDoki/confucius/actions/runs/37437169272)
+  passed on Node.js 22 and 24 and published both assets as a prerelease; Latest
+  remains 0.5.0. Consecutive anonymous discovery and both XPI download paths passed
+  in CI and local verification. All 19 files in the public XPI match the tested
+  candidate; its original ZIP checksum was verified independently.
+- Unchanged 0.5.0 and 0.5.1 Beta 1 clients upgraded through their own real GitHub
+  updaters to the public package, passing 24 checks without retries. Installed
+  hashes, Chinese drafts, full restarts, channel settings and no-downgrade behavior
+  passed; both installations took effect without requiring a restart.
 - An older maintenance harness stopped at an obsolete archive-policy assertion
   during development and is not counted as passing. The
   [acceptance record](https://github.com/ZionDoki/confucius/blob/v0.6.0-beta.1/.github/maintainers/acceptance/release-0.6.0-beta.1.md)

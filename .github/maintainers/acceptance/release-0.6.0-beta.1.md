@@ -125,3 +125,38 @@ node scripts/live-legacy-update.mjs \
 
 候选原始证据位于忽略目录 `output/release-0.6.0-beta.1/`，包括自动检查日志、
 产物摘要、批注与子任务报告、上下文专项、两份升级报告和热更新报告。
+
+## 发布后公开包验收结果
+
+发布提交为 `0a53efb852f89d5f08967515d31aac3f12cbc4f1`。
+[tag CI](https://github.com/ZionDoki/confucius/actions/runs/37437169272) 的 Node.js 22、
+24 验证和发布任务全部通过；对应
+[master CI](https://github.com/ZionDoki/confucius/actions/runs/37437169303) 也通过。
+[Release](https://github.com/ZionDoki/confucius/releases/tag/v0.6.0-beta.1)
+于 `2026-10-06T08:38:08Z` 公开，ID `404488748`，`draft=false`、`prerelease=true`，
+Latest 仍为 `v0.5.0`。标题、tag、正文与 CHANGELOG 提取结果已核对。
+
+| 原始 CI 公开产物 | 字节数 | SHA-256 |
+| --- | ---: | --- |
+| `confucius.xpi` | 733937 | `c7dac01bc526ad637ab583082423f0e759dd9cb678fcbf5f6446725fb3e3b3c7` |
+| `update-beta.json` | 587 | `4fde652ed0f5ea0a68e837ed4af96636a85b767e333b6176bc1280ea0e283320` |
+
+CI 和本地独立验收均通过连续三次匿名发现、资产 API 下载、浏览器下载与摘要核对。
+公开 XPI 的 19 个文件解包后逐字节匹配本地已测候选；ZIP 元数据导致包摘要不同，
+公开包的原始字节始终保持不变，未用本地重建包替换。
+
+`scripts/live-legacy-update.mjs` 正常安装两个原始旧 XPI，通过旧包自身的更新器
+调用真实 GitHub，两个场景均首次通过，无重试、替换响应或临时版本修改：
+
+| 真实在线升级 | 检查数 | 结果 |
+| --- | ---: | --- |
+| `0.5.0 → 0.6.0-beta.1` | 12 | 通过 |
+| `0.5.1-beta.1 → 0.6.0-beta.1` | 12 | 通过 |
+
+Beta 开关关闭时不提供测试版，开启后发现并安装本次公开包。安装返回
+`restartRequired=false`，随后完整退出重启仍为目标版本，已安装文件摘要匹配公开 XPI。
+任务和中文草稿、显式渠道选择均保留；已安装版本不会重复提供；关闭 Beta 不降级；
+再次重启保留关闭状态和独立的自动检查偏好。
+
+原始公开资产、CI 元数据、匿名核对日志、解包比较和两份在线升级报告保存在同一
+忽略目录中。本节为发布后追加记录，未移动 tag 或修改公开安装包。
