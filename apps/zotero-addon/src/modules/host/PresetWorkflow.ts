@@ -221,6 +221,7 @@ export class PresetToolProvider implements ToolProvider {
 const common = [
   "Follow the current user request, source scope, language and format. Use task source identifiers and actual tool results.",
   "Read evidence, prepare candidates and drafts, revise concrete issues, and save the required artifacts in the current context.",
+  "commit_annotations submits immutable suggestions to the user's review pool. Only the user's acceptance writes PDF annotations. Continue research after submission, including additional batches; do not wait for review or repeat pending/rejected suggestions. Distinguish pending review from actually saved annotations, and link pending suggestions to source pages rather than inventing annotation keys.",
   "Annotation colors are assigned by the host against the frozen PDF baseline. Use actual returned colors in legends. Only verified Confucius Agent annotations may be updated or deleted, across tasks and agents; keep original batch ownership. Untraceable marks remain existing annotations.",
   "Reuse existing evidence and completed writes. Review a saved draft against the source before finalizing it; do not restart completed research or ask about optional preferences.",
 ].join("\n");

@@ -112,8 +112,9 @@ export class FileMemoryStore {
     };
   }
 
-  async put(record: MemoryRecord): Promise<void> {
+  async put(record: MemoryRecord, validate?: () => void): Promise<void> {
     await this.fs.makeDirectory(this.memoriesDir);
+    validate?.();
     const text = serializeMemory(record);
     const path = this.memoryPath(record.id);
     await this.fs.writeFile(path, text);

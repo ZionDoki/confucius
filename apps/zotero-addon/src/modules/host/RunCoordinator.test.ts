@@ -48,6 +48,104 @@ const gap = () => ({
   ],
 });
 
+for (const action of ["switch", "recover", "improve"])
+  it(`a superseded result snapshot cannot ${action} the newer execution`, async () => {
+    const state = run();
+    state.budget.modelRequestsObservable = false;
+    let current = true,
+      reads = 0,
+      effects = 0;
+    const coordinator = new RunCoordinator({
+      run: state,
+      current: () => current,
+      persist: async () => {},
+      progress: () => {},
+      snapshot: async () => {
+        if (++reads === 2) current = false;
+        return empty();
+      },
+      switchContext: async () => {
+        effects++;
+      },
+      recover: async () => {
+        effects++;
+      },
+      improve: async () => {
+        effects++;
+      },
+      wait: async () => {},
+      executor: {
+        run: async () => ({
+          stopReason:
+            action === "switch"
+              ? "context_switch"
+              : action === "recover"
+                ? "error"
+                : "completed",
+          text: "Old result",
+          failure: { retryable: true, message: "Connection failed" },
+        }),
+      },
+    });
+    const result = await coordinator.execute(
+      "Read",
+      new AbortController().signal,
+    );
+    assert.equal(result.superseded, true);
+    assert.equal(effects, 0);
+  });
+
+it("a cancelled final snapshot cannot report the task completed", async () => {
+  const state = run(),
+    controller = new AbortController();
+  let snapshots = 0;
+  const coordinator = new RunCoordinator({
+    run: state,
+    current: () => true,
+    persist: async () => {},
+    progress: () => {},
+    snapshot: async () => {
+      if (++snapshots === 3) controller.abort();
+      return empty();
+    },
+    executor: { run: async () => ({ stopReason: "completed", text: "Saved" }) },
+  });
+  assert.equal(
+    (await coordinator.execute("Read", controller.signal)).stopReason,
+    "aborted",
+  );
+});
+
+it("newly discovered work in the final snapshot is continued before completion", async () => {
+  const state = run();
+  let starts = 0,
+    snapshots = 0;
+  const coordinator = new RunCoordinator({
+    run: state,
+    current: () => true,
+    persist: async () => {},
+    progress: () => {},
+    snapshot: async () => {
+      snapshots++;
+      return starts === 1 && snapshots >= 3 ? gap() : empty();
+    },
+    executor: {
+      run: async () => {
+        starts++;
+        state.budget.iterationsUsed++;
+        return { stopReason: "completed", text: "Saved" };
+      },
+    },
+  });
+  const result = await coordinator.execute(
+    "Read",
+    new AbortController().signal,
+  );
+  assert.equal(starts, 2);
+  assert.deepEqual(result.work.missing, []);
+  assert.equal(result.stopReason, "completed");
+});
+
 it("external context switches keep the run, receipts and cumulative budget with distinct requests", async () => {
   const state = run();
   state.budget.modelRequestsObservable = false;

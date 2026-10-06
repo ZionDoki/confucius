@@ -64,6 +64,10 @@ export async function prepareContextHandoff(
         8000,
         sourceIds,
       );
+      if (read.revision !== note.revision)
+        throw new Error(
+          "Working note revision changed during handoff; prepare the handoff again",
+        );
       notes.push({
         ref: `n:${taskId}:${note.name}`,
         revision: note.revision,
@@ -166,23 +170,25 @@ export async function prepareContextHandoff(
           await memory.search({ query: query.text, limit: 4 })
         ).entries()) {
           if (isKnowledgeRecord(hit.record)) continue;
-          const at = Math.max(
+          let at = Math.max(
             0,
             hit.record.content.toLowerCase().indexOf(query.text.toLowerCase()) -
               80,
           );
+          if (/[\uDC00-\uDFFF]/.test(hit.record.content[at] ?? "")) at--;
+          const excerpt = contextTextSlice(hit.record.content, 200, at).content;
           pool.push({
             ref: `m:${hit.record.id}`,
             sourceIds: hit.record.sourceRefs ?? [],
             offset: at,
-            endOffset: at + Math.min(700, hit.record.content.length - at),
+            endOffset: at + excerpt.length,
             sourceVersion: await memorySourceVersion(
               hit.record.id,
               hit.record.content,
             ),
             page: undefined,
             section: undefined,
-            excerpt: hit.record.content.slice(at, at + 700),
+            excerpt,
             rank: rank + 1,
           });
         }

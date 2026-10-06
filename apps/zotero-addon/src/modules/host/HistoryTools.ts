@@ -139,9 +139,33 @@ export class TaskHistoryToolProvider implements ToolProvider {
     };
     return null;
   }
-  async call(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+  async call(
+    name: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+    context: ToolExecutionContext = {},
+    validate?: () => void,
+  ): Promise<ToolResult> {
     const { store, taskId } = this.options;
+    const sourceIds = this.options.sourceIds?.()?.slice();
+    const validateAccess = () => {
+      try {
+        if (
+          signal?.aborted ||
+          context.signal?.aborted ||
+          JSON.stringify(sourceIds) !==
+            JSON.stringify(this.options.sourceIds?.())
+        )
+          throw new Error(
+            "History access was cancelled or its source scope changed",
+          );
+        validate?.();
+      } catch (error) {
+        throw new HistoryAccessSuperseded(String(error));
+      }
+    };
     try {
+      validateAccess();
       let data: unknown;
       const historyQuery = {
         taskId: args.taskId ? String(args.taskId) : undefined,
@@ -150,7 +174,7 @@ export class TaskHistoryToolProvider implements ToolProvider {
         offset: typeof args.offset === "number" ? args.offset : undefined,
         limit: typeof args.limit === "number" ? args.limit : undefined,
         preferredTaskIds: this.options.references().map((ref) => ref.taskId),
-        sourceIds: this.options.sourceIds?.(),
+        sourceIds,
       };
       switch (name) {
         case "history_list":
@@ -172,8 +196,9 @@ export class TaskHistoryToolProvider implements ToolProvider {
             ref,
             historyQuery.offset,
             historyQuery.limit,
-            this.options.sourceIds?.(),
+            sourceIds,
           );
+          validateAccess();
           this.options.recalled?.(ref, read.item.sourceIds);
           data = read;
           break;
@@ -187,7 +212,7 @@ export class TaskHistoryToolProvider implements ToolProvider {
             String(args.name ?? ""),
             historyQuery.offset,
             historyQuery.limit,
-            this.options.sourceIds?.(),
+            sourceIds,
           );
           break;
         case "notes_write":
@@ -195,7 +220,9 @@ export class TaskHistoryToolProvider implements ToolProvider {
             taskId,
             String(args.name ?? ""),
             String(args.content ?? ""),
-            this.options.sourceIds?.(),
+            sourceIds,
+            undefined,
+            validateAccess,
           );
           break;
         case "new_context":
@@ -218,6 +245,7 @@ export class TaskHistoryToolProvider implements ToolProvider {
             message: "Unknown history tool",
           };
       }
+      if (name !== "notes_write") validateAccess();
       return { ok: true, toolName: name, data };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -231,7 +259,12 @@ export class TaskHistoryToolProvider implements ToolProvider {
         toolName: name,
         code: invalid ? "invalid_args" : missing ? "not_found" : "unavailable",
         effect:
-          name === "notes_write" && !invalid && !missing ? "unknown" : "none",
+          name === "notes_write" &&
+          !invalid &&
+          !missing &&
+          !(error instanceof HistoryAccessSuperseded)
+            ? "unknown"
+            : "none",
         issues: [
           {
             path: "$",
@@ -250,3 +283,5 @@ export class TaskHistoryToolProvider implements ToolProvider {
     }
   }
 }
+
+class HistoryAccessSuperseded extends Error {}

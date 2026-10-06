@@ -2486,6 +2486,10 @@ export class ZoteroToolHost {
           annotationArgs: canonical(args),
           annotationProposal: proposal.id,
           annotationFingerprint: fingerprint,
+          annotationTarget: canonical({
+            libraryID: pdf.libraryID,
+            key: pdf.key,
+          }),
           annotationEntries: canonical(proposal.entries),
         });
         await this.saveAnnotationRecord(token, record);

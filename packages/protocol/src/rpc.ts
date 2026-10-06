@@ -157,6 +157,8 @@ export const RPC_METHODS = {
   updateSetAuto: "update/setAuto",
   updateSetPrerelease: "update/setPrerelease",
   annotationBatches: "annotation/batches",
+  annotationReviewList: "annotation/review/list",
+  annotationReviewDecide: "annotation/review/decide",
   memoryProposalList: "memory/proposal/list",
   memoryProposalResolve: "memory/proposal/resolve",
 } as const;

@@ -24,6 +24,7 @@ import {
   type WorkSnapshot,
 } from "@confucius/protocol";
 import { AgentHost } from "./AgentHost";
+import { AnnotationReviewService } from "./AnnotationReview";
 import type { BackendCallbacks, BackendTurnInput } from "./AgentBackend";
 import type { McpToolCallResult } from "./McpToolResult";
 import { PluginRuntimeCapabilityStore } from "./PluginRuntimeSupport";
@@ -331,6 +332,17 @@ function fixture() {
       unknownOperationIds: [],
     }),
     execution,
+    annotationReviews: new AnnotationReviewService({
+      storage: memoryJsonStorage(),
+      id: () => `review-${++sequence}`,
+      execute: async () => {
+        throw new Error("Unexpected native annotation write");
+      },
+      operation: (id) => execution.getOperation(id),
+      reconcile: (taskId, operationIds) =>
+        execution.unresolvedForTask(taskId, { operationIds }),
+      changed: () => undefined,
+    }),
     maintenanceQueue: Promise.resolve(),
     historyCleanupEnabled: () => false,
   });
@@ -2228,6 +2240,144 @@ for (const phase of [
     assert.deepEqual(state.record.run.budget, oldBudget);
   });
 
+for (const changed of ["generation", "window"])
+  it(`a native context callback cannot overwrite a newer ${changed}`, async () => {
+    const { host, state } = fixture();
+    state.record.backend = "native";
+    state.record.run = run(state.record);
+    state.activeTurnId = "native-turn";
+    const context = Reflect.get(host, "nativeWindowContext").call(
+      host,
+      state,
+      4096,
+    );
+    const switchWindow = Reflect.get(context, "options").switchWindow;
+    if (changed === "generation") state.record.run.generation++;
+    else
+      state.record.contextWindow = {
+        ...state.record.contextWindow!,
+        id: "new-window",
+      };
+    const window = state.record.contextWindow;
+    await assert.rejects(
+      switchWindow(initialContextWindow(state.record.id, "native"), {
+        turnId: "old-turn",
+      }),
+      /superseded/,
+    );
+    assert.equal(state.record.contextWindow, window);
+    assert.equal(state.record.contextSwitch, undefined);
+  });
+
+it("concurrent context switches cannot prepare the same runtime transaction twice", async () => {
+  const { host, state, backend } = fixture();
+  state.record.run = run(state.record);
+  state.activeTurnId = "handoff-turn";
+  const direct = host as unknown as {
+    history: HistoryStore;
+    switchExternalContext(state: TestState): Promise<void>;
+  };
+  await direct.history.writeNote(
+    state.record.id,
+    "progress",
+    "Saved action",
+    undefined,
+    {
+      version: 1,
+      binding: executionBinding(state.record.run)!,
+      evidenceRefs: [],
+    },
+  );
+  const entered = deferred<void>(),
+    release = deferred<void>();
+  let preparations = 0;
+  Object.assign(backend, {
+    prepareSession: async () => {
+      preparations++;
+      entered.resolve();
+      await release.promise;
+      return { externalSessionId: "candidate" };
+    },
+  });
+  const first = direct.switchExternalContext(state);
+  await entered.promise;
+  try {
+    const second = assert.rejects(
+      direct.switchExternalContext(state),
+      /in progress/,
+    );
+    await setImmediate();
+    release.resolve();
+    await second;
+    await first;
+    assert.equal(preparations, 1);
+  } finally {
+    release.resolve();
+    await first.catch(() => {});
+  }
+});
+
+for (const boundary of [
+  "handoff",
+  "prepared",
+  "session-ready",
+  "committed",
+] as const)
+  it(`user steering at the ${boundary} persistence boundary fences the old context switch`, async () => {
+    const { host, state, backend } = fixture();
+    state.record.run = run(state.record);
+    state.activeTurnId = "handoff-turn";
+    state.record.externalSessionId = "old";
+    const direct = host as unknown as {
+      history: HistoryStore;
+      switchExternalContext(state: TestState): Promise<void>;
+    };
+    await direct.history.writeNote(
+      state.record.id,
+      "progress",
+      "Saved action",
+      undefined,
+      {
+        version: 1,
+        binding: executionBinding(state.record.run)!,
+        evidenceRefs: [],
+      },
+    );
+    let prepared = 0,
+      steered = false;
+    Object.assign(backend, {
+      prepareSession: async () => {
+        prepared++;
+        return { externalSessionId: "candidate" };
+      },
+      discardSession: async () => {},
+    });
+    host.persistNow = async () => {
+      if (
+        steered ||
+        (boundary === "handoff"
+          ? !state.record.contextHandoff
+          : state.record.contextSwitch?.phase !== boundary)
+      )
+        return;
+      steered = true;
+      state.record.run = {
+        ...state.record.run!,
+        intentRevision: 2,
+        request: "New instruction",
+      };
+      state.record.contextSwitch = undefined;
+      state.record.externalSessionId = "newer-session";
+    };
+    await assert.rejects(direct.switchExternalContext(state), /superseded/);
+    assert.equal(state.record.externalSessionId, "newer-session");
+    assert.equal(state.record.contextSwitch, undefined);
+    assert.equal(
+      prepared,
+      boundary === "handoff" || boundary === "prepared" ? 0 : 1,
+    );
+  });
+
 it("a candidate prepared after user steering cannot overwrite the newer run", async () => {
   const { host, state, backend } = fixture();
   state.record.run = run(state.record);
@@ -2267,4 +2417,47 @@ it("a candidate prepared after user steering cannot overwrite the newer run", as
   assert.equal(state.record.run.request, "New user request");
   assert.equal(state.record.externalSessionId, "old");
   assert.equal(discarded, true);
+});
+
+it("submitted annotation suggestions satisfy the Agent obligation without claiming PDF writes", async (t) => {
+  const previous = Reflect.get(globalThis, "Zotero");
+  Reflect.set(globalThis, "Zotero", {
+    locale: "en-US",
+    Prefs: { get: () => "en-US" },
+  });
+  t.after(() => Reflect.set(globalThis, "Zotero", previous));
+  const { host, state } = fixture();
+  state.record.run = run(state.record);
+  Reflect.deleteProperty(host, "workSnapshot");
+  Object.assign(host, {
+    annotationReviews: {
+      submittedProposalIds: async () => new Set(["queued"]),
+    },
+    tools: {
+      workForTask: async () => ({
+        completed: [],
+        missing: [
+          {
+            id: "queued",
+            kind: "proposal",
+            description: "Commit candidate annotations",
+          },
+          {
+            id: "unsubmitted",
+            kind: "proposal",
+            description: "Unsubmitted candidates",
+          },
+        ],
+      }),
+    },
+  });
+  const snapshot = await host.workSnapshot(state);
+  assert.deepEqual(
+    snapshot.missing.map((item) => item.id),
+    ["unsubmitted"],
+  );
+  assert.match(
+    snapshot.completed[0].description,
+    /review pool.*require individual acceptance/,
+  );
 });

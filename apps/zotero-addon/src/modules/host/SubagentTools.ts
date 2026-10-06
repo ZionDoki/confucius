@@ -98,6 +98,7 @@ export class SubagentToolProvider implements ToolProvider {
         data = await this.manager.spawn(
           this.parent,
           args as unknown as SubagentSpawn,
+          signal,
         );
       else if (name === "subagent_list")
         data = await this.manager.list(this.parent);
@@ -204,6 +205,13 @@ export class SubagentResearchTools implements ToolProvider {
       ? { name, catalog: "agent", concurrency: "serial", mutatesState: false }
       : null;
   }
+  private active(signal?: AbortSignal) {
+    return (
+      !signal?.aborted &&
+      !this.run.abort.signal.aborted &&
+      this.run.current?.() !== false
+    );
+  }
   private async metadata() {
     for (const id of this.run.document.record.sourceIds.filter((id) =>
       /^W\d+$/.test(id),
@@ -214,6 +222,7 @@ export class SubagentResearchTools implements ToolProvider {
           this.run.document.record.parentTaskId,
           id,
         );
+        if (!this.active()) throw new Error("Child research was cancelled");
         this.run.document.archive[ref] = JSON.stringify({
           ...work,
           decision: undefined,
@@ -230,7 +239,7 @@ export class SubagentResearchTools implements ToolProvider {
     result: ToolResult,
     args: Record<string, unknown> = {},
   ) {
-    if (this.run.abort.signal.aborted) return;
+    if (!this.active()) return;
     const receipt = sourceReadEvidence(result, args);
     if (!receipt) return;
     this.run.document.record.evidence.push({
@@ -264,7 +273,7 @@ export class SubagentResearchTools implements ToolProvider {
       };
     const invalid = validateArgs(name, this.getSchema(name), args);
     if (invalid) return invalid;
-    if (signal?.aborted || this.run.abort.signal.aborted)
+    if (!this.active(signal))
       return {
         ok: false,
         toolName: name,
@@ -311,6 +320,13 @@ export class SubagentResearchTools implements ToolProvider {
       const pool = await this.literature.load(
         this.run.document.record.parentTaskId,
       );
+      if (!this.active(signal))
+        return {
+          ok: false,
+          toolName: name,
+          code: "unavailable",
+          message: "Child research was cancelled",
+        };
       const found = pool.works.filter((w) =>
         w.queryIds.includes(String(queryId)),
       );
@@ -347,6 +363,13 @@ export class SubagentResearchTools implements ToolProvider {
             work.id,
             signal ?? this.run.abort.signal,
           );
+          if (!this.active(signal))
+            return {
+              ok: false,
+              toolName: name,
+              code: "unavailable",
+              message: "Child research was cancelled",
+            };
           // Only fill abstract metadata; the child's source/acquisition snapshot stays fixed.
           work.abstract = enriched.abstract;
           work.abstractLookup = enriched.abstractLookup;
@@ -396,6 +419,13 @@ export class SubagentResearchTools implements ToolProvider {
         };
       result = await this.library.call(name, args, signal, context);
     }
+    if (!this.active(signal))
+      return {
+        ok: false,
+        toolName: name,
+        code: "unavailable",
+        message: "Child research was cancelled",
+      };
     this.run.document.archive[
       `tool:${Date.now()}_${Math.random().toString(36).slice(2)}`
     ] = JSON.stringify({ name, args, result }, (key, value) =>

@@ -209,8 +209,11 @@ export class MemoryEngine {
   }
 
   /** Save first; only then evict. A failed write must never delete old memory. */
-  private async putWithinBudget(record: MemoryRecord): Promise<void> {
-    if (isKnowledgeRecord(record)) return this.store.put(record);
+  private async putWithinBudget(
+    record: MemoryRecord,
+    validate?: () => void,
+  ): Promise<void> {
+    if (isKnowledgeRecord(record)) return this.store.put(record, validate);
     const records = [
       ...this.store
         .all()
@@ -218,7 +221,7 @@ export class MemoryEngine {
       record,
     ];
     const victims = this.victims(records, record);
-    await this.store.put(record);
+    await this.store.put(record, validate);
     for (const victim of victims) await this.store.remove(victim.id);
   }
 
@@ -285,18 +288,21 @@ export class MemoryEngine {
     return this.idFactory();
   }
 
-  async save(input: {
-    /** Host-preallocated identity for an approved, replayable creation. */
-    id?: string;
-    content: string;
-    type?: MemoryType;
-    title?: string;
-    tags?: string[];
-    confidence?: number;
-    sourceSessionId?: string;
-    protection?: "user" | "none";
-    sourceRefs?: string[];
-  }): Promise<MemoryRecord> {
+  async save(
+    input: {
+      /** Host-preallocated identity for an approved, replayable creation. */
+      id?: string;
+      content: string;
+      type?: MemoryType;
+      title?: string;
+      tags?: string[];
+      confidence?: number;
+      sourceSessionId?: string;
+      protection?: "user" | "none";
+      sourceRefs?: string[];
+    },
+    validate?: () => void,
+  ): Promise<MemoryRecord> {
     await this.ensureLoaded();
     const timestamp = this.now();
     const content = input.content.trim();
@@ -324,7 +330,8 @@ export class MemoryEngine {
       const existing = input.id
         ? await this.store.recover(input.id)
         : undefined;
-      if (!existing) await this.putWithinBudget(record);
+      validate?.();
+      if (!existing) await this.putWithinBudget(record, validate);
       await this.store.rebuildIndex();
       return existing ?? record;
     });
@@ -344,9 +351,11 @@ export class MemoryEngine {
       sourceRefs?: string[];
     },
     ordinaryOnly = false,
+    validate?: () => void,
   ): Promise<MemoryRecord | null> {
     await this.ensureLoaded();
     return this.serialize(async () => {
+      validate?.();
       const existing = this.store.get(input.id);
       if (
         existing &&
@@ -381,15 +390,20 @@ export class MemoryEngine {
                   ...existing.history,
                 ].slice(0, 10),
       };
-      await this.putWithinBudget(next);
+      await this.putWithinBudget(next, validate);
       await this.store.rebuildIndex();
       return next;
     });
   }
 
-  async delete(id: string, ordinaryOnly = false): Promise<boolean> {
+  async delete(
+    id: string,
+    ordinaryOnly = false,
+    validate?: () => void,
+  ): Promise<boolean> {
     await this.ensureLoaded();
     return this.serialize(async () => {
+      validate?.();
       const record = this.store.get(id);
       if (
         record &&

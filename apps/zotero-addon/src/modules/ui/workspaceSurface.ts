@@ -67,7 +67,8 @@ export const SURFACE_CSS = `
 .confucius-literature .confucius-literature-quiet:hover { background:var(--confucius-surface); }
 .confucius-composer-dock { position:relative; z-index:12; display:grid; grid-template-columns:minmax(0,1fr) 34px; align-items:center; gap:8px; width:100%; max-width:880px; min-width:0; margin:0 auto 8px; }
 .confucius-composer-dock[hidden] { display:none !important; }
-.confucius-literature-dock { grid-column:1; min-width:0; }
+.confucius-composer-capsules { grid-column:1; display:flex; align-items:center; flex-wrap:wrap; gap:8px; min-width:0; }
+.confucius-literature-dock { min-width:0; max-width:100%; }
 .confucius-literature-capsule.confucius-button { display:flex; align-items:center; gap:8px; max-width:100%; min-height:34px; padding:6px 12px; border-radius:24px; background:var(--confucius-elevated); box-shadow:var(--confucius-shadow-soft); font-size:12px; }
 .confucius-literature-capsule-copy { display:flex; flex-wrap:wrap; align-items:baseline; gap:0 4px; min-width:0; text-align:left; overflow-wrap:anywhere; }
 .confucius-literature-capsule-count { white-space:nowrap; font-variant-numeric:tabular-nums; }

@@ -17,6 +17,7 @@ import {
   createOpenAlexSettings,
 } from "./literaturePanel";
 import { renderMemoryProposal } from "./memoryProposalCards";
+import { createAnnotationReviewPanel } from "./annotationReviewPanel";
 import { bindBtwSelection } from "./btwPopup";
 import { artifactWindows } from "./artifactWindow";
 import { mountWorkspaceArtifact } from "./artifactWorkspace";
@@ -1636,15 +1637,21 @@ function bindWorkspace(
   const composerDock = el(doc, "div");
   composerDock.className = "confucius-composer-dock";
   composerDock.hidden = true;
+  const composerCapsules = el(doc, "div");
+  composerCapsules.className = "confucius-composer-capsules";
+  composerDock.appendChild(composerCapsules);
   const literaturePanel = createLiteraturePanel(doc, {
     rpc,
     viewport: timelinePane,
-    visibilityChanged: () => syncLatest(),
+    visibilityChanged: () => {
+      if (literaturePanel.floating) annotationReview.close();
+      syncLatest();
+    },
     changed: () => {
       void refreshSessions().then(() => renderLists());
     },
   });
-  composerDock.appendChild(literaturePanel.node);
+  composerCapsules.appendChild(literaturePanel.node);
   const latest = button(
     doc,
     "confucius-latest",
@@ -1661,10 +1668,12 @@ function bindWorkspace(
         timelinePane.scrollTop -
         timelinePane.clientHeight <
         96 || !state.events.length;
-    composerDock.hidden = !literaturePanel.visible && latest.hidden;
+    composerDock.hidden =
+      !literaturePanel.visible && !annotationReview.visible && latest.hidden;
   };
   latest.addEventListener("click", () => {
     literaturePanel.close();
+    annotationReview.close();
     timelinePane.scrollTop = timelinePane.scrollHeight;
     rememberTimelineViewport();
     syncLatest();
@@ -1672,6 +1681,14 @@ function bindWorkspace(
   timelinePane.addEventListener("scroll", syncLatest, { passive: true });
   composerDock.appendChild(latest);
   composer.insertBefore(composerDock, composerCard);
+  const annotationReview = createAnnotationReviewPanel(doc, {
+    rpc,
+    viewport: timelinePane,
+    anchor: composerDock,
+    opened: () => literaturePanel.close(),
+    visibilityChanged: syncLatest,
+  });
+  composerCapsules.prepend(annotationReview.node);
   workbenchPane.appendChild(composer);
 
   root.appendChild(topbar);
@@ -1862,6 +1879,7 @@ function bindWorkspace(
     };
   });
   layoutCleanups.set(root, () => {
+    annotationReview.destroy();
     literaturePanel.destroy();
     closeSubagentPopup(doc);
     disposeBtwSelection();
@@ -4857,6 +4875,7 @@ function bindWorkspace(
   }
 
   function renderLists(): void {
+    annotationReview.update(state.sessionId ?? undefined);
     literaturePanel.update(
       state.sessionId ?? undefined,
       currentTask()?.literature,
@@ -4878,6 +4897,7 @@ function bindWorkspace(
       ? timelineViewports.get(timelineTaskId)
       : undefined;
     const followTimeline =
+      !annotationReview.floating &&
       !literaturePanel.floating &&
       !isSubagentPopupOpen(doc) &&
       (taskChanged
@@ -8822,6 +8842,10 @@ function bindWorkspace(
           state.lastEventId = incoming[incoming.length - 1].id;
         }
         collectApprovals();
+        if (
+          incoming.some((event) => event.type === "annotation_review_changed")
+        )
+          await annotationReview.refresh();
         if (incoming.some((event) => event.type === "memory_updated")) {
           await refreshMemories();
         }

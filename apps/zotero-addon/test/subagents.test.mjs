@@ -122,6 +122,284 @@ const goal = {
   sourceIds: ["1:PAPER"],
   background: "Only this explicitly passed evidence",
 };
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+test("cancelled registration cannot leave an unscheduled queued child", async () => {
+  const controller = new globalThis.AbortController();
+  const f = fixture("native", { changed: async () => controller.abort() });
+  await assert.rejects(
+    f.manager.spawn("parent", goal, controller.signal),
+    /cancelled/,
+  );
+  const rows = await f.manager.wait("parent");
+  assert.equal(rows[0].status, "cancelled");
+  assert.equal(f.pending.length, 0);
+});
+
+test("overlapping parent cancellations keep the queue closed until both finish", async () => {
+  const entered = deferred(),
+    release = deferred();
+  const f = fixture("native", {
+    stop: async () => {
+      entered.resolve();
+      await release.promise;
+    },
+  });
+  await f.manager.spawn("parent", goal);
+  await setImmediate();
+  const first = f.manager.cancel("parent");
+  await entered.promise;
+  await f.manager.cancel("parent");
+  await assert.rejects(f.manager.spawn("parent", goal), /cancelled/);
+  release.resolve();
+  await first;
+  assert.equal(f.pending.length, 1);
+});
+
+test("wait does not return completed children before their final save settles", async () => {
+  const entered = deferred(),
+    release = deferred();
+  const f = fixture("native", {
+    charge: async (run) => {
+      if (run.document.record.status === "completed") {
+        entered.resolve();
+        await release.promise;
+      }
+    },
+  });
+  const child = await f.manager.spawn("parent", goal);
+  await setImmediate();
+  f.pending[0].resolve({ text: "Durable result" });
+  await entered.promise;
+  let settled = false;
+  const waiting = f.manager.wait("parent").then((rows) => {
+    settled = true;
+    return rows;
+  });
+  await setImmediate();
+  assert.equal(settled, false);
+  release.resolve();
+  await waiting;
+  assert.equal(
+    (await f.storage.read(child.id)).record.result,
+    "Durable result",
+  );
+});
+
+test("concurrent retries create exactly one new attempt", async () => {
+  const f = fixture();
+  const child = await f.manager.spawn("parent", goal);
+  await setImmediate();
+  await f.manager.cancel("parent");
+  await f.manager.wait("parent");
+  const attempts = await Promise.allSettled([
+    f.manager.retry("parent", child.id),
+    f.manager.retry("parent", child.id),
+  ]);
+  assert.equal(
+    attempts.filter((attempt) => attempt.status === "fulfilled").length,
+    1,
+  );
+  await setImmediate();
+  assert.equal(f.pending.length, 2);
+  assert.equal((await f.manager.read("parent", child.id)).record.attempt, 2);
+  await f.manager.cancel("parent");
+});
+
+test("a failed final save cannot be reported as a durable completed result", async () => {
+  const f = fixture();
+  const child = await f.manager.spawn("parent", goal);
+  await setImmediate();
+  const write = f.storage.write;
+  f.storage.write = async (id, value) => {
+    if (value?.record?.status === "completed") throw new Error("Disk full");
+    await write(id, value);
+  };
+  f.pending[0].resolve({ text: "Unsaved conclusion" });
+  const result = await f.manager.wait("parent");
+  assert.equal(result[0].status, "failed");
+  assert.match(result[0].error, /Disk full/);
+  assert.equal((await f.storage.read(child.id)).record.status, "failed");
+});
+
+test("a failed retry save leaves a terminal child that can be retried again", async () => {
+  const f = fixture();
+  const child = await f.manager.spawn("parent", goal);
+  await setImmediate();
+  await f.manager.cancel("parent");
+  await f.manager.wait("parent");
+  const write = f.storage.write;
+  f.storage.write = async (id, value) => {
+    if (value?.record?.status === "queued")
+      throw new Error("Retry storage unavailable");
+    await write(id, value);
+  };
+  await assert.rejects(
+    f.manager.retry("parent", child.id),
+    /storage unavailable/,
+  );
+  assert.equal(
+    (await f.manager.read("parent", child.id)).record.status,
+    "failed",
+  );
+  f.storage.write = write;
+  await f.manager.retry("parent", child.id);
+  await setImmediate();
+  assert.equal(f.pending.length, 2);
+  await f.manager.cancel("parent");
+});
+
+for (const accepted of [false, true])
+  test(`native evidence delivery requires a successful model response (${accepted})`, async () => {
+    const delivered = [];
+    const f = fixture("native", {
+      execute: async (run) => {
+        run.delivered = async (result) => {
+          delivered.push(result);
+        };
+        run.tools = {
+          ...emptyTools,
+          listTools: () => [
+            {
+              name: "get_pages",
+              description: "Read",
+              inputSchema: { type: "object", properties: {} },
+            },
+          ],
+          getMeta: () => ({
+            name: "get_pages",
+            mutatesState: false,
+            concurrency: "parallel_safe",
+          }),
+          call: async () => ({
+            ok: true,
+            toolName: "get_pages",
+            data: { text: "Evidence" },
+          }),
+        };
+        let requests = 0;
+        return executeNativeSubagent(run, {
+          complete: async () => {
+            if (++requests === 1)
+              return {
+                toolCalls: [{ id: "pages", name: "get_pages", args: {} }],
+              };
+            if (!accepted) throw new Error("Provider rejected input");
+            return { text: "Read the evidence" };
+          },
+        });
+      },
+    });
+    await f.manager.spawn("parent", goal);
+    const rows = await f.manager.wait("parent");
+    assert.equal(rows[0].status, accepted ? "completed" : "failed");
+    assert.equal(delivered.length, accepted ? 1 : 0);
+  });
+test("cancellation during the initial save never starts a child executor", async () => {
+  const entered = deferred(),
+    release = deferred();
+  const f = fixture("native", {
+    charge: async () => {
+      entered.resolve();
+      await release.promise;
+    },
+  });
+  await f.manager.spawn("parent", goal);
+  await entered.promise;
+  await f.manager.cancel("parent");
+  release.resolve();
+  await setImmediate();
+  assert.equal(f.pending.length, 0);
+  assert.equal((await f.manager.list("parent"))[0].status, "cancelled");
+});
+test("deleting a parent while sources load cannot recreate the child index", async () => {
+  const entered = deferred(),
+    release = deferred();
+  const f = fixture("native", {
+    sources: async () => {
+      entered.resolve();
+      await release.promise;
+      return emptyLockedContext();
+    },
+  });
+  const spawning = assert.rejects(
+    f.manager.spawn("parent", goal),
+    /deleted|cancelled|superseded/i,
+  );
+  await entered.promise;
+  await f.manager.remove("parent");
+  release.resolve();
+  await spawning;
+  assert.deepEqual(await f.storage.keys(), []);
+  assert.equal(f.pending.length, 0);
+});
+test("concurrent cold reads share one recovered child document", async () => {
+  const f = fixture();
+  const child = await f.manager.spawn("parent", goal);
+  await f.manager.cancel("parent");
+  await setImmediate();
+  let reads = 0;
+  const original = f.storage.read;
+  f.storage.read = async (key) => {
+    if (key === child.id) {
+      reads++;
+      await setImmediate();
+    }
+    return original(key);
+  };
+  const restarted = new SubagentManager(f.options);
+  await Promise.all([
+    restarted.read("parent", child.id),
+    restarted.read("parent", child.id),
+  ]);
+  assert.equal(reads, 1);
+});
+test("a read finishing after cancellation and retry cannot modify the new child archive", async () => {
+  const f = fixture(),
+    gate = deferred(),
+    entered = deferred();
+  const child = await f.manager.spawn("parent", goal);
+  await setImmediate();
+  const previous = f.pending[0].run;
+  const tools = new SubagentResearchTools(
+    previous,
+    {
+      listTools: () => [
+        {
+          name: "get_pages",
+          inputSchema: {
+            type: "object",
+            properties: {},
+            additionalProperties: true,
+          },
+        },
+      ],
+      getMeta: () => ({ mutatesState: false }),
+      call: async () => {
+        entered.resolve();
+        await gate.promise;
+        return { ok: true, toolName: "get_pages", data: { stale: true } };
+      },
+    },
+    {},
+  );
+  const reading = tools.call("get_pages", { libraryID: 1, key: "PDF" });
+  await entered.promise;
+  await f.manager.cancel("parent");
+  await setImmediate();
+  await f.manager.retry("parent", child.id);
+  await setImmediate();
+  gate.resolve();
+  const result = await reading;
+  assert.equal(result.ok, false);
+  assert.deepEqual((await f.manager.trace("parent", child.id)).archive, {});
+  await f.manager.cancel("parent");
+});
 test("children enrich only scoped abstracts and source-only research does not go online", async () => {
   const f = fixture();
   await f.manager.spawn("parent", goal);

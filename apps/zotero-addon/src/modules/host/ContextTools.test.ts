@@ -4,6 +4,7 @@ import {
   HistoryStore,
   InMemoryFileSystem,
   MemoryEngine,
+  type MemoryFileSystem,
 } from "@confucius/memory";
 import {
   CompositeToolProvider,
@@ -16,7 +17,7 @@ import { ToolExecutionService } from "./ReliableToolProvider";
 import { registerHostOperationDomains } from "./HostOperationDomains";
 import { memoryJsonStorage } from "./RuntimeStorage";
 
-function fixture(fs = new InMemoryFileSystem()) {
+function fixture(fs: MemoryFileSystem = new InMemoryFileSystem()) {
   const history = new HistoryStore(fs, "/history");
   const memory = new MemoryEngine({ fs, root: "/memory", now: () => 100 });
   for (const id of ["current", "related", "other"])
@@ -28,6 +29,7 @@ function fixture(fs = new InMemoryFileSystem()) {
       updatedAt: 1,
     });
   let scope: string[] | undefined;
+  let revision = 1;
   let switches = 0;
   let proposals = 0;
   const provider = new ContextToolProvider({
@@ -38,7 +40,7 @@ function fixture(fs = new InMemoryFileSystem()) {
     sourceIds: () => scope,
     binding: () => ({
       runId: "run",
-      intentRevision: 1,
+      intentRevision: revision,
       sourceFingerprint: "sources",
     }),
     legacy: new TaskHistoryToolProvider({
@@ -65,6 +67,7 @@ function fixture(fs = new InMemoryFileSystem()) {
     scope: (value: string[] | undefined) => {
       scope = value;
     },
+    revise: () => revision++,
     switches: () => switches,
     proposals: () => proposals,
   };
@@ -73,6 +76,174 @@ const data = <T>(result: ToolResult): T => {
   assert.equal(result.ok, true, !result.ok ? result.message : "");
   return (result as { data: T }).data;
 };
+
+test("all-scope cursors remain bound to the caller's ranking preferences", async () => {
+  const f = fixture();
+  for (let i = 0; i < 12; i++)
+    await f.history.append({
+      taskId: "current",
+      windowId: "w",
+      itemId: `i${i}`,
+      role: "tool",
+      content: `needle ${i}`,
+      sourceIds: [],
+    });
+  const first = data<{ nextCursor: string }>(
+    await f.provider.call("context_search", { query: "needle", scope: "all" }),
+  );
+  assert.ok(first.nextCursor);
+  const other = new ContextToolProvider({
+    history: f.history,
+    memory: f.memory,
+    taskId: "other",
+    references: () => [],
+    sourceIds: () => undefined,
+    legacy: new TaskHistoryToolProvider({
+      store: f.history,
+      taskId: "other",
+      references: () => [],
+    }),
+    requestNewContext: () => {},
+    propose: async () => {
+      throw new Error("Unexpected write");
+    },
+  });
+  assert.equal(
+    (
+      await other.call("context_search", {
+        query: "needle",
+        scope: "all",
+        cursor: first.nextCursor,
+      })
+    ).ok,
+    false,
+  );
+});
+test("search refuses a mixed index generation when notes change during retrieval", async () => {
+  const f = fixture();
+  await f.history.writeNote("current", "progress", "needle old");
+  const search = f.history.search.bind(f.history);
+  f.history.search = async (query) => {
+    const result = await search(query);
+    await f.history.writeNote("current", "progress", "needle new");
+    return result;
+  };
+  const result = await f.provider.call("context_search", { query: "needle" });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.match(result.message, /changed|index/i);
+});
+test("a progress save rechecks its binding after reading the history head", async () => {
+  const f = fixture();
+  const head = f.history.head.bind(f.history);
+  f.history.head = async (taskId) => {
+    const value = await head(taskId);
+    f.revise();
+    return value;
+  };
+  const result = await f.provider.call("context_save", {
+    content: "Old request progress",
+  });
+  assert.equal(result.ok, false);
+  assert.deepEqual(await f.history.listNotes("current"), []);
+});
+test("cancelled progress saves never publish after waiting for the note directory", async () => {
+  const f = fixture(),
+    controller = new AbortController();
+  const mkdir = f.fs.makeDirectory.bind(f.fs);
+  f.fs.makeDirectory = async (path) => {
+    await mkdir(path);
+    if (path.endsWith("/notes")) controller.abort();
+  };
+  const result = await f.provider.call(
+    "context_save",
+    { content: "Cancelled progress" },
+    controller.signal,
+  );
+  assert.equal(result.ok, false);
+  assert.deepEqual(await f.history.listNotes("current"), []);
+});
+test("exact memory evidence never returns a split UTF-16 character", async () => {
+  const f = fixture();
+  await f.memory.save({
+    id: "unicode",
+    content: "abc🧪evidence",
+    protection: "none",
+  });
+  const result = await f.provider.call("context_read", {
+    ref: "m:unicode",
+    offset: 0,
+    endOffset: 4,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(f.memory.get("unicode")!.accessCount, 0);
+});
+
+for (const tool of ["context_save", "notes_write"])
+  test(`${tool} rechecks cancellation at the manifest commit boundary`, async () => {
+    const f = fixture(),
+      controller = new AbortController();
+    await f.history.writeNote("current", "progress", "Previous committed note");
+    const mkdir = f.fs.makeDirectory.bind(f.fs);
+    f.fs.makeDirectory = async (path) => {
+      await mkdir(path);
+      if (path === "/history/current/") controller.abort();
+    };
+    const result = await f.provider.call(
+      tool,
+      { name: "progress", content: "Cancelled replacement" },
+      controller.signal,
+    );
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.effect, "none");
+    assert.equal(
+      (await f.history.readNote("current", "progress")).content,
+      "Previous committed note",
+    );
+  });
+
+test("memory writes cancelled during directory creation leave the previous record intact", async () => {
+  const f = fixture(),
+    controller = new AbortController();
+  await f.memory.save({
+    id: "retained",
+    content: "Previous memory",
+    protection: "none",
+  });
+  const mkdir = f.fs.makeDirectory.bind(f.fs);
+  f.fs.makeDirectory = async (path) => {
+    await mkdir(path);
+    if (path === "/memory/memories") controller.abort();
+  };
+  const result = await f.provider.call(
+    "context_save",
+    { target: "memory", id: "retained", content: "Cancelled memory" },
+    controller.signal,
+  );
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.effect, "none");
+  assert.equal(f.memory.get("retained")?.content, "Previous memory");
+});
+
+test("a committed note keeps its success receipt when cancellation follows the commit", async () => {
+  const f = fixture(),
+    controller = new AbortController();
+  await f.history.writeNote("current", "progress", "Previous note");
+  const write = f.fs.writeFile.bind(f.fs);
+  f.fs.writeFile = async (path, content) => {
+    await write(path, content);
+    if (path === "/history/current/index.json") controller.abort();
+  };
+  const result = await f.provider.call(
+    "context_save",
+    { content: "Committed replacement" },
+    controller.signal,
+  );
+  assert.equal(result.ok, true);
+  assert.equal(
+    (await f.history.readNote("current", "progress")).content,
+    "Committed replacement",
+  );
+});
 
 test("search deduplicates complete passages but preserves distinct pages with identical hit excerpts", async () => {
   const f = fixture();

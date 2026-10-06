@@ -88,10 +88,17 @@ export async function readContextEvidence(
       throw new Error("Evidence range exceeds the saved memory");
     offset = Math.min(requestedOffset, record.content.length);
     if (/[\uDC00-\uDFFF]/.test(record.content[offset] ?? "")) offset--;
-    const end = Math.min(
+    let end = Math.min(
       record.content.length,
       location.endOffset ?? offset + 20000,
     );
+    if (/[\uDC00-\uDFFF]/.test(record.content[end] ?? "")) {
+      if (location.endOffset !== undefined)
+        throw new Error(
+          "Evidence boundary splits a UTF-16 character; use whole-character offsets",
+        );
+      end--;
+    }
     content = record.content.slice(offset, end);
     nextOffset = end < record.content.length ? end : null;
     touch = () => stores.memory.read(id);

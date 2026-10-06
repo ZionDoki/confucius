@@ -19,11 +19,31 @@ export async function executeNativeSubagent(
   const ids = () => `${run.task.run!.id}_${run.task.run!.generation}_${++next}`;
   const events = new MemoryEventLog();
   events.append = (event) => run.event(event);
+  const delivered = new Set<string>();
   const context = new WindowContext({
     window: run.task.contextWindow!,
     contextWindowTokens: run.capacity,
     maxOutputTokens: run.maxOutput,
     nextId: ids,
+    provided: async (messages) => {
+      if (run.abort.signal.aborted || run.current?.() === false) return;
+      for (const message of messages) {
+        if (
+          message.role !== "tool" ||
+          !message.toolCallId ||
+          delivered.has(message.toolCallId)
+        )
+          continue;
+        let value: import("@confucius/protocol").ToolResult;
+        try {
+          value = JSON.parse(message.content);
+        } catch {
+          continue; // Non-structured excerpts are not evidence receipts.
+        }
+        await run.delivered?.(value);
+        delivered.add(message.toolCallId);
+      }
+    },
     archive: async ({ id, windowId, message }) => {
       const ref = { taskId: run.task.id, windowId, itemId: id };
       run.document.archive[`h:${ref.taskId}:${windowId}:${id}`] =
@@ -43,30 +63,9 @@ export async function executeNativeSubagent(
         2000,
       ).content,
   });
-  const delivered = new Set<string>();
-  const observedModel: ModelAdapter = {
-    complete: async (request, signal) => {
-      for (const message of request.messages)
-        if (
-          message.role === "tool" &&
-          message.toolCallId &&
-          !delivered.has(message.toolCallId)
-        ) {
-          delivered.add(message.toolCallId);
-          let value: import("@confucius/protocol").ToolResult | undefined;
-          try {
-            value = JSON.parse(message.content);
-          } catch {
-            /* Non-structured excerpts are not evidence receipts. */
-          }
-          if (value) await run.delivered?.(value);
-        }
-      return model.complete(request, signal);
-    },
-  };
   const loop = new TurnLoop({
     context,
-    model: observedModel,
+    model,
     tools: run.tools,
     budget: run.budget,
     events,

@@ -1,4 +1,5 @@
 import { SURFACE_CSS } from "./workspaceSurface";
+import { ANNOTATION_REVIEW_CSS } from "./annotationReviewStyles";
 import { REPORT_STYLE_CSS } from "./reportStyleStyles";
 
 export const TUI_CSS = `
@@ -1292,4 +1293,5 @@ ${REPORT_STYLE_CSS}
 .confucius-workspace-root[data-confucius-layout=sidebar] .confucius-template-button { min-height: 64px; padding: 12px; }
 .confucius-attachment-chip { border-radius: 8px; }
 ${SURFACE_CSS}
+${ANNOTATION_REVIEW_CSS}
 `;

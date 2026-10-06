@@ -37,6 +37,7 @@ export interface SubagentRun {
   prompt: string;
   capacity: number;
   maxOutput: number;
+  current?(): boolean;
   delivered?(
     result: import("@confucius/protocol").ToolResult,
     args?: Record<string, unknown>,
@@ -101,6 +102,7 @@ export function subagentSummary(record: SubagentRecord): SubagentSummary {
   };
 }
 const copy = <T>(v: T): T => JSON.parse(JSON.stringify(v));
+class SubagentCancelled extends Error {}
 /** Durable scheduler. Its synthetic tasks are never registered in the sidebar. */
 export class SubagentManager {
   private readonly store: JsonStorage;
@@ -110,25 +112,43 @@ export class SubagentManager {
   private readonly queued: string[] = [];
   private readonly waiters = new Set<() => void>();
   private scheduling = false;
-  private readonly cancellingParents = new Map<string, symbol>();
+  private readonly cancellingParents = new Map<string, number>();
+  private readonly parentEpochs = new Map<string, number>();
   private removedParents = new Set<string>();
   private saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
   constructor(private readonly options: Options) {
     this.store = options.storage ?? runtimeJsonStorage("subagents");
   }
   private async save(doc: SubagentDocument) {
-    if (this.removedParents.has(doc.record.parentTaskId)) return;
-    doc.record.updatedAt = Date.now();
-    await this.locks.run([doc.record.id], () =>
-      this.store.write(doc.record.id, copy(doc)),
-    );
-    await this.options.changed(subagentSummary(doc.record));
-    for (const wake of this.waiters) wake();
+    const written = await this.locks.run([doc.record.id], async () => {
+      if (
+        this.removedParents.has(doc.record.parentTaskId) ||
+        this.documents.get(doc.record.id) !== doc
+      )
+        return false;
+      doc.record.updatedAt = Date.now();
+      await this.store.write(doc.record.id, copy(doc));
+      return true;
+    });
+    if (
+      !written ||
+      this.removedParents.has(doc.record.parentTaskId) ||
+      this.documents.get(doc.record.id) !== doc
+    )
+      return;
+    try {
+      await this.options.changed(subagentSummary(doc.record));
+    } finally {
+      for (const wake of this.waiters) wake();
+    }
   }
   private async document(id: string): Promise<SubagentDocument> {
-    let doc = this.documents.get(id);
-    if (!doc) {
-      doc = (await this.store.read<SubagentDocument>(id)) ?? undefined;
+    const cached = this.documents.get(id);
+    if (cached) return cached;
+    return this.locks.run([id], async () => {
+      const cached = this.documents.get(id);
+      if (cached) return cached;
+      const doc = await this.store.read<SubagentDocument>(id);
       if (!doc) throw new Error("Subagent not found");
       if (doc.record.status === "running" || doc.record.status === "queued") {
         doc.record.status = "interrupted";
@@ -136,18 +156,22 @@ export class SubagentManager {
         await this.store.write(id, doc);
       }
       this.documents.set(id, doc);
-    }
-    return doc;
+      return doc;
+    });
   }
   private async ids(parent: string): Promise<string[]> {
     return [
       ...new Set([
         ...((await this.store.read<string[]>(`${parent}_index`)) ?? []),
         ...(this.options.references?.(parent) ?? []),
+        ...[...this.documents.values()]
+          .filter((doc) => doc.record.parentTaskId === parent)
+          .map((doc) => doc.record.id),
       ]),
     ];
   }
   async list(parent: string) {
+    if (this.removedParents.has(parent)) return [];
     return Promise.all(
       (await this.ids(parent)).map(async (id) =>
         subagentSummary((await this.document(id)).record),
@@ -203,7 +227,7 @@ export class SubagentManager {
       ),
     });
   }
-  async spawn(parentId: string, input: SubagentSpawn) {
+  async spawn(parentId: string, input: SubagentSpawn, signal?: AbortSignal) {
     if (this.removedParents.has(parentId))
       throw new Error("Parent task was deleted");
     if (
@@ -216,13 +240,35 @@ export class SubagentManager {
         "Provide a bounded research goal and explicit source IDs",
       );
     const parent = this.options.parent(parentId),
-      owner = parent.task.run;
+      taskSnapshot = copy(parent.task),
+      owner = taskSnapshot.run,
+      nativeConfig = copy(parent.nativeConfig ?? null) ?? undefined,
+      epoch = this.parentEpochs.get(parentId);
     if (!owner || !parent.budget.canStartIteration())
       throw new Error("Parent research budget is unavailable");
+    input = copy(input);
+    const assertCurrent = () => {
+      if (this.removedParents.has(parentId))
+        throw new SubagentCancelled("Parent task was deleted");
+      const current = this.options.parent(parentId).task.run;
+      if (
+        signal?.aborted ||
+        this.cancellingParents.has(parentId) ||
+        this.parentEpochs.get(parentId) !== epoch ||
+        current?.id !== owner.id ||
+        current.intentRevision !== owner.intentRevision ||
+        current.generation !== owner.generation
+      )
+        throw new SubagentCancelled(
+          "Subagent submission was cancelled or superseded",
+        );
+    };
+    assertCurrent();
     const sources = await this.options.sources(
-      parent.task,
+      taskSnapshot,
       input.sourceIds ?? [],
     );
+    assertCurrent();
     const now = Date.now(),
       id = `sub_${now.toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
     const record: SubagentRecord = {
@@ -237,17 +283,17 @@ export class SubagentManager {
       background: input.background ?? "",
       sourceIds: input.sourceIds ?? [],
       sources: copy(sources),
-      backend: parent.task.backend,
-      runtimeModel: copy(parent.task.runtimeModel ?? null) ?? undefined,
-      nativeConfig: parent.nativeConfig,
+      backend: taskSnapshot.backend,
+      runtimeModel: taskSnapshot.runtimeModel,
+      nativeConfig,
       status: "queued",
       createdAt: now,
       updatedAt: now,
       attempt: 1,
       result: "",
       evidence: [],
-      usageObservable: parent.task.backend === "native",
-      allowSearch: !parent.task.templateId,
+      usageObservable: taskSnapshot.backend === "native",
+      allowSearch: !taskSnapshot.templateId,
     };
     const task: ResearchTaskRecord = {
       id,
@@ -278,12 +324,27 @@ export class SubagentManager {
     };
     const doc: SubagentDocument = { record, task, archive: {}, events: [] };
     this.documents.set(id, doc);
-    await this.save(doc);
-    await this.locks.run([`${parentId}_index`], async () => {
-      const ids = await this.ids(parentId);
-      await this.store.write(`${parentId}_index`, [...new Set([...ids, id])]);
-    });
-    if (!this.options.current(record)) {
+    try {
+      await this.save(doc);
+      await this.locks.run([`${parentId}_index`], async () => {
+        assertCurrent();
+        const ids = await this.ids(parentId);
+        assertCurrent();
+        await this.store.write(`${parentId}_index`, [...new Set([...ids, id])]);
+      });
+    } catch (error) {
+      record.status =
+        error instanceof SubagentCancelled ? "cancelled" : "failed";
+      record.error = String(error);
+      await this.save(doc).catch(() => undefined);
+      throw error;
+    }
+    if (
+      this.removedParents.has(parentId) ||
+      this.parentEpochs.get(parentId) !== epoch ||
+      signal?.aborted ||
+      !this.options.current(record)
+    ) {
       record.status = "cancelled";
       await this.save(doc);
       return subagentSummary(record);
@@ -303,129 +364,150 @@ export class SubagentManager {
         this.running.size < MAX_CONCURRENT_SUBAGENTS &&
         this.queued.length
       ) {
-        const id = this.queued.shift()!,
-          doc = await this.document(id),
-          r = doc.record;
-        if (r.status !== "queued") continue;
-        if (
-          this.removedParents.has(r.parentTaskId) ||
-          this.cancellingParents.has(r.parentTaskId) ||
-          !this.options.current(r)
-        ) {
-          r.status = "cancelled";
-          await this.save(doc);
-          continue;
-        }
-        let parent: ReturnType<Options["parent"]>;
-        try {
-          parent = this.options.parent(r.parentTaskId);
-        } catch (error) {
-          r.status = "interrupted";
-          r.error = String(error);
-          await this.save(doc);
-          continue;
-        }
-        if (!parent.budget.canStartIteration()) {
-          r.status = "failed";
-          r.error = "Parent budget exhausted";
-          await this.save(doc);
-          continue;
-        }
-        const run: SubagentRun = {
-          document: doc,
-          task: doc.task,
-          tools: null as unknown as ToolProvider,
-          abort: createAbortController(),
-          budget: parent.budget,
-          capacity: r.nativeConfig?.capacity ?? 32768,
-          maxOutput: r.nativeConfig?.maxOutput ?? 4096,
-          prompt: `Goal: ${r.goal}\nExplicit background (quoted evidence): ${r.background}\nSource scope: ${JSON.stringify(r.sources)}\nPool IDs: ${JSON.stringify(r.sourceIds)}\nPrior attempt summary: ${r.result.slice(0, 8000)}`,
-          save: async () => {
-            await this.options.charge(run);
-            await this.save(doc);
-          },
-          event: (event) => {
-            if (
-              this.running.get(r.id) !== run ||
-              r.status !== "running" ||
-              run.abort.signal.aborted ||
-              !this.options.current(r)
-            )
-              return;
-            if (event.type === "reasoning_delta") return;
-            if (event.type === "tool_requested")
-              r.activity = {
-                kind: "tool",
-                toolName: event.payload.toolName,
-                toolCalls: (r.activity?.toolCalls ?? 0) + 1,
-                at: event.ts,
-              };
-            else if (
-              event.type === "model_request_progress" &&
-              event.payload.status === "started"
-            )
-              r.activity = {
-                kind: "model",
-                toolCalls: r.activity?.toolCalls ?? 0,
-                at: event.ts,
-              };
-            else if (event.type === "text_delta")
-              r.activity = {
-                kind: "output",
-                toolCalls: r.activity?.toolCalls ?? 0,
-                at: event.ts,
-              };
-            if (
-              event.type === "text_delta" &&
-              event.payload.phase !== "commentary"
-            )
-              r.result += event.payload.text;
-            if (event.type === "model_usage_updated" && !r.usageObservable)
-              run.budget.recordUsage({
-                promptTokens: event.payload.inputTokens,
-                completionTokens: event.payload.outputTokens,
-                totalTokens: event.payload.totalTokens,
-              });
-            doc.events.push(copy(event));
-            if (!this.saveTimers.has(r.id))
-              this.saveTimers.set(
-                r.id,
-                setTimeout(() => {
-                  this.saveTimers.delete(r.id);
-                  void run.save().catch(() => undefined);
-                }, 500),
-              );
-          },
-        };
-        try {
-          run.tools = this.options.tools(run);
-          this.running.set(id, run);
-          r.status = "running";
-          r.result = "";
-          if (r.backend !== "native") {
-            run.budget.recordIteration();
-            run.budget.recordModelAttempt();
-          }
-          await run.save();
-          void this.perform(run);
-        } catch (error) {
-          // A failed setup must release its slot and wake a parent's wait.
-          this.running.delete(id);
-          r.status = "failed";
-          r.error = String(error);
-          await this.save(doc).catch(() => undefined);
-          for (const wake of this.waiters) wake();
-        }
+        await this.start(this.queued.shift()!);
       }
     } finally {
       this.scheduling = false;
     }
   }
+  private createRun(
+    doc: SubagentDocument,
+    budget: BudgetAccountant,
+  ): SubagentRun {
+    const r = doc.record;
+    const run: SubagentRun = {
+      document: doc,
+      task: doc.task,
+      tools: null as unknown as ToolProvider,
+      abort: createAbortController(),
+      budget,
+      capacity: r.nativeConfig?.capacity ?? 32768,
+      maxOutput: r.nativeConfig?.maxOutput ?? 4096,
+      prompt: `Goal: ${r.goal}\nExplicit background (quoted evidence): ${r.background}\nSource scope: ${JSON.stringify(r.sources)}\nPool IDs: ${JSON.stringify(r.sourceIds)}\nPrior attempt summary: ${r.result.slice(0, 8000)}`,
+      save: async () => {
+        if (this.running.get(r.id) !== run) return;
+        await this.options.charge(run);
+        await this.save(doc);
+      },
+      current: () =>
+        this.running.get(r.id) === run &&
+        this.documents.get(r.id) === doc &&
+        r.status === "running" &&
+        !run.abort.signal.aborted &&
+        !this.removedParents.has(r.parentTaskId) &&
+        this.options.current(r),
+      event: (event) => {
+        if (
+          this.running.get(r.id) !== run ||
+          r.status !== "running" ||
+          run.abort.signal.aborted ||
+          !this.options.current(r)
+        )
+          return;
+        if (event.type === "reasoning_delta") return;
+        if (event.type === "tool_requested")
+          r.activity = {
+            kind: "tool",
+            toolName: event.payload.toolName,
+            toolCalls: (r.activity?.toolCalls ?? 0) + 1,
+            at: event.ts,
+          };
+        else if (
+          event.type === "model_request_progress" &&
+          event.payload.status === "started"
+        )
+          r.activity = {
+            kind: "model",
+            toolCalls: r.activity?.toolCalls ?? 0,
+            at: event.ts,
+          };
+        else if (event.type === "text_delta")
+          r.activity = {
+            kind: "output",
+            toolCalls: r.activity?.toolCalls ?? 0,
+            at: event.ts,
+          };
+        if (event.type === "text_delta" && event.payload.phase !== "commentary")
+          r.result += event.payload.text;
+        if (event.type === "model_usage_updated" && !r.usageObservable)
+          run.budget.recordUsage({
+            promptTokens: event.payload.inputTokens,
+            completionTokens: event.payload.outputTokens,
+            totalTokens: event.payload.totalTokens,
+          });
+        doc.events.push(copy(event));
+        if (!this.saveTimers.has(r.id))
+          this.saveTimers.set(
+            r.id,
+            setTimeout(() => {
+              this.saveTimers.delete(r.id);
+              void run.save().catch(() => undefined);
+            }, 500),
+          );
+      },
+    };
+    return run;
+  }
+  private async start(id: string) {
+    let doc: SubagentDocument | undefined;
+    try {
+      doc = await this.document(id);
+      const r = doc.record;
+      if (r.status !== "queued") return;
+      if (
+        this.removedParents.has(r.parentTaskId) ||
+        this.cancellingParents.has(r.parentTaskId) ||
+        !this.options.current(r)
+      ) {
+        r.status = "cancelled";
+        await this.save(doc);
+        return;
+      }
+      let parent: ReturnType<Options["parent"]>;
+      try {
+        parent = this.options.parent(r.parentTaskId);
+      } catch (error) {
+        r.status = "interrupted";
+        r.error = String(error);
+        await this.save(doc);
+        return;
+      }
+      if (!parent.budget.canStartIteration()) {
+        r.status = "failed";
+        r.error = "Parent budget exhausted";
+        await this.save(doc);
+        return;
+      }
+      const run = this.createRun(doc, parent.budget);
+      run.tools = this.options.tools(run);
+      this.running.set(id, run);
+      r.status = "running";
+      r.result = "";
+      if (r.backend !== "native") {
+        run.budget.recordIteration();
+        run.budget.recordModelAttempt();
+      }
+      await run.save();
+      void this.perform(run);
+    } catch (error) {
+      this.running.delete(id);
+      if (doc) {
+        if (doc.record.status !== "cancelled") doc.record.status = "failed";
+        doc.record.error = String(error);
+        await this.save(doc).catch(() => undefined);
+      }
+      for (const wake of this.waiters) wake();
+    }
+  }
   private async perform(run: SubagentRun) {
     const r = run.document.record;
     try {
+      if (!run.current?.()) {
+        r.status = "cancelled";
+        return;
+      }
       const result = await this.options.execute(run);
-      if (!run.abort.signal.aborted && this.options.current(r)) {
+      if (run.current?.()) {
         r.result = result.text;
         r.error = result.error;
         r.status = result.error ? "failed" : "completed";
@@ -436,7 +518,13 @@ export class SubagentManager {
     } finally {
       clearTimeout(this.saveTimers.get(r.id));
       this.saveTimers.delete(r.id);
-      await run.save().catch(() => undefined);
+      try {
+        await run.save();
+      } catch (error) {
+        if (r.status !== "cancelled") r.status = "failed";
+        r.error = `Failed to persist subagent result: ${String(error)}`;
+        await this.save(run.document).catch(() => undefined);
+      }
       this.running.delete(r.id);
       for (const wake of this.waiters) wake();
       void this.schedule();
@@ -458,7 +546,13 @@ export class SubagentManager {
         if (ids?.some((id) => !all.some((r) => r.id === id)))
           throw new Error("Unknown subagent");
         if (signal?.aborted) throw new Error("Subagent wait cancelled");
-        if (selected.every((r) => !["queued", "running"].includes(r.status)))
+        if (
+          selected.every(
+            (r) =>
+              !["queued", "running"].includes(r.status) &&
+              !this.running.has(r.id),
+          )
+        )
           return selected;
         await changed;
       } finally {
@@ -471,8 +565,7 @@ export class SubagentManager {
   async cancel(parent: string, id?: string) {
     // Block dequeue before the first await: aborting one running child frees a
     // slot and must not start another child while the parent is being stopped.
-    const gate = id ? undefined : Symbol();
-    if (gate) this.cancellingParents.set(parent, gate);
+    const release = !id ? this.beginCancellation(parent) : undefined;
     try {
       const rows = await this.list(parent);
       if (id && !rows.some((r) => r.id === id))
@@ -481,6 +574,7 @@ export class SubagentManager {
         if (id && row.id !== id) continue;
         if (!["queued", "running"].includes(row.status)) continue;
         const doc = await this.document(row.id);
+        if (!["queued", "running"].includes(doc.record.status)) continue;
         doc.record.status = "cancelled";
         const queued = this.queued.indexOf(row.id);
         if (queued >= 0) this.queued.splice(queued, 1);
@@ -491,33 +585,64 @@ export class SubagentManager {
       }
       return this.list(parent);
     } finally {
-      if (gate && this.cancellingParents.get(parent) === gate)
-        this.cancellingParents.delete(parent);
+      release?.();
     }
   }
+  private beginCancellation(parent: string) {
+    this.cancellingParents.set(
+      parent,
+      (this.cancellingParents.get(parent) ?? 0) + 1,
+    );
+    this.parentEpochs.set(parent, (this.parentEpochs.get(parent) ?? 0) + 1);
+    return () => {
+      const remaining = this.cancellingParents.get(parent)! - 1;
+      if (remaining) this.cancellingParents.set(parent, remaining);
+      else this.cancellingParents.delete(parent);
+    };
+  }
   async retry(parent: string, id: string) {
-    const doc = await this.document(id),
-      r = doc.record;
+    const previous = await this.document(id),
+      r = previous.record;
+    if (this.removedParents.has(parent) || this.cancellingParents.has(parent))
+      throw new Error("Parent task was deleted or cancelled");
     if (r.parentTaskId !== parent || !this.options.current(r))
       throw new Error(
         "This request was superseded; delegate again from the current request",
       );
     if (
+      this.documents.get(id) !== previous ||
       this.running.has(id) ||
       !["failed", "interrupted", "cancelled"].includes(r.status)
     )
       throw new Error("Subagent cannot be retried now");
     this.options.parent(parent); // No new budget is created by the scheduler.
-    r.status = "queued";
-    r.attempt++;
-    delete r.error;
+    // Late tool/adapter callbacks retain the previous attempt's document only.
+    const doc = copy(previous);
+    doc.record.status = "queued";
+    doc.record.attempt++;
+    delete doc.record.error;
+    this.documents.set(id, doc);
     doc.task.run!.generation++;
     delete doc.task.externalSessionId;
     delete doc.task.externalTurnId;
-    await this.save(doc);
+    try {
+      await this.save(doc);
+    } catch (error) {
+      if ((doc.record.status as SubagentRecord["status"]) !== "cancelled")
+        doc.record.status = "failed";
+      doc.record.error = String(error);
+      await this.save(doc).catch(() => undefined);
+      throw error;
+    }
+    if (
+      doc.record.status !== "queued" ||
+      this.documents.get(id) !== doc ||
+      this.removedParents.has(parent)
+    )
+      return subagentSummary(doc.record);
     this.queued.push(id);
     void this.schedule();
-    return subagentSummary(r);
+    return subagentSummary(doc.record);
   }
   async branch(source: string, target: string, completedIds: string[]) {
     const ids: string[] = [],
@@ -541,16 +666,24 @@ export class SubagentManager {
     return mapping;
   }
   async remove(parent: string) {
-    await this.cancel(parent);
-    this.removedParents.add(parent);
-    for (const id of await this.ids(parent)) {
-      clearTimeout(this.saveTimers.get(id));
-      this.saveTimers.delete(id);
-      await this.locks.run([id], async () => {
-        await this.store.remove?.(id);
-        this.documents.delete(id);
+    const release = this.beginCancellation(parent);
+    try {
+      await this.cancel(parent);
+      const ids = await this.ids(parent);
+      this.removedParents.add(parent);
+      for (const id of ids) {
+        clearTimeout(this.saveTimers.get(id));
+        this.saveTimers.delete(id);
+        await this.locks.run([id], async () => {
+          await this.store.remove?.(id);
+          this.documents.delete(id);
+        });
+      }
+      await this.locks.run([`${parent}_index`], async () => {
+        await this.store.remove?.(`${parent}_index`);
       });
+    } finally {
+      release();
     }
-    await this.store.remove?.(`${parent}_index`);
   }
 }

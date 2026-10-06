@@ -63,6 +63,7 @@ export type ConfuciusEventType =
   | "source_read_delivered"
   | "approval_required"
   | "approval_resolved"
+  | "annotation_review_changed"
   | "artifact_upserted"
   | "text_delta"
   | "reasoning_delta"
@@ -154,6 +155,7 @@ type EventPayloads = {
   };
   approval_required: { request: ApprovalRequest };
   approval_resolved: { resolution: ApprovalResolution };
+  annotation_review_changed: { revision: number };
   artifact_upserted: { artifact: ArtifactSummary };
   text_delta: {
     text: string;

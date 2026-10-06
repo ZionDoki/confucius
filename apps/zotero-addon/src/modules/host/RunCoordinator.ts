@@ -193,7 +193,12 @@ export class RunCoordinator {
             : "interrupted";
       run.updatedAt = Date.now();
       await this.options.persist();
-      return { ...result, stopReason: reason, work };
+      return {
+        ...result,
+        stopReason: reason,
+        work,
+        ...(!this.options.current() ? { superseded: true } : {}),
+      };
     };
     while (this.options.current() && !signal.aborted) {
       work = await this.options.snapshot();
@@ -245,6 +250,7 @@ export class RunCoordinator {
           : "failed",
       );
       work = await this.options.snapshot();
+      if (!this.options.current()) return { ...result, work, superseded: true };
       if (signal.aborted) return finish("aborted");
       if (work.unknownOperationIds.length) return finish("outcome_unknown");
       if (
@@ -313,8 +319,11 @@ export class RunCoordinator {
           return { ...result, work, superseded: true };
         if (signal.aborted) return finish("aborted");
         work = await this.options.snapshot();
+        if (!this.options.current())
+          return { ...result, work, superseded: true };
+        if (signal.aborted) return finish("aborted");
         if (work.unknownOperationIds.length) return finish("outcome_unknown");
-        return finish("completed");
+        if (!work.missing.length) return finish("completed");
       }
       const gap = JSON.stringify({
         missing: work.missing

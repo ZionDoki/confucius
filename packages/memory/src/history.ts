@@ -345,7 +345,11 @@ export class HistoryStore {
     this.queue = pending.catch(() => undefined);
     return pending;
   }
-  private async commit(taskId: string, manifest: Manifest): Promise<void> {
+  private async commit(
+    taskId: string,
+    manifest: Manifest,
+    validate?: () => void,
+  ): Promise<void> {
     manifest.manifestBytes = 0;
     // Fixed point only changes when the digit count changes; no filesystem scan.
     for (let n = 0; n < 4; n++) {
@@ -354,6 +358,7 @@ export class HistoryStore {
       manifest.manifestBytes = size;
     }
     await this.fs.makeDirectory(this.path(taskId, ""));
+    validate?.();
     await this.fs.writeFile(
       this.path(taskId, "index.json"),
       JSON.stringify(manifest),
@@ -913,6 +918,7 @@ export class HistoryStore {
     content: string,
     sourceIds?: string[],
     state?: WorkingNoteState,
+    validate?: () => void,
   ) {
     safeId(name);
     if (content.length > 250000)
@@ -920,6 +926,7 @@ export class HistoryStore {
     return this.serial(async () => {
       const index = await this.load(taskId);
       if (index.deleted) throw new Error("History task was deleted");
+      validate?.();
       const previous = index.notes.find((n) => n.name === name);
       const note = {
         name,
@@ -931,39 +938,49 @@ export class HistoryStore {
         passages: indexPassages(content),
       };
       await this.fs.makeDirectory(this.path(taskId, "notes"));
+      validate?.();
       await this.fs.writeFile(
         this.path(taskId, `notes/${name}_${note.revision}.txt`),
         content,
       );
-      await this.commit(taskId, {
-        ...index,
-        notes: [...index.notes.filter((n) => n.name !== name), note],
-        sourceProgress: state
-          ? [
-              ...(index.sourceProgress ?? []).filter(
-                (entry) =>
-                  entry.state.binding.runId === state.binding.runId &&
-                  !state.sourceProgress?.some(
-                    (p) => p.sourceId === entry.sourceId,
-                  ),
-              ),
-              ...(state.sourceProgress ?? []).map((entry) => ({
-                ...entry,
-                note: name,
-                revision: note.revision,
-                state: {
-                  ...state,
-                  sourceProgress: undefined,
-                  sourceVersions: state.sourceVersions?.[entry.sourceId]
-                    ? { [entry.sourceId]: state.sourceVersions[entry.sourceId] }
-                    : undefined,
-                },
-              })),
-            ]
-          : index.sourceProgress,
-        retainedBytes:
-          (index.retainedBytes ?? 0) + new TextEncoder().encode(content).length,
-      });
+      validate?.();
+      await this.commit(
+        taskId,
+        {
+          ...index,
+          notes: [...index.notes.filter((n) => n.name !== name), note],
+          sourceProgress: state
+            ? [
+                ...(index.sourceProgress ?? []).filter(
+                  (entry) =>
+                    entry.state.binding.runId === state.binding.runId &&
+                    !state.sourceProgress?.some(
+                      (p) => p.sourceId === entry.sourceId,
+                    ),
+                ),
+                ...(state.sourceProgress ?? []).map((entry) => ({
+                  ...entry,
+                  note: name,
+                  revision: note.revision,
+                  state: {
+                    ...state,
+                    sourceProgress: undefined,
+                    sourceVersions: state.sourceVersions?.[entry.sourceId]
+                      ? {
+                          [entry.sourceId]:
+                            state.sourceVersions[entry.sourceId],
+                        }
+                      : undefined,
+                  },
+                })),
+              ]
+            : index.sourceProgress,
+          retainedBytes:
+            (index.retainedBytes ?? 0) +
+            new TextEncoder().encode(content).length,
+        },
+        validate,
+      );
       return { ...note, passages: undefined };
     });
   }

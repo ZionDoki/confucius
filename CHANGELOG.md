@@ -2,6 +2,84 @@
 
 ## Unreleased
 
+## 0.6.0-beta.1 - 2026-10-06
+
+### Added
+
+- Open the annotation capsule above the composer to review Agent suggestions in
+  a floating card deck or list. Browse cards with dragging, scrolling or the
+  position slider; search and filter the list to review a selected group together.
+  Minimize at any time, including during writes, without losing the current view.
+  Completed reviews retain a receipt and reopen as review history.
+- Keep multiple Agent publications in one persistent review area. New batches
+  update the capsule without opening it or changing the current card, reading
+  position and selected scope; accepting
+  suggestions writes only the selected entries to Zotero. Rejected suggestions
+  can be restored, and saved or uncertain outcomes are retained across restarts
+  without automatically replaying writes.
+
+### Changed
+
+- Agent `commit_annotations` calls now submit suggestions for human review and
+  can continue without waiting for a whole-batch approval. Existing tool grants
+  do not automatically accept suggestions. Other write tools and user-initiated
+  report writeback retain their existing approval flow.
+
+### Fixed
+
+- Preserve confirmed annotation outcomes and newer decisions when reconciling a
+  partially completed batch. Unlocatable suggestions can be rejected and restored
+  without becoming writable.
+- Keep long review lists in source order after searching and loading more entries.
+  Incoming batches preserve Chinese text composition, and delayed responses from
+  earlier task views do not move the current card or display unrelated errors.
+- Cancelled or superseded context saves cannot replace working notes or memory.
+  Context switches recheck ownership after persistence, and completed writes keep
+  their receipts even when cancellation follows the commit.
+- Keep search continuations tied to their task and index version. Concurrent
+  edits require a fresh query; handoffs reject changed note revisions, and exact
+  memory passages preserve complete Unicode characters.
+- Prevent cancelled child research from starting or publishing into a retry.
+  Concurrent retries start one attempt, parent deletion fences pending submissions,
+  and child completion waits for persistence with save failures reported.
+  Failed model requests no longer count as confirmed evidence delivery.
+- Recheck task ownership and remaining work after asynchronous completion checks,
+  so cancelled tasks cannot launch recovery and newly discovered work is finished
+  before the task is marked complete.
+
+### Upgrade notes
+
+- This is a Beta release. Enable “Include prereleases” in Confucius Settings →
+  Update to receive it from 0.5.0 or an older Beta. Disabling Betas never
+  downgrades the installed version; automatic checking remains independent.
+- Existing tasks, research records and Zotero annotations are retained. No manual
+  data migration or model reconfiguration is required. Follow the update page's
+  actual restart status after installation.
+- Older releases cannot display pending annotation reviews. Finish those reviews
+  before downgrading; downgrading does not undo annotations already accepted into
+  Zotero. Approval grants no longer bypass review for Agent annotation batches.
+
+### Validation and known limits
+
+- All 1,230 automated tests, type checking, lint, workspace-version and skill-sync
+  checks, and the production build passed. The Beta XPI manifest, update file,
+  download URL, compatibility bounds and SHA-512 were verified together.
+- In isolated macOS Zotero 10.0.4, 41 annotation-review checks, nine context-race
+  checks and 24 subagent behavior checks passed. These cover long lists, multiple
+  publications, minimization during writes, native PDF writes, restart persistence,
+  task switching and delayed responses.
+- Complete data upgrades from the original 0.5.0 and 0.5.1 Beta 1 packages passed
+  20 and 26 checks, retaining all 28/40 original history files, research records
+  and consumed execution budgets. Seven hot-update checks passed for workspace,
+  draft, sidebar and settings restoration, including already-closed windows.
+- An older maintenance harness stopped at an obsolete archive-policy assertion
+  during development and is not counted as passing. The
+  [acceptance record](https://github.com/ZionDoki/confucius/blob/v0.6.0-beta.1/.github/maintainers/acceptance/release-0.6.0-beta.1.md)
+  distinguishes that limitation from the current context-race checks.
+- Native Windows, Linux, other Zotero versions and external Codex/Kimi execution
+  were not revalidated. Deterministic local model fixtures do not establish the
+  quality of a model's suggested annotations.
+
 ## 0.5.1-beta.1 - 2026-09-29
 
 ### Fixed

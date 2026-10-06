@@ -54,7 +54,8 @@ const check = (name, condition = true, details) => {
 };
 const z = await IsolatedZotero.create({
   root,
-  binary: "/Applications/Zotero.app/Contents/MacOS/zotero",
+  binary:
+    process.env.ZOTERO_BIN ?? "/Applications/Zotero.app/Contents/MacOS/zotero",
   xpi: old,
   prefix: `release-upgrade-${label}-`,
 });

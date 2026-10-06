@@ -11,6 +11,10 @@ import { ZoteroLiteratureAcquirer } from "./LiteratureAcquisition";
 import { LiteratureAbstracts } from "./LiteratureAbstracts";
 import { LiteratureToolProvider } from "./LiteratureToolProvider";
 import {
+  AnnotationReviewProvider,
+  AnnotationReviewService,
+} from "./AnnotationReview";
+import {
   LITERATURE_TOOL_NAMES,
   RESEARCH_INSTRUCTIONS,
   type LiteratureSearch,
@@ -62,6 +66,7 @@ import type { HistoryAppend } from "@confucius/memory";
 import { isContinueRequest } from "./PresetWorkflow";
 import {
   runtimePath,
+  runtimeJsonStorage,
   runtimeIoPath,
   migrateRuntimeStorage,
   writeRuntimeText,
@@ -1133,6 +1138,44 @@ export class AgentHost {
     return new LiteratureToolProvider(this.literature, state.record.id);
   }
 
+  private annotationReviews?: AnnotationReviewService;
+  private reviews(): AnnotationReviewService {
+    if (!this.annotationReviews) {
+      this.annotationReviews = new AnnotationReviewService({
+        storage: runtimeJsonStorage("annotation-reviews"),
+        id: () => this.ids(),
+        execute: (intent, context) =>
+          this.execution
+            .wrap(new ZoteroToolProvider(this.tools), context)
+            .call("commit_annotations", { ...intent.args }, undefined, context),
+        operation: (id) => this.execution.getOperation(id),
+        reconcile: (taskId, operationIds) =>
+          this.execution.unresolvedForTask(taskId, { operationIds }),
+        changed: (taskId, revision) => {
+          const state = this.sessions.get(taskId);
+          if (state)
+            this.emitSessionEvent(
+              state,
+              undefined,
+              "annotation_review_changed",
+              { revision },
+            );
+        },
+      });
+      this.execution.registerDomain("annotation-review", {
+        reconcile: (_intent, operation) =>
+          this.annotationReviews!.reconcileSubmission(operation),
+      });
+    }
+    return this.annotationReviews;
+  }
+  private reviewTools(): ToolProvider {
+    return new AnnotationReviewProvider(
+      new ZoteroToolProvider(this.tools),
+      this.reviews(),
+    );
+  }
+
   private readonly execution = new ToolExecutionService(undefined, undefined, {
     readWarning: () =>
       this.historyFailure || this.stateStorageFailure
@@ -1259,6 +1302,7 @@ export class AgentHost {
       setPref("memoryAutoExtract", true);
     }
     this.tools.setOperationReader(this.execution);
+    this.reviews();
     registerHostOperationDomains(this.execution, {
       artifacts: this.artifacts,
       history: this.history,
@@ -2059,6 +2103,18 @@ export class AgentHost {
     params: Record<string, unknown> = {},
   ): Promise<unknown> {
     switch (method) {
+      case RPC_METHODS.annotationReviewList: {
+        const taskId = String(params.taskId ?? "");
+        this.requireSession(taskId);
+        return this.reviews().list(taskId);
+      }
+      case RPC_METHODS.annotationReviewDecide: {
+        const taskId = String(params.taskId ?? "");
+        this.requireSession(taskId);
+        return this.reviews().decide(
+          params as unknown as import("@confucius/protocol").AnnotationReviewDecision,
+        );
+      }
       case RPC_METHODS.btwOpen:
         await this.initializeStorage();
         return this.btw().open(params.selection);
@@ -2906,7 +2962,9 @@ export class AgentHost {
     if (!run || !turnId)
       throw new Error("A recoverable run is required for context handoff");
     const binding = executionBinding(run)!;
+    const generation = run.generation;
     const current = () =>
+      run.generation === generation &&
       state.record.run === run &&
       sameContextBinding(binding, executionBinding(state.record.run));
     if (
@@ -3047,6 +3105,7 @@ export class AgentHost {
       if (!current()) throw new Error("Handoff was superseded");
       state.record.contextHandoff = handoff;
       await this.persistNow();
+      if (!current()) throw new Error("Handoff was superseded");
       return text;
     } finally {
       releases.forEach((release) => release());
@@ -3065,10 +3124,14 @@ export class AgentHost {
     const ownerRun = state.record.run;
     const ownerTurn = state.activeTurnId;
     const ownerBinding = executionBinding(ownerRun);
+    const ownerGeneration = ownerRun?.generation;
+    let ownerWindow = state.record.contextWindow;
     const ownerSources = ownerRun?.sources ?? state.record.lockedContext;
     const ownerSourceVersions = contextSourceVersions(ownerSources);
     const current = () =>
       state.record.run === ownerRun &&
+      state.record.run?.generation === ownerGeneration &&
+      state.record.contextWindow === ownerWindow &&
       state.activeTurnId === ownerTurn &&
       sameContextBinding(ownerBinding, executionBinding(state.record.run));
     return new WindowContext({
@@ -3108,8 +3171,10 @@ export class AgentHost {
       },
       provided: async (messages, refs) => {
         if (!current()) return;
-        for (const ref of refs)
+        for (const ref of refs) {
+          if (!current()) return;
           await this.history.recordDelivery(ref, "native-request");
+        }
         for (const message of messages)
           if (message.role === "tool") {
             let result;
@@ -3128,6 +3193,7 @@ export class AgentHost {
                 "native-request",
               );
           }
+        if (!current()) return;
         const handoff = state.record.contextHandoff;
         if (handoff && messages.some((m) => m.content.includes(handoff.id))) {
           for (const index of contextHandoffProjection(
@@ -3140,68 +3206,82 @@ export class AgentHost {
         }
       },
       hint: async () => this.prepareHandoff(state),
-      switchWindow: async (window, checkpoint) => {
-        this.emitSessionEvent(state, checkpoint.turnId, "context_progress", {
-          stage: "switching",
-          status: "started",
-        });
-        const old = {
-          window: state.record.contextWindow,
-          messages: state.messages,
-          latest: state.latestCheckpoint,
-          safe: state.safeCheckpoint,
-        };
-        try {
-          if (!state.record.contextHandoff || !ownerRun)
-            throw new Error("A validated handoff is required");
-          state.record.contextSwitch = {
-            version: 1,
-            id: `switch_${this.ids()}`,
-            binding: executionBinding(ownerRun)!,
-            handoffId: state.record.contextHandoff.id,
-            from: state.record.contextWindow!,
-            to: window,
-            phase: "prepared",
-            createdAt: Date.now(),
-          };
-          await this.persistNow();
-          await this.history.addWindow(state.record.id, window);
+      switchWindow: (window, checkpoint) =>
+        this.withContextSwitch(state, async () => {
           if (!current())
             throw new Error("Context switch superseded by a newer execution");
-          state.record.contextWindow = window;
-          state.messages = (checkpoint.messages as ModelMessage[]).slice(1);
-          state.latestCheckpoint = checkpoint;
-          state.safeCheckpoint = checkpoint;
-          state.record.contextSwitch.phase = "committed";
-          await this.persistNow();
-        } catch (error) {
           this.emitSessionEvent(state, checkpoint.turnId, "context_progress", {
             stage: "switching",
-            status: "failed",
-            message: errorMessage(error),
+            status: "started",
           });
-          if (current()) {
-            state.record.contextWindow = old.window;
-            if (state.record.contextSwitch)
-              state.record.contextSwitch.phase = "prepared";
-            state.messages = old.messages;
-            state.latestCheckpoint = old.latest;
-            state.safeCheckpoint = old.safe;
+          const old = {
+            window: state.record.contextWindow,
+            messages: state.messages,
+            latest: state.latestCheckpoint,
+            safe: state.safeCheckpoint,
+          };
+          try {
+            if (!state.record.contextHandoff || !ownerRun)
+              throw new Error("A validated handoff is required");
+            state.record.contextSwitch = {
+              version: 1,
+              id: `switch_${this.ids()}`,
+              binding: executionBinding(ownerRun)!,
+              handoffId: state.record.contextHandoff.id,
+              from: state.record.contextWindow!,
+              to: window,
+              phase: "prepared",
+              createdAt: Date.now(),
+            };
+            await this.persistNow();
+            if (!current())
+              throw new Error("Context switch superseded by a newer execution");
+            await this.history.addWindow(state.record.id, window);
+            if (!current())
+              throw new Error("Context switch superseded by a newer execution");
+            state.record.contextWindow = window;
+            ownerWindow = window;
+            state.messages = (checkpoint.messages as ModelMessage[]).slice(1);
+            state.latestCheckpoint = checkpoint;
+            state.safeCheckpoint = checkpoint;
+            state.record.contextSwitch.phase = "committed";
+            await this.persistNow();
+            if (!current())
+              throw new Error("Context switch superseded by a newer execution");
+          } catch (error) {
+            this.emitSessionEvent(
+              state,
+              checkpoint.turnId,
+              "context_progress",
+              {
+                stage: "switching",
+                status: "failed",
+                message: errorMessage(error),
+              },
+            );
+            if (current()) {
+              state.record.contextWindow = old.window;
+              ownerWindow = old.window!;
+              if (state.record.contextSwitch)
+                state.record.contextSwitch.phase = "prepared";
+              state.messages = old.messages;
+              state.latestCheckpoint = old.latest;
+              state.safeCheckpoint = old.safe;
+            }
+            throw error;
           }
-          throw error;
-        }
-        if (!current()) return;
-        this.emitSessionEvent(
-          state,
-          checkpoint.turnId,
-          "context_window_changed",
-          { window },
-        );
-        this.emitSessionEvent(state, checkpoint.turnId, "context_progress", {
-          stage: "switching",
-          status: "completed",
-        });
-      },
+          if (!current()) return;
+          this.emitSessionEvent(
+            state,
+            checkpoint.turnId,
+            "context_window_changed",
+            { window },
+          );
+          this.emitSessionEvent(state, checkpoint.turnId, "context_progress", {
+            stage: "switching",
+            status: "completed",
+          });
+        }),
     });
   }
 
@@ -3732,6 +3812,8 @@ export class AgentHost {
     state.externalToolNames = undefined;
     state.externalSourceScope = undefined;
     state.externalVisualInspectionActive = false;
+    // Stop Agent submission before removing its review queue.
+    await this.reviews().remove(sessionId);
     await this.persistNow();
     if (this.historyFailure) throw this.historyFailure;
     await clearMigratedContextCopies();
@@ -4433,7 +4515,7 @@ export class AgentHost {
     const tools = [
       ...this.literatureTools(state).listTools(),
       ...this.subagentTools(state).listTools(),
-      ...new ZoteroToolProvider(this.tools).listTools(),
+      ...this.reviewTools().listTools(),
       ...this.memoryProvider().listTools(),
       ...advertisedArtifactTools(state.record.run?.requiredArtifactKinds),
       ...this.historyTools(state).listTools(),
@@ -4674,7 +4756,7 @@ export class AgentHost {
             ? this.artifactProvider(state, turnId)
             : HISTORY_TOOL_NAMES.has(name)
               ? this.historyTools(state)
-              : new ZoteroToolProvider(this.tools);
+              : this.reviewTools();
     if (typeof params.operationId === "string")
       executionContext.operationId = `${taskId}:${params.operationId}`;
     const provider = this.execution.wrap(innerProvider, executionContext);
@@ -4738,7 +4820,8 @@ export class AgentHost {
     let approvedArgs = args;
     if (
       WRITE_TOOL_NAMES.has(name as never) &&
-      !(isAnnotationProposalTool(name) || isMemoryProposalTool(name))
+      !(isAnnotationProposalTool(name) || isMemoryProposalTool(name)) &&
+      (name !== "commit_annotations" || state.record.permissionMode === "deny")
     ) {
       executionContext.executionScope?.pause?.();
       let resolution: ApprovalResolution;
@@ -6832,6 +6915,23 @@ export class AgentHost {
         sourceRefs,
       },
     );
+    const submitted = this.annotationReviews
+      ? await this.annotationReviews.submittedProposalIds(state.record.id)
+      : new Set<string>();
+    domain.completed = [
+      ...domain.completed,
+      ...domain.missing.filter((item) => submitted.has(item.id)),
+    ];
+    domain.missing = domain.missing.filter((item) => !submitted.has(item.id));
+    domain.completed = domain.completed.map((item) =>
+      submitted.has(item.id)
+        ? {
+            ...item,
+            description:
+              "Annotation suggestions submitted to the user's review pool; PDF writes require individual acceptance.",
+          }
+        : item,
+    );
     const coverage = await this.history.sourceCoverage(state.record.id, run);
     if (sourceRefs)
       coverage.entries = coverage.entries.filter((entry) =>
@@ -7699,7 +7799,27 @@ export class AgentHost {
     });
   }
 
-  private async switchExternalContext(state: SessionState): Promise<void> {
+  private contextSwitches?: WeakSet<SessionState>;
+  private async withContextSwitch<T>(
+    state: SessionState,
+    work: () => Promise<T>,
+  ): Promise<T> {
+    const switching = (this.contextSwitches ??= new WeakSet());
+    if (switching.has(state))
+      throw new Error("A context switch is already in progress");
+    switching.add(state);
+    try {
+      return await work();
+    } finally {
+      switching.delete(state);
+    }
+  }
+  private switchExternalContext(state: SessionState): Promise<void> {
+    return this.withContextSwitch(state, () =>
+      this.prepareExternalContext(state),
+    );
+  }
+  private async prepareExternalContext(state: SessionState): Promise<void> {
     const run = state.record.run;
     const ownerTurn = state.activeTurnId;
     const turnId =
@@ -7708,8 +7828,10 @@ export class AgentHost {
       (run?.status === "completed" ? `context_${run.id}` : undefined);
     if (!run || !turnId) throw new Error("A recoverable run is required");
     const binding = executionBinding(run)!;
+    let generation = run.generation;
     const current = () =>
       state.record.run === run &&
+      run.generation === generation &&
       state.activeTurnId === ownerTurn &&
       sameContextBinding(binding, executionBinding(run));
     const backend = this.backendFor(state.record.backend);
@@ -7718,6 +7840,7 @@ export class AgentHost {
         "This runtime cannot prepare a recoverable replacement session",
       );
     await this.prepareHandoff(state);
+    if (!current()) throw new Error("Context switch was superseded");
     const old = {
       window: state.record.contextWindow!,
       messages: state.messages,
@@ -7747,6 +7870,7 @@ export class AgentHost {
       };
       state.record.contextSwitch = transaction;
       run.generation++; // Fence all callbacks and tool leases from the previous execution.
+      generation = run.generation;
     }
     this.emitSessionEvent(state, turnId, "context_progress", {
       stage: "preparing",
@@ -7754,6 +7878,7 @@ export class AgentHost {
     });
     try {
       await this.persistNow();
+      if (!current()) throw new Error("Context switch was superseded");
       const handle = await backend.prepareSession(
         {
           task: state.record,
@@ -7772,6 +7897,7 @@ export class AgentHost {
       if (handle.runtimeModel) state.record.runtimeModel = handle.runtimeModel;
       transaction.phase = "session-ready";
       await this.persistNow();
+      if (!current()) throw new Error("Context switch was superseded");
       await this.history.addWindow(state.record.id, transaction.to);
       if (!current()) throw new Error("Context switch was superseded");
       state.record.externalSessionId = handle.externalSessionId;
@@ -7781,6 +7907,7 @@ export class AgentHost {
       transaction.phase = "committed";
       state.record.contextResetRequested = undefined;
       await this.persistNow(); // Activation/inference happens only in the next executor start.
+      if (!current()) throw new Error("Context switch was superseded");
       this.emitSessionEvent(state, turnId, "context_window_changed", {
         window: transaction.to,
       });
@@ -7829,7 +7956,7 @@ export class AgentHost {
       new SkillToolProvider(this.skills, (skill) =>
         state.loadedSkills.add(skill.slug),
       ),
-      new ZoteroToolProvider(this.tools),
+      this.reviewTools(),
       this.memoryProvider(),
       this.artifactProvider(state, input.turnId),
       ...this.mcpProviders,
@@ -7897,6 +8024,8 @@ export class AgentHost {
       ids: this.ids,
       now: Date.now,
       modeFor: (name) => {
+        if (name === "commit_annotations")
+          return state.record.permissionMode === "deny" ? "deny" : "auto_allow";
         if (
           isAnnotationProposalTool(name) ||
           isMemoryProposalTool(name) ||

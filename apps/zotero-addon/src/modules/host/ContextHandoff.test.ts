@@ -97,6 +97,30 @@ test("a current text-only note is a free handoff; host request and receipts rema
   );
 });
 
+test("handoff rejects a note revised between listing its state and reading its body", async () => {
+  const f = fixture();
+  await f.history.writeNote("task", "progress", "Old body", undefined, {
+    version: 1,
+    binding: executionBinding(f.run)!,
+    evidenceRefs: [],
+    nextAction: "Old action",
+  });
+  const read = f.history.readNote.bind(f.history);
+  f.history.readNote = async (...args) => {
+    await f.history.writeNote("task", "progress", "New body", undefined, {
+      version: 1,
+      binding: executionBinding(f.run)!,
+      evidenceRefs: [],
+      nextAction: "New action",
+    });
+    return read(...args);
+  };
+  await assert.rejects(
+    prepareContextHandoff(f.options),
+    /changed|version|revision/i,
+  );
+});
+
 test("host pending work plus its latest tool result fills empty notes without calling a model", async () => {
   const f = fixture();
   f.work.missing.push({

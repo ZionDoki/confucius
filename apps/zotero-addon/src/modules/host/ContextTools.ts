@@ -345,14 +345,22 @@ export class ContextToolProvider implements ToolProvider {
   async call(
     name: string,
     args: Record<string, unknown>,
-    _signal?: AbortSignal,
+    signal?: AbortSignal,
     context: ToolExecutionContext = {},
   ): Promise<ToolResult> {
     if (!CONTEXT_TOOL_NAMES.has(name))
-      return this.options.legacy.call(name, args);
+      return this.options.legacy.call(
+        name,
+        args,
+        signal,
+        context,
+        this.access(signal, context).validate,
+      );
     try {
       const invalid = validateArgs(name, this.getSchema(name), args);
       if (invalid) return invalid;
+      const access = this.access(signal, context);
+      access.validate();
       context.onProgress?.({ stage: name, elapsedMs: 0 });
       let data: unknown;
       if (name === "context_search")
@@ -382,162 +390,22 @@ export class ContextToolProvider implements ToolProvider {
           const invalid = await this.prepare(name, args, context);
           if (invalid) return invalid;
         }
-        if (args.target !== "memory") {
-          if (
-            contextTextTokens(String(args.content ?? "")) >
-            CONTEXT_POLICY.readTokens
-          )
-            return failure(
-              name,
-              "invalid_args",
-              "Keep the working note within 4000 estimated tokens",
-            );
-          const noteName = String(args.name ?? "progress");
-          const binding = this.options.binding?.();
-          const evidenceRefs = Array.isArray(args.evidenceRefs)
-            ? args.evidenceRefs.map(String)
-            : [];
-          // Resolve each supplied ref under current source permission before stamping it.
-          const supplied: EvidenceLocation[] = [
-            ...evidenceRefs.map((ref) => ({ ref })),
-            ...((args.evidence ?? []) as EvidenceLocation[]),
-          ];
-          if (supplied.length > 20)
-            throw new Error("Use at most 20 evidence locations per note");
-          const resolved = [];
-          for (const location of supplied)
-            resolved.push(
-              await readContextEvidence(
-                { ...this.options, sourceIds: this.options.sourceIds() },
-                location,
-                100,
-              ),
-            );
-          const evidence: EvidenceLocation[] = resolved.map((read, i) => ({
-            ...supplied[i],
-            sourceVersion: read.sourceVersion,
-            offset: supplied[i].offset ?? read.offset,
-            endOffset: supplied[i].endOffset,
-          }));
-          const sourceProgress = (args.sourceProgress ??
-            []) as SourceProgressNote[];
-          for (const progress of sourceProgress) {
-            if (
-              this.options.sourceIds() &&
-              !this.options.sourceIds()!.includes(progress.sourceId)
-            )
-              throw new Error(
-                "Progress source is unavailable in this source scope",
-              );
-            if (
-              progress.status === "analyzed" &&
-              !resolved.some(
-                (read) =>
-                  read.content.trim() &&
-                  read.sourceRefs.includes(progress.sourceId),
-              )
-            )
-              throw new Error(
-                "Analyzed progress requires readable evidence for that source",
-              );
-          }
-          if (binding && !sameContextBinding(binding, this.options.binding?.()))
-            throw new Error(
-              "Progress was superseded by new instructions or sources",
-            );
-          const note = await this.options.history.writeNote(
-            this.options.taskId,
-            noteName,
-            String(args.content),
-            this.options.sourceIds(),
-            binding
-              ? {
-                  version: 1,
-                  binding,
-                  throughItemId: await this.options.history.head(
-                    this.options.taskId,
-                  ),
-                  nextAction: args.nextAction
-                    ? String(args.nextAction)
-                    : undefined,
-                  evidenceRefs,
-                  evidence,
-                  sourceProgress,
-                  sourceVersions: sourceProgress.length
-                    ? Object.fromEntries(
-                        Object.entries(
-                          this.options.sourceVersions?.() ?? {},
-                        ).filter(([id]) =>
-                          sourceProgress.some((p) => p.sourceId === id),
-                        ),
-                      )
-                    : undefined,
-                }
-              : undefined,
+        access.validate();
+        if (args.target === "memory")
+          return await this.saveMemory(args, context, access);
+        if (
+          contextTextTokens(String(args.content ?? "")) >
+          CONTEXT_POLICY.readTokens
+        )
+          return failure(
+            name,
+            "invalid_args",
+            "Keep the working note within 4000 estimated tokens",
           );
-          data = {
-            name: note.name,
-            revision: note.revision,
-            characters: note.characters,
-            ref: `n:${this.options.taskId}:${noteName}`,
-            sourceVersion: `n:${this.options.taskId}:${noteName}:${note.revision}`,
-            saved: true,
-            sourceProgress: sourceProgress.length ? sourceProgress : undefined,
-          };
-        } else {
-          const { memory } = this.options;
-          const id = String(context.preparedOperation?.recovery.memoryId ?? "");
-          const existing = memory.get(id);
-          const op: MemoryOp =
-            args.delete === true
-              ? { op: "delete", id }
-              : existing
-                ? {
-                    op: "update",
-                    id,
-                    content: String(args.content),
-                    title: args.title ? String(args.title) : undefined,
-                  }
-                : {
-                    op: "add",
-                    type: isMemoryType(args.type) ? args.type : "note",
-                    title: contextTextHead(
-                      String(args.title ?? args.content),
-                      80,
-                    ),
-                    content: String(args.content),
-                  };
-          if (args.protected === true || existing?.protection === "user")
-            return this.options.propose(
-              op.op === "update" && args.protected === true
-                ? { ...op, protection: "user" }
-                : op,
-              context,
-            );
-          const sourceRefs = [
-            ...new Set([
-              ...(existing?.sourceRefs ?? []),
-              ...(Array.isArray(args.sourceRefs)
-                ? args.sourceRefs.map(String)
-                : [`task:${this.options.taskId}`]),
-            ]),
-          ].slice(0, 20);
-          if (op.op === "delete") await memory.delete(id, true);
-          else if (op.op === "update") {
-            if (!(await memory.update({ ...op, sourceRefs }, true)))
-              throw new Error("Memory was cleared before update");
-          } else
-            await memory.save({
-              ...op,
-              id,
-              protection: "none",
-              sourceSessionId: this.options.taskId,
-              sourceRefs,
-            });
-          // A tool response needs the identity, not another copy of the memory body/history.
-          data = { ref: `m:${id}`, saved: true, removed: op.op === "delete" };
-        }
+        data = await this.saveNote(args, access);
       }
+      // A committed write must retain its receipt even if cancellation follows it.
+      if (name !== "context_save") access.validate();
       return { ok: true, toolName: name, data };
     } catch (error) {
       return {
@@ -548,9 +416,185 @@ export class ContextToolProvider implements ToolProvider {
             : "unavailable",
           error instanceof Error ? error.message : String(error),
         ),
-        effect: name === "context_save" ? "unknown" : "none",
+        effect:
+          name === "context_save" && !(error instanceof ContextSuperseded)
+            ? "unknown"
+            : "none",
       };
     }
+  }
+  private access(
+    signal: AbortSignal | undefined,
+    context: ToolExecutionContext,
+  ) {
+    const value = this.options.binding?.();
+    const binding = value ? { ...value } : undefined;
+    const sourceIds = this.options.sourceIds()?.slice();
+    const sourceVersions = { ...this.options.sourceVersions?.() };
+    return {
+      binding,
+      sourceIds,
+      sourceVersions,
+      validate: () => {
+        const current = this.options.binding?.();
+        if (
+          signal?.aborted ||
+          context.signal?.aborted ||
+          ((binding || current) && !sameContextBinding(binding, current)) ||
+          JSON.stringify(sourceIds) !== JSON.stringify(this.options.sourceIds())
+        )
+          throw new ContextSuperseded(
+            "Context access was cancelled or superseded by new instructions or sources",
+          );
+      },
+    };
+  }
+  private async saveNote(
+    args: Record<string, unknown>,
+    access: ReturnType<ContextToolProvider["access"]>,
+  ) {
+    const noteName = String(args.name ?? "progress");
+    const { binding, sourceIds, sourceVersions, validate } = access;
+    const evidenceRefs = Array.isArray(args.evidenceRefs)
+      ? args.evidenceRefs.map(String)
+      : [];
+    // Resolve each supplied ref under current source permission before stamping it.
+    const supplied: EvidenceLocation[] = [
+      ...evidenceRefs.map((ref) => ({ ref })),
+      ...((args.evidence ?? []) as EvidenceLocation[]),
+    ];
+    if (supplied.length > 20)
+      throw new Error("Use at most 20 evidence locations per note");
+    const resolved = [];
+    for (const location of supplied)
+      resolved.push(
+        await readContextEvidence(
+          { ...this.options, sourceIds },
+          location,
+          100,
+        ),
+      );
+    const evidence: EvidenceLocation[] = resolved.map((read, i) => ({
+      ...supplied[i],
+      sourceVersion: read.sourceVersion,
+      offset: supplied[i].offset ?? read.offset,
+      endOffset: supplied[i].endOffset,
+    }));
+    const sourceProgress = (args.sourceProgress ?? []) as SourceProgressNote[];
+    for (const progress of sourceProgress) {
+      if (sourceIds && !sourceIds.includes(progress.sourceId))
+        throw new Error("Progress source is unavailable in this source scope");
+      if (
+        progress.status === "analyzed" &&
+        !resolved.some(
+          (read) =>
+            read.content.trim() && read.sourceRefs.includes(progress.sourceId),
+        )
+      )
+        throw new Error(
+          "Analyzed progress requires readable evidence for that source",
+        );
+    }
+    const throughItemId = binding
+      ? await this.options.history.head(this.options.taskId)
+      : undefined;
+    validate();
+    const note = await this.options.history.writeNote(
+      this.options.taskId,
+      noteName,
+      String(args.content),
+      sourceIds,
+      binding
+        ? {
+            version: 1,
+            binding,
+            throughItemId,
+            nextAction: args.nextAction ? String(args.nextAction) : undefined,
+            evidenceRefs,
+            evidence,
+            sourceProgress,
+            sourceVersions: sourceProgress.length
+              ? Object.fromEntries(
+                  Object.entries(sourceVersions).filter(([id]) =>
+                    sourceProgress.some((p) => p.sourceId === id),
+                  ),
+                )
+              : undefined,
+          }
+        : undefined,
+      validate,
+    );
+    return {
+      name: note.name,
+      revision: note.revision,
+      characters: note.characters,
+      ref: `n:${this.options.taskId}:${noteName}`,
+      sourceVersion: `n:${this.options.taskId}:${noteName}:${note.revision}`,
+      saved: true,
+      sourceProgress: sourceProgress.length ? sourceProgress : undefined,
+    };
+  }
+  private async saveMemory(
+    args: Record<string, unknown>,
+    context: ToolExecutionContext,
+    access: ReturnType<ContextToolProvider["access"]>,
+  ): Promise<ToolResult> {
+    const name = "context_save";
+    const { memory } = this.options;
+    const id = String(context.preparedOperation?.recovery.memoryId ?? "");
+    const existing = memory.get(id);
+    const op: MemoryOp =
+      args.delete === true
+        ? { op: "delete", id }
+        : existing
+          ? {
+              op: "update",
+              id,
+              content: String(args.content),
+              title: args.title ? String(args.title) : undefined,
+            }
+          : {
+              op: "add",
+              type: isMemoryType(args.type) ? args.type : "note",
+              title: contextTextHead(String(args.title ?? args.content), 80),
+              content: String(args.content),
+            };
+    if (args.protected === true || existing?.protection === "user")
+      return this.options.propose(
+        op.op === "update" && args.protected === true
+          ? { ...op, protection: "user" }
+          : op,
+        context,
+      );
+    const sourceRefs = [
+      ...new Set([
+        ...(existing?.sourceRefs ?? []),
+        ...(Array.isArray(args.sourceRefs)
+          ? args.sourceRefs.map(String)
+          : [`task:${this.options.taskId}`]),
+      ]),
+    ].slice(0, 20);
+    if (op.op === "delete") await memory.delete(id, true, access.validate);
+    else if (op.op === "update") {
+      if (!(await memory.update({ ...op, sourceRefs }, true, access.validate)))
+        throw new Error("Memory was cleared before update");
+    } else
+      await memory.save(
+        {
+          ...op,
+          id,
+          protection: "none",
+          sourceSessionId: this.options.taskId,
+          sourceRefs,
+        },
+        access.validate,
+      );
+    // A tool response needs the identity, not another copy of the memory body/history.
+    return {
+      ok: true,
+      toolName: name,
+      data: { ref: `m:${id}`, saved: true, removed: op.op === "delete" },
+    };
   }
   private async search(args: Record<string, unknown>) {
     if (args.view === "coverage") return this.searchCoverage(args);
@@ -561,24 +605,36 @@ export class ContextToolProvider implements ToolProvider {
     if (requestedTask && scope && !scope.includes(requestedTask))
       throw new Error("Use scope=all to search another retained task");
     const query = String(args.query ?? "");
-    const sourceIds = this.options.sourceIds();
-    const key = await runtimeDigest(
-      JSON.stringify({
-        query,
-        scope,
-        requestedTask,
-        sourceIds,
-        corpus: await history.retrievalVersion(
-          requestedTask ? [requestedTask] : scope,
-        ),
-        memory:
-          !sourceIds && !requestedTask
-            ? (await memory.list({ limit: 10000 }))
-                .filter((r) => !isKnowledgeRecord(r))
-                .map((r) => [r.id, r.updatedAt, r.content])
-            : undefined,
-      }),
-    );
+    const sourceIds = this.options.sourceIds()?.slice();
+    const indexKey = async () =>
+      runtimeDigest(
+        JSON.stringify({
+          taskId,
+          preferredTaskIds: [taskId, ...this.options.references()],
+          query,
+          scope,
+          requestedTask,
+          sourceIds,
+          corpus: await history.retrievalVersion(
+            requestedTask ? [requestedTask] : scope,
+          ),
+          memory:
+            !sourceIds && !requestedTask
+              ? (await memory.list({ limit: 10000 }))
+                  .filter((r) => !isKnowledgeRecord(r))
+                  .map((r) => [
+                    r.id,
+                    r.updatedAt,
+                    r.content,
+                    r.title,
+                    r.type,
+                    r.tags,
+                    r.sourceRefs,
+                  ])
+              : undefined,
+        }),
+      );
+    const key = await indexKey();
     const cursor: { key: string; positions: number[]; seen: string[] } =
       args.cursor
         ? searchCursors.get(String(args.cursor))!
@@ -671,17 +727,19 @@ export class ContextToolProvider implements ToolProvider {
         memories
           .slice(cursor.positions[2], cursor.positions[2] + 16)
           .map(async (r, i) => {
-            const at = Math.max(
+            let at = Math.max(
               0,
               r.content.toLocaleLowerCase().indexOf(query.toLocaleLowerCase()) -
                 80,
             );
+            if (/[\uDC00-\uDFFF]/.test(r.content[at] ?? "")) at--;
+            const excerpt = contextTextSlice(r.content, 150, at);
             return {
               ref: `m:${r.id}`,
               title: r.title,
-              excerpt: r.content.slice(at, at + 400),
+              excerpt: excerpt.content,
               offset: at,
-              endOffset: Math.min(r.content.length, at + 400),
+              endOffset: at + excerpt.content.length,
               sourceVersion: await memorySourceVersion(r.id, r.content),
               sourceRefs: r.sourceRefs,
               rank: cursor.positions[2] + i + 1,
@@ -777,6 +835,11 @@ export class ContextToolProvider implements ToolProvider {
     const nextCursor = more
       ? await runtimeDigest(JSON.stringify({ key, positions, seen: [...seen] }))
       : null;
+    const coverage = this.options.coverage ? await this.coverage() : undefined;
+    if ((await indexKey()) !== key)
+      throw new Error(
+        "The current index changed during search; repeat the query without a cursor",
+      );
     if (nextCursor) {
       searchCursors.set(nextCursor, { key, positions, seen: [...seen] });
       while (searchCursors.size > 128)
@@ -784,11 +847,7 @@ export class ContextToolProvider implements ToolProvider {
     }
     return {
       results,
-      coverage: this.options.coverage
-        ? await this.coverage().then((c) =>
-            c ? coverageSummary(c) : undefined,
-          )
-        : undefined,
+      coverage: coverage ? coverageSummary(coverage) : undefined,
       scope: args.scope === "all" ? "all" : "related",
       tokensEstimate: contextTextTokens(JSON.stringify(results)),
       more,
@@ -897,6 +956,8 @@ export class ContextToolProvider implements ToolProvider {
     );
   }
 }
+
+class ContextSuperseded extends Error {}
 
 function tokenLimit(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value)

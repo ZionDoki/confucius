@@ -44,6 +44,45 @@ export interface AnnotationBatchView {
   membership: Record<string, string | null>;
   filter: AnnotationBatchFilter;
 }
+
+/** A publication in the task's review pool, distinct from native PDF ownership. */
+export type AnnotationReviewStatus =
+  | "pending"
+  | "writing"
+  | "accepted"
+  | "rejected"
+  | "failed"
+  | "unknown"
+  | "unavailable";
+export interface AnnotationReviewEntry {
+  id: string;
+  type: string;
+  page: number;
+  quote: string;
+  comment: string;
+  color: string;
+  status: AnnotationReviewStatus;
+  annotationKey?: string;
+  error?: string;
+}
+export interface AnnotationReviewBatch {
+  id: string;
+  createdAt: number;
+  title: string;
+  libraryID: number;
+  attachmentKey: string;
+  entries: AnnotationReviewEntry[];
+}
+export interface AnnotationReviewPool {
+  taskId: string;
+  revision: number;
+  batches: AnnotationReviewBatch[];
+}
+export interface AnnotationReviewDecision {
+  taskId: string;
+  action: "accept" | "reject" | "restore";
+  entries: Array<{ batchId: string; entryId: string }>;
+}
 export function annotationMatchesFilter(
   batchId: string | null | undefined,
   filter: AnnotationBatchFilter,
