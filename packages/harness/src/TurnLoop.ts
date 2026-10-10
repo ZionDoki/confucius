@@ -784,7 +784,7 @@ export class TurnLoop {
           resolution: decision.resolution,
         });
       }
-      if (decision.verdict === "deny") {
+      if (decision.verdict !== "allow") {
         await this.deps.tools.recordDenied?.(
           call.name,
           call.args,

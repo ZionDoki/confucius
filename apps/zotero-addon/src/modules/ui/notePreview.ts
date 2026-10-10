@@ -20,7 +20,11 @@ export function renderNotePreview(
 ): void {
   const doc = node.ownerDocument;
   if (!doc) return;
-  const template = doc.createElementNS(NS, "template") as HTMLTemplateElement;
+  // Zotero workspaces are XHTML/XUL documents. Parse source HTML in an inert
+  // HTML template so ordinary void elements and named entities are accepted.
+  const template = doc.implementation
+    .createHTMLDocument("")
+    .createElement("template");
   template.innerHTML = html;
   node.replaceChildren();
   const copy = (source: Node | null, parent: HTMLElement) => {

@@ -2,12 +2,10 @@
 name: Research Knowledge Base
 description: Maintain a searchable knowledge base for a research topic.
 allowed-tools:
-  - knowledge_base_list
-  - knowledge_base_get
-  - knowledge_base_search
-  - knowledge_base_create
-  - knowledge_base_update
-  - knowledge_base_save_entry
+  - knowledge_search
+  - knowledge_read
+  - create_note
+  - update_note
   - context_search
   - context_read
   - search_items
@@ -37,21 +35,10 @@ triggers:
   - 课题追踪
 ---
 
-Maintain the user's active research topic.
+Maintain continuity in the user's research through the unified knowledge index.
 
-Start with `knowledge_base_list`. Reuse a topic when its scope matches. Before adding an entry, call `knowledge_base_search` with its main terms and update a matching entry when the new material changes it.
+Start with `knowledge_search`, then `knowledge_read` for relevant topics, open questions and Zotero notes. Follow the returned source references. Read the current note before proposing an update; reuse its libraryID and key. Save documents as Zotero notes using the existing approval flow. Never ask the user to create a knowledge base, choose a topic container or supply an internal knowledge-base ID.
 
-Choose the closest entry type:
+Research memory is maintained automatically after ordinary conversations when enabled. Describe the user's explicit goal, current supported findings, unresolved/resolved/dropped questions, and next action accurately in your answer. Reuse an existing topic when the scope matches. Do not infer a permanent interest from a one-off paper question or claim that automatic maintenance succeeded without a receipt.
 
-- `paper`: a literature record with the Zotero `libraryID` and `key` when known. Record why it matters.
-- `note`: observations or reading notes linked to their source.
-- `insight`: a synthesis, hypothesis, contradiction, or research gap that crosses sources.
-- `method`: an approach that was attempted or is planned. State inputs, outcome, failure mode, and the next decision.
-- `discussion`: conclusions, unresolved questions, and decisions from a conversation.
-- `mindmap`: a Markdown outline for a paper or topic.
-
-Separate evidence from interpretation. Cite Zotero items as `libraryID:key`. Search the library when a source is uncertain.
-
-Save material when the user asks to remember, store, or track it; when it changes the research topic; or when it will be used in another session. Do not save temporary exploration. Give each proposed write a specific title and content that can be reviewed in the approval dialog.
-
-At the end, list the topic and entries that changed, followed by any open research question.
+Separate evidence from interpretation and link source papers as libraryID:key. Use context tools for working progress. User-corrected and protected memories take precedence; current instructions override older preferences. Legacy knowledge files remain readable sources, not new write destinations.

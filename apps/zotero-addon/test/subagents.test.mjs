@@ -129,6 +129,80 @@ function deferred() {
   });
   return { promise, resolve };
 }
+for (const backend of ["native", "codex", "kimi"]) {
+  test(`${backend} research children inherit parent language despite an English goal`, async () => {
+    let prompt;
+    const f = fixture(backend, {
+      execute: async (run) => {
+        assert.deepEqual(
+          run.task.responseLanguageContext,
+          f.task.responseLanguageContext,
+        );
+        assert.notEqual(
+          run.task.responseLanguageContext,
+          f.task.responseLanguageContext,
+        );
+        if (backend === "native")
+          return executeNativeSubagent(run, {
+            complete: async (input) => {
+              prompt = JSON.stringify(input);
+              return { text: "Ergebnis" };
+            },
+          });
+        return executeExternalSubagent(run, {
+          startTurn: async (input, callbacks) => {
+            prompt = input.workflowInstruction;
+            callbacks.event({
+              type: "turn_completed",
+              turnId: run.task.run.id,
+              payload: {},
+            });
+            return {};
+          },
+          dispose: async () => {},
+        });
+      },
+    });
+    f.task.responseLanguageContext = {
+      request: "Bitte untersuche diese Methoden auf Deutsch.",
+      priorRequests: [],
+    };
+    await f.manager.spawn("parent", goal);
+    const results = await f.manager.wait("parent");
+    assert.equal(results[0].status, "completed", results[0].error);
+    assert.match(prompt, /Bitte untersuche diese Methoden auf Deutsch/);
+    assert.match(prompt, /explicit output-language request first/);
+  });
+}
+
+test("retrying a legacy research child recovers its parent's language evidence", async () => {
+  const f = fixture();
+  f.task.responseLanguageContext = {
+    request: "Bitte analysiere die Belege.",
+    priorRequests: [],
+  };
+  const child = await f.manager.spawn("parent", goal);
+  await setImmediate();
+  await f.manager.cancel("parent");
+  await f.manager.wait("parent");
+  const legacy = await f.storage.read(child.id);
+  delete legacy.task.responseLanguageContext;
+  await f.storage.write(child.id, legacy);
+  const restarted = new SubagentManager(f.options);
+  await restarted.retry("parent", child.id);
+  await setImmediate();
+  assert.deepEqual(
+    f.pending[1].run.task.responseLanguageContext,
+    f.task.responseLanguageContext,
+  );
+  f.pending[1].resolve({ text: "Ergebnis" });
+  await restarted.wait("parent");
+  assert.deepEqual(
+    (await f.storage.read(child.id)).task.responseLanguageContext,
+    f.task.responseLanguageContext,
+  );
+});
+
 test("cancelled registration cannot leave an unscheduled queued child", async () => {
   const controller = new globalThis.AbortController();
   const f = fixture("native", { changed: async () => controller.abort() });

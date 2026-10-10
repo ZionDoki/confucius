@@ -1,32 +1,31 @@
 # AGENTS.md
 
-本文件对在本仓库工作的人工智能代理具有约束力。动手前先读完。
+English · [简体中文](AGENTS.zh-CN.md)
 
-改完代码后跑 `npm test` 和 `npm run typecheck`。
+These instructions bind AI agents working in this repository. Read the whole file before making changes.
 
-本地预览 Zotero 工作区：`npm start`（`apps/zotero-addon`，需要本机 Zotero 7+），点 Confucius 工具栏按钮打开工作区；偏好在 Zotero → Settings → Confucius。
+After code changes, run `npm test` and `npm run typecheck`.
 
-## 版本、更新与发布
+For a local Zotero workspace preview, run `npm start` in `apps/zotero-addon` with Zotero 7+ installed. Open the workspace with the Confucius toolbar button. Preferences are in Zotero → Settings → Confucius.
 
-涉及版本号、更新功能、CHANGELOG、Git tag 或 GitHub Release 时，先读 [发布规范](.github/maintainers/releases.md)，按其中的准备、检查、发布和验收步骤执行。
+## Versions, updates, and releases
 
-- 公开版本使用 `MAJOR.MINOR.PATCH`；测试版使用 `MAJOR.MINOR.PATCH-beta.N`，`N` 从 1 开始递增。Git tag 必须是 `v<完整版本号>`。Beta 必须标记为 prerelease，不能设为 Latest。
-- 根 `package.json` 是产品版本的来源。所有 workspace、`package-lock.json` 内根包和 workspace 版本、`packages/protocol/src/version.ts` 的 `CONFUCIUS_VERSION` 必须一致；构建后的 XPI manifest 和更新文件也必须对应同一版本。不要手改构建产物来凑版本号。
-- 已发布的 tag、版本号和安装包不可复用或覆盖。修复已发布版本时递增版号；本地未发布改动先写入 `CHANGELOG.md` 的 `Unreleased`，不要把新改动补写成旧版本已发布的能力。
-- 发布说明的唯一正文来源是 `CHANGELOG.md`。发版时使用唯一的 `## <版本号> - YYYY-MM-DD` 条目，写明用户可感知的变化、升级／迁移注意事项、实际验证结果和已知限制；不得以提交列表、占位符或未执行的验证代替。
-- 更新由 Confucius 自行检查、比较、下载和校验。设置必须保留“接收测试版更新”开关，保存显式选择；关闭时只接收稳定版，开启时比较稳定版与 Beta，始终只升级到更高版本，关闭开关不能自动降级。自动检查开关与版本渠道开关独立。
-- 发布前执行 `npm run release:check -- v<版本号>`、`npm test`、`npm run typecheck`、`npm run lint` 和 `npm run build`，并按发布规范核对产物和升级场景。代码／文档准备、打 tag、发布 Release、安装后的实测是不同状态，交付时如实说明完成到哪一步。
+Before changing versions, update behavior, CHANGELOG, Git tags, or GitHub Releases, read the [release rules](.github/maintainers/releases.md) and follow their preparation, validation, publication, and acceptance steps.
 
-## 设计规范
+- Public stable versions use `MAJOR.MINOR.PATCH`; Betas use `MAJOR.MINOR.PATCH-beta.N`, with N starting at 1 and increasing. Tags are `v<full-version>`. Betas must be prereleases and cannot be Latest.
+- The root `package.json` is the product-version authority. All workspace versions, root/workspace lockfile versions, and `CONFUCIUS_VERSION` in `packages/protocol/src/version.ts` must agree. Built XPI manifests and update files must use the same version. Never hand-edit generated artifacts to make versions match.
+- Never reuse or overwrite published tags, versions, or packages. Fix a published release with a higher version. Record unpublished changes under CHANGELOG's Unreleased; do not add new capabilities to old released entries.
+- `CHANGELOG.md` is the only release-body source. Use one `## <version> - YYYY-MM-DD` entry describing user-visible changes, upgrade/migration notes, actual validation, and known limits. Commit lists, placeholders, and unrun checks are not substitutes.
+- Confucius checks, compares, downloads, and verifies updates itself. Keep the Include prereleases preference and preserve explicit choices. Off accepts only stable versions; on compares stable and Beta versions. Offer only higher versions; turning it off cannot trigger a downgrade. Automatic checks and channel selection are independent.
+- Before publication run `npm run release:check -- v<version>`, `npm test`, `npm run typecheck`, `npm run lint`, and `npm run build`, then inspect artifacts and upgrade scenarios under the release rules. Preparing code/docs, tagging, publishing a Release, and testing an installed package are distinct states; report the actual completion level.
 
-改动任何 UI 前必须先读并遵循 [界面设计准则](docs/design.md)，以 APP（工作区顶栏／
-时间线／输入区）为准。配色使用公共变量，顶栏复用公共按钮样式，常规与紧凑布局的
-边距、尺寸均按准则执行；artifact 阅读界面不使用装饰性分割线。修改公共视觉规则时
-同步更新该文档，禁止为阅读页另起一套配色与按钮尺寸。完工后对照自查清单核对，
-再跑 `npm test` 和 `npm run typecheck`，如实说明实机验证范围。
+## Interface design
 
-## 文档范围
+Before any UI change, read and follow the [interface design rules](docs/design.md), using the app workspace toolbar, timeline, and composer as the baseline. Use shared color variables and toolbar button styles, and follow regular/compact spacing and sizing. Artifact readers have no decorative dividers. Update the design document when shared visual rules change; do not create a separate reader palette or button size system. Complete its checklist, run `npm test` and `npm run typecheck`, and state the scope of real-device testing.
 
-- `docs/` 面向产品用户，保留使用方法、设置、故障处理和已知限制，以及统一的界面设计准则 `docs/design.md`；入口为 `docs/README.md`。不放实现草稿、代理工作计划、临时测试日志或逐次开发记录。
-- 仍需维护的架构、发布流程和验收记录放在 `.github/maintainers/`；原始 trace、机器路径、测试库和临时输出放在已忽略的 `output/`，不要提交凭据或个人文库内容。
-- 删除过时设计文档时同步修复当前文档的链接。历史 Release 固定到旧 tag 的证据链接保留，不把新测试结果改写为旧版本的能力。
+## Documentation scope
+
+- `docs/` contains user instructions, settings, troubleshooting, known limits, and shared `docs/design.md` rules. Its entry is `docs/README.md`. Do not put implementation drafts, agent plans, temporary test logs, or sequential development diaries there.
+- Maintained architecture, release procedures, and acceptance records belong in `.github/maintainers/`. Raw traces, machine paths, test libraries, and temporary output belong in ignored `output/`. Never commit credentials or personal library contents.
+- When removing obsolete designs, repair current documentation links. Preserve historical Release evidence URLs pinned to old tags; do not rewrite new test results as old-version capabilities.
+- Current user/developer guides have separate English and Chinese versions: default files are English and Chinese files use `*.zh-CN.md`. Normal navigation stays in the current language; language switches are explicit. Historical records retain their original language with a label. Follow the [documentation rules](.github/maintainers/documentation.md).

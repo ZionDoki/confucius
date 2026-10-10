@@ -35,3 +35,4 @@ pref("codexExecutable", "");
 pref("kimiExecutable", "");
 
 pref("openAlexApiKey", "");
+pref("tavilyApiKey", "");

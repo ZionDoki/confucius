@@ -1,15 +1,29 @@
-# Confucius 使用文档
+# User guide
 
-Confucius 将文献阅读、研究任务和成果审阅放在 Zotero 工作区中。
+English · [简体中文](README.zh-CN.md)
 
-- [安装与开始使用](../README.zh-CN.md#安装)：安装插件、连接模型、打开工作区。
-- [模型与思考选项](model-selection.md)：选择 Native、Codex 或 Kimi，以及适用的思考设置。
-- [检索文献与委派研究](literature-research.md)：OpenAlex Key、结果池与候选、确认获取全文、浏览器补齐和研究子 Agent。
-- [Codex / Kimi 检测与连接](runtime-discovery.md)：自动查找、手动路径和登录故障处理。
-- [上下文、换窗与归档](context-system.md)：交接流程、维护成本、原文保留和容量不足处理。
-- [划线询问](selection-questions.md)：在 PDF、报告和对话中提问，独立保存旁支上下文。
-- [任务恢复、文件与更新](tasks-and-data.md)：请求恢复、标注批次和筛选、上下文与记忆清理、备份数据和 Beta 开关。
-- [版本更新记录](../CHANGELOG.md)：每个公开版本的变化与已知限制。
-- [界面设计准则](design.md)：以 APP 为准的配色、边距、按钮与阅读界面规范。
+Start with [installation and your first task](../README.md). You only need Zotero
+and one working model connection.
 
-开发与发版资料见[维护者文档](../.github/maintainers/README.md)。
+These pages describe the current source; an installed release may differ.
+[Check your installed version](updates.md) if a control is missing.
+
+| I want to…                                | Read                                                  |
+| ----------------------------------------- | ----------------------------------------------------- |
+| Connect or change a model                 | [Model setup](model-selection.md)                     |
+| Fix Codex or Kimi detection               | [CLI connections](runtime-discovery.md)               |
+| Find papers and obtain PDFs               | [Literature research](literature-research.md)         |
+| Read, revise, save or annotate            | [Reports and annotations](reading-and-annotations.md) |
+| Ask about selected text                   | [Selection questions](selection-questions.md)         |
+| Find notes or remember a research topic   | [Knowledge and memory](knowledge.md)                  |
+| Continue a task or back up data           | [Tasks and data](tasks-and-data.md)                   |
+| Understand long conversations and cleanup | [Context and history](context-system.md)              |
+| Install an update or opt into Betas       | [Updates](updates.md)                                 |
+| Resolve an error                          | [Troubleshooting](troubleshooting.md)                 |
+
+Most settings are available in the workspace's **Settings**. Zotero also provides
+**Settings → Confucius**. Start with a model connection; OpenAlex and Tavily keys
+are optional additions for literature services.
+
+For contributors: [development guide](../.github/maintainers/development.md),
+[interface rules](design.md) and [maintainer guide](../.github/maintainers/README.md).

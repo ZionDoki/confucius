@@ -85,6 +85,8 @@ export interface WorkflowState {
 
 /** Schema-v3 task with a durable history and replaceable context windows. */
 export interface ResearchTaskRecord extends SessionRecord {
+  /** Real user requests used as language evidence across retries and windows. */
+  responseLanguageContext?: { request: string; priorRequests: string[] };
   subagentIds?: string[];
   presetPrepared?: boolean;
   literatureSourceKeys?: string[];
@@ -101,6 +103,11 @@ export interface ResearchTaskRecord extends SessionRecord {
     error?: string;
     requests?: import("./events").ModelRequestProgress[];
     attempts?: number;
+    /** Current-turn research tracking, distinct from legacy archive distillation. */
+    researchTracking?: boolean;
+    researchAttempts?: number;
+    researchSnapshot?: unknown;
+    researchUpdates?: unknown[];
     maintenanceTarget?: string;
     maintenanceAttempts?: number;
     maintenanceSourceUpdatedAt?: number;

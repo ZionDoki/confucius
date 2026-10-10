@@ -1,39 +1,46 @@
-# 划线询问
+# Selection questions
 
-在 PDF、报告正文或任务对话中选中文字，会在选区附近出现一行输入框。
-输入问题并按 Enter，即可查看逐步生成的回答，随后继续追问。中文输入法选词时的
-Enter 不会发送问题。输入框仅接受问题，没有附件、模型或工具切换按钮。
+English · [简体中文](selection-questions.zh-CN.md)
 
-点击浮层外部或按 Escape 可继续阅读。关闭浮层不会中止回答；再次选中文字即可
-恢复所属旁支（btw）的回答与草稿。应用退出或重启会中断尚未完成的回答，保留已保存
-的部分，不会自动重新发送。回答生成期间可编辑下一条问题，完成后再发送。
+[User guide](README.md)
 
-## 默认上下文
+## Ask while reading
 
-| 选中文字的位置 | 可检索的任务历史                                     | 旁支归属                                 |
-| -------------- | ---------------------------------------------------- | ---------------------------------------- |
-| PDF            | 同一文章关联的任务中已完成的对话，按问题检索相关段落 | 同一文库中的同一文章；独立附件按附件区分 |
-| 报告           | 报告所属任务；所选报告版本的正文                     | 报告所属任务                             |
-| 对话           | 所选内容所属任务中已完成的对话                       | 所属任务，与该任务的报告共享             |
+Select text in a PDF, report or conversation. Type in the input near the selection
+and press **Enter**. The answer appears there, and you can ask follow-up questions.
+Enter used to confirm an input-method composition does not send the question.
 
-每次发送固定当时选中的文字、来源和版本，之后切换页面或修订报告不会改变已经
-提交的问题。Agent 会优先参考选区，按需检索允许范围内的历史并读取文库原文。
-它不会读取其他旁支或全局记忆，也不会修改报告、批注、笔记或主任务。
-旁支内容不会进入主任务时间线、主任务模型上下文或自动记忆提取。
+Click outside or press **Escape** to return to reading. Closing the popup does
+not stop an answer; selecting text again can reopen the saved side conversation.
 
-任务旁支首次创建时继承任务的 Native、Codex 或 Kimi 后端及外部后端的模型设置。
-PDF 旁支首次创建时使用最近更新的关联任务后端；没有关联任务时使用 Native。
-Native 使用首次创建旁支时选中的端点；后续从设置解析该端点的模型和凭据。
-旁支保留自己的配置与对话，不复用主任务的模型会话。
+## What context is available?
 
-## 保存与限制
+| Selection    | Available material                                                                 |
+| ------------ | ---------------------------------------------------------------------------------- |
+| PDF          | Selected text, the paper and relevant completed conversations linked to that paper |
+| Report       | The selected report revision and its task's completed history                      |
+| Conversation | Completed history from that task                                                   |
 
-旁支独立保存在 Confucius 运行数据目录的 `btw/` 下。开启历史自动清理时，最近
-10 个、30 天内且合计不超过 50 MiB 的旁支保留在近期范围，其他旁支转为归档；
-归档最多保留 90 天、合计 500 MiB。正在回答的旁支不参与清理。
-删除任务会删除该任务的旁支；删除或移入回收站的文章会清理对应 PDF 旁支。
+PDF side conversations belong to the paper within its library; standalone
+attachments are separate. A task's reports and conversation share its side
+conversation. Each question keeps the selection, source and version from when it
+was sent.
 
-当前不提供联网查询。需要外部信息时，回答应说明现有材料的限制。
-扫描 PDF 只有在 Zotero 能选取文本时才会出现划线入口。模型连接、登录和额度
-仍使用现有设置；连接失败时浮层显示错误并保留问题。保存失败时会显示错误，
-新问题在首次保存成功前不会调用模型。
+This mode is read-only. It does not search the web, read global memory or other
+side conversations, change notes/annotations/reports, or add its content to the
+main task or automatic memory extraction.
+
+## Model and saved history
+
+A task side conversation initially inherits its task's runtime and external model
+settings. A PDF side conversation uses the most recently updated linked task's
+runtime, or Native if none exists. It keeps a separate model session.
+
+Side conversations save under the runtime data directory's `btw/`.
+Restart interrupts unfinished answers and preserves saved content without
+resending. Deleting the parent task removes its task side conversation; deleting
+or trashing a paper cleans up its PDF side conversation.
+
+Automatic history cleanup also applies to side conversations. See
+[context and history](context-system.md). A scanned PDF needs selectable text in
+Zotero before the selection input can appear.

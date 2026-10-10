@@ -1,4 +1,5 @@
-# 界面设计准则
+# Interface design rules
 
-统一规则维护在 [docs/design.md](../../docs/design.md)。改动 UI 前请阅读该文档，
-以 APP 工作区为基准核对配色、边距、按钮及文末自查清单。此入口不另设一套标准。
+English · [简体中文](design.zh-CN.md)
+
+Read the shared [interface design rules](../../docs/design.md) before changing UI. Use the app workspace as the baseline for colors, spacing, buttons, and the review checklist. This page does not define a separate standard.

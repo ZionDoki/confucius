@@ -2,6 +2,196 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-10-10
+
+Confucius 0.6.0 brings annotation review, more reliable fulltext recovery and
+research memory, and fixes later skill calls and user-language output.
+
+### Added
+
+- Review Agent annotation suggestions in persistent cards or a searchable list
+  before writing them to Zotero. Accept selected entries, reject or restore
+  suggestions, and minimize the review without losing the current position.
+  Multiple batches and confirmed write receipts survive restarts without replay.
+- Fulltext recovery can load JavaScript pages in an isolated Zotero browser,
+  discover files through Europe PMC and the current PMC Cloud dataset, and use
+  an optional Tavily search key. Search challenges pause repeated requests.
+- Article identity checks distinguish supplementary-file headings from notices
+  that supplementary material is available alongside the main article, and reject
+  peer-review files that repeat the article title and DOI.
+- Search Zotero notes, research topics, preferences and legacy knowledge files in
+  one source index. Read current notes, correct or forget research memory, and
+  export notes or report revisions as portable HTML files.
+- Completed ordinary conversations can maintain concise research topics and
+  explicit preferences using the existing automatic-memory setting and bounded
+  maintenance allowance. Topic updates retain source tasks and open questions;
+  user corrections and forgotten identities fence late automatic updates.
+- Fulltext acquisition now retains all OpenAlex locations and manuscript versions,
+  follows landing-page PDF links through Zotero translators, and reuses Zotero's
+  DOI, URL and open-access resolvers before reporting unavailable fulltext.
+- For confirmed papers whose deterministic acquisition failed, the Agent can
+  search by title or DOI, navigate observed webpage links and request verified
+  downloads within per-paper limits. Continuing with current results, cancelling
+  downloads or changing candidate confirmation prevents further acquisition.
+
+### Changed
+
+- Agent annotation submissions now await individual review. Existing write grants
+  do not automatically accept suggestions; other tools keep their approval flow.
+- Stop adding Confucius batch tags to new PDF annotations and stop rewriting old
+  tags at startup. Existing tags, internal batch history, color baselines and
+  verified annotation ownership remain available. No new setting is required.
+
+- Reorganize current user and developer guides into separate English and Simplified
+  Chinese versions, with language-consistent navigation and shorter task guides.
+  Historical acceptance records retain their original language and dated results.
+- Reports save to Zotero notes without a separate knowledge-base destination or
+  internal ID input. Existing legacy knowledge files remain readable in place;
+  new writes use native notes or research memory. Task drafts and revision history
+  remain available for review and recovery.
+
+### Fixed
+
+- Recover available legacy history automatically after a Zotero reinstall or
+  profile move leaves its task index missing. Preserve verified originals,
+  backups, titles and drafts; interrupted recovery resumes without duplicate
+  imports, overwritten new work or automatic tool replay.
+- Preserve annotation review decisions, search position and Chinese text
+  composition across incoming batches and task changes. Fence cancelled context
+  saves, research retries and late completion against newer task state.
+- Load explicitly invoked skills on later user turns for native, Codex and Kimi
+  sessions; preserve loaded skills and expose the existing read-only skill tool
+  to external runtimes. Leading whitespace works consistently in the slash menu.
+- Follow the user request and conversation language for generated answers,
+  progress, annotation comments, report titles, revisions and research subtasks,
+  with the interface language only as a fallback. Preserve source quotations.
+
+- Keep a paper's isolated browser session between Agent navigation and verified
+  download, and reuse a fetched PDF without downloading it twice. Fresh PDF or
+  session evidence permits one bounded retry of a recently failed address.
+- Follow observed page refreshes, render script-only pages and recognize explicit
+  PDF download links without a `.pdf` extension. Page reads keep the 5 MiB HTML
+  limit while accepting PDFs up to 100 MiB.
+- Return compact literature lists with a failed-status filter and paged attempt
+  details. Search-provider cooldowns are shared across papers, preserve unused
+  exploration budgets and reset when the configured search key changes.
+- Prefer explicit PDF front-matter version labels over stale source labels;
+  linked files no longer inherit an unverified landing-page version.
+- Continue fulltext discovery after malformed search/repository records or a
+  failing Zotero resolver; resolve relative PDF links and keep manuscript versions
+  unknown when the source does not supply them.
+- Stop cancelled supplemental downloads before they start, avoid repeating a
+  failed browser attempt, and release remaining browser resources when one native
+  cleanup operation fails. DNS cancellation now survives native errors, and
+  expanded IPv6 notation cannot bypass reserved-address checks.
+- Stop automatic download retries when acquisition state cannot be saved, release
+  waiting calls, keep tracking other active workers, and retain imported PDF
+  receipts when duplicate paper identities merge during acquisition.
+- Reject malformed or mismatched approval replies before executing write tools.
+  Invalid RPC replies leave the pending request available for a valid decision.
+- Read the latest memory files inside the write queue before modifying or
+  expiring records. Disk protection changes now prevent automatic replacement
+  or deletion, and stale updates cannot recreate externally deleted files.
+- Exclude notes whose parent items are in the Zotero trash from knowledge search
+  and direct reads; restoring the parent makes its notes available again.
+- Refresh memory-file additions, edits and deletions when searching knowledge,
+  while preserving concurrent writes, source files and explicit-read retention.
+- Load uncached Zotero note titles and bodies before searching or reading the
+  knowledge index, including notes in other libraries.
+- Reconcile concurrent research updates against the latest topic state within the
+  existing maintenance allowance. Conflicting or exhausted batches remain
+  incomplete instead of silently dropping progress, and legacy topic names no
+  longer prevent new research memory from being created.
+- Verify a PDF's first-page title and DOI or author before attaching it, including
+  dropped files. Reject mismatches and supplementary material, retain source URLs
+  and version uncertainty, and preserve actionable failure reasons for each attempt.
+- Check download URLs, DNS addresses and redirects for private-network targets;
+  keep OpenAlex keys on the content origin and avoid repeated failed candidates.
+
+### Upgrade notes
+
+- This is a stable update from 0.5.0 and 0.6.0-beta.1. It is available with
+  “Include prereleases” off or on. Explicit channel choices and automatic-check
+  preferences are preserved; disabling Betas never triggers a downgrade.
+- No manual data migration or model reconfiguration is required. Existing tasks,
+  notes, report revisions, research records and annotation tags remain available.
+  Missing legacy indexes are recovered automatically with verified backups.
+  Follow the update page's actual restart status after installation.
+- Legacy knowledge files remain readable in place; new report exports use Zotero
+  notes or portable HTML. New annotations have no automatic batch tag, while
+  existing ownership receipts continue to protect edits and deletion.
+- Finish pending annotation reviews and back up runtime data before downgrading.
+  Older versions cannot show these reviews or reverse legacy-history recovery;
+  downgrading does not undo annotations already accepted into Zotero.
+
+### Validation and known limits
+
+- The 0.6.0 candidate passed all 1,333 automated tests, type checking, lint,
+  workspace-version and skill-sync checks, and the production build. Manifest,
+  update files, compatibility bounds, release URLs and XPI hashes match 0.6.0.
+- Isolated macOS 26.6.2 / Zotero 10.0.6 acceptance passed 30 checks using the
+  normally installed candidate. Three successive UI submissions reached the
+  actual native turn loop and HTTP adapter with the selected skill bodies.
+  Later mouse/Enter/Tab/Escape selections, restart recovery and four real-model
+  German/English language probes passed.
+- Data upgrades from the original 0.5.0 and 0.6.0-beta.1 packages passed 20 and
+  26 checks, retaining all 28/40 original history bodies, research records and
+  consumed budgets. Seven hot-update checks passed, including explicit stable
+  selection for the Beta installation and already-closed workspace behavior.
+  See the [stable release acceptance record](https://github.com/ZionDoki/confucius/blob/v0.6.0/.github/maintainers/acceptance/release-0.6.0.md).
+
+- The October 10 user-feedback patch passed 1,333 automated tests, all workspace
+  type checks, skill synchronization and production build. Isolated macOS 26.6.2 /
+  Zotero 10.0.6 checks verified later-turn menus, annotation review, tag preservation
+  and German/English output with a real native model. Codex/Kimi CLI execution and
+  other desktop platforms were not rerun. See the
+  [user-feedback acceptance record](https://github.com/ZionDoki/confucius/blob/v0.6.0/.github/maintainers/acceptance/user-feedback-2026-10-10.md).
+
+- The final fulltext build recovered 9/20 verified PDFs from the unchanged corpus,
+  matching the previous run; 3/14 were recovered after OpenAlex direct links failed.
+  AI retried a known repository to recover one paper, then reached the unchanged
+  15-minute test ceiling without finishing. Reported tokens fell 29.9%, but elapsed
+  time increased. No Tavily key or OpenAlex paid caching was used. See the
+  [latest PDF acquisition acceptance record](https://github.com/ZionDoki/confucius/blob/v0.6.0/.github/maintainers/acceptance/pdf-acquisition-2026-10-08.md).
+- All 1,316 automated tests, type checking, full-workspace lint and production
+  builds passed for the October 8 fulltext review. The seven undeclared-global
+  errors in the fulltext tests are resolved. Interactive Zotero and public-site
+  acquisition checks were not rerun for this patch.
+  See the [fulltext recovery review (Chinese original)](https://github.com/ZionDoki/confucius/blob/v0.6.0/.github/maintainers/acceptance/fulltext-review-2026-10-08.md).
+  The earlier authorization/memory review added 16 automated regression cases.
+  See the [Agent and memory review (Chinese original)](https://github.com/ZionDoki/confucius/blob/v0.6.0/.github/maintainers/acceptance/agent-memory-review-2026-10-07.md).
+  Earlier checks in an isolated macOS Zotero 10.0.4 profile covered real PDF parsing, mismatched-file
+  rejection, Zotero resolver/translator acquisition and Agent navigation/import
+  passed with controlled webpage responses. Normal light and compact dark layouts
+  showed no horizontal overflow.
+- Knowledge-index checks in an isolated macOS Zotero 10.0.4 profile passed native
+  note creation and reuse, uncached note loading, live source edits/deletion,
+  parent-item trash and restoration, and memory-file additions, edits and deletions.
+  Research-state updates across conversations, correction/forget controls, source
+  navigation and HTML export passed. Normal Chinese light and compact English
+  dark layouts were inspected.
+  See the [knowledge-index acceptance record (Chinese original)](https://github.com/ZionDoki/confucius/blob/v0.6.0/.github/maintainers/acceptance/knowledge-index-2026-10-07.md).
+- Research extraction used controlled model responses for end-to-end validation;
+  real-model recognition quality has not been evaluated. Tracking happens after
+  ordinary conversations and shares the existing maintenance budget; it is not
+  scheduled monitoring. Legacy knowledge files remain read-only sources. Forget
+  suppression matches normalized titles and does not guarantee semantic matches
+  for renamed topics.
+- The earlier replay of the same 20-paper corpus with real public sites and the locally configured
+  `deepseek-flash` model recovered 9 verified PDFs, up from 7. Two newly recovered
+  papers used browser fallback. The AI phase added no PDFs: public search required
+  human verification, and no Tavily key was configured. OpenAlex paid caching was
+  disabled in both runs. This small-sample result is not a general success rate.
+  See the [PDF acquisition acceptance record (Chinese original)](https://github.com/ZionDoki/confucius/blob/v0.6.0/.github/maintainers/acceptance/pdf-acquisition-2026-10-07.md).
+- This environment's system DNS returns non-public proxy addresses. The live test
+  used public DNS only in its isolated profile; ordinary profiles with synthetic
+  DNS addresses may still need browser download and PDF drop.
+- Isolated JavaScript-page loading was tested on Zotero 10.0.4; account sign-in
+  and human CAPTCHA challenges still require the user's browser. Public search
+  may be unavailable or rate limited; real Tavily results remain untested.
+  Image-only PDFs and files with incomplete or changed first-page metadata may
+  require manual verification in Zotero. Version labels reflect source metadata.
+
 ## 0.6.0-beta.1 - 2026-10-06
 
 ### Added

@@ -2,12 +2,15 @@ import type {
   LiteratureErrorCode,
   LiteratureSearch,
   LiteratureWork,
+  LiteratureAttempt,
+  LiteratureVersion,
 } from "@confucius/protocol";
 
 export class LiteratureError extends Error {
   constructor(
     readonly code: LiteratureErrorCode,
     message: string,
+    readonly attempts?: LiteratureAttempt[],
   ) {
     super(message);
   }
@@ -35,15 +38,27 @@ export function publicUrl(value: unknown): string | undefined {
   try {
     const url = new URL(String(value));
     if (!/^https?:$/.test(url.protocol) || url.username || url.password) return;
-    for (const key of ["api_key", "apikey", "access_token", "token"])
-      url.searchParams.delete(key);
+    for (const key of [...url.searchParams.keys()])
+      if (/^(api[_-]?key|access[_-]?token|token|authorization)$/i.test(key))
+        url.searchParams.delete(key);
+    url.hash = "";
     return url.href;
   } catch {
     return;
   }
 }
 type Obj = Record<string, any>;
+export function literatureVersion(value: unknown): LiteratureVersion {
+  if (value === "publishedVersion" || value === "published")
+    return "publishedVersion";
+  if (value === "acceptedVersion" || value === "accepted")
+    return "acceptedVersion";
+  if (value === "submittedVersion" || value === "submitted")
+    return "submittedVersion";
+  return "unknown";
+}
 export function openAlexWork(raw: Obj, queryId: string): LiteratureWork | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const id = String(raw.id ?? "")
     .match(/(?:^|\/)W\d+$/)?.[0]
     .replace(/^\//, "");
@@ -73,7 +88,7 @@ export function openAlexWork(raw: Obj, queryId: string): LiteratureWork | null {
     doi: normalizeDoi(raw.doi),
     title: String(raw.title ?? raw.display_name ?? id),
     authors: (Array.isArray(raw.authorships) ? raw.authorships : [])
-      .map((a: Obj) => String(a.author?.display_name ?? ""))
+      .map((a: Obj) => String(a?.author?.display_name ?? ""))
       .filter(Boolean),
     year: Number.isInteger(raw.publication_year)
       ? raw.publication_year
@@ -98,8 +113,26 @@ export function openAlexWork(raw: Obj, queryId: string): LiteratureWork | null {
           .filter((u): u is string => !!u),
       ),
     ],
+    locations: locations
+      .map((location) => ({
+        pdfUrl: publicUrl(location.pdf_url),
+        landingUrl: publicUrl(location.landing_page_url),
+        version: literatureVersion(location.version),
+        openAccess: location.is_oa === true,
+      }))
+      .filter(
+        (location, index, all) =>
+          (location.pdfUrl || location.landingUrl) &&
+          all.findIndex(
+            (other) =>
+              other.pdfUrl === location.pdfUrl &&
+              other.landingUrl === location.landingUrl,
+          ) === index,
+      ),
     cachedPdfUrl:
-      cache && new URL(cache).hostname === "content.openalex.org"
+      cache &&
+      new URL(cache).origin === "https://content.openalex.org" &&
+      new URL(cache).pathname === `/works/${id}.pdf`
         ? cache
         : undefined,
     queryIds: [queryId],
@@ -240,7 +273,7 @@ export class OpenAlexClient {
           : "relevance_score:desc",
     );
     const data = await this.request(url.href, signal);
-    if (!Array.isArray(data.results))
+    if (!Array.isArray(data?.results))
       throw new LiteratureError("network", "Invalid OpenAlex response");
     return {
       works: data.results

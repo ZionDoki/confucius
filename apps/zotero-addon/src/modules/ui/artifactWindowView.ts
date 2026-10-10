@@ -1,3 +1,5 @@
+import { exportKnowledgeDocument } from "./knowledgeExport";
+import type { KnowledgeDocument } from "../host/KnowledgeIndex";
 import type { ArtifactRecord, ResearchTaskRecord } from "@confucius/protocol";
 import {
   DEFAULT_UI_FONT,
@@ -108,7 +110,22 @@ export function mountArtifactWindow(
     });
   }
   context.append(status);
-  actions.append(revisionButton, writeback);
+  const exportButton = createWorkspaceButton(
+    doc,
+    "confucius-artifact-export",
+    getString("workspace-knowledge-export"),
+  );
+  exportButton.addEventListener("click", () => {
+    exportButton.disabled = true;
+    void host
+      .rpc("artifact/export", { id: artifact.id, revision: displayedRevision })
+      .then((value) => exportKnowledgeDocument(win, value as KnowledgeDocument))
+      .catch(error)
+      .finally(() => {
+        exportButton.disabled = false;
+      });
+  });
+  actions.append(revisionButton, writeback, exportButton);
   if (detach) actions.append(detach);
   toolbar.append(context, actions);
   const errors = element("div", "confucius-artifact-window-error");
@@ -193,7 +210,7 @@ export function mountArtifactWindow(
       artifact.kind,
     )
       ? getString("workspace-save-artifact")
-      : getString("workspace-writeback");
+      : getString("workspace-writeback-note");
     writeback.textContent = saveLabel;
     const emptyBody =
       revision.body.type === "markdown" &&

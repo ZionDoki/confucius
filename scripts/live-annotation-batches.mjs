@@ -97,11 +97,8 @@ try {
     result.view.batches.length === 2 && result.view.existingCount === 1,
   );
   check(
-    "Each annotation has one batch-start timestamp tag",
-    result.tags.length === 1 &&
-      /^Confucius 批次：\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(
-        result.tags[0].tag,
-      ),
+    "New annotations have no automatic batch tags",
+    result.tags.length === 0,
   );
   const selected = result.view.batches.find((b) => b.taskId === "task-a").id;
   await instance.rpc("annotation/batches", {
@@ -134,18 +131,17 @@ try {
     const before={comment:item.annotationComment,color:item.annotationColor,position:item.annotationPosition,added:item.dateAdded,modified:item.dateModified};
     const human=Zotero.Items.getByLibraryAndKey(q.pdf.libraryID,q.humanKey);
     human.addTag('Confucius 批次：'+batch.name);await human.saveTx();
-    await q.host.tools.migrateAnnotationBatchLabels();
     const tags=item.getTags();
-    await q.host.tools.migrateAnnotationBatchLabels();
     return {tags,again:item.getTags(),human:human.getTags(),before,after:{comment:item.annotationComment,color:item.annotationColor,position:item.annotationPosition,added:item.dateAdded,modified:item.dateModified}};
   `);
   check(
-    "Verified legacy labels consolidate without changing annotation data",
+    "Legacy and user tags remain unchanged after annotation work",
     JSON.stringify(migration.before) === JSON.stringify(migration.after) &&
-      migration.tags.length === 2 &&
+      migration.tags.length === 3 &&
       migration.tags.some((t) => t.tag === "human-tag") &&
-      migration.tags.filter((t) => /^Confucius 批次：\d{4}-/.test(t.tag))
-        .length === 1 &&
+      migration.tags.some(
+        (t) => t.tag === "Confucius 批次：Legacy acceptance batch",
+      ) &&
       JSON.stringify(migration.tags) === JSON.stringify(migration.again),
   );
   check(
@@ -154,7 +150,7 @@ try {
   );
   await evaluate(`
     const q=globalThis.confuciusBatchQA;
-    await q.reader._internalReader._annotationManager.setFilter(Cu.cloneInto({tags:[${JSON.stringify(result.tags[0].tag)}]},q.reader._iframeWindow));
+    await q.reader._internalReader._annotationManager.setFilter(Cu.cloneInto({tags:[${JSON.stringify("human-tag")}]},q.reader._iframeWindow));
     return true;
   `);
   check(
@@ -164,7 +160,7 @@ try {
         evaluate(`
     const q=globalThis.confuciusBatchQA;
     const shown=q.reader._internalReader._state.annotations.filter(x=>!x._hidden);
-    return shown.length>0&&shown.length<3&&shown.every(x=>x.tags.some(t=>t.name===${JSON.stringify(result.tags[0].tag)}));
+    return shown.length>0&&shown.length<3&&shown.every(x=>x.tags.some(t=>t.name===${JSON.stringify("human-tag")}));
   `),
       10000,
     ),
@@ -215,20 +211,18 @@ try {
     const batch=record.batches[record.marks[item.key].batchId].batch;
     item.setTags([{tag:'Confucius 批次：'+batch.name},{tag:'Confucius 批次日期：'+batch.timeLabel.slice(0,10)},{tag:'human-tag'}]);await item.saveTx();
     await q.host.tools.ownership.change(token,current=>{delete current.batchLabelsVersion;});
-    return {key:item.key,tag:'Confucius 批次：'+batch.timeLabel,dateModified:item.dateModified};
+    return {key:item.key,tags:item.getTags(),dateModified:item.dateModified};
   `);
   await instance.stop({ graceful: true });
   await instance.launch();
   const migratedAtStartup = await evaluate(`
-    await Zotero.Confucius.hooks.host.annotationLabelMigration;
     const item=Zotero.Items.getByLibraryAndKey(${fixture.libraryID},${JSON.stringify(restartLabels.key)});
     return {tags:item.getTags(),dateModified:item.dateModified};
   `);
   check(
-    "Startup resumes legacy label migration without changing modification time",
-    migratedAtStartup.tags.length === 2 &&
-      migratedAtStartup.tags.some((t) => t.tag === restartLabels.tag) &&
-      migratedAtStartup.tags.some((t) => t.tag === "human-tag") &&
+    "Startup preserves legacy and user tags and modification time",
+    JSON.stringify(migratedAtStartup.tags) ===
+      JSON.stringify(restartLabels.tags) &&
       migratedAtStartup.dateModified === restartLabels.dateModified,
   );
   const restored = await instance.rpc("annotation/batches", fixture);

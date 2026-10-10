@@ -26,6 +26,7 @@ export interface PdfOwnership {
   >;
   marks: Record<string, AnnotationProvenance>;
   filter: AnnotationBatchFilter;
+  /** Legacy marker; retained on disk without modifying any native tags. */
   batchLabelsVersion?: 1;
 }
 export function normalizedColor(value: string): string {

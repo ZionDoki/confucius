@@ -1,220 +1,157 @@
-# 界面设计准则
+# Interface design rules
 
-以 APP 本体的工作区顶栏、时间线和输入区为视觉基准。artifact 阅读页、独立窗口、
-侧栏及浮层均遵循本文。修改界面前先核对对应规则，完成后逐项检查文末清单。
+English · [简体中文](design.zh-CN.md)
 
-本文是配色、边距和按钮的统一约定；[使用文档](README.md)与
-[维护者文档](../.github/maintainers/README.md)共同引用，不维护两份不同标准。
+Use the main app's workspace toolbar, timeline, and composer as the visual baseline. Artifact readers, detached windows, sidebars, and overlays follow the same rules. Check the relevant rules before editing UI and complete the checklist afterward.
 
-## 配色
+This is the shared source for colors, spacing, and buttons, linked from the [user guides](README.md) and [maintainer guides](../.github/maintainers/README.md). Do not maintain a separate reader design system.
 
-所有界面色使用 [workspacePalette.css](../apps/zotero-addon/addon/content/workspacePalette.css)
-中的语义变量，不在组件中写死 hex/rgb，也不自行派生一套深色模式。
-颜色跟随 Confucius 外观设置，并支持系统深色模式与高对比度。
-共享配色同时响应 `forced-colors` 和 `prefers-contrast: more`；Zotero chrome 工作区
-通过后者切换系统色，浮层保留结构边界，等待提示停用装饰动画。
+## Colors
 
-| 用途                 | 变量                                                             | 使用范围                                 |
-| -------------------- | ---------------------------------------------------------------- | ---------------------------------------- |
-| 页面、顶栏、阅读正文 | `--confucius-paper`                                              | 顶栏与正文保持连续底色                   |
-| 工作区底层           | `--confucius-canvas`                                             | 时间线外层、会话栏                       |
-| 控件底色             | `--confucius-surface`                                            | 普通文字按钮、输入区、图标按钮悬停       |
-| 控件悬停             | `--confucius-hover`                                              | 文字按钮等已有底色的控件                 |
-| 菜单与弹窗           | `--confucius-elevated`                                           | 真正的浮层                               |
-| 正文、按钮           | `--confucius-ink`                                                | 主要可读内容                             |
-| 次级文字             | `--confucius-secondary`                                          | 引文与补充说明                           |
-| 提示与元信息         | `--confucius-muted`                                              | 状态、版本说明、引用区标题               |
-| 链接与品牌           | `--confucius-accent`、`--confucius-accent-text`                  | 可点击引用、链接及品牌，不铺成大面积背景 |
-| 结构线               | `--confucius-line`、`--confucius-line-strong`                    | 表格、输入边界和引文竖线                 |
-| 焦点与反馈           | `--confucius-focus`、`--confucius-danger`、`--confucius-success` | 键盘焦点、错误与成功状态                 |
+Use semantic variables from [workspacePalette.css](../apps/zotero-addon/addon/content/workspacePalette.css). Do not hardcode hex/RGB colors or create a separate dark palette. Colors follow Confucius appearance settings and support system dark mode and high contrast.
 
-PDF 批注的色块、批注竖线和区域定位框反映实际批注颜色，属于内容数据，保留原色。
-批次使用批注下方的 Zotero 原生时间标签，不在 PDF 顶栏增加自定义批次筛选器。
-主要操作复用 APP 已有控件语义，不给阅读页单独增加强调色、描边或阴影。
+The shared palette handles both `forced-colors` and `prefers-contrast: more`. Zotero chrome uses the latter to select system colors. Overlays keep structural boundaries; waiting indicators disable decorative animation.
 
-## 顶栏与边距
+| Purpose                        | Variables                                                        | Use                                                         |
+| ------------------------------ | ---------------------------------------------------------------- | ----------------------------------------------------------- |
+| Page, toolbar, reading surface | `--confucius-paper`                                              | Continuous toolbar and body background                      |
+| Workspace base                 | `--confucius-canvas`                                             | Timeline surroundings and task sidebar                      |
+| Controls                       | `--confucius-surface`                                            | Text buttons, inputs, icon hover                            |
+| Control hover                  | `--confucius-hover`                                              | Controls with an existing background                        |
+| Menus and dialogs              | `--confucius-elevated`                                           | Actual overlays                                             |
+| Body and buttons               | `--confucius-ink`                                                | Primary readable content                                    |
+| Secondary text                 | `--confucius-secondary`                                          | Quotes and supporting text                                  |
+| Hints and metadata             | `--confucius-muted`                                              | Status, revisions, reference headings                       |
+| Links and branding             | `--confucius-accent`, `--confucius-accent-text`                  | Clickable citations, links, branding; not large backgrounds |
+| Structural lines               | `--confucius-line`, `--confucius-line-strong`                    | Tables, input borders, quote bars                           |
+| Focus and feedback             | `--confucius-focus`, `--confucius-danger`, `--confucius-success` | Keyboard focus, errors, success                             |
 
-下表按 APP 的实际布局定义。宽度指当前工作区或阅读窗口的可用宽度。
+PDF annotation swatches, quote bars, and region outlines represent annotation data and retain their actual colors. Keep Zotero's native annotation date display. Record conversation batch times internally without adding or rewriting native tags; do not add a custom batch filter to the PDF toolbar. Reuse the app's existing control semantics without reader-specific accent colors, outlines, or shadows.
 
-| 项目                   | 常规布局（至少 620px）               | 紧凑布局（小于 620px） |
-| ---------------------- | ------------------------------------ | ---------------------- |
-| 顶栏内边距             | 上下 10px、左右 14px                 | 四边 8px               |
-| 上下文与操作区         | 横排、纵向居中、间距 10px            | 分行、行间距 6px       |
-| 同组按钮间距           | 8px                                  | 4px                    |
-| 顶栏最小高度           | 48px；34px 按钮加内边距后实际为 54px | 高度随内容行数增长     |
-| 顶栏文字按钮           | 13px，内边距 6px 8px                 | 12px，内边距 6px 8px   |
-| 极窄窗口（小于 300px） | 不适用                               | 文字按钮内边距 5px 4px |
-| 时间线内边距           | 上下 18px、左右 24px                 | 四边 10px              |
+## Toolbar and spacing
 
-- 常规间距以 4px 为基本单位，8px 用于同组控件；顶栏的 10px/14px 等光学留白按表保留。
-- 按钮的外边距为 0，由父容器统一管理间距，不能再叠加原生按钮 margin。
-- 同级内容对齐；内容容器与内部正文不重复叠加横向 padding。
-- APP 紧凑操作区沿用四列布局。阅读页的操作数量和文案长度不同，允许换行，
-  保留同样的内边距与按钮间距；不把字号缩到 10px 来硬塞一行。
-- 长标题允许省略；按钮文案保持可读，必要时换行并增高。阅读正文在常规窗口
-  居中、最大宽度 680px；紧凑窗口左右留白 10px。
+Width means the available workspace or reader-window width.
 
-## 按钮与交互
+| Item                     | Regular: at least 620px                        | Compact: below 620px        |
+| ------------------------ | ---------------------------------------------- | --------------------------- |
+| Toolbar padding          | 10px vertical, 14px horizontal                 | 8px on all sides            |
+| Context and actions      | Horizontal, vertically centered, 10px gap      | Wrapped rows, 6px row gap   |
+| Buttons in one group     | 8px gap                                        | 4px gap                     |
+| Toolbar minimum height   | 48px; a 34px button plus padding produces 54px | Grows with content rows     |
+| Toolbar text buttons     | 13px text, 6px 8px padding                     | 12px text, 6px 8px padding  |
+| Very narrow: below 300px | Not applicable                                 | 5px 4px text-button padding |
+| Timeline padding         | 18px vertical, 24px horizontal                 | 10px on all sides           |
 
-- 文字按钮复用 `createWorkspaceButton` / `.confucius-button`，圆角 8px，
-  `surface` 底、`ink` 字，字重 550，悬停为 `hover` 底。
-- 顶栏文字按钮高 34px，尺寸规则与 APP 的“新任务”按钮共享；紧凑阅读页文字
-  换行时可增高，但最小高度仍为 34px。
-- 图标按钮复用 `.confucius-icon-button`：固定 34px × 34px，内边距 0，圆角 8px，
-  透明底、`ink` 色，悬停为 `surface` 底，图标槽为 20px。
-- 禁用文字按钮沿用公共样式 `opacity: .48`、默认指针且不出现悬停反馈。
-  `title` 应说明实际不可用原因，例如任务运行中、等待确认或正文为空。
-- 图标按钮有 `title` 和 `aria-label`；保留键盘焦点样式，菜单继续支持键盘导航。
-- 不在阅读页覆盖公共控件的圆角、字重和状态色。需要新增控件时先检查
-  [workspaceSurface.ts](../apps/zotero-addon/src/modules/ui/workspaceSurface.ts) 与
-  [workspaceTheme.ts](../apps/zotero-addon/src/modules/ui/workspaceTheme.ts) 中的公共样式。
+- Use a 4px spacing unit, with 8px between related controls. Keep the toolbar's specified 10px/14px optical spacing.
+- Buttons have zero margin; the parent owns gaps. Do not add native button margins.
+- Align peer content. Avoid stacking horizontal padding on a container and its body.
+- The compact app action area retains four columns. Reader actions may wrap while keeping the same padding and gaps. Do not shrink text to 10px to force one row.
+- Long titles may truncate. Keep button labels readable and allow wrapping with increased height. Reading content is centered, at most 680px wide; compact readers keep 10px side margins.
 
-## 模型目录选择
+## Buttons and interaction
 
-- 目录选择使用输入框与对话框内的列表；输入模型 ID、名称或服务商时自动筛选，
-  不使用会在 Zotero chrome 窗口中溢出的原生 `select` 弹出菜单。
-- 条目复用设置的选择行样式，名称与服务商／模型 ID 分两行；长文本允许换行。
-  列表使用公共 `paper` 底色、8px 圆角与结构边界，高度不超过 280px 或视口的
-  36%，内部滚动，不覆盖顶栏、设置页脚或窗口外的内容。
-- 输入焦点保留在筛选框，方向键浏览、Enter 选择，Escape 先关闭候选列表；
-  输入法组字不触发查询或选择。选中后显示配置预览，应用按钮才写入表单。
-- 思考参数格式使用公共按钮组成的单选组，允许换行；同样不使用原生弹出菜单。
+- Text buttons use `createWorkspaceButton` / `.confucius-button`: 8px radius, `surface` background, `ink` text, weight 550, and `hover` background on hover.
+- Toolbar text buttons are 34px high, sharing the app's New task sizing. Wrapped compact reader buttons may grow but remain at least 34px high.
+- Icon buttons use `.confucius-icon-button`: 34px × 34px, zero padding, 8px radius, transparent background, `ink` color, `surface` hover, and a 20px icon slot.
+- Disabled text buttons use the shared `opacity: .48`, default cursor, and no hover feedback. Their `title` explains the actual reason, such as a running task, pending confirmation, or empty content.
+- Icon buttons have both `title` and `aria-label`. Keep visible keyboard focus and keyboard menu navigation.
+- Do not override shared radii, font weights, or state colors in readers. Before adding controls, check [workspaceSurface.ts](../apps/zotero-addon/src/modules/ui/workspaceSurface.ts) and [workspaceTheme.ts](../apps/zotero-addon/src/modules/ui/workspaceTheme.ts).
 
-## 阅读页不使用装饰性分割线
+## Model catalog picker
 
-- 顶栏无底边线，引用区无顶边线；Markdown `hr` 保留 24px 纵向间距，
-  高度为 0、无边框、无背景线条。
-- 文献关系图的条目、批注图例和批注列表同样不画横向装饰线。
-- 用留白和字号、颜色层级分区。正文与引用区保留 40px 间距。
-- 表格行线、引文竖线、批注颜色标记和区域定位框是内容结构，保留。
-- 正文作为连续阅读面呈现，不加外框、卡片底色或装饰性阴影。空内容显示明确提示。
-- 正文滚动容器获得焦点时不画整圈轮廓，避免 Gecko 在顶栏下方显示一条横线；
-  保留容器的键盘滚动，以及按钮、链接和菜单的可见焦点提示。
-- 标题允许换行，字距为 0；正文使用用户设置的字体、字号和行高。
+- Use an input and a list inside the dialog. Filter by model ID, name, or provider; avoid native `select` popups that overflow Zotero chrome.
+- Reuse settings selection rows, with name and provider/model ID on two lines. Long text wraps. Use `paper`, 8px radius, and a structural border; cap list height at 280px or 36% of the viewport. Scroll inside the list without covering the toolbar, settings footer, or window boundaries.
+- Keep focus in the filter input. Arrow keys browse, Enter selects, and Escape closes the candidate list first. IME composition must not trigger queries or selection. Selection shows a configuration preview; Apply writes to the form.
+- Thinking-parameter formats use a wrapping radio group of shared buttons, not native popups.
 
-## 报告风格选择
+## Reading surfaces
 
-- 输入区入口仅随「论文阅读」预设显示；取消或切换预设后不占布局空间。
-  按钮高度跟随输入区控件尺寸，常规为 36px、极窄布局为 32px。
-  按钮文案保持单行，左侧控件组空间不足时整体换行，不能挤入模型或发送按钮。
-- 排版、文风、阅读侧重点各占一组，每组为三个无边框单选卡片。卡片透明底，
-  选中时用 `surface` 底色与单选圆点表达状态；不用装饰性分割线。
-- 组内间距 8px、卡片内边距 12px；窄浮层改为单列，组内间距 4px。按钮复用
-  APP 控件；弹窗可纵向滚动，中英文文案均能换行。
-- 键盘支持方向键切换组内选项、Tab 在组间移动和 Escape 取消；取消不发送草稿。
-- 预览使用与报告相同的排版规则。原文与解释双栏用留白分开，窄阅读面上下排列。
-  可展开的补充说明紧邻相关段落，必要推理和证据限定始终留在正文中。
+- No decorative bottom border on the toolbar or top border on references. Markdown `hr` keeps 24px vertical spacing but has zero height, no border, and no background line.
+- Literature-map entries, annotation legends, and annotation lists also omit decorative horizontal rules.
+- Separate sections with whitespace and text hierarchy. Leave 40px between body and references.
+- Keep structural table lines, quote bars, annotation marks, and region outlines.
+- Present the body as a continuous surface without an outer frame, card background, or decorative shadow. Show a clear empty state.
+- Suppress the full outline on the focused body scroll container to avoid Gecko drawing a line under the toolbar. Keep keyboard scrolling and visible focus on buttons, links, and menus.
+- Titles wrap with zero letter spacing. Body text follows the user's font, size, and line height.
 
-## 划线询问
+## Report style picker
 
-划线询问在 PDF、报告和对话中复用同一浮层：选区附近显示高 34px 的单行输入，
-使用公共 `surface`、`ink`、`line` 和焦点变量；仅输入问题，不附加按钮或工具栏。
-回答在输入上方展开，沿用正文字体、字号、行高、公共浮层底色和阴影，长回答在浮层内滚动。
-正文内边距 12px，追问间距 20px；展开后输入区四周保留 8px，问题以次级色和略小字号区分。
-代码和表格在各自区域横向滚动；不增加装饰性分割线。
-宽度上限 420px，窄窗口收缩并保留两侧至少 8px；上下位置随选区和阅读区域的可用空间调整。
-点击外部或 Escape 关闭，后台回答继续保存；浮层出现时不抢走原文选区焦点。
-输入法组字期间 Enter 和 Escape 不发送或关闭；选择回答文字时暂停替换该段，取消选区后显示最新内容。
+- Show the composer entry only for the Paper review preset. Hide it without leaving space when the preset is cleared or changed. Match composer controls: 36px high normally, 32px in very narrow layouts. Keep the label on one line; wrap the whole left control group when needed without overlapping the model or Send button.
+- Layout, tone, and reading focus each use three borderless radio cards. Cards are transparent; selection uses `surface` and a radio dot. No decorative dividers.
+- Use 8px group gaps and 12px card padding. Narrow overlays use one column and 4px gaps. Reuse app buttons, allow vertical dialog scrolling, and wrap English and Chinese labels.
+- Arrow keys change the option within a group, Tab moves between groups, and Escape cancels. Canceling does not send the draft.
+- Previews use the report's layout rules. Source and explanation columns use whitespace and stack on narrow surfaces. Expandable supplements sit beside the relevant paragraph; essential reasoning and evidence limits stay in the body.
 
-## 文献与子 Agent
+## Selection questions
 
-- 「按文章」按创建会话时的论文归属分组，后续添加材料、确认调研候选或提交新一轮对话
-  不改变分组。从空白入口开始检索的会话单列「文献调研」，不为检索所得论文逐篇生成分组。
-  从文章入口开始的调研仍留在创建文章下；「按时间」始终每个会话只出现一次。
-- 文献从对话发起：每个任务只有一个文献胶囊，多轮检索更新同一个结果池；时间线保留
-  工具活动，不再重复插入文献卡片。未检索的空任务不显示文献入口，检索返回零条仍可
-  打开胶囊调整查询。
-- 胶囊显示「候选文献：9 / 100」，分子为候选数，分母为任务中实际检索并去重的文献数，
-  不使用 API 总命中数。浮层标题和元信息解释计数，全文获取及待确认状态放在浮层内。
-- 文献、批注胶囊与「回到最新」放在输入卡片上方的同一个布局行中，宽度、左右边缘与输入卡片
-  对齐，最大宽度 880px，距输入卡片 8px。左侧留给胶囊，右侧保留 34px 图标按钮位置，
-  两者间距 8px；左侧胶囊空间不足时换行，展开的浮层仍与输入卡片左侧对齐。
-  所有入口均不显示时整行隐藏；同一时刻只展开文献或批注中的一个浮层。
-- 胶囊高至少 34px、12px 文字、圆角 24px，使用公共浮层底色与轻阴影；复用
-  `.confucius-button` 的字重、悬停及焦点反馈。图标和箭头固定 16px 槽位、垂直居中，
-  开合只旋转箭头；长标签允许换行，计数整体保留，不缩小字号或改变点击区域。
-  「回到最新」复用 34px 的 `.confucius-icon-button`。
-- 点击胶囊，在该行上方展开最大宽度 680px 的不透明浮层，左边缘与输入卡片对齐；
-  窄窗口沿用输入区边距，高度由时间线可用空间决定。浮层采用 `elevated` 底色、
-  14px 圆角与公共阴影，头尾固定、列表内部滚动，输入框始终可用。标题 14px、内容
-  13px、元信息 12px，常规内边距 16px／20px，紧凑内边距 12px；按钮复用公共样式。
-- 单一候选编辑器在展开／关闭时保留勾选、筛选、摘要和列表滚动位置，不改变对话位置；
-  浮层打开期间暂停主时间线自动跟随新消息。点击外部和 Escape 关闭，不停止后台工作，
-  关闭时不抢占外部焦点。「回到最新」主动收起浮层并滚到对话末尾。
-  查询条件与本地筛选作为浮层内的次级入口；论文行用留白组织，复选框对齐标题第一行。
-- 候选与结果池标签支持方向键，焦点清晰。确认范围原位显示新增、移除与获取范围，
-  「确认并获取全文」授权整个批次；版本变化后必须重新核对。全文状态独立于候选勾选。
-  PDF 拖入区使用结构性虚线边界，拖入时突出对应目标。
-- 文献浮层底部保留继续入口：确认前为「仅用摘要继续」，获取后为「按当前结果继续」。
-  底部以候选数为分母分别显示全文、摘要覆盖率，并说明是否入库及后台下载行为。
-  继续操作不被搜索、摘要查找或单篇 PDF 导入的等待禁用；版本已过期的确认预览必须
-  重新核对。沿用公共按钮、头尾固定与列表滚动规则；覆盖数使用简短标签，窄窗口允许
-  文案和按钮组换行，按钮组保持右对齐，为可滚动论文列表留出空间。
-  用户接受当前材料后隐藏继续按钮；尚缺全文时只保留「补充获取全文」文字链接，使用
-  公共 link 按钮样式和焦点轮廓，不再使用主按钮强调。全文已齐或正在获取时隐藏该入口；
-  候选发生变化后恢复「确认候选」，新版本需重新核对。
-- 子 Agent 在委派发生的位置显示独立入口，包含图标、名称、状态和最近活动／工具调用数，
-  更新不移动位置；常规委派工具不再重复显示为普通工具块，失败仍保留错误反馈。
-  入口铺满聊天内容列，与正文左右边界对齐。使用公共按钮的底色、悬停、焦点和字重，
-  内容分两行，内边距 10px／12px，
-  图标固定 18px，不因开合、按下或悬停位移。最多同时运行三个子任务，其余排队。
-- 所有子 Agent 共用一个固定居中的气泡，位置与大小不随入口、内容或主时间线滚动改变。
-  点击同一入口收起、另一入口切换；气泡内「上一个／下一个」按任务顺序切换，显示当前序号。
-  切换保留每个子任务的筛选、展开项、已读取归档和滚动位置，只有当前内容挂载并刷新。
-  气泡宽度为 680px、高度为 640px，窄小窗口分别收缩至视口减 16px，四周至少留 8px；
-  沿用文献浮层配色、圆角、
-  头尾固定与内部滚动结构，常规内边距 16px／20px，紧凑内边距 12px。标题 14px、
-  正文 13px、元信息 12px，按钮复用公共样式。
-- 气泡和主会话共用消息渲染：指令使用用户消息样式，回答直接显示 Markdown、链接和公式；
-  进度／公开思考摘要按三行预览、展开、单行收起切换，支持键盘操作；工具先显示合并摘要，
-  再按调用展开输入、进度和完整结果。筛选工具时按具体调用匹配，不展开无关调用。
-  预览和单行收起保留文字对比度，不用渐变遮罩淡化短内容。收起期间到达的工具结果在
-  再次展开时显示最新内容；重试或已结束执行中缺少回执的调用标记为中断，不显示为持续运行。
-  模型活动使用主会话的等待指示，完成后移除；结论在原时间线中保留一份，不另建结果卡片。
-  原始事件及分页证据归档放在底部的次级折叠区，不增加聊天输入，也不新增内部模型推理记录。
-  新记录追加时保留展开项、选择文字与阅读位置，仅在阅读末尾时跟随；打开气泡时
-  主时间线暂停自动跟随。关闭、Escape 与外部点击不取消任务，停止和重试需显式点击。
-  长 trace 分批加载并显示已加载事件数；筛选在本地完成，输入法组字不触发筛选。
-  无新增事件时保持已有内容，过期响应不得回退归档分页或抢占另一任务的焦点。
-- 文献控件及子 Agent 气泡使用同一套浅色／深色变量。窄窗口允许换行，不压缩可读字号；
-  隐藏控件不占空间。关闭工作区只卸载监听和浮层，不取消宿主后台任务。
+PDFs, reports, and conversations share one popover. Show a 34px single-line question input near the selection using shared `surface`, `ink`, `line`, and focus variables. Do not add a toolbar or extra buttons.
 
-## 批注建议审阅
+The answer opens above the input, using the reading font, size, line height, and shared overlay background and shadow. Long answers scroll inside. Use 12px body padding, 20px between follow-ups, and 8px around the expanded input. Questions use secondary color and slightly smaller text. Code and tables scroll horizontally in their own regions; no decorative dividers.
 
-- Agent 每次提交形成独立审阅批次，每个任务只保留一个「批注」胶囊，与文献胶囊
-  共用输入区上方的布局行。胶囊沿用文献入口的配色、34px 最小高度、12px 字号与
-  24px 圆角，显示待审／写入／需关注数量；处理完成后显示「已处理」总数。
-- 胶囊默认最小化，点击后浮出审阅区，内部用两个图标按钮切换卡片与列表。卡片使用
-  公共 `elevated` 底色、14px 圆角和两层纸张叠放；不使用玻璃边缘、半透明底色或
-  背景模糊。实际批注颜色仅用于原文竖线。
-- 卡片支持横向拖动、滚轮翻阅与原生滑杆定位；滑杆支持键盘方向键。长原文内部滚动，
-  不抢占文字滚动。接受、拒绝共享 34px 控件与固定图标槽；触控设备点击区域至少 44px。
-- 卡片与列表共用文献浮层的最大宽度 680px、不透明底色、14px 圆角与公共阴影；
-  展开、切换与最小化均不改变胶囊行和输入区的高度。头尾固定、正文内滚动，条目按批次分组，以留白分区。
-  搜索框和一个批次／状态菜单完成筛选，勾选后才显示批量操作；长列表随滚动分批挂载。
-- 新批次追加时保持最小化／展开状态、当前卡片、搜索、勾选和滚动位置，更新胶囊新增
-  数量与浮层中的「查看新增」入口，不强制展开；已勾选的
-  范围是当时的快照，新到达条目不得自动加入批量操作。不同批次保留各自视图状态。
-- 接受后取得实际写入回执才标为「已写入」；拒绝可恢复，写入失败与结果待核对明确区分。
-  无法定位的建议仍可拒绝；恢复保留原来的不可写状态及原因，不能因恢复而变成可接受。
-  未确认的写入不自动重试。页码按钮打开原文，已写入条目可跳转至原生批注。
-- 只有全部已到达批次均已写入或拒绝时显示「当前建议已处理」，表示当前审阅结果，
-  不代表 Agent 已结束。筛选为空、写入中、失败、待核对与无法定位均不能计为完成。
-  完成后保留回执与「完成并收起」，再次打开可回看处理记录。
-- 标题栏始终保留 `—` 最小化按钮，写入期间仍可使用；胶囊再次点击、外部点击或
-  Escape 同样最小化，菜单先关闭。最小化不取消后台写入，也不清空视图状态；写入
-  回执到达后只更新结果，不强制展开。键盘关闭后焦点回到胶囊，外部点击不抢焦点。
-  展开期间暂停主时间线自动跟随；输入法组字期间不触发筛选或关闭。
-  「回到最新」同时收起浮层。
+Cap width at 420px. Narrow windows retain at least 8px on both sides. Position within the available reading area. Outside clicks or Escape close the popover while the answer continues and is saved. Opening it does not steal focus from the source selection. Enter/Escape during IME composition must not send or close. Selecting answer text pauses replacement of that passage until selection ends.
 
-## 自查清单
+## Literature and subagents
 
-### 检查项目
+### Task grouping and capsules
 
-1. 界面色来自公共变量；实际批注颜色仍忠实于数据。
-2. 常规、紧凑和极窄窗口的顶栏内边距、按钮尺寸与上表一致。
-3. 中英文长文案和较大字号下没有重叠、裁切或窗口横向溢出。
-4. 阅读页工具栏、引用区、正文 `hr`、列表均无装饰线；在 Zotero 中检查正文刚打开和重新聚焦时也无整圈轮廓，表格和引文仍清晰可读。
-5. 空态与禁用原因明确，悬停、焦点、菜单键盘操作保持可用。
-6. 浅色、深色和高对比度下可读，并区分自动化检查与 Zotero 实机验证结果。
-7. 修改后运行 `npm test` 和 `npm run typecheck`；不要把未执行的检查标为通过。
+- By article groups tasks by their paper at creation. Later materials, confirmed candidates, and turns do not change that group. Searches started from a blank task appear in Literature research without creating one group per result. Research started from an article remains under that article. By time shows each task once.
+- Each task has one literature capsule; further searches update its result pool. Keep tool activity in the timeline without duplicate literature cards. Hide the entry before any search; a zero-result search still exposes it so users can adjust the query.
+- Display counts such as “Candidate papers: 9 / 100”: selected candidates over papers actually retrieved and deduplicated for this task, not the API's total hits. Explain counts in the overlay; keep full-text and confirmation status inside it.
+- Literature, annotation, and Back to latest controls share one row above the composer, aligned to its edges, at most 880px wide and 8px above it. Capsules occupy the left; reserve 34px for the right icon button with an 8px gap. Capsules may wrap. Hide the row when empty. Only one literature or annotation overlay opens at a time.
+- Capsules have a minimum height of 34px, 12px text, 24px radius, shared elevated background, and a light shadow. Reuse shared button weight, hover, and focus. Icons/arrows use fixed centered 16px slots; opening only rotates the arrow. Long labels may wrap, but keep counts together without shrinking text or changing the target. Back to latest uses the 34px shared icon button.
+
+### Literature overlay
+
+- Open an opaque overlay above the row, aligned to the composer's left edge, at most 680px wide. Compact windows keep composer margins. Height follows available timeline space. Use `elevated`, 14px radius, shared shadow, fixed header/footer, and a scrolling list; the composer stays usable.
+- Use 14px titles, 13px content, 12px metadata, and 16px vertical/20px horizontal padding, reduced to 12px in compact layouts. Reuse shared buttons.
+- Preserve candidate selection, filters, abstracts, and list scroll across closing/reopening. Opening pauses main-timeline auto-follow without moving the conversation. Outside clicks/Escape close without stopping work or stealing outside focus. Back to latest closes the overlay and scrolls to the conversation end.
+- Query controls and local filters are secondary entries. Organize paper rows with whitespace; align checkboxes with the title's first line.
+- Candidate/result tabs support arrows and visible focus. Confirmation shows additions, removals, and acquisition scope in place. Confirm and acquire fulltext authorizes the whole batch; changed versions require a fresh review. Full-text status is independent of selection. The PDF drop zone uses a structural dashed border and highlights its target.
+- The footer offers Continue with abstracts before confirmation and Continue with current results afterward. Show full-text and abstract coverage against candidate count, plus library-import and background-download behavior. Search, abstract lookup, or a single PDF import must not disable Continue. Stale confirmation previews require review.
+- Keep concise coverage labels, fixed header/footer, and list scrolling. Allow labels and right-aligned button groups to wrap in narrow windows.
+- After current materials are accepted, hide Continue. When full text is still missing, show only a secondary Get remaining full text link with shared link-button styling and focus. Hide it when complete or downloading. Candidate changes restore confirmation for the new version.
+
+### Subagent entries and viewer
+
+- Place each subagent entry at its delegation point, showing icon, name, state, and latest activity/tool count. Updates do not move it. Avoid duplicate ordinary tool blocks for delegation; retain error feedback.
+- Entries span the chat content column. Use shared button colors, hover, focus, and weight, two text rows, 10px vertical/12px horizontal padding, and a fixed 18px icon that does not shift on interaction. Run at most three subtasks; queue the rest.
+- All subagents share one fixed centered viewer. Its position and size do not depend on the entry, content, or main scroll. Clicking the same entry closes it; another switches it. Previous/Next follow task order and show position.
+- Keep each subtask's filters, expanded items, loaded archives, and scroll when switching. Mount and refresh only the current content.
+- Viewer size is 680px × 640px, shrinking to viewport minus 16px with at least 8px margins. Reuse the literature overlay's palette, radius, fixed header/footer, scrolling, padding, and 14px/13px/12px text sizes.
+- Share main-chat message rendering: instructions use user-message style; answers render Markdown, links, and math. Public progress summaries switch between a three-line preview, full view, and one-line collapse with keyboard support. Tools show grouped summaries, then per-call input, progress, and full output. Filtering matches individual calls without expanding unrelated ones.
+- Keep text contrast in previews; do not fade short content with gradients. Reopening shows newly arrived results. Calls without receipts after retry or a finished execution display Interrupted, not Running.
+- Use the main chat's waiting indicator during model activity and remove it afterward. Keep one conclusion in the original timeline without another result card.
+- Raw events and paged evidence archives stay in a secondary collapsed area at the bottom. Do not add a chat input or record hidden model reasoning.
+- Appending events preserves expansion, text selection, and reading position; follow only at the end. Opening pauses main-timeline auto-follow. Closing, Escape, and outside clicks do not cancel; Stop and Retry are explicit actions.
+- Load long traces in batches and show loaded event counts. Filter locally after IME composition ends. With no new events, preserve content. Stale responses must not roll back archive pagination or steal another task's focus.
+- Literature and subagent controls share light/dark variables. Wrap in narrow windows without shrinking readable text; hidden controls occupy no space. Closing the workspace removes listeners and overlays without canceling host tasks.
+
+## Annotation review
+
+- Each submission creates an independent review batch. Each task has one annotation capsule in the shared composer row. Reuse literature capsule styling, 34px minimum height, 12px text, and 24px radius. Show pending/writing/needs-attention counts, then a handled total.
+- Start minimized. Two icon buttons switch between cards and list. Cards use `elevated`, 14px radius, and two stacked paper layers; no glass edges, translucent backgrounds, or blur. Use actual annotation color only for the source quote bar.
+- Cards support horizontal dragging, wheel navigation, and a native range slider with arrow-key support. Long source text scrolls inside without hijacking text scrolling. Accept/Reject use shared 34px controls and fixed icon slots; touch targets are at least 44px.
+- Cards/list share the literature overlay's 680px maximum width, opaque background, 14px radius, and shadow. Opening, switching, and minimizing must not change capsule-row or composer height. Fix header/footer, scroll the body, and group batches with whitespace.
+- Use one search field and one batch/status menu. Show bulk actions only after selection. Virtualize long lists.
+- New batches preserve minimized/expanded state, current card, search, selection, and scroll. Update counts and offer View new without forcing open. Bulk selection is a snapshot; later arrivals do not join automatically. Keep per-batch view state.
+- Mark Written only after a real write receipt. Rejection is reversible. Distinguish failed writes from outcomes needing verification. Unlocatable proposals may still be rejected; restoring them retains the unwritable state and reason. Do not retry uncertain writes automatically. Page buttons open the source; written items can open native annotations.
+- Show Current proposals handled only when every arrived proposal is written or rejected. This describes review progress, not agent completion. An empty filter, active write, failure, uncertain outcome, or unlocatable proposal is not completion. Keep receipts and Done and minimize; reopening shows the review history.
+- Always keep the `—` minimize control, including during writes. Clicking the capsule, outside, or Escape also minimizes; close menus first. Preserve background writes and view state. Receipts update results without reopening.
+- Keyboard closing returns focus to the capsule; outside clicks retain outside focus. Pause main auto-follow while open. IME composition must not filter or close. Back to latest also minimizes the overlay.
+
+## Knowledge and file export
+
+- Provide one search entry and source list for Zotero notes, research topics, preferences, ordinary memories, and legacy knowledge files. No topic-container editor or knowledge-base ID input. Selecting an entry reads its actual source.
+- Use side-by-side list and reader normally; stack below 620px, with independent scrolling. Follow shared toolbar padding, buttons, palette, and reading rules, without decorative body dividers.
+- Notes offer Open in Zotero and Export file. Research memories offer Correct memory and Forget. Preserve focus and drafts during correction; background refresh must not overwrite an edit. Search supports IME composition.
+- Reading outputs default to Zotero notes; omit a destination menu with only one option. Export uses shared buttons in the same group without global format or storage-channel settings.
+
+## Review checklist
+
+1. UI colors come from shared variables; annotation colors still reflect data.
+2. Regular, compact, and very narrow toolbars match the spacing and button sizes above.
+3. Long English/Chinese labels and larger fonts do not overlap, clip, or cause window-level horizontal overflow.
+4. Reader toolbar, references, Markdown rules, and lists have no decorative lines. In Zotero, check first opening and refocusing for unwanted body outlines; tables and quotes remain legible.
+5. Empty/disabled states explain why. Hover, focus, and keyboard menus work.
+6. Light, dark, and high-contrast modes remain readable. Distinguish automated checks from real Zotero testing.
+7. Run `npm test` and `npm run typecheck`; never report unrun checks as passing.

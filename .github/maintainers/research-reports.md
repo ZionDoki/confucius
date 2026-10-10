@@ -1,196 +1,89 @@
-# 研究报告修订
+# Report and revision contracts
 
-研究报告是一份持续维护的成果。新建时使用 `artifact_upsert`，后续复核或用户补充
-要求时复用同一 ID。全文替换仍使用 `artifact_upsert`；Markdown 局部修订使用
-`artifact_patch`。这两个写入接口都只保存当前任务的成果，不需要 Zotero 文库写入
-授权。笔记和 PDF 批注继续由原有工具分别授权。
+English · [简体中文](research-reports.zh-CN.md)
 
-## 内容与复核契约
+[Maintainer guide](README.md) · [User guide](../../docs/reading-and-annotations.md)
 
-报告以设置中的回复语言撰写，原文引文保留其语言。除非用户指定其他格式，开头的
-“一分钟速读”概括研究问题、核心方法、主要结论和最重要的适用条件。其后给出方法
-解释、关键证据及局限；确切数字使用带页码的正文或有助比较的证据表，保留分母、实验对象、比较
-基线与适用范围。摘要属于同一份正文，不另外创建摘要成果，也不在聊天中重复全文。
+## One report with revisions
 
-精读可读正文直接保存为 `ready`，`draft` 仅表示内容尚未完成。当前模型和用户选择的
-推理设置用于一次独立直接修订：只提供当前要求、组合写作指导、最新报告、原文和实际
-批注，不提供起草历史。优先复用来源，仅补取缺失的引用页和当前批注；来源不足时收窄
-论断并标明限制，不以固定读取顺序、分页次数或评分阻止交付。
+Use `artifact_upsert` to create a task artifact or replace its body. Later edits
+reuse its ID; `artifact_patch` applies targeted Markdown changes. Neither task
+artifact operation needs Zotero write approval. Native note writes and annotation
+review retain their separate confirmation flows.
 
-修订在当前请求的报告正文变化且成果已就绪时触发，使用剩余调用额度及请求超时。
-普通问答、打开报告和保存风格不触发。RunState 仅保存内容指纹和一次尝试记录；重启后
-不重放已经启动的尝试。无改动不保存新版本。局部或全文修订均转换为当前版本的原子
-patch，引用未变时省略；发生取消、版本冲突、无效输出或模型失败时保留已有报告。
-新建草稿、未知写入和真实执行失败仍保留原有状态，不由修订冒充完成。
+A deep-reading report includes a brief opening summary, method explanation,
+evidence and limitations. Preserve denominators, baselines and scope for numeric
+claims. Source quotations keep their original language. `reportStyleGuidance`
+combines layout, tone and focus; it is the shared style entry.
 
-格式、引用解析、版本和操作一致性检查保留。`ready` 表示可交付，不是事实认证。
-理解和写作质量通过开发评测观察，不产生用户报告的质量门禁。组合规则的唯一入口
-是 `reportStyleGuidance`，内置技能保留公共取证和批注操作规范。
+`ready` means deliverable, not independently fact-certified. Only incomplete
+content stays draft. The host can make one independent revision after a ready
+report changes in the current request, using the current model and remaining
+budget. Inputs contain the current request/report and available source evidence,
+not the drafting conversation or hidden reasoning.
 
-## 工具契约
+Opening a report, saving a style or ordinary Q&A does not trigger revision.
+Record the attempt against the request and report version; restart does not
+replay it. Failure, cancellation, invalid output or conflict leaves the saved
+report unchanged. No-change output creates no new revision.
 
-0.4.3-beta.1 精读只交付一个报告，标注内容作为附录，最后附带问题、方法、证据和边界的
-通俗导读 Map。引用格式为正文中的 `[cite:e1]` 和唯一的 `citations[].id: "e1"`。
-引用的 `itemLibraryID`、`itemKey`、`attachmentKey`、`page`、`annotationKey` 来自
-原文工具；`title` 和 `quote` 用于可读标签及证据提示。页码是物理页，不是印刷标签。
-没有 PDF 的摘要引用只保存条目定位。缺失或重复引用 ID 会阻止保存和 patch，旧报告
-的普通 Markdown 链接仍可用。写回笔记和知识库时转换为带正确个人／群组文库范围的
-Zotero 链接。详见[本轮验收](acceptance/research-harness-2026-09-07.md)。
+## Reading, patching and citations
 
-| 工具             | 参数与结果                                                                                                                                          |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `artifact_read`  | 必填 `id`；默认读正文，`part: "citations"` 读引用 JSON 文本。返回当前 revision、正文片段及 `nextOffset`，不含历史版本。                             |
-| `artifact_patch` | 必填 `id`、`expectedRevision`；可选 `edits`、`title`、`status`、`citations`，至少指定一种修改。返回 ID、当前 revision、状态及引用数量，不返回全文。 |
+| Tool              | Contract                                                                                       |
+| ----------------- | ---------------------------------------------------------------------------------------------- |
+| `artifact_read`   | Read body or citations with revision and pagination. Continue with the same expected revision. |
+| `artifact_patch`  | Require `id` and `expectedRevision`; edit body/title/status/citations atomically.              |
+| `artifact_upsert` | Create or replace within the owning task; do not overwrite another task's artifact.            |
 
-读取默认最多 8,000 个 JavaScript 字符（UTF-16 单元），上限 12,000；继续读取时使用
-返回的 `nextOffset` 和第一次读取的 revision 作为 `expectedRevision`，避免把不同
-版本拼在一起。Markdown 原样返回，其他正文和引用以 JSON 文本分页。
+An edit's `oldText` must match exactly once in the original snapshot. Reject
+overlapping edits, ambiguous matches and stale versions before any save.
+Recheck the expected revision under the artifact lock; preparation must not
+silently upgrade the expected version.
 
-每项 edit 包含 `oldText` 和 `newText`。`oldText` 必须在同一原始快照中恰好出现
-一次；所有匹配区间不得重叠。一次最多 30 项，先完整校验，再从后往前替换并保存
-一个版本。新增文字可通过替换包含插入位置的唯一片段完成。匹配有歧义时读取当前
-报告、扩大上下文重新提交；不采用模糊匹配来猜测用户想改哪一处。
+Omitted fields preserve values. Explicit citations replace the complete list;
+an empty list clears it. Structured bodies use upsert for replacement.
 
-省略字段保留原值，包括正文、引用和来源。显式传入 `citations` 替换完整引用列表，
-`[]` 清空引用。结构化成果允许改标题、状态和引用；其正文替换仍使用 upsert。
+Inline `[cite:e1]` references map to unique citation IDs. Native item/library,
+attachment, physical-page and annotation identifiers must come from evidence.
+An abstract-only source must not invent a PDF page. Note export converts references
+to native Zotero links; legacy Markdown links stay readable.
 
-版本比较不只发生在读取后：保存时还通过 ArtifactStore 的资源锁再次核对版本。
-patch 的写入预期固定为用于构造修改的原始快照，不能因准备过程中读到新版而被
-自动换成新版。并发变更、匹配缺失、歧义或重叠均不能造成部分保存。
+## Persistence and replay
 
-## 上下文与恢复
+Store the full expected result in operation recovery material while keeping
+model-visible patch parameters compact. Artifact revisions can carry
+`operationId`; older revisions without it remain readable.
 
-Native、外部引擎的任务网关和预设均暴露读写工具。独立修订上下文只注入当前报告和可用原文、批注，
-排除历史全文与起草推理；修订模型不调用工具，只返回可应用的正文修改。
-宿主固定目标 ID 和 expectedRevision，经正常工具执行路径保存。现有 `artifact_upserted` 事件刷新成果视图，维持同一文件与历史版本。
+Replay requires matching task, expected revision, operation ID and content.
+Another operation writing identical text does not prove this one succeeded.
+A known committed operation returns its existing receipt.
 
-完整预期正文保存在本机操作日志的恢复材料中，模型调用、消息与 checkpoint 保留
-简短的 patch 参数。每个新工具写入的成果版本带可选 `operationId`；旧版本无此
-字段也可读取，不需要迁移。中断后 patch 恢复要求任务、预期版本、操作 ID 和正文
-均对应，不能因为另一操作恰好写了相同正文就认定本次操作成功。已知成功的同一操作
-重放回执，不再增加版本。
+## Report views and writeback
 
-## 独立报告窗口
+The report can live in the workspace or a separate native window. Reuse the same
+renderer, palette, buttons and reading preferences; see [design rules](../../docs/design.md).
+Deduplicate windows by artifact ID, including concurrent opens.
 
-`artifact.xhtml` 是单独的 chrome 文档，`ArtifactWindows` 用无父窗口、非模态的
-原生窗口打开它。按 artifact ID 去重，加载过程中重复点击也只创建一个窗口。
-窗口注册表属于插件，不属于工作区组件；切换任务、卸载侧栏或关闭聊天窗口不会
-销毁报告。删除任务关闭该任务的窗口，插件关闭时统一释放窗口和偏好观察器。
-Gecko 替换初始 about:blank 时可能丢失加载监听，因此由插件定时检查文档就绪，
-挂载或关窗后停止检查；初始文档卸载不视为用户关窗。
+Latest view follows updates while preserving position; selected historical
+revisions stay pinned. Text selection and writeback review pause replacement.
+Writeback uses the displayed revision, not an unseen newer one.
 
-报告复用阅读渲染器、配色、菜单和排版设置，顶部仅保留版本、状态和写回操作。
-默认跟随最新版，历史版本显式固定；后台保存保留滚动位置，选中文本或审查写回
-内容时暂缓刷新。写回始终使用屏幕实际显示的版本，不能误用尚未显示的新版本。
-每个窗口通过 `artifact/get` 读取成果和所属任务状态，关闭后停止轮询，不调用模型。
-系统标题栏和 Ctrl+W 关闭窗口，Escape 只关闭菜单或写回对话框。
+A report's default durable destination is a Zotero note. Preview and confirmation
+belong to that concrete request. Closing/cancelling rejects pending unconfirmed
+requests, including late preparation results; an already confirmed write can finish.
+Export creates an independent file; the knowledge library indexes sources.
 
-写回仍通过宿主现有的准备与审批接口。选择目标后点击“继续”，窗口显示宿主重新
-准备的具体内容；点击“确认写入”只批准这个请求。取消或关窗拒绝本窗口未确认的
-请求，也处理关窗后才返回的准备结果。已经明确确认的写入不因关窗而反向取消。
-这避免了报告窗口独立后，用户仍需回到聊天时间线寻找写入审批的交互断点。
+The window registry belongs to the plugin, not the chat component. Closing the
+chat keeps detached reports open; deleting the task or unloading the plugin closes
+them and releases listeners. A branch has independent report snapshots and writeback targets.
 
-## 修订工具检查
+## Validation
 
-2026-09-07 在 Windows、Node.js 24 完成 `npm test`（774 项全部通过）、
-`npm run typecheck`、`npm run lint`、`npm run build`、
-`npm run sync-skills:check` 和 `npm run versions:check`。构建用于验证开发代码，
-不作为同版号的公开安装包分发。
+Test version conflicts, ambiguous/overlapping patches, citation preservation,
+cross-task rejection, receipt replay, window lifecycle and confirmation races.
+Synthetic correction cases establish tool behavior, not general writing quality
+or token-cost savings. Real-model, layout and native writeback checks need
+separate recorded evidence.
 
-在仓库根目录运行：
-
-```sh
-node --import tsx --test --test-name-pattern="editable research reports" apps/zotero-addon/src/modules/host/ArtifactStore.test.ts
-```
-
-合成案例含“一分钟速读”、方法、证据表和局限，故意把 50/100 写成 100/100，并在
-摘要中误称全部完成。测试一次纠正摘要和证据，检查其他部分、引用、来源及旧版本
-完整保留，不访问真实文库或模型。9 项测试通过，覆盖：
-
-- 同一文件的关联修订，以及引用的保留、替换和显式清空。
-- 旧版本、缺失或重复匹配、范围重叠、空修改和无效标题均不产生写入。
-- 读取快照后、再次准备前插入另一处修改，原报告不被覆盖；同时覆盖工具直调和执行网关。
-- 分页连续性、跨任务拒绝及续读时的版本冲突。
-- 读报告不能代替原文复核，复核通过后允许仅修改完成状态。
-- checkpoint 重放不增加版本；丢失写入回执可恢复；其他操作的同文写入不能冒充成功。
-
-另有宿主生命周期测试实际通过任务网关读取和修订成果，确认不弹出 Zotero 写入审批，
-并核对复核输入不含历史正文。
-
-成本测试在同一合成报告后追加 400 行不变的讨论文字，执行“同时修正摘要和数字并
-标为 ready”。测试输出的请求大小如下；这是 UTF-8 序列化字节，不是模型 Token。
-
-| 请求内容                                 | 字节数 |
-| ---------------------------------------- | -----: |
-| 包含修正后全文、引用与来源的 upsert 参数 | 14,590 |
-| 两处修正及 ready 状态的 patch 参数       |    195 |
-| 已复核且无需正文修改时的参数             |     53 |
-
-完整原文读取和首次报告写作仍然必要。新增工具定义也会占用请求输入，因此上述
-数字只能证明局部修改避免重复生成、传送全文，不能换算成整项任务的费用降幅。
-报告越短或首次阅读越长，整体收益越可能被其他开销稀释。
-
-以上为接口开发阶段的记录，已发布 0.4.1 不包含这些接口。该阶段未安装到
-普通启动的本机 Zotero，也没有真实 MiniMax-M3 调用。端到端评测应固定相同
-论文、模型、设置语言与任务要求，分别记录报告质量、修订成功率、输入/输出 Token
-和总耗时；不能将本合成案例宣称为真实模型成功率提升。
-
-## 独立窗口检查（2026-09-07）
-
-Windows、Node.js 24 上通过 `npm test`（781 项）、`npm run typecheck`、
-`npm run lint`、`npm run build`、技能同步和版本一致性检查。新增 7 项行为测试
-覆盖窗口去重、跨任务关闭、旧窗口卸载、慢加载与丢失加载事件、历史版本选择、
-明确确认及准备期间关窗的审批撤销；宿主与插件关闭测试也覆盖新的生命周期。
-
-普通启动的本机 Zotero 10.0.1 中临时加载当前编译后的窗口组件，使用已有报告
-的内存副本验证；未启动开发 Zotero、替换已安装插件或修改实际报告与文库。
-正常宽度与约 520 像素窄窗口均可阅读，版本菜单显示历史状态和选中标记。
-本机检查通过：重复打开返回同一窗口且保留位置、历史版本在新修订到来后保持
-不变、最新版更新保留滚动位置、选中文本期间冻结版本并在取消选择后更新。
-关闭聊天侧栏后报告继续可用，正文来源链接可导航到实际 PDF 第四页。
-
-本机写回检查使用模拟回执，只验证预览、确认和取消的窗口交互；真实写入仍由
-既有宿主工具执行。本轮没有重新调用 MiniMax-M3、进行新安装包的升级验收，
-也没有验证 macOS/Linux 的原生窗口表现。构建产物仅用于开发检查，不作为
-同版号 0.4.1 的替换包发布。
-
-## 0.4.2 发布复核
-
-后续已完成普通安装包、真实 MiniMax-M3 报告修订、窗口与实际笔记写回验收，
-详见 [0.4.2 发布记录](acceptance/release-0.4.2.md)。短报告中的一次 patch 参数
-可能比全文替换更长，因此上面的合成大报告结果只说明局部修订的适用场景，
-不构成每种报告或整项任务的 Token 降幅。
-
-## 风格生成与直接修订检查（2026-09-11）
-
-本轮在 macOS 上通过 `npm test`（1,044 项）、`npm run typecheck`、
-`npm run sync-skills:check`、`npm run lint` 和 `npm run build`。
-自动测试覆盖 27 种风格组合、Native/Codex/Kimi 共用的独立修订输入、同一成果更新
-与引用保留，以及失败、取消、预算不足、版本变化和恢复后不重复修订。
-测试使用固定来源和故意包含数字错误、推理跳步、阅读块错误的报告，
-不能据此推断真实论文的解释质量或事实准确率。
-
-隔离的 Zotero 10.0.1 开发实例通过 44 项表单与阅读界面检查，实际查看了原文双栏和
-展开后的补充说明。该检查没有调用模型或更改日常文库；构建产物仅用于开发验证，
-本轮不升版、不发布，也不代替用户常用配置下的升级验收。
-
-真实 Codex CLI 使用 `gpt-6-astra`、`medium`，对相同合成来源和错误初稿分别执行
-“原文对照＋耐心讲解＋方法侧重”与“连续文章＋简洁直接＋实验侧重”。两次均返回
-可应用修改，纠正 100/100 为 50/100、保留基线与两款应用的范围，并将方法解释和
-实验说明按所选风格组织；额外耗时分别约 38.5 秒与 23.0 秒。人工检查发现对照版
-出现多余来源编号列表，收紧指导后复测约 39.5 秒，列表已去除。这里只验证合成材料
-中的直接修订，没有验证完整论文首次生成，也不是质量通过门槛。
-
-Kimi 真实调用约 65.5 秒后返回 `cancelled`，未产生可应用修改，不计为质量通过。
-Native 因未配置可用 API key 未执行真实模型检查；其调用、设置与保留原稿行为由
-自动测试覆盖。原始输入、模型输出与界面截图留在被忽略的 `output/` 中。
-
-真实模型挑战脚本沿用同一组合成论文来源和相同预算，支持指定组合及完整组合矩阵：
-
-```sh
-node --import tsx scripts/live-research-challenges.mjs --prefs PATH --with-skill true --style parallel,patient,method --output output/report-style-method
-node --import tsx scripts/live-research-challenges.mjs --prefs PATH --with-skill true --style-matrix true --output output/report-style-matrix
-```
-
-脚本分别保存初稿、一次直接修改、应用结果和额外耗时，供开发者比较解释质量、
-风格差异和事实错误。本轮未运行完整组合矩阵，也未完成真实论文评测。
+Historical report, style and window experiments are preserved in the
+[acceptance archive](acceptance/README.md); they are not current-code guarantees.

@@ -1,12 +1,23 @@
+import { KnowledgeIndex, zoteroKnowledgeNotes } from "./KnowledgeIndex";
+import {
+  ResearchMemory,
+  ResearchMemoryConflict,
+  researchMemoryMessages,
+  parseResearchUpdates,
+  RESEARCH_MEMORY_TAG,
+  type ResearchSnapshot,
+} from "./ResearchMemory";
 import { SubagentManager, type SubagentRun } from "./SubagentManager";
 import { SubagentToolProvider, SubagentResearchTools } from "./SubagentTools";
 import {
   executeNativeSubagent,
   executeExternalSubagent,
 } from "./SubagentExecution";
-import { SUBAGENT_TOOL_NAMES } from "@confucius/protocol";
+import { isApprovalResolution, SUBAGENT_TOOL_NAMES } from "@confucius/protocol";
 import { LiteratureService } from "./LiteratureService";
 import { OpenAlexClient } from "./OpenAlexClient";
+import { LiteratureFulltextAgent } from "./LiteratureFulltextAgent";
+import { tavilySearch } from "./LiteratureSearch";
 import { ZoteroLiteratureAcquirer } from "./LiteratureAcquisition";
 import { LiteratureAbstracts } from "./LiteratureAbstracts";
 import { LiteratureToolProvider } from "./LiteratureToolProvider";
@@ -81,7 +92,10 @@ import {
   reconcileKnowledgeWrite,
 } from "./KnowledgeOperations";
 import { TaskTraceBuffer } from "./TaskTrace";
-import { responseLanguageInstruction } from "./ResponseLanguage";
+import {
+  responseLanguageContext,
+  responseLanguageInstruction,
+} from "./ResponseLanguage";
 import { collectTaskTrace } from "./TaskTraceReport";
 import type { ToolExecutionContext, ToolResult } from "@confucius/protocol";
 import {
@@ -201,7 +215,7 @@ import {
   type EndpointStore,
   type ModelEndpoint,
 } from "@confucius/protocol";
-import type { KnowledgeEntryType, MemoryOp } from "@confucius/memory";
+import type { MemoryOp } from "@confucius/memory";
 import {
   KnowledgeBaseService,
   isKnowledgeEntryType,
@@ -233,6 +247,7 @@ import {
   type TurnCheckpoint,
 } from "@confucius/harness";
 import {
+  formatInvokedUserText,
   formatSkillPromptSection,
   parseSkillInvocation,
   SKILL_TOOL_NAME,
@@ -842,6 +857,9 @@ export class AgentHost {
   private readonly literature = new LiteratureService({
     client: this.openAlex,
     acquire: this.literatureAcquirer,
+    fulltext: new LiteratureFulltextAgent(() =>
+      String(getPref("tavilyApiKey") || ""),
+    ),
     abstracts: new LiteratureAbstracts(this.openAlex, (work) =>
       this.literatureAcquirer.abstract(work),
     ),
@@ -1054,6 +1072,7 @@ export class AgentHost {
           return executeExternalSubagent(
             run,
             this.backendFor(run.task.backend),
+            this.languageInstruction(run.task, run.document.record.goal),
           );
         const config = run.document.record.nativeConfig;
         const { store } = this.readEndpointStore();
@@ -1088,6 +1107,7 @@ export class AgentHost {
             },
             snapshot,
           ),
+          this.languageInstruction(run.task, run.document.record.goal),
         );
       },
       stop: async (run) => {
@@ -1260,7 +1280,6 @@ export class AgentHost {
   private persistTimer: number | null = null;
   private persistQueue: Promise<void> = Promise.resolve();
   private shuttingDown = false;
-  private annotationLabelMigration?: Promise<void>;
   private shutdownTask?: Promise<void>;
   private readonly ids = createIdFactory(EVENT_ID_PREFIX);
   private readonly titleFinalizers = new Map<string, string>();
@@ -1415,12 +1434,6 @@ export class AgentHost {
     ztoolkit.log("[Confucius] Runtime storage", runtimePath());
     void this.reloadMcp();
     this.updates.start(afterUpdate);
-    if (this.storageReady)
-      this.annotationLabelMigration = this.tools
-        .migrateAnnotationBatchLabels(() => !this.shuttingDown)
-        .catch((error) => {
-          ztoolkit.log("[Confucius] Annotation label migration failed", error);
-        });
   }
 
   private async initializeStorage(): Promise<void> {
@@ -1520,7 +1533,6 @@ export class AgentHost {
             ztoolkit.log("[Confucius] runtime disposal failed", result.reason);
         await this.pluginRuntime.shutdown();
       } finally {
-        await this.annotationLabelMigration;
         try {
           // Append exactly one final snapshot after writes already queued. Late
           // callbacks cannot enqueue another snapshot after sessions are cleared.
@@ -1617,6 +1629,17 @@ export class AgentHost {
           entry.loadedSkills ?? (entry.skillSlug ? [entry.skillSlug] : []),
         );
         const record = migrateSessionRecord(entry.record);
+        const userRequests = events.flatMap((event) =>
+          event.type === "turn_started" ? [event.payload.userText] : [],
+        );
+        record.responseLanguageContext = responseLanguageContext(
+          record.responseLanguageContext
+            ? []
+            : userRequests.length
+              ? userRequests
+              : [record.run?.request ?? ""],
+          record.responseLanguageContext,
+        );
         if (!record.createdFrom) {
           record.createdFrom = taskArticles(record);
           repaired = true;
@@ -2081,7 +2104,7 @@ export class AgentHost {
     }
     const inner =
       name.startsWith("memory_") ||
-      name.startsWith("knowledge_base_") ||
+      name.startsWith("knowledge_") ||
       name.startsWith("conversation_log_")
         ? this.memoryProvider()
         : new ZoteroToolProvider(this.tools);
@@ -2302,11 +2325,21 @@ export class AgentHost {
         return this.artifactList(String(params.taskId ?? ""));
       case RPC_METHODS.artifactGet:
         return this.artifactGet(String(params.id ?? ""));
+      case "artifact/export":
+        return this.artifactExport(params);
       case RPC_METHODS.artifactUpsert:
         return this.artifactUpsert(params as unknown as ArtifactUpsertInput);
       case RPC_METHODS.artifactWritebackPreview:
+        if (params.target === "knowledge_base")
+          throw new Error(
+            "Save this report as a Zotero note; knowledge indexes it automatically",
+          );
         return this.artifactWritebackPreview(params);
       case RPC_METHODS.artifactWritebackCommit:
+        if (params.target === "knowledge_base")
+          throw new Error(
+            "Save this report as a Zotero note; knowledge indexes it automatically",
+          );
         return this.artifactWritebackCommit(params);
       case RPC_METHODS.runtimeList:
         return this.pluginRuntime.listRuntimes(false);
@@ -2367,7 +2400,7 @@ export class AgentHost {
           params.afterId ? String(params.afterId) : undefined,
         );
       case RPC_METHODS.approvalResolve:
-        return this.approvalResolve(params as unknown as ApprovalResolution);
+        return this.approvalResolve(params);
       case RPC_METHODS.skillList:
         return { skills: this.skills.list() };
       case RPC_METHODS.skillActivate:
@@ -2387,6 +2420,24 @@ export class AgentHost {
         return this.memoryRpcProtect(params);
       case RPC_METHODS.memoryDelete:
         return this.memoryRpcDelete(params);
+      case "knowledge/index":
+        return this.knowledgeIndex().search(
+          String(params.query ?? ""),
+          Number(params.offset),
+          Number(params.limit),
+        );
+      case "knowledge/read":
+        return this.knowledgeIndex().read(String(params.id), true);
+      case "knowledge/correct":
+        await this.researchMemory().correct(
+          String(params.id),
+          String(params.content ?? ""),
+          String(params.expected ?? ""),
+        );
+        return { saved: true };
+      case "knowledge/forget":
+        await this.researchMemory().forget(String(params.id));
+        return { removed: true };
       case RPC_METHODS.knowledgeList:
         return this.knowledgeRpcList(params);
       case RPC_METHODS.knowledgeGet:
@@ -2394,15 +2445,25 @@ export class AgentHost {
       case RPC_METHODS.knowledgeSearch:
         return this.knowledgeRpcSearch(params);
       case RPC_METHODS.knowledgeCreate:
-        return this.knowledgeRpcCreate(params);
+        throw new Error(
+          "Knowledge is an index. Edit source notes in Zotero or use the knowledge memory controls.",
+        );
       case RPC_METHODS.knowledgeUpdate:
-        return this.knowledgeRpcUpdate(params);
+        throw new Error(
+          "Knowledge is an index. Edit source notes in Zotero or use the knowledge memory controls.",
+        );
       case RPC_METHODS.knowledgeDelete:
-        return this.knowledgeRpcDelete(params);
+        throw new Error(
+          "Knowledge is an index. Edit source notes in Zotero or use the knowledge memory controls.",
+        );
       case RPC_METHODS.knowledgeSaveEntry:
-        return this.knowledgeRpcSaveEntry(params);
+        throw new Error(
+          "Knowledge is an index. Edit source notes in Zotero or use the knowledge memory controls.",
+        );
       case RPC_METHODS.knowledgeDeleteEntry:
-        return this.knowledgeRpcDeleteEntry(params);
+        throw new Error(
+          "Knowledge is an index. Edit source notes in Zotero or use the knowledge memory controls.",
+        );
       case "subagent/list":
         return this.subagents().list(String(params.taskId));
       case "subagent/read":
@@ -2425,14 +2486,28 @@ export class AgentHost {
       case "subagent/retry":
         return this.subagents().retry(String(params.taskId), String(params.id));
       case "literature/config":
-        return { hasKey: !!getPref("openAlexApiKey") };
+        return {
+          hasKey: !!getPref(
+            params.provider === "tavily" ? "tavilyApiKey" : "openAlexApiKey",
+          ),
+        };
       case "literature/configure": {
         if (typeof params.key !== "string" || params.key.length > 4096)
-          throw new Error("Invalid OpenAlex key");
-        setPref("openAlexApiKey", params.key.trim());
-        return { hasKey: !!getPref("openAlexApiKey") };
+          throw new Error("Invalid API key");
+        const pref =
+          params.provider === "tavily" ? "tavilyApiKey" : "openAlexApiKey";
+        setPref(pref, params.key.trim());
+        return { hasKey: !!getPref(pref) };
       }
       case "literature/test":
+        if (params.provider === "tavily") {
+          await tavilySearch(
+            "Zotero reference manager",
+            String(getPref("tavilyApiKey") || ""),
+            createAbortController().signal,
+          );
+          return { hasKey: true };
+        }
         return this.openAlex.test();
       case "literature/list":
         return this.literature.list(String(params.taskId), params);
@@ -3495,6 +3570,11 @@ export class AgentHost {
           (e) => e.type !== "subagent_updated",
         );
       branch.messages = snapshot.messages;
+      branch.record.responseLanguageContext = responseLanguageContext(
+        snapshot.messages.flatMap((message) =>
+          message.role === "user" ? [message.content] : [],
+        ),
+      );
       branch.record.artifactIds = snapshot.artifactIds;
       branch.record.permissionMode = source.record.permissionMode;
       branch.loadedSkills = new Set(source.loadedSkills);
@@ -3852,7 +3932,9 @@ export class AgentHost {
     }
   }
 
-  private approvalResolve(resolution: ApprovalResolution) {
+  private approvalResolve(resolution: unknown) {
+    if (!isApprovalResolution(resolution))
+      throw new Error("Invalid approval resolution");
     const pending = this.pendingApprovals.get(resolution.id);
     if (!pending) {
       throw new Error("Unknown approval id");
@@ -4418,6 +4500,28 @@ export class AgentHost {
     };
   }
 
+  private async artifactExport(params: Record<string, unknown>) {
+    const artifact = await this.requireArtifact(String(params.id));
+    const revision = artifactRevision(artifact, params.revision);
+    const note = artifactWritebackFor(artifact, "zotero_note");
+    if (
+      note?.state === "committed" &&
+      note.revision === revision.revision &&
+      note.targetRef
+    ) {
+      const target = parseLibraryTarget(note.targetRef);
+      if (target)
+        return this.knowledgeIndex().read(
+          `note:${target.libraryID}:${target.key}`,
+        );
+    }
+    return {
+      title: artifact.title,
+      format: "markdown",
+      content: renderArtifactBody(revision.body, revision.citations),
+    };
+  }
+
   private async artifactUpsert(input: ArtifactUpsertInput) {
     const state = this.requireSession(String(input.taskId ?? ""));
     const binding = executionBinding(state.record.run);
@@ -4519,6 +4623,7 @@ export class AgentHost {
       ...this.memoryProvider().listTools(),
       ...advertisedArtifactTools(state.record.run?.requiredArtifactKinds),
       ...this.historyTools(state).listTools(),
+      ...this.skillProvider(state).listTools(),
     ].filter(
       (tool) =>
         !state.externalToolNames || state.externalToolNames.has(tool.name),
@@ -4744,19 +4849,22 @@ export class AgentHost {
       await this.persistNow();
     }
     if (!current()) return cancelled();
-    const innerProvider: ToolProvider = SUBAGENT_TOOL_NAMES.has(name)
-      ? this.subagentTools(state)
-      : LITERATURE_TOOL_NAMES.has(name)
-        ? this.literatureTools(state)
-        : name.startsWith("memory_") ||
-            name.startsWith("knowledge_base_") ||
-            name.startsWith("conversation_log_")
-          ? this.memoryProvider()
-          : ARTIFACT_TOOL_NAMES.has(name)
-            ? this.artifactProvider(state, turnId)
-            : HISTORY_TOOL_NAMES.has(name)
-              ? this.historyTools(state)
-              : this.reviewTools();
+    const innerProvider: ToolProvider =
+      name === SKILL_TOOL_NAME
+        ? this.skillProvider(state)
+        : SUBAGENT_TOOL_NAMES.has(name)
+          ? this.subagentTools(state)
+          : LITERATURE_TOOL_NAMES.has(name)
+            ? this.literatureTools(state)
+            : name.startsWith("memory_") ||
+                name.startsWith("knowledge_") ||
+                name.startsWith("conversation_log_")
+              ? this.memoryProvider()
+              : ARTIFACT_TOOL_NAMES.has(name)
+                ? this.artifactProvider(state, turnId)
+                : HISTORY_TOOL_NAMES.has(name)
+                  ? this.historyTools(state)
+                  : this.reviewTools();
     if (typeof params.operationId === "string")
       executionContext.operationId = `${taskId}:${params.operationId}`;
     const provider = this.execution.wrap(innerProvider, executionContext);
@@ -4837,7 +4945,7 @@ export class AgentHost {
         executionContext.executionScope?.resume?.();
       }
       if (!current()) return cancelled();
-      if (resolution.verdict === "deny") {
+      if (!isApprovalResolution(resolution) || resolution.verdict !== "allow") {
         await provider.recordDenied?.(name, args, executionContext);
         const denied: ToolFailure = {
           ok: false,
@@ -6055,6 +6163,18 @@ export class AgentHost {
     };
   }
 
+  private researchMemoryInstance?: ResearchMemory;
+  private researchMemory(): ResearchMemory {
+    return (this.researchMemoryInstance ??= new ResearchMemory(
+      this.memory,
+      runtimeJsonStorage("knowledge"),
+      runtimeDigest,
+    ));
+  }
+  private knowledgeIndex(): KnowledgeIndex {
+    return new KnowledgeIndex(this.memory, zoteroKnowledgeNotes());
+  }
+
   private memoryProvider(): ConfuciusMemoryToolProvider {
     return new ConfuciusMemoryToolProvider(
       this.memory,
@@ -6112,6 +6232,7 @@ export class AgentHost {
           data: { proposal, requiresApproval: true, saved: false },
         };
       },
+      this.knowledgeIndex(),
     );
   }
 
@@ -6259,69 +6380,6 @@ export class AgentHost {
         score: result.score,
       })),
     };
-  }
-
-  private async knowledgeRpcCreate(params: Record<string, unknown>) {
-    return {
-      knowledgeBase: await this.knowledge.create({
-        title: String(params.title ?? ""),
-        description: params.description
-          ? String(params.description)
-          : undefined,
-        tags: Array.isArray(params.tags) ? params.tags.map(String) : undefined,
-      }),
-    };
-  }
-
-  private async knowledgeRpcUpdate(params: Record<string, unknown>) {
-    const knowledgeBase = await this.knowledge.update({
-      id: String(params.id ?? ""),
-      title: params.title === undefined ? undefined : String(params.title),
-      description:
-        params.description === undefined
-          ? undefined
-          : String(params.description),
-      tags: Array.isArray(params.tags) ? params.tags.map(String) : undefined,
-    });
-    if (!knowledgeBase) throw new Error("Unknown knowledge base id");
-    return { knowledgeBase };
-  }
-
-  private async knowledgeRpcDelete(params: Record<string, unknown>) {
-    const result = await this.knowledge.delete(String(params.id ?? ""));
-    if (!result.removed) throw new Error("Unknown knowledge base id");
-    return result;
-  }
-
-  private async knowledgeRpcSaveEntry(params: Record<string, unknown>) {
-    const kind: KnowledgeEntryType = isKnowledgeEntryType(params.kind)
-      ? params.kind
-      : "note";
-    const hasSource =
-      Number(params.libraryID) > 0 && String(params.key ?? "").trim();
-    const entry = await this.knowledge.saveEntry({
-      id: params.id ? String(params.id) : undefined,
-      knowledgeBaseId: String(params.knowledgeBaseId ?? ""),
-      kind,
-      title: String(params.title ?? ""),
-      content: String(params.content ?? ""),
-      tags: Array.isArray(params.tags) ? params.tags.map(String) : undefined,
-      source: hasSource
-        ? { libraryID: Number(params.libraryID), key: String(params.key) }
-        : undefined,
-      clearSource: params.clearSource === true,
-    });
-    if (!entry) throw new Error("Unknown knowledge base or entry id");
-    return { entry };
-  }
-
-  private async knowledgeRpcDeleteEntry(params: Record<string, unknown>) {
-    const removed = await this.knowledge.deleteEntry(
-      String(params.knowledgeBaseId ?? ""),
-      String(params.id ?? ""),
-    );
-    if (!removed) throw new Error("Unknown knowledge entry id");
-    return { removed: true };
   }
 
   private backendFor(kind: AgentBackendKind): AgentBackend {
@@ -6642,6 +6700,7 @@ export class AgentHost {
       const prompt = [
         "Generate a concise title for this completed research task.",
         "Use the same language as the user's request. Summarize both the request and the delivered answer.",
+        this.languageInstruction(state.record, userText),
         "Return plain text only: one line, no Markdown, no quotation marks, at most 48 characters.",
         "",
         "USER REQUEST:",
@@ -6747,7 +6806,7 @@ export class AgentHost {
         : inherited;
     const lines: string[] = [];
     lines.push(
-      responseLanguageInstruction(configuredUiLanguage()),
+      this.languageInstruction(task, prompt),
       "Annotation batches persist across follow-ups, retries and Agent changes. Use actual host-returned colors; existing colors at PDF task binding are forbidden for new marks. Only host-verified Confucius Agent annotations may be edited or deleted across tasks/agents; ownership and batch never change. Ordinary work memory can be saved with context_save and may expire. Protected memories require per-item approval to change.",
       `Durable research task: ${task.id}.`,
       CONTEXT_USAGE_GUIDANCE,
@@ -6808,12 +6867,11 @@ export class AgentHost {
     lines.push(
       "Use these task sources unless the user updates them. Do not replace them with the current Zotero selection.",
     );
-    if (options.loadedSkills?.length) {
-      lines.push("", "Loaded preset procedure (follow it):");
-      for (const skill of options.loadedSkills) {
-        lines.push("", `## ${skill.slug} (${skill.name})`, skill.body);
-      }
-    }
+    const skillSection = formatSkillPromptSection({
+      skills: this.skills.list(),
+      loaded: options.loadedSkills ?? [],
+    });
+    if (skillSection) lines.push("", skillSection);
     if (options.workflowInstruction?.trim()) {
       // Keep host source and outcome requirements after quoted source material.
       lines.push("", options.workflowInstruction.trim());
@@ -6821,6 +6879,11 @@ export class AgentHost {
     if (options.handoffText) lines.push("", options.handoffText);
     if (task.templateId === "deep-read")
       lines.push("", reportStyleGuidance(task.reportStyle));
+    if (task.run?.skillInvocation)
+      lines.push(
+        "",
+        this.invokedSkillInstruction(task.run.skillInvocation.slug),
+      );
     const required = lines.join("\n");
     const suffix = `\n\nCurrent user request:\n${prompt}`;
     const limit = options.maxTokens ?? 24000;
@@ -7132,6 +7195,9 @@ export class AgentHost {
               )),
         ),
       );
+    const invoked = resuming
+      ? undefined
+      : parseSkillInvocation(trimmed, this.skills.list());
     const requiredArtifactKinds =
       state.record.mode === "agent" &&
       template &&
@@ -7189,6 +7255,23 @@ export class AgentHost {
       run.requiredArtifactKinds = requiredArtifactKinds;
     run.budget.modelRequestsObservable = state.record.backend === "native";
     state.record.run = run;
+    if (!resuming) {
+      run.skillInvocation = invoked?.slug
+        ? { slug: invoked.slug, rest: invoked.rest }
+        : undefined;
+      const previousLanguage =
+        state.record.responseLanguageContext ??
+        responseLanguageContext(
+          state.events.flatMap((event) =>
+            event.type === "turn_started" ? [event.payload.userText] : [],
+          ),
+        );
+      state.record.responseLanguageContext = responseLanguageContext(
+        [text],
+        previousLanguage,
+      );
+    }
+    if (run.skillInvocation) state.loadedSkills.add(run.skillInvocation.slug);
     if (!continuing || changedIntent) {
       run.reportRevision = undefined;
       run.reportRevisionBaseline = Object.fromEntries(
@@ -7323,7 +7406,9 @@ export class AgentHost {
           SKILL_TOOL_NAME,
         ]);
       const modelPrompt = buildTaskAttachmentUserText(
-        resuming ? run.request : trimmed,
+        run.skillInvocation
+          ? `${run.request}\n\n${formatInvokedUserText(run.skillInvocation.slug, run.skillInvocation.rest)}`
+          : run.request,
         preparedAttachments,
       );
       if (state.record.titleState === "pending") {
@@ -7424,8 +7509,8 @@ export class AgentHost {
             const input: BackendTurnInput = {
               task: state.record,
               turnId,
-              prompt,
-              modelPrompt: prompt,
+              prompt: continuation ? prompt : modelPrompt,
+              modelPrompt: continuation ? prompt : modelPrompt,
               mode: state.record.mode,
               capabilityProfile: state.record.capabilityProfile,
               workingDirectory: state.record.workingDirectory,
@@ -7946,16 +8031,12 @@ export class AgentHost {
     const state = this.requireSession(input.task.id);
     const abort = state.abort!;
     const run = state.record.run!;
-    const invoked = parseSkillInvocation(input.prompt, this.skills.list());
-    if (invoked.slug) state.loadedSkills.add(invoked.slug);
     const window = this.nativeWindowContext(state);
     const providers: ToolProvider[] = [
       this.literatureTools(state),
       this.subagentTools(state),
       this.historyTools(state, () => window.request()),
-      new SkillToolProvider(this.skills, (skill) =>
-        state.loadedSkills.add(skill.slug),
-      ),
+      this.skillProvider(state),
       this.reviewTools(),
       this.memoryProvider(),
       this.artifactProvider(state, input.turnId),
@@ -8005,6 +8086,8 @@ export class AgentHost {
       planMode: state.record.mode === "plan",
       skills: this.skills.list(),
       loadedSkills: this.loadedSkillRecords(state),
+      responseLanguageContext: state.record.responseLanguageContext,
+      invokedSkillSlug: run.skillInvocation?.slug,
       suppressSelection: input.promptContext?.suppressSelection === true,
       lockedContext: run.sources,
       templateId: run.templateId,
@@ -8261,8 +8344,9 @@ export class AgentHost {
           : state.record.contextWindow?.capacityTokens || 32768;
       const messages = reportRevisionMessages({
         request: run.request,
-        languageInstruction: responseLanguageInstruction(
-          configuredUiLanguage(),
+        languageInstruction: this.languageInstruction(
+          state.record,
+          run.request,
         ),
         style: state.record.reportStyle,
         artifact,
@@ -8439,12 +8523,17 @@ export class AgentHost {
     ) {
       const pending: Array<"title" | "memory"> = [];
       if (state.record.titleState === "pending") pending.push("title");
+      const researchTracking =
+        this.memoryConsent() !== "off" &&
+        !presetWorkflow(state.record.templateId);
+      if (researchTracking) pending.push("memory");
       if (pending.length)
         (state.record.postProcessing ??= []).push({
           turnId,
           runId: run.id,
           userText: run.request,
           assistantText: text,
+          researchTracking,
           pending,
         });
     }
@@ -8657,8 +8746,10 @@ export class AgentHost {
                 this.auxiliaryAdapter(state, job, step),
               );
             } else {
-              // Legacy per-turn extraction jobs are retired without model calls.
-              if (job.maintenanceTarget)
+              if (job.researchTracking)
+                await this.trackResearchMemory(state, job, current);
+              // Legacy jobs remain retired; only explicitly marked new jobs track research.
+              else if (job.maintenanceTarget)
                 await this.runContextMaintenance(state, job, current);
             }
             if (!current()) return state.record;
@@ -8678,6 +8769,98 @@ export class AgentHost {
       return state.record;
     } finally {
       this.postProcessingRuns.delete(taskId);
+    }
+  }
+
+  private async trackResearchMemory(
+    state: SessionState,
+    job: NonNullable<ResearchTaskRecord["postProcessing"]>[number],
+    current: () => boolean,
+  ): Promise<void> {
+    const enabled = () => current() && this.memoryConsent() !== "off";
+    if (!enabled() || job.runId !== state.record.run?.id) return;
+    const tracker = this.researchMemory();
+    const prepare = async (priorityIds: string[] = []) => {
+      const budget = state.record.maintenanceBudget;
+      if (
+        !budget ||
+        budget.turnId !== job.turnId ||
+        budget.attempts >= CONTEXT_POLICY.maintenanceAttempts ||
+        (job.researchAttempts ?? 0) >= 2
+      )
+        throw new Error(
+          "Research memory maintenance allowance exhausted; this step remains incomplete",
+        );
+      const snapshot = await tracker.snapshot(
+        job.userText,
+        state.record.id,
+        priorityIds,
+      );
+      const result = await this.auxiliaryAdapter(state, job, "memory").complete(
+        {
+          messages: researchMemoryMessages(
+            job.userText,
+            job.assistantText,
+            snapshot,
+          ),
+          maxAttempts: 1,
+          onAttempt: async () => {
+            if (
+              !enabled() ||
+              budget.attempts >= CONTEXT_POLICY.maintenanceAttempts
+            )
+              throw new Error("Research maintenance cancelled");
+            budget.attempts++;
+            job.researchAttempts = (job.researchAttempts ?? 0) + 1;
+            await this.persistNow();
+          },
+        },
+      );
+      if (!enabled()) return;
+      const updates = parseResearchUpdates(
+        result.text ?? "",
+        job.userText,
+        snapshot,
+      );
+      job.researchSnapshot = snapshot;
+      job.researchUpdates = updates;
+      await this.persistNow();
+    };
+    if (!job.researchUpdates) await prepare();
+    while (enabled()) {
+      const snapshot = job.researchSnapshot as ResearchSnapshot;
+      if (
+        !snapshot ||
+        !Array.isArray(snapshot.records) ||
+        !Number.isInteger(snapshot.revision)
+      )
+        throw new Error("Invalid saved research snapshot");
+      const updates = parseResearchUpdates(
+        JSON.stringify(job.researchUpdates),
+        job.userText,
+        snapshot,
+      );
+      try {
+        const changes = await tracker.apply(
+          `${state.record.id}:${job.turnId}`,
+          snapshot,
+          updates,
+          state.record.id,
+          enabled,
+        );
+        for (const change of changes)
+          this.emitSessionEvent(state, job.turnId, "memory_updated", {
+            ...change,
+            total: this.memory.stats().total,
+          });
+        return;
+      } catch (error) {
+        if (!(error instanceof ResearchMemoryConflict)) throw error;
+        if (!enabled()) return;
+        // Keep the prepared result until a valid replacement is durable. A
+        // failed or exhausted rebase must remain pending, never acknowledged.
+        await prepare(error.recordIds);
+      }
     }
   }
 
@@ -8983,6 +9166,7 @@ export class AgentHost {
           state.record.historyRetention?.tier !== "archived"
         )
           continue;
+        if (await this.researchMemory().ignoresArchive(row.id)) continue;
         (owner.record.postProcessing ??= []).push({
           turnId,
           runId: owner.record.run?.id,
@@ -9010,6 +9194,7 @@ export class AgentHost {
     const stillSource = async () =>
       current() &&
       this.sessions.get(target.record.id) === target &&
+      !(await this.researchMemory().ignoresArchive(target.record.id)) &&
       (await this.canRetireContext(target)) &&
       (target.record.updatedAt === job.maintenanceSourceUpdatedAt ||
         Boolean(
@@ -9140,15 +9325,23 @@ export class AgentHost {
           JSON.stringify(job.maintenanceOps),
           new Set(job.maintenanceAllowedIds ?? []),
         );
-        await this.memory.applyOrdinaryOps(
-          ops,
+        const applied = await this.researchMemory().maintainArchive(
           target.record.id,
-          job.maintenanceBatchId,
-          [
-            `task:${target.record.id}`,
-            ...historySourceRefs(target.record.lockedContext),
-          ],
+          async () => {
+            if (!(await stillSource()))
+              throw new Error("Source changed; maintenance cancelled");
+            await this.memory.applyOrdinaryOps(
+              ops,
+              target.record.id,
+              job.maintenanceBatchId!,
+              [
+                `task:${target.record.id}`,
+                ...historySourceRefs(target.record.lockedContext),
+              ],
+            );
+          },
         );
+        if (!applied) return;
         await this.memory.flush();
         job.maintenanceApplied = true;
         await this.persistNow();
@@ -9219,9 +9412,11 @@ export class AgentHost {
     });
     if (state.record.run) state.record.run.sources = state.record.lockedContext;
     state.record.draft = undefined;
+    state.record.responseLanguageContext = undefined;
     state.record.postProcessing = undefined;
     if (state.record.run) {
       state.record.run.request = "";
+      state.record.run.skillInvocation = undefined;
       state.record.run.recoveryNotes = undefined;
       state.record.run.modelRequest = undefined;
       state.record.run.providerRequest = undefined;
@@ -9259,6 +9454,28 @@ export class AgentHost {
     return records;
   }
 
+  private skillProvider(state: SessionState): SkillToolProvider {
+    return new SkillToolProvider(this.skills, (skill) => {
+      state.loadedSkills.add(skill.slug);
+      this.persistSoon();
+    });
+  }
+
+  private invokedSkillInstruction(slug: string): string {
+    return `The current user explicitly invoked /${slug}. Apply that skill to this request; it takes precedence over conflicting previously loaded procedures. Loaded skills do not change source scope or write permissions. Do not repeat earlier tasks merely because their skills remain loaded.`;
+  }
+
+  private languageInstruction(
+    task: Pick<ResearchTaskRecord, "responseLanguageContext">,
+    userText: string,
+  ): string {
+    return responseLanguageInstruction({
+      userText: task.responseLanguageContext?.request ?? userText,
+      conversationRequests: task.responseLanguageContext?.priorRequests,
+      fallbackLanguage: configuredUiLanguage(),
+    });
+  }
+
   private async memoryContextHints(query: string): Promise<string> {
     const pieces: string[] = [];
     let remaining = 750;
@@ -9266,7 +9483,12 @@ export class AgentHost {
       type: "preference",
       limit: 200,
     })) {
-      if (record.protection !== "user" || remaining < 40) continue;
+      if (
+        (record.protection !== "user" &&
+          !record.tags.includes(RESEARCH_MEMORY_TAG)) ||
+        remaining < 40
+      )
+        continue;
       const line = contextTextSlice(
         `- ${record.content} (m:${record.id})`,
         remaining,
@@ -9276,7 +9498,7 @@ export class AgentHost {
     }
     if (pieces.length)
       pieces.unshift(
-        "User-preserved preferences (current user instructions take precedence):",
+        "User-stated preferences (current user instructions take precedence):",
       );
     const hits = (
       await this.memory.search({ query, limit: CONTEXT_POLICY.searchResults })
@@ -9301,6 +9523,8 @@ export class AgentHost {
       references?: ResearchTaskRecord["references"];
       skills: ConfuciusSkill[];
       loadedSkills: ConfuciusSkill[];
+      responseLanguageContext?: ResearchTaskRecord["responseLanguageContext"];
+      invokedSkillSlug?: string;
       suppressSelection?: boolean;
       lockedContext: LockedContextSnapshot;
       templateId?: string;
@@ -9314,7 +9538,7 @@ export class AgentHost {
   ): Promise<string> {
     const parts = [
       "You are Confucius, a research agent inside Zotero.",
-      responseLanguageInstruction(configuredUiLanguage()),
+      this.languageInstruction(options, userText),
       `Durable task: ${options.taskId ?? "current"}.`,
       CONTEXT_USAGE_GUIDANCE,
       RESEARCH_INSTRUCTIONS,
@@ -9332,10 +9556,9 @@ export class AgentHost {
     ];
     if (options.includeRecallContext !== false) {
       parts.push(
-        "Visible research topics live in knowledge bases. Use knowledge_base_list and",
-        "knowledge_base_search before adding material, then organize papers,",
-        "notes, insights, attempted methods, discussion results, and Markdown mind maps",
-        "with knowledge_base_save_entry. Knowledge-base writes require user approval.",
+        "Knowledge is a unified index of live Zotero notes and research memory. Use knowledge_search and knowledge_read to find the user's existing projects, open questions, preferences and source notes before repeating research.",
+        "Save user documents with the Zotero note tools or as report artifacts for review. Never create separate knowledge-base copies or ask the user for a knowledge-base id. Continue updating the same note.",
+        "Research topics and explicitly stated preferences are maintained after completed conversations. Keep findings, unresolved/resolved questions, and next actions grounded; a one-off paper question is not a permanent research interest. User corrections and current instructions take precedence over memory.",
       );
     } else {
       parts.push(
@@ -9398,17 +9621,6 @@ export class AgentHost {
     }
     if (options.includeRecallContext !== false) {
       try {
-        const bases = await this.knowledge.list({ limit: 6 });
-        if (bases.length > 0) {
-          parts.push("Visible research knowledge bases:");
-          for (const base of bases) {
-            parts.push(
-              `- ${base.title} (${base.id}; ${base.entryCount} entries)${
-                base.description ? ` — ${base.description.slice(0, 160)}` : ""
-              }`,
-            );
-          }
-        }
         const memoryHints = await this.memoryContextHints(userText);
         if (memoryHints) parts.push(memoryHints);
       } catch (error) {
@@ -9428,6 +9640,8 @@ export class AgentHost {
     }
     if (options.templateId === "deep-read")
       parts.push(reportStyleGuidance(options.reportStyle));
+    if (options.invokedSkillSlug)
+      parts.push(this.invokedSkillInstruction(options.invokedSkillSlug));
     return parts.join("\n");
   }
 

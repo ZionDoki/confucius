@@ -1,102 +1,106 @@
-# 检索文献与委派研究
+# Literature research
 
-新任务从研究问题开始，不需要先绑定论文。切换 Zotero PDF 标签不会改变任务来源。
-通过 `@`、文章入口或确认候选添加材料后，来源会随任务保存。单篇材料提供论文阅读和
-证据审计预设，多篇或集合提供综合预设；选择预设会在当前会话准备草稿，点击发送才执行。
-研究运行中请等待完成或先停止，再切换预设；这不会另建任务。
+English · [简体中文](literature-research.zh-CN.md)
 
-## OpenAlex 设置
+[User guide](README.md)
 
-在工作区设置的「运行时」页，或 Zotero → Settings → Confucius 中配置 OpenAlex API Key。
-可以保存、替换、清除及测试连接；[获取 Key](https://openalex.org/settings/api)。不需要额外
-安装 SDK、CLI、浏览器扩展或本地服务。Key 只用于宿主的 OpenAlex 请求，不提供给模型。
+## Find your first papers
 
-元数据查询支持匿名使用，但匿名额度有限。缓存全文需要 Key，且可能消耗 OpenAlex
-额度；额度和限流以 [OpenAlex 当前说明](https://help.openalex.org/api/authentication/)为准。
-认证、额度和网络错误会显示在检索活动或文献卡片内。连接测试成功不意味着所有论文都有可下载全文。
+Try: “Find recent papers on graph neural networks for molecular prediction.
+Recommend the most relevant ones and explain your choices.”
 
-## 结果池与候选
+1. Ask in a new conversation; no attached paper is required.
+2. Open the **Literature** capsule above the composer.
+3. Read the abstracts and selection reasons; check or uncheck candidates.
+4. Choose **Review selection → Confirm and acquire fulltext** to save the
+   selected papers to your personal Zotero library and attempt PDF downloads.
 
-直接在对话中提出问题，例如「帮我找近五年用图神经网络预测分子性质的论文，推荐最相关
-的几篇」。Agent 执行 OpenAlex 检索后，输入框左上方出现一个文献胶囊；空白任务没有
-文献入口。多轮检索汇总到同一个胶囊，对话中只保留检索活动，不重复插入文献卡片。
-「候选文献：9 / 100」表示候选 9 篇、实际检索并去重 100 篇，不代表 API 总命中数。
+Matching library items and verified attachments are reused. Changing candidates
+requires a new confirmation. Removing a confirmed candidate unbinds the source;
+it does not delete the Zotero item or PDF.
 
-点击胶囊向上展开候选与结果池，不跳动对话位置；候选选择、筛选、摘要展开和列表滚动
-位置保留。点击「收起」、外部或按 Escape 关闭浮层，后台工作继续。右侧独立的
-「回到最新」按钮收起浮层并滚到对话末尾，与胶囊同时出现时不会重叠。候选与结果池标签
-支持左右方向键切换。切换任务时关闭当前浮层，显示所选任务自己的文献状态。
+## Understand the counts
 
-浮层内的「调整检索条件 · 联网」支持关键词、年份、开放获取及排序，另可继续加载已有
-查询。每次联网最多获取 100 条。任务内检索共用一个结果池，数量是实际获取并按
-OpenAlex ID／DOI 去重的数量；每次查询的 API 总命中数在检索条件内单独显示。无 DOI 的
-论文仍可进入结果池；相似标题不会自动合并。
+“9 / 100” means **9 selected candidates out of 100 fetched, deduplicated papers**.
+It is not the search service's total hit count.
 
-展开「筛选当前结果（不联网）」只在已获取的内容中查找，不发起联网搜索。每页可展开摘要及筛选理由。
-也可以让 Agent 根据研究问题筛选，再通过对话或勾选调整。结果池、已评估、候选、全文
-可用和已读取全文证据是不同状态；读过摘要不会被记录为读过全文。
+**Search criteria** makes a network request; **Filter current results** searches
+only the local pool. Each OpenAlex page fetches at most 100 records. Missing
+abstracts can be looked up from local Zotero, OpenAlex and Crossref metadata.
 
-缺少摘要时，Agent 读取论文详情会依次尝试本地 Zotero、OpenAlex 和
-[Crossref 元数据](https://www.crossref.org/documentation/retrieve-metadata/rest-api/)。
-也可展开该论文的摘要，点击「查找摘要」。补充结果标记来源；每篇查找最多等待约 12 秒，
-未成功的尝试缓存 5 分钟，避免反复联网等待。这不会创建 Zotero 条目、下载 PDF，
-也不能保证每篇都有摘要；未取得的内容会明确显示为缺失。
+## Continue without every PDF
 
-候选始终是草案。点击「确认候选」核对新增、移除与全文获取数量，再点击
-「确认并获取全文」。这一操作授权整个批次保存到个人文库、绑定来源和下载全文。
-已有匹配条目和有效 PDF 会优先复用；重复提交不会重复创建附件。后续候选更改需要再次
-确认。如果 Agent 和用户同时修改候选，过时版本会被拒绝，刷新后再决定。
+| Choice                        | What happens                                                                                 |
+| ----------------------------- | -------------------------------------------------------------------------------------------- |
+| Continue with abstracts       | Continue without importing or downloading this batch.                                        |
+| Continue with current results | Use available PDFs and abstracts; already authorized downloads may finish in the background. |
+| Confirm and acquire fulltext  | Import the selected papers, bind them to this task and download available PDFs.              |
 
-只想先筛选或调研时，可直接点击浮层底部的「仅用摘要继续」，暂不入库或获取全文。
-已经开始获取后，可随时点击「按当前结果继续」，接受已有全文与摘要，剩余下载留在后台；
-即使全文为零，或下载已失败、已停止，也可以继续。底部单独显示候选中全文和摘要的
-覆盖数；缺少全文不等于调研必须等待，报告仍需区分全文证据、摘要信息与仅有元数据的记录。
+These choices apply to the current candidate selection. Reports must distinguish
+full-text, abstract-only and metadata-only evidence. Obtaining a PDF does not mean
+the Agent has read it.
 
-这两个选择会唤醒正在等待文献的调研；任务已停止或完成时只记录选择，不另行启动。
-同一批候选的选择会保留，重复工具调用和重启后也不会重新要求补齐全文。候选变化后需
-重新决定。接受后不再突出显示获取按钮；尚缺全文且未在下载时，底部保留低调的
-「补充获取全文」文字链接，可重新核对并授权入库、绑定与下载。全文已齐时不显示该链接。
-调研获取的论文不会生成侧栏文章分组：空白会话的调研放在「文献调研」中，从文章创建的
-会话仍留在原文章下。研究材料和证据保留在文献胶囊及当前任务中。
+## Optional service keys
 
-移除候选并确认只解除由本次检索添加的任务来源。原有手动绑定的来源、Zotero 论文、
-PDF 和历史报告会保留。正在研究时，来源变更需要等待研究停止或进入文献确认等待点；
-等待确认的主 Agent 在这一安全边界接收新的来源快照，可以在同一请求继续研究；已经启动
-的子 Agent 保留委派时的来源版本。其余运行阶段不改变执行中的来源。
+In **Settings → Runtime**, you can configure:
 
-## 全文获取与浏览器补齐
+- **OpenAlex Key:** used for OpenAlex requests and required for its cached PDFs.
+  The plugin can send metadata requests without a key; the service may limit or
+  reject them.
+  [Get a key](https://openalex.org/settings/api).
+- **Tavily Key:** enables a search provider for supplemental full-text discovery.
+  Search and connection tests use the provider's quota. Without a usable key,
+  Confucius can try public HTML search.
 
-获取顺序是已有附件、开放获取 PDF 直链、OpenAlex 缓存 PDF，最后由浏览器补齐。
-开放获取标记本身不代表下载成功。Confucius 检查文件头、结束标记并实际解析 PDF，拒绝把登录页
-或错误 HTML 保存成全文；每次最多并发下载两份，每次网络请求有超时，失败条目可单独重试。
+Keys stay in host settings and are not sent to the model. Searches send the
+query, paper title or DOI to the selected service. A successful connection test
+does not guarantee that a paper is available.
 
-点击条目的「从浏览器获取」，在自己的浏览器中访问论文页面，使用已有的机构登录或
-其他访问权限下载 PDF，再拖到**该条目**下方的目标区。原文件保留，副本附加到此前
-确认的 Zotero 条目。单文件上限为 100 MiB。本版不监听下载目录，不读取浏览器 Cookie。
+## When a PDF is missing
 
-只收集文献不会自动开始研读。仅当此前研究明确等待这些全文、且尚未选择按当前结果继续时，补齐会唤醒原有等待。
-关闭工作区不会停止下载；停止下载后可以重试。重启会保留结果、候选和获取记录，中断
-的下载显示为可重试，不自动重新执行研究。
+Confucius tries existing attachments, source links, Zotero resolvers and repository
+metadata. On supported Zotero versions it can render public pages in an isolated
+browser. If full text is needed, the Agent can investigate observed links for
+failed papers in the unchanged, confirmed batch.
 
-## 研究子 Agent
+Downloads must parse as PDFs and match the first-page title plus DOI or author.
+Supplements, review files and mismatched papers are rejected. Versions may be
+published, accepted, preprint or unknown; a clear PDF version statement takes
+precedence over source metadata.
 
-主 Agent 可以按需委派检索、逐篇阅读或方法比较。最多同时执行三个，其余排队。
-子 Agent 继承委派时的引擎、模型和思考设置，有自己的上下文、归档和检查点；只能访问
-明确传入的材料及背景，不会复制整个主会话或读取其他子 Agent 的实时历史。
+For a paper that still fails:
 
-子 Agent 可以读取材料及检索 OpenAlex，不能继续委派、改变候选、入库、写批注、笔记
-或记忆。检索发现可进入父任务结果池，候选建议由主 Agent 应用。主 Agent 按需读取
-子 Agent 的结论、证据和限制；子 Agent 读取与主 Agent 直接读取分别记录。
+1. Choose **Get from browser**.
+2. Download it using your own access.
+3. Drop the PDF onto **that paper's drop target** in the literature list.
 
-时间线中的独立入口与聊天内容等宽，显示最近活动和工具调用次数；主任务等待期间也会显示已结束的子任务数量。
-点击可打开固定居中的共用气泡，以主会话相同的样式查看任务指令、进度、工具调用和 Markdown 回答。
-工具先显示摘要，再逐个展开完整输入与结果；模型活动使用相同的等待指示。原始事件和
-分页证据归档位于底部的折叠区，内部模型推理不在记录范围内。气泡持续更新，保留展开项和阅读位置；同时
-只查看一个子任务。点击同一入口收起、另一入口切换，也可在气泡内用「上一个／下一个」切换。
-切换时气泡不移动，并记住每个子任务的筛选、展开项和阅读位置。诊断导出也包含子任务的公开过程和证据。
-气泡提供停止和重试，没有独立聊天框；点击外部或 Escape 关闭，后台工作继续。子 Agent 不出现在
-任务侧栏。停止、删除或替换父请求会取消关联工作；重试和重启恢复使用原请求剩余额度。
-外部引擎没有报告的内部用量保持未知。
+The original file stays in place; a verified copy is attached to Zotero.
+The limit is **100 MiB per PDF**. Scans or unusual front matter may require manual
+verification in Zotero.
 
-结果池和子 Agent 过程存放在任务索引之外。分支保留所选回复对应的文献版本及已完成
-子 Agent 结果，后续修改互不影响，不复制仍在执行的工作。旧任务和历史报告继续兼容。
+## Limits and recovery
+
+- Account login and human CAPTCHA use your browser. Browser login cookies are
+  not imported into Confucius.
+- Local/private network download addresses are rejected. Some VPN or proxy DNS
+  setups therefore require a manual browser download.
+- Two papers download concurrently. Each acquisition has an approximately
+  three-minute deadline; individual failed papers can be retried.
+- Supplemental exploration has per-paper limits: two searches, three download
+  candidates and twelve steps per confirmed revision. Provider cooldowns are
+  shared, so repeatedly asking about other papers will not bypass them.
+- Cancel, candidate changes and choosing to continue with current results stop
+  new supplemental acquisition. Closing the workspace alone does not stop work.
+- Restart preserves saved results and marks interrupted downloads for retry;
+  it does not automatically restart research.
+
+## Research subagents
+
+The main Agent can delegate focused reading or comparison, with up to three
+running subagents. Open a subagent's activity entry to inspect its public progress,
+tools and conclusion. Closing the viewer does not stop it.
+
+Subagents receive assigned sources and background. They cannot approve writes,
+change candidates, modify notes or annotations, or delegate again. Stopping or
+deleting the parent request cancels associated work. Their findings remain
+distinct from evidence the main Agent read directly.

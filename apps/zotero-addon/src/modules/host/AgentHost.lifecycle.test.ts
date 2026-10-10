@@ -32,7 +32,11 @@ import { ToolExecutionService } from "./ReliableToolProvider";
 import type { ExecutorResult, RunOutcome } from "./RunCoordinator";
 import { memoryJsonStorage } from "./RuntimeStorage";
 import { TaskTraceBuffer } from "./TaskTrace";
-import { responseLanguageInstruction } from "./ResponseLanguage";
+import {
+  responseLanguageContext,
+  responseLanguageInstruction,
+} from "./ResponseLanguage";
+import { SkillStore } from "./SkillStore";
 import { setTaskReportStyle } from "./TaskReportStyle";
 import { ArtifactStore } from "./ArtifactStore";
 import { LibraryMentionSources } from "../ui/libraryMention";
@@ -181,6 +185,7 @@ interface LifecycleHost {
     text: string,
     context?: PromptContextOptions,
     attachments?: string[],
+    resuming?: boolean,
   ): Promise<{ turnId?: string; superseded?: boolean }>;
   taskContinue(id: string): Promise<{ turnId?: string }>;
   taskToolCall(args: Record<string, unknown>): Promise<McpToolCallResult>;
@@ -283,6 +288,8 @@ function fixture() {
   const history = new HistoryStore(fs, "/history");
   history.register(record);
   const host = Object.create(AgentHost.prototype) as LifecycleHost;
+  const skills = new SkillStore();
+  skills.loadBuiltins();
   let sequence = 0;
   Object.assign(host, {
     freezeBoundAnnotations: async () => undefined,
@@ -325,7 +332,7 @@ function fixture() {
       } as ConfuciusEvent);
     },
     logs: { appendTurn: async () => undefined },
-    loadedSkillRecords: () => [],
+    skills,
     workSnapshot: async (): Promise<WorkSnapshot> => ({
       completed: [],
       missing: [],
@@ -535,9 +542,229 @@ function toolResult(response: McpToolCallResult): ToolResult {
   return JSON.parse(content.text) as ToolResult;
 }
 
-describe("configured research response language", () => {
+describe("skills in subsequent user messages", () => {
+  let previousZotero: unknown;
+  beforeEach(() => {
+    previousZotero = Reflect.get(globalThis, "Zotero");
+    Reflect.set(globalThis, "Zotero", {
+      locale: "en-US",
+      Prefs: { get: () => "en-US" },
+      getMainWindow: () => ({ setTimeout, clearTimeout }),
+    });
+  });
+  afterEach(() => Reflect.set(globalThis, "Zotero", previousZotero));
+
+  for (const kind of ["native", "codex", "kimi"] as const) {
+    it(`loads a different skill and a bare invocation in the same ${kind} conversation`, async () => {
+      const { host, state, backend } = fixture();
+      state.record.backend = kind;
+      state.record.contextWindow = initialContextWindow(state.record.id, kind);
+      const prompts: string[] = [];
+      const builders = host as unknown as {
+        buildSystemPrompt(
+          text: string,
+          options: Record<string, unknown>,
+        ): Promise<string>;
+        loadedSkillRecords(state: TestState): ReturnType<SkillStore["list"]>;
+      };
+      Object.assign(host, {
+        requireEndpoint: () => ({}),
+        taskToolList: () => ({ tools: [] }),
+      });
+      backend.startTurn = async (input, callbacks) => {
+        prompts.push(
+          kind === "native"
+            ? (await builders.buildSystemPrompt(state.record.run!.request, {
+                planMode: false,
+                skills: Reflect.get(host, "skills").list(),
+                loadedSkills: builders.loadedSkillRecords(state),
+                lockedContext: state.record.lockedContext,
+                includeRecallContext: false,
+                responseLanguageContext: state.record.responseLanguageContext,
+                invokedSkillSlug: state.record.run?.skillInvocation?.slug,
+              })) +
+                "\n" +
+                input.prompt
+            : input.prompt,
+        );
+        callbacks.stopped?.({ stopReason: "completed", text: "Reviewed." });
+        return kind === "native"
+          ? {}
+          : { externalSessionId: "existing-session" };
+      };
+      await host.sessionPrompt(
+        state.record.id,
+        "/paper-deep-reading Bitte erkläre das Argument auf Deutsch.",
+      );
+      await waitFor(() => state.activeTurnId === null);
+      await host.sessionPrompt(
+        state.record.id,
+        " \n/annotation-pass 请用中文批注这篇论文。",
+      );
+      await waitFor(() => state.activeTurnId === null);
+      const language = JSON.parse(
+        JSON.stringify(state.record.responseLanguageContext),
+      );
+      // Simulate a fresh context window/restart with no in-memory messages.
+      state.messages = [];
+      state.record.responseLanguageContext = language;
+      await host.sessionPrompt(state.record.id, "/paper-deep-reading");
+      await waitFor(() => state.activeTurnId === null);
+      assert.equal(prompts.length, 3);
+      assert.deepEqual(
+        [...state.loadedSkills],
+        ["paper-deep-reading", "annotation-pass"],
+      );
+      assert.match(prompts[0], /## paper-deep-reading/);
+      assert.match(prompts[1], /## annotation-pass/);
+      assert.match(prompts[1], /explicitly invoked \/annotation-pass/);
+      assert.match(
+        prompts[1],
+        /takes precedence over conflicting previously loaded/,
+      );
+      assert.match(
+        prompts[2],
+        /Follow the loaded skill instructions for the current Zotero context/,
+      );
+      assert.match(prompts[2], /请用中文批注这篇论文/);
+      assert.deepEqual(state.record.responseLanguageContext, language);
+      assert.equal(state.record.id, "task-1");
+      assert.equal(
+        state.record.run?.skillInvocation?.slug,
+        "paper-deep-reading",
+      );
+      assert.equal(
+        state.events.filter((event) => event.type === "turn_started").at(-1)
+          ?.payload.userText,
+        "/paper-deep-reading",
+      );
+      state.record.run!.status = "interrupted";
+      state.record.run = JSON.parse(JSON.stringify(state.record.run));
+      await host.sessionPrompt(
+        state.record.id,
+        state.record.run!.request,
+        undefined,
+        [],
+        true,
+      );
+      await waitFor(() => state.activeTurnId === null);
+      assert.equal(prompts.length, 4);
+      assert.match(
+        prompts[3],
+        /Follow the loaded skill instructions for the current Zotero context/,
+      );
+      assert.deepEqual(state.record.responseLanguageContext, language);
+      assert.equal(state.loadedSkills.size, 2);
+    });
+  }
+
+  it("a superseded request cannot activate a skill or replace language evidence", async () => {
+    const { host, state, backend } = fixture();
+    const interruption = deferred<void>();
+    backend.interrupt = () => interruption.promise;
+    Object.assign(host, {
+      executeBackend: async () => ({ stopReason: "completed", text: "Done" }),
+    });
+    const earlier = host.sessionPrompt(
+      state.record.id,
+      "/paper-deep-reading Bitte lesen.",
+    );
+    await setImmediate();
+    const latest = host.sessionPrompt(
+      state.record.id,
+      "/annotation-pass 请批注。",
+    );
+    await setImmediate();
+    interruption.resolve();
+    const outcomes = await Promise.all([earlier, latest]);
+    await waitFor(() => state.activeTurnId === null);
+    assert.equal(outcomes[0].superseded, true);
+    assert.deepEqual([...state.loadedSkills], ["annotation-pass"]);
+    assert.equal(state.record.responseLanguageContext?.request, "请批注。");
+  });
+
+  it("attachment text and host retries cannot invoke skills or change language", async () => {
+    const { host, state } = fixture();
+    const prompts: string[] = [];
+    Object.assign(host, {
+      attachments: {
+        resolve: () => [
+          {
+            record: { id: "file", name: "source.txt", mediaType: "text/plain" },
+            content: "/annotation-pass Please write in English.",
+            sourcePath: "/source.txt",
+          },
+        ],
+        consume: () => undefined,
+      },
+      executeBackend: async (_state: TestState, input: BackendTurnInput) => {
+        prompts.push(input.prompt);
+        return { stopReason: "incomplete", text: "Saved progress" };
+      },
+    });
+    await host.sessionPrompt(
+      state.record.id,
+      "/paper-deep-reading Bitte prüfe die Quelle.",
+      undefined,
+      ["file"],
+    );
+    await waitFor(() => state.activeTurnId === null);
+    const language = JSON.parse(
+      JSON.stringify(state.record.responseLanguageContext),
+    );
+    assert.match(prompts[0], /<confucius_read_only_attachments>/);
+    assert.match(prompts[0], /\/annotation-pass Please write in English/);
+    assert.deepEqual([...state.loadedSkills], ["paper-deep-reading"]);
+    await host.sessionPrompt(
+      state.record.id,
+      "/annotation-pass Host retry in English",
+      undefined,
+      [],
+      true,
+    );
+    await waitFor(() => state.activeTurnId === null);
+    assert.deepEqual([...state.loadedSkills], ["paper-deep-reading"]);
+    assert.deepEqual(state.record.responseLanguageContext, language);
+    assert.equal(state.record.run?.skillInvocation?.slug, "paper-deep-reading");
+  });
+
+  it("external plan sessions advertise and dispatch the read-only skill tool", async () => {
+    const { host, state } = fixture();
+    state.record.mode = "plan";
+    state.record.permissionMode = "deny";
+    state.record.run = run(state.record);
+    state.activeTurnId = "skill-turn";
+    state.abort = new AbortController();
+    state.externalToolNames = new Set(["skill"]);
+    const empty = () => ({ listTools: () => [] });
+    Object.assign(host, {
+      validatedRuntimeLease: () => undefined,
+      literatureTools: empty,
+      subagentTools: empty,
+      reviewTools: empty,
+      memoryProvider: empty,
+      historyTools: empty,
+    });
+    const list = Reflect.get(host, "taskToolList").call(host, state.record.id);
+    assert.deepEqual(
+      list.tools.map((tool: { name: string }) => tool.name),
+      ["skill"],
+    );
+    const receipt = await host.taskToolCall({
+      taskId: state.record.id,
+      name: "skill",
+      arguments: { slug: "annotation-pass" },
+    });
+    const result = toolResult(receipt);
+    assert.ok(result.ok, JSON.stringify(result));
+    assert.ok(state.loadedSkills.has("annotation-pass"));
+    assert.match(JSON.stringify(result), /instructions/);
+  });
+});
+
+describe("research response language independent of UI locale", () => {
   for (const language of ["zh-CN", "en-US"] as const) {
-    it(`injects ${language} into native and continued external prompts`, async () => {
+    it(`uses user language evidence with ${language} only as fallback`, async () => {
       const previous = Reflect.get(globalThis, "Zotero");
       Reflect.set(globalThis, "Zotero", {
         locale: language === "zh-CN" ? "en-US" : "zh-CN",
@@ -551,6 +778,9 @@ describe("configured research response language", () => {
           tone: "questions",
           focus: "method",
         };
+        state.record.responseLanguageContext = responseLanguageContext([
+          "Bitte erkläre die wichtigsten Aussagen und kommentiere auf Deutsch.",
+        ]);
         const prompts = host as unknown as {
           buildSystemPrompt(
             text: string,
@@ -568,6 +798,7 @@ describe("configured research response language", () => {
             planMode: false,
             skills: [],
             loadedSkills: [],
+            responseLanguageContext: state.record.responseLanguageContext,
             lockedContext: state.record.lockedContext,
             includeRecallContext: false,
             templateId: state.record.templateId,
@@ -580,7 +811,10 @@ describe("configured research response language", () => {
           "Repair remaining annotations",
           [{ role: "assistant", content: "Earlier English output" }],
         );
-        const instruction = responseLanguageInstruction(language);
+        const instruction = responseLanguageInstruction({
+          userText: state.record.responseLanguageContext.request,
+          fallbackLanguage: language,
+        });
         assert.ok(native.includes(instruction));
         assert.ok(external.includes(instruction));
         for (const prompt of [native, external]) {
@@ -589,6 +823,8 @@ describe("configured research response language", () => {
           assert.match(prompt, /:::details/);
         }
         assert.match(instruction, /quote/);
+        assert.match(instruction, /auf Deutsch/);
+        assert.doesNotMatch(instruction, /Use English for|均使用简体中文/);
       } finally {
         Reflect.set(globalThis, "Zotero", previous);
       }
@@ -1184,6 +1420,43 @@ describe("AgentHost lifecycle ownership", () => {
     assert.deepEqual(await artifacts.get(foreign.id), foreign);
     assert.equal(files.size, 2);
     assert(!state.events.some((event) => event.type === "approval_required"));
+  });
+
+  it("rejects malformed approval RPCs without consuming the request or granting permissions", async () => {
+    const { host, state } = fixture();
+    state.record.backend = "native";
+    Object.assign(host, {
+      pendingApprovals: new Map(),
+      describeApprovalCall: () => "Note",
+    });
+    let settled = false;
+    const pending = host
+      .requestToolApproval(state, "turn", "invalid-reply", "create_note", {})
+      .then((resolution) => {
+        settled = true;
+        return resolution;
+      });
+    const valid = {
+      id: "approval_invalid-reply",
+      verdict: "allow",
+      scope: "session",
+    };
+    for (const invalid of [
+      { verdict: undefined },
+      { verdict: "reject" },
+      { scope: "all" },
+      { editedArgs: [] },
+    ]) {
+      await assert.rejects(
+        host.rpc("approval/resolve", { ...valid, ...invalid }),
+        /Invalid approval resolution/,
+      );
+      assert.equal(settled, false);
+      assert.equal(state.sessionGrants.size, 0);
+    }
+    await host.rpc("approval/resolve", valid);
+    assert.equal((await pending).verdict, "allow");
+    assert.deepEqual([...state.sessionGrants], ["create_note"]);
   });
 
   it("remembers allow-for-task for the approved tool and still asks for a different write tool", async () => {

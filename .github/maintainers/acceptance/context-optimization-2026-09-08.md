@@ -114,8 +114,8 @@ Codex 精确证据样例从约第 45,600 个字符处取回标记，保留正确
 短任务为 1 次主请求，连续两次换窗为 5 次，维护均为零。原始报告与测试包摘要一起
 保存，不以回放代替真实 Native 模型验收。
 
-用户文档见[上下文、换窗与归档](../../../docs/context-system.md)，实现约定见
-[上下文与记忆管理](../context-memory-refactor.md)。`Unreleased` 已说明精确证据、
+用户文档见[上下文、换窗与归档](../../../docs/context-system.zh-CN.md)，实现约定见
+[上下文与记忆管理](../context-memory-refactor.zh-CN.md)。`Unreleased` 已说明精确证据、
 来源覆盖及兼容迁移。流程图的[JSON 源文件](../diagrams/context-system.architecture.json)
 增加覆盖检查视图，说明 BM25、阶段发现和下一步工作集；确定性检查 9/9 通过、
 0 警告，浅色与深色静态图以及浏览器中的覆盖视图已查看。

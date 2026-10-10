@@ -41,3 +41,23 @@ export interface ApprovalResolution {
   scope: PermissionScope;
   editedArgs?: Record<string, unknown>;
 }
+
+/** RPC replies are untrusted data until the complete decision is validated. */
+export function isApprovalResolution(
+  value: unknown,
+): value is ApprovalResolution {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const resolution = value as Record<string, unknown>;
+  return (
+    typeof resolution.id === "string" &&
+    resolution.id.trim().length > 0 &&
+    (resolution.verdict === "allow" || resolution.verdict === "deny") &&
+    (resolution.scope === "once" ||
+      resolution.scope === "session" ||
+      resolution.scope === "always") &&
+    (resolution.editedArgs === undefined ||
+      (resolution.editedArgs !== null &&
+        typeof resolution.editedArgs === "object" &&
+        !Array.isArray(resolution.editedArgs)))
+  );
+}

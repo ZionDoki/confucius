@@ -99,6 +99,30 @@ async function selectOne(f) {
     "agent",
   );
 }
+test("malformed OpenAlex records preserve usable results and report invalid response envelopes", async () => {
+  const client = new OpenAlexClient(
+    () => "",
+    async () => ({
+      status: 200,
+      data: {
+        results: [
+          null,
+          raw(0, { authorships: [null, { author: { display_name: "A" } }] }),
+        ],
+      },
+    }),
+  );
+  const result = await client.search({ query: "paper" }, "query");
+  assert.equal(result.works.length, 1);
+  assert.deepEqual(result.works[0].authors, ["A"]);
+  const invalid = new OpenAlexClient(
+    () => "",
+    async () => ({ status: 200, data: null }),
+  );
+  await assert.rejects(invalid.search({ query: "paper" }, "query"), {
+    code: "network",
+  });
+});
 test(
   "slow searches do not block continuing, and late pages preserve newer user decisions",
   { timeout: 2000 },

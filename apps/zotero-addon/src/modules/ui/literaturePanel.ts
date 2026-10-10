@@ -706,6 +706,11 @@ export function createLiteraturePanel(
           `${text("abstract-source")} · ${work.abstractLookup.source}`,
         );
         source.className = "confucius-literature-meta";
+        source.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          Zotero.launchURL(work.acquisition.sourceUrl!);
+        });
         details.append(source);
       }
       if (!work.abstract) {
@@ -750,11 +755,18 @@ export function createLiteraturePanel(
       const status = node(
         doc,
         "div",
-        `${text(work.acquisition.status)}${work.acquisition.error ? ` · ${work.acquisition.error}` : ""}`,
+        `${work.acquisition.status === "available" && work.acquisition.version ? text(`version-${work.acquisition.version}`) : text(work.acquisition.status)}${work.acquisition.error ? ` · ${text(`error-${work.acquisition.error}`)}` : ""}`,
       );
       status.className = "confucius-literature-meta";
       row.append(label, info, reason, details);
       if (work.acquisition.status !== "missing") row.append(status);
+      if (work.acquisition.sourceUrl) {
+        const source = node(doc, "a", text("fulltext-source"));
+        source.href = work.acquisition.sourceUrl;
+        source.title = work.acquisition.sourceUrl;
+        source.className = "confucius-literature-meta";
+        row.append(source);
+      }
       if (work.acquisition.message)
         row.append(node(doc, "p", work.acquisition.message));
       if (
@@ -1015,19 +1027,41 @@ export function createLiteraturePanel(
   };
 }
 export function createOpenAlexSettings(doc: Document, rpc: Rpc) {
+  const container = node(doc, "div");
+  container.append(
+    createLiteratureKeySettings(doc, rpc, "openalex"),
+    createLiteratureKeySettings(doc, rpc, "tavily"),
+  );
+  return container;
+}
+function createLiteratureKeySettings(
+  doc: Document,
+  rpc: Rpc,
+  provider: "openalex" | "tavily",
+) {
+  const name = provider === "tavily" ? "Tavily" : "OpenAlex";
   const section = node(doc, "section");
   section.className = "confucius-literature-settings";
-  section.append(node(doc, "h3", "OpenAlex"), node(doc, "p", text("key-help")));
+  section.append(
+    node(doc, "h3", name),
+    node(
+      doc,
+      "p",
+      text(provider === "tavily" ? "tavily-key-help" : "key-help"),
+    ),
+  );
   const input = node(doc, "input");
   input.type = "password";
   input.autocomplete = "new-password";
-  input.placeholder = "OpenAlex API Key";
-  input.setAttribute("aria-label", "OpenAlex API Key");
+  input.placeholder = `${name} API Key`;
+  input.setAttribute("aria-label", `${name} API Key`);
   const status = node(doc, "div");
   status.setAttribute("role", "status");
   const run = async (method: string, params?: Record<string, unknown>) => {
     try {
-      const result = (await rpc(method, params)) as { hasKey: boolean };
+      const result = (await rpc(method, { ...params, provider })) as {
+        hasKey: boolean;
+      };
       input.value = "";
       status.textContent = result.hasKey
         ? text("configured")
@@ -1056,8 +1090,15 @@ export function createOpenAlexSettings(doc: Document, rpc: Rpc) {
     });
     section.append(button);
   }
-  const link = node(doc, "a", text("get-key"));
-  link.href = "https://openalex.org/settings/api";
+  const link = node(
+    doc,
+    "a",
+    text(provider === "tavily" ? "get-tavily-key" : "get-key"),
+  );
+  link.href =
+    provider === "tavily"
+      ? "https://app.tavily.com/"
+      : "https://openalex.org/settings/api";
   link.addEventListener("click", (e) => {
     e.preventDefault();
     Zotero.launchURL(link.href);

@@ -10,10 +10,21 @@ import type { AgentBackend } from "./AgentBackend";
 import { SUBAGENT_INSTRUCTIONS } from "@confucius/protocol";
 import type { SubagentRun } from "./SubagentManager";
 import { createAbortController } from "../../utils/webPlatform";
+import { responseLanguageInstruction } from "./ResponseLanguage";
+
+function childLanguageInstruction(run: SubagentRun): string {
+  return responseLanguageInstruction({
+    userText:
+      run.task.responseLanguageContext?.request ?? run.document.record.goal,
+    conversationRequests: run.task.responseLanguageContext?.priorRequests,
+    fallbackLanguage: "en-US",
+  });
+}
 
 export async function executeNativeSubagent(
   run: SubagentRun,
   model: ModelAdapter,
+  languageInstruction = childLanguageInstruction(run),
 ) {
   let next = 0;
   const ids = () => `${run.task.run!.id}_${run.task.run!.generation}_${++next}`;
@@ -71,7 +82,7 @@ export async function executeNativeSubagent(
     events,
     ids,
     now: Date.now,
-    systemPrompt: SUBAGENT_INSTRUCTIONS,
+    systemPrompt: `${SUBAGENT_INSTRUCTIONS}\n\n${languageInstruction}`,
     permissions: new PermissionGate({
       ids,
       now: Date.now,
@@ -109,6 +120,7 @@ export async function executeNativeSubagent(
 export async function executeExternalSubagent(
   run: SubagentRun,
   backend: AgentBackend,
+  languageInstruction = childLanguageInstruction(run),
 ): Promise<{ text: string; error?: string }> {
   let finish!: (value: { text: string; error?: string }) => void;
   const result = new Promise<{ text: string; error?: string }>((resolve) => {
@@ -134,7 +146,7 @@ export async function executeExternalSubagent(
           prompt: run.prompt,
           mode: "plan",
           capabilityProfile: "zotero_only",
-          workflowInstruction: SUBAGENT_INSTRUCTIONS,
+          workflowInstruction: `${SUBAGENT_INSTRUCTIONS}\n\n${languageInstruction}`,
           includeArtifactGuidance: false,
         },
         {

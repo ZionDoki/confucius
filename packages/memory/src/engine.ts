@@ -148,6 +148,15 @@ export class MemoryEngine {
     return this.serialize(() => this.store.recover(id, true));
   }
 
+  /** Rebuild the source catalogue in the same queue as memory writes. */
+  async refresh(): Promise<MemoryRecord[]> {
+    await this.ensureLoaded();
+    return this.serialize(async () => {
+      await this.store.refresh();
+      return this.store.all();
+    });
+  }
+
   retentionStats() {
     const records = this.store
       .all()
@@ -170,7 +179,13 @@ export class MemoryEngine {
     let tokens = records.reduce((sum, record) => sum + memoryTokens(record), 0);
     const candidates = records
       .filter(
-        (record) => record.id !== incoming?.id && record.protection === "none",
+        (record) =>
+          record.id !== incoming?.id &&
+          record.protection === "none" &&
+          !(
+            record.tags.includes("confucius:research") &&
+            record.tags.includes("research:status:active")
+          ),
       )
       .sort(
         (a, b) =>
@@ -228,6 +243,7 @@ export class MemoryEngine {
   async maintain(): Promise<AppliedChange[]> {
     await this.ensureLoaded();
     return this.serialize(async () => {
+      await this.store.refresh();
       const victims = this.victims(
         this.store.all().filter((record) => !isKnowledgeRecord(record)),
       );
@@ -327,6 +343,9 @@ export class MemoryEngine {
       history: [],
     };
     const saved = await this.serialize(async () => {
+      // Files can be edited outside the plugin. Refresh inside the write queue
+      // before choosing replacements or retention victims, including protection.
+      await this.store.refresh();
       const existing = input.id
         ? await this.store.recover(input.id)
         : undefined;
@@ -355,6 +374,7 @@ export class MemoryEngine {
   ): Promise<MemoryRecord | null> {
     await this.ensureLoaded();
     return this.serialize(async () => {
+      await this.store.refresh();
       validate?.();
       const existing = this.store.get(input.id);
       if (
@@ -403,6 +423,7 @@ export class MemoryEngine {
   ): Promise<boolean> {
     await this.ensureLoaded();
     return this.serialize(async () => {
+      await this.store.refresh();
       validate?.();
       const record = this.store.get(id);
       if (
@@ -429,6 +450,7 @@ export class MemoryEngine {
     await this.ensureLoaded();
     const changes: AppliedChange[] = [];
     await this.serialize(async () => {
+      await this.store.refresh();
       for (const op of ops) {
         if (op.op === "add") {
           const duplicates = this.store
@@ -536,7 +558,12 @@ export class MemoryEngine {
               !isKnowledgeRecord(record) &&
               record.content.trim() === op.content.trim(),
           );
-        if (duplicate?.protection !== "none" && duplicate) continue;
+        if (
+          duplicate &&
+          (duplicate.protection !== "none" ||
+            duplicate.tags.includes("confucius:research"))
+        )
+          continue;
         if (duplicate) {
           await this.update(
             {
@@ -568,7 +595,8 @@ export class MemoryEngine {
         if (
           !record ||
           record.protection !== "none" ||
-          isKnowledgeRecord(record)
+          isKnowledgeRecord(record) ||
+          record.tags.includes("confucius:research")
         )
           continue;
         if (op.op === "delete") {

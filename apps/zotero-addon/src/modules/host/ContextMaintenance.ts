@@ -56,7 +56,11 @@ const instruction = [
 export function distillationMemories(related: MemoryRecord[]): MemoryRecord[] {
   const selected: MemoryRecord[] = [];
   for (const memory of related) {
-    if (memory.protection !== "none") continue;
+    if (
+      memory.protection !== "none" ||
+      memory.tags.includes("confucius:research")
+    )
+      continue;
     const candidate = [...selected, memory].map(({ id, content }) => ({
       id,
       content,

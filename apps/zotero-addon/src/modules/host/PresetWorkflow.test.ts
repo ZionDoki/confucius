@@ -135,6 +135,7 @@ for (const id of ["deep-read", "evidence-audit", "synthesis"] as const) {
   it(`${id} exposes evidence and deliverable tools together without a phase switch`, () => {
     const preset = presetWorkflow(id)!;
     const names = presetToolNames(preset);
+    assert(names.has("skill"));
     assert(names.has("get_pages"));
     assert(names.has("artifact_upsert"));
     assert(names.has("artifact_read"));

@@ -225,6 +225,27 @@ async function fixture(backend = "native") {
   };
 }
 
+for (const backend of ["native", "codex", "kimi"]) {
+  test(`${backend} report revision uses current user language while preserving source quotes`, async () => {
+    const f = await fixture(backend);
+    f.state.record.responseLanguageContext = {
+      request: "Bitte korrigiere den Bericht auf Deutsch.",
+      priorRequests: ["Earlier English request"],
+    };
+    await f.revise();
+    assert.equal(f.calls.length, 1);
+    const prompt = JSON.stringify(f.calls[0]);
+    assert.match(prompt, /Bitte korrigiere den Bericht auf Deutsch/);
+    assert.match(prompt, /explicit output-language request first/);
+    assert.match(
+      prompt,
+      /never translate a quote used to locate an annotation/,
+    );
+    assert.match(prompt, /50 of 100/);
+    assert.doesNotMatch(prompt, /Use English for/);
+  });
+}
+
 test("all 27 combinations enter independent context with original evidence and no author history", async () => {
   const f = await fixture();
   for (const layout of REPORT_STYLE_OPTIONS.layout)

@@ -1,49 +1,35 @@
-import type { LiteratureWork, LockedItemContext } from "@confucius/protocol";
+import type {
+  LiteratureWork,
+  LockedItemContext,
+  LiteratureAcquisitionResult,
+  LiteratureAcquisitionStage,
+  LiteratureAttempt,
+  LiteratureVersion,
+} from "@confucius/protocol";
 import type { LiteratureAcquirer } from "./LiteratureService";
-import {
-  LiteratureError,
-  normalizeDoi,
-  openAlexFailure,
-  publicUrl,
-} from "./OpenAlexClient";
+import { LiteratureError, normalizeDoi, publicUrl } from "./OpenAlexClient";
 import { ResourceLocks, runtimeIoPath, runtimePath } from "./RuntimeStorage";
+import { MAX_PDF_BYTES, validPdf, verifyPdf } from "./LiteraturePdf";
+import { fulltextUrl } from "./LiteratureNetwork";
+import {
+  boundedLiterature,
+  htmlDocument,
+  nativeResolvers,
+  resolverCandidates,
+  translatedCandidates,
+  ancillaryFile,
+  pageRefresh,
+  type FulltextCandidate,
+} from "./LiteratureResolvers";
+import { createAbortController } from "../../utils/webPlatform";
+import {
+  LiteratureBrowser,
+  browserFulltextAvailable,
+  type FulltextTransfer,
+} from "./LiteratureBrowser";
+import { repositoryCandidates } from "./LiteratureRepositories";
+export { validPdf } from "./LiteraturePdf";
 
-export function validPdf(bytes: Uint8Array): boolean {
-  if (bytes.length < 32 || bytes.length > 100 * 1024 * 1024) return false;
-  const text = (part: Uint8Array) =>
-    Array.from(part, (b) => String.fromCharCode(b)).join("");
-  return (
-    /%PDF-1\.[0-9]|%PDF-2\.[0-9]/.test(text(bytes.slice(0, 1024))) &&
-    /%%EOF/.test(text(bytes.slice(-4096)))
-  );
-}
-/** Parse before importing: a forged PDF header or an HTML login page is not fulltext. */
-async function readablePdf(bytes: Uint8Array): Promise<boolean> {
-  if (!validPdf(bytes)) return false;
-  const worker = Zotero.PDFWorker as {
-    _enqueue<T>(work: () => Promise<T>, priority?: boolean): Promise<T>;
-    _query<T>(
-      action: string,
-      data: Record<string, unknown>,
-      transfer: ArrayBuffer[],
-    ): Promise<T>;
-  };
-  const buffer = Uint8Array.from(bytes).buffer;
-  try {
-    const result = await worker._enqueue(
-      () =>
-        worker._query<{ totalPages?: number }>(
-          "pdf.getFulltext",
-          { buf: buffer, maxPages: 1 },
-          [buffer],
-        ),
-      false,
-    );
-    return Number(result.totalPages) > 0;
-  } catch {
-    return false;
-  }
-}
 const itemRef = (item: Zotero.Item): LockedItemContext => ({
   id: `item:${item.libraryID}:${item.key}`,
   libraryID: item.libraryID,
@@ -132,184 +118,480 @@ export class ZoteroLiteratureAcquirer implements LiteratureAcquirer {
       );
     return item;
   }
-  private async existing(work: LiteratureWork): Promise<string | undefined> {
-    const parent = this.parent(work);
-    for (const id of parent.getAttachments()) {
+  private async existing(
+    work: LiteratureWork,
+    signal?: AbortSignal,
+  ): Promise<LiteratureAcquisitionResult | undefined> {
+    for (const id of this.parent(work).getAttachments()) {
+      if (signal?.aborted) throw new LiteratureError("cancelled", "Cancelled");
       const attachment = await Zotero.Items.getAsync(id);
       if (!attachment || attachment.deleted || !attachment.isPDFAttachment())
         continue;
       const path = await attachment.getFilePathAsync();
-      if (path && (await IOUtils.exists(runtimeIoPath(path)))) {
-        const size = (await IOUtils.stat(runtimeIoPath(path))).size ?? Infinity;
-        if (
-          size <= 100 * 1024 * 1024 &&
-          (await readablePdf(await IOUtils.read(runtimeIoPath(path))))
-        )
-          return attachment.key;
+      if (!path || !(await IOUtils.exists(runtimeIoPath(path)))) continue;
+      try {
+        const bytes = await this.readBytes(path);
+        const version =
+          work.acquisition.attachmentKey === attachment.key
+            ? (work.acquisition.version ?? "unknown")
+            : "unknown";
+        const { detectedVersion, ...verification } = await boundedLiterature(
+          verifyPdf(bytes, work, version),
+          signal ?? createAbortController().signal,
+        );
+        return {
+          attachmentKey: attachment.key,
+          stage: "existing",
+          version: detectedVersion ?? version,
+          sourceUrl: publicUrl(attachment.getField("url")),
+          verification,
+        };
+      } catch {
+        /* Preserve existing files, but never count a mismatched attachment as fulltext. */
       }
     }
     return undefined;
   }
+  private async readBytes(path: string) {
+    if (
+      ((await IOUtils.stat(runtimeIoPath(path))).size ?? Infinity) >
+      MAX_PDF_BYTES
+    )
+      throw new LiteratureError("invalid_pdf", "PDF exceeds 100 MiB");
+    return IOUtils.read(runtimeIoPath(path));
+  }
   async acquire(
     work: LiteratureWork,
     signal: AbortSignal,
-    stage: (stage: "existing" | "open_access" | "cache") => Promise<void>,
-  ) {
-    await stage("existing");
-    const existing = await this.existing(work);
-    if (existing)
-      return { attachmentKey: existing, stage: "existing" as const };
-    const urls: Array<{ url: string; stage: "open_access" | "cache" }> =
-      work.pdfUrls.map((url) => ({ url, stage: "open_access" as const }));
-    if (work.cachedPdfUrl)
-      urls.push({ url: work.cachedPdfUrl, stage: "cache" });
-    let failure: LiteratureError = new LiteratureError(
-      "unavailable",
-      "没有可下载的全文链接，请从浏览器补齐 / No downloadable fulltext; use the browser",
-    );
-    for (const location of urls) {
-      if (signal.aborted) throw new LiteratureError("cancelled", "Cancelled");
-      const isCache = (location.stage as string) === "cache";
-      await stage(isCache ? "cache" : "open_access");
-      try {
-        const bytes = await this.download(location.url, isCache, signal);
-        if (signal.aborted) throw new LiteratureError("cancelled", "Cancelled");
-        const dir = runtimePath("literature-downloads");
-        await IOUtils.makeDirectory(runtimeIoPath(dir), {
-          ignoreExisting: true,
-          createAncestors: true,
-        });
-        const path = PathUtils.join(
-          dir,
-          `${work.id}_${Date.now()}_${Math.random().toString(36).slice(2)}.pdf`,
+    stage: (stage: LiteratureAcquisitionStage) => Promise<void>,
+    candidate?: FulltextCandidate,
+    transfer?: FulltextTransfer,
+  ): Promise<LiteratureAcquisitionResult> {
+    const controller = createAbortController();
+    const abort = () => controller.abort();
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+    const timer = setTimeout(abort, 180_000);
+    const browser = transfer?.browser ?? new LiteratureBrowser();
+    try {
+      return await this.acquireWithinDeadline(
+        work,
+        controller.signal,
+        stage,
+        candidate,
+        browser,
+        transfer?.prepared,
+      );
+    } catch (error) {
+      if (!signal.aborted && controller.signal.aborted)
+        throw new LiteratureError(
+          "network",
+          "全文获取达到时限，可重试或补充检索 / Fulltext deadline reached; retry or search for another source",
+          error instanceof LiteratureError ? error.attempts : undefined,
         );
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      if (!transfer) browser.dispose();
+    }
+  }
+  private async acquireWithinDeadline(
+    work: LiteratureWork,
+    signal: AbortSignal,
+    stage: (stage: LiteratureAcquisitionStage) => Promise<void>,
+    onlyCandidate?: FulltextCandidate,
+    browser = new LiteratureBrowser(),
+    prepared?: FulltextTransfer["prepared"],
+  ): Promise<LiteratureAcquisitionResult> {
+    if (signal.aborted) throw new LiteratureError("cancelled", "Cancelled");
+    await stage("existing");
+    const existing = await this.existing(work, signal);
+    if (existing) return existing;
+    const attempts: LiteratureAttempt[] = [];
+    const tried = new Set<string>();
+    const browserQueue = new Map<string, FulltextCandidate>();
+    // Retry is explicit; within a run, including redirects and translator results,
+    // one failed URL is never fetched again.
+    let failure = new LiteratureError(
+      "unavailable",
+      "未发现可验证的全文，可补充检索或从浏览器获取 / No verified fulltext found; search for another source or use the browser",
+    );
+    const tryCandidate = async (
+      candidate: FulltextCandidate,
+      current: LiteratureAcquisitionStage,
+      useBrowser = false,
+    ): Promise<LiteratureAcquisitionResult | undefined> => {
+      if (signal.aborted)
+        throw new LiteratureError("cancelled", "Cancelled", attempts);
+      let url: string | undefined;
+      try {
+        url = fulltextUrl(candidate.url);
+        if (ancillaryFile(url))
+          throw new LiteratureError(
+            "identity_mismatch",
+            "附件是补充材料或审稿历史 / Supplement or peer-review attachment",
+          );
+        const attemptKey = useBrowser ? `browser:${url}` : url;
+        if (tried.has(attemptKey) || attempts.length >= 45) return undefined;
+        if (useBrowser) tried.add(attemptKey);
+        await stage(current);
+        const attempt: LiteratureAttempt = {
+          stage: current,
+          method: useBrowser ? "browser" : "http",
+          url,
+          at: Date.now(),
+        };
+        attempts.push(attempt);
         try {
-          await IOUtils.write(runtimeIoPath(path), bytes);
-          if (signal.aborted)
-            throw new LiteratureError("cancelled", "Cancelled");
-          const attachmentKey = await this.attach(work, path);
-          return {
-            attachmentKey,
-            stage: isCache ? ("cache" as const) : ("open_access" as const),
-          };
-        } finally {
-          await IOUtils.remove(runtimeIoPath(path), { ignoreAbsent: true });
+          let cacheKey: string | undefined;
+          if (current === "cache") {
+            const parsed = new URL(url);
+            if (
+              parsed.origin !== "https://content.openalex.org" ||
+              !work.openAlexIds.some(
+                (id) => parsed.pathname === `/works/${id}.pdf`,
+              )
+            )
+              throw new LiteratureError(
+                "unsafe_url",
+                "Invalid OpenAlex content URL",
+              );
+            cacheKey = this.key();
+            if (!cacheKey)
+              throw new LiteratureError(
+                "authentication",
+                "OpenAlex 缓存全文需要 Key / OpenAlex cached fulltext requires a key",
+              );
+          }
+          const response =
+            prepared && candidate === onlyCandidate
+              ? prepared
+              : useBrowser
+                ? await browser.read(url, signal)
+                : await browser.request(url, signal, {
+                    cacheKey,
+                    maxHtmlBytes: 5 * 1024 * 1024,
+                    beforeRequest: (next) => {
+                      if (tried.has(next))
+                        throw new LiteratureError(
+                          "unavailable",
+                          "This fulltext URL was already tried",
+                        );
+                      tried.add(next);
+                    },
+                  });
+          if (response === prepared) {
+            prepared = undefined;
+            tried.add(url);
+          }
+          if (validPdf(response.bytes)) {
+            const result = await this.importBytes(
+              work,
+              response.bytes,
+              signal,
+              {
+                version: candidate.version,
+                sourceUrl: current === "cache" ? url : response.url,
+                discoveredFrom: publicUrl(candidate.sourceUrl),
+                stage: current,
+              },
+            );
+            return { ...result, attempts };
+          }
+          if (/html/i.test(response.contentType) || candidate.kind === "page") {
+            if (response.bytes.length > 5 * 1024 * 1024)
+              throw new LiteratureError(
+                "unavailable",
+                "Fulltext page exceeds 5 MiB",
+              );
+            const doc = await htmlDocument(response.bytes, response.url);
+            const refresh = pageRefresh(doc, response.url);
+            if (refresh) {
+              const redirected = await tryCandidate(
+                { ...candidate, url: refresh, sourceUrl: response.url },
+                current,
+                useBrowser,
+              );
+              if (redirected) return redirected;
+            }
+            const candidates = await translatedCandidates(
+              doc,
+              response.url,
+              signal,
+            );
+            for (const next of candidates) {
+              const result = await tryCandidate(
+                // A page's version label does not identify every linked file.
+                {
+                  ...next,
+                  version:
+                    work.locations?.find(
+                      (location) => location.pdfUrl === next.url,
+                    )?.version ?? next.version,
+                },
+                current,
+                useBrowser,
+              );
+              if (result) return result;
+            }
+            throw new LiteratureError(
+              doc.querySelector('input[type="password"]')
+                ? "authentication"
+                : "unavailable",
+              "页面未提供可验证的 PDF，可能需要登录 / No verified PDF on this page; sign-in may be needed",
+            );
+          }
+          throw new LiteratureError(
+            "invalid_pdf",
+            "链接没有返回有效 PDF / Link did not return a valid PDF",
+          );
+        } catch (error) {
+          attempt.error =
+            error instanceof LiteratureError ? error.code : "network";
+          if (
+            !useBrowser &&
+            current !== "cache" &&
+            [
+              "network",
+              "authentication",
+              "unavailable",
+              "invalid_pdf",
+            ].includes(attempt.error)
+          )
+            browserQueue.set(url, candidate);
+          throw error;
         }
       } catch (error) {
-        failure =
+        if (signal.aborted)
+          throw new LiteratureError("cancelled", "Cancelled", attempts);
+        const next =
           error instanceof LiteratureError
             ? error
             : new LiteratureError(
                 "network",
-                "全文下载失败 / Fulltext download failed",
+                "全文获取失败 / Fulltext acquisition failed",
               );
+        if (!url)
+          attempts.push({ stage: current, error: next.code, at: Date.now() });
+        // Preserve actionable errors instead of replacing e.g. rate limits with a later 404.
+        const rank = (code: string) =>
+          [
+            "unavailable",
+            "network",
+            "invalid_pdf",
+            "unverified_pdf",
+            "identity_mismatch",
+            "unsafe_url",
+            "authentication",
+            "quota",
+            "rate_limit",
+          ].indexOf(code);
+        if (rank(next.code) >= rank(failure.code)) failure = next;
+        return undefined;
       }
-    }
-    throw failure;
-  }
-  private async download(raw: string, cache: boolean, signal: AbortSignal) {
-    const safe = publicUrl(raw);
-    if (!safe) throw new LiteratureError("unavailable", "Invalid PDF URL");
-    const url = new URL(safe);
-    if (cache) {
-      if (url.hostname !== "content.openalex.org" || url.protocol !== "https:")
-        throw new LiteratureError(
-          "unavailable",
-          "Invalid OpenAlex content URL",
-        );
-      if (!this.key())
-        throw new LiteratureError(
-          "authentication",
-          "OpenAlex 缓存全文需要 Key / OpenAlex cached fulltext requires a key",
-        );
-      url.searchParams.set("api_key", this.key());
-    }
-    let xhr: XMLHttpRequest | undefined;
-    const cancel = () => xhr?.abort();
-    signal.addEventListener("abort", cancel, { once: true });
-    try {
-      const result = await Zotero.HTTP.request("GET", url.href, {
-        responseType: "arraybuffer",
-        timeout: 60_000,
-        successCodes: false,
-        requestObserver: (request: XMLHttpRequest) => {
-          xhr = request;
-          request.onprogress = (e) => {
-            if ((e as ProgressEvent).loaded > 100 * 1024 * 1024)
-              request.abort();
-          };
-          if (signal.aborted) cancel();
-        },
-      });
-      if (cache) {
-        const failure = openAlexFailure(result.status);
-        if (failure) throw failure;
-      }
-      if (result.status < 200 || result.status >= 300)
-        throw new LiteratureError(
-          result.status === 401 || result.status === 403
-            ? "authentication"
-            : "network",
-          `全文 HTTP ${result.status}`,
-        );
-      const bytes = new Uint8Array(result.response as ArrayBuffer);
-      if (!validPdf(bytes))
-        throw new LiteratureError(
-          "invalid_pdf",
-          "链接返回的不是有效 PDF，可能需要浏览器登录 / Response is not a valid PDF; browser sign-in may be needed",
-        );
-      return bytes;
-    } catch (error) {
-      if (error instanceof LiteratureError) throw error;
-      throw new LiteratureError(
-        signal.aborted ? "cancelled" : "network",
-        "全文下载中断或网络错误 / Fulltext download interrupted or network failure",
+    };
+    const tryBrowsers = async (current: LiteratureAcquisitionStage) => {
+      if (!browserFulltextAvailable()) return undefined;
+      // Spend the bounded browser budget on actual files and repositories before
+      // DOI redirects or index records, which can otherwise starve later sources.
+      const priority = (candidate: FulltextCandidate) => {
+        const url = new URL(candidate.url);
+        if (url.hostname === "pmc.ncbi.nlm.nih.gov") return 50;
+        if (candidate.kind === "pdf") return 40;
+        if (
+          work.locations?.some(
+            (location) =>
+              location.openAccess &&
+              [location.pdfUrl, location.landingUrl].includes(candidate.url),
+          )
+        )
+          return 30;
+        if (/^(?:repository|biblio)\./i.test(url.hostname)) return 20;
+        if (/\/(?:handle|bitstream)\//i.test(url.pathname)) return 10;
+        return 0;
+      };
+      const queued = [...browserQueue.values()].sort(
+        (a, b) => priority(b) - priority(a),
       );
-    } finally {
-      signal.removeEventListener("abort", cancel);
+      for (const candidate of queued.slice(0, 3)) {
+        const result = await tryCandidate(candidate, current, true);
+        if (result) return result;
+      }
+      return undefined;
+    };
+    if (onlyCandidate) {
+      const result = await tryCandidate(onlyCandidate, "agent");
+      if (result) return result;
+      const rendered = await tryBrowsers("agent");
+      if (rendered) return rendered;
+      throw new LiteratureError(failure.code, failure.message, attempts);
     }
+    for (const url of work.pdfUrls) {
+      const location = work.locations?.find((l) => l.pdfUrl === url);
+      const result = await tryCandidate(
+        { url, kind: "pdf", version: location?.version ?? "unknown" },
+        "open_access",
+      );
+      if (result) return result;
+    }
+    if (work.cachedPdfUrl) {
+      const result = await tryCandidate(
+        { url: work.cachedPdfUrl, kind: "pdf", version: "unknown" },
+        "cache",
+      );
+      if (result) return result;
+    }
+    const locations = work.locations ?? [];
+    for (const location of locations) {
+      for (const candidate of resolverCandidates({
+        url: location.pdfUrl,
+        pageURL: location.landingUrl,
+        articleVersion: location.version,
+      })) {
+        const result = await tryCandidate(candidate, "zotero");
+        if (result) return result;
+      }
+    }
+    let resolvers: ReturnType<typeof nativeResolvers> = [];
+    try {
+      resolvers = nativeResolvers(this.parent(work));
+    } catch (error) {
+      if (signal.aborted)
+        throw new LiteratureError("cancelled", "Cancelled", attempts);
+      attempts.push({
+        stage: "zotero",
+        error: error instanceof LiteratureError ? error.code : "network",
+        at: Date.now(),
+      });
+    }
+    for (const resolver of resolvers) {
+      if (signal.aborted)
+        throw new LiteratureError("cancelled", "Cancelled", attempts);
+      try {
+        const entries =
+          typeof resolver === "function"
+            ? await boundedLiterature(resolver(), signal)
+            : [resolver];
+        for (const entry of entries.slice(0, 12))
+          for (const candidate of resolverCandidates(entry)) {
+            const result = await tryCandidate(candidate, "zotero");
+            if (result) return result;
+          }
+      } catch (error) {
+        if (signal.aborted)
+          throw new LiteratureError("cancelled", "Cancelled", attempts);
+        attempts.push({
+          stage: "zotero",
+          error: error instanceof LiteratureError ? error.code : "network",
+          at: Date.now(),
+        });
+      }
+    }
+    // Only query repository APIs when the source and native resolver stages failed.
+    for (const candidate of await repositoryCandidates(
+      work,
+      signal,
+      attempts,
+    )) {
+      const result = await tryCandidate(candidate, "zotero");
+      if (result) return result;
+    }
+    const rendered = await tryBrowsers("zotero");
+    if (rendered) return rendered;
+    throw new LiteratureError(failure.code, failure.message, attempts);
   }
-  async attach(work: LiteratureWork, path: string): Promise<string> {
+  async acquireCandidate(
+    work: LiteratureWork,
+    candidate: FulltextCandidate,
+    signal: AbortSignal,
+    transfer?: FulltextTransfer,
+  ) {
+    return this.acquire(work, signal, async () => {}, candidate, transfer);
+  }
+  private async importBytes(
+    work: LiteratureWork,
+    bytes: Uint8Array,
+    signal: AbortSignal,
+    provenance: {
+      version: LiteratureVersion;
+      sourceUrl?: string;
+      discoveredFrom?: string;
+      stage: LiteratureAcquisitionStage;
+    },
+  ): Promise<LiteratureAcquisitionResult> {
+    const { detectedVersion, ...verification } = await boundedLiterature(
+      verifyPdf(bytes, work, provenance.version),
+      signal,
+    );
+    if (detectedVersion)
+      provenance = { ...provenance, version: detectedVersion };
     return locks.run(
       [
         `attachment:${work.acquisition.item?.libraryID}:${work.acquisition.item?.key}`,
       ],
       async () => {
-        const existing = await this.existing(work);
+        if (signal.aborted) throw new LiteratureError("cancelled", "Cancelled");
+        const existing = await this.existing(work, signal);
         if (existing) return existing;
-        const stat = await IOUtils.stat(runtimeIoPath(path));
-        if ((stat.size ?? Infinity) > 100 * 1024 * 1024)
-          throw new LiteratureError("invalid_pdf", "PDF exceeds 100 MiB");
-        const bytes = await IOUtils.read(runtimeIoPath(path));
-        if (!(await readablePdf(bytes)))
-          throw new LiteratureError(
-            "invalid_pdf",
-            "请拖入有效 PDF（不超过 100 MiB） / Drop a valid PDF up to 100 MiB",
-          );
-        // Import exactly the validated bytes. The user's source file can change
-        // while parsing, and must never be moved or rewritten by this operation.
         const directory = runtimePath("literature-downloads");
         await IOUtils.makeDirectory(runtimeIoPath(directory), {
           ignoreExisting: true,
           createAncestors: true,
         });
-        const validated = PathUtils.join(
+        const path = PathUtils.join(
           directory,
-          `verified_${work.id}_${Date.now()}_${Math.random().toString(36).slice(2)}.pdf`,
+          `verified_${Date.now()}_${Math.random().toString(36).slice(2)}.pdf`,
         );
         try {
-          await IOUtils.write(runtimeIoPath(validated), bytes);
+          await IOUtils.write(runtimeIoPath(path), bytes);
+          if (signal.aborted)
+            throw new LiteratureError("cancelled", "Cancelled");
+          const title =
+            provenance.version === "acceptedVersion"
+              ? "Accepted manuscript"
+              : provenance.version === "submittedVersion"
+                ? "Preprint"
+                : provenance.version === "publishedVersion"
+                  ? "Published version"
+                  : "Full text (version unknown)";
           const attachment = await Zotero.Attachments.importFromFile({
-            file: Zotero.File.pathToFile(validated),
+            file: Zotero.File.pathToFile(path),
             parentItemID: this.parent(work).id,
+            title,
           });
-          return attachment.key;
+          // The imported item is already durable. Return its receipt even if cancelled now.
+          if (provenance.sourceUrl) {
+            try {
+              attachment.setField("url", provenance.sourceUrl);
+              await attachment.saveTx();
+            } catch {
+              /* Provenance is also retained in the durable acquisition receipt. */
+            }
+          }
+          return { attachmentKey: attachment.key, ...provenance, verification };
         } finally {
-          await IOUtils.remove(runtimeIoPath(validated), {
-            ignoreAbsent: true,
-          });
+          try {
+            await IOUtils.remove(runtimeIoPath(path), { ignoreAbsent: true });
+          } catch {
+            /* Cleanup cannot invalidate an already committed attachment receipt. */
+          }
         }
       },
+    );
+  }
+  async attach(work: LiteratureWork, path: string): Promise<string> {
+    return (await this.attachVerified(work, path)).attachmentKey;
+  }
+  async attachVerified(
+    work: LiteratureWork,
+    path: string,
+  ): Promise<LiteratureAcquisitionResult> {
+    return this.importBytes(
+      work,
+      await this.readBytes(path),
+      createAbortController().signal,
+      { stage: "browser", version: "unknown" },
     );
   }
 }

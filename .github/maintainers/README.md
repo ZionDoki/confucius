@@ -1,35 +1,36 @@
-# 维护者文档
+# Maintainer guide
 
-产品使用说明位于 [`docs/`](../../docs/README.md)。这里保留仍需维护的工程约定与
-验收证据；临时日志、原始模型 trace 和隔离测试库保留在已忽略的 `output/`。
+English · [简体中文](README.zh-CN.md)
 
-- [0.5.1-beta.1 发布验收](acceptance/release-0.5.1-beta.1.md)：缺索引错误复现与自动恢复、旧版完整数据升级、热更新和公开包验收。
-- [0.5.0 正式版验收](acceptance/release-0.5.0.md)：候选包检查、稳定版与 Beta 数据升级、交互和热更新验证，以及公开旧包在线升级流程。
-- [0.5.0-beta.3 发布验收](acceptance/release-0.5.0-beta.3.md)：单一文献胶囊、计数与窄窗对齐、候选包安装、热更新及旧版升级。
-- [0.5.0-beta.2 发布验收](acceptance/release-0.5.0-beta.2.md)：模型目录输入筛选、自定义思考设置与公开包升级。
-- [0.5.0-beta.1 发布验收](acceptance/release-0.5.0-beta.1.md)：OpenAlex 科研助手、候选与公开包、隔离升级及 Beta 渠道核验。
-- [版本与发布规范](releases.md)：版号、Beta 渠道、更新说明、产物与发布验收。
-- [任务执行与恢复](runtime.md)：执行、存储、上下文和诊断的维护契约。
-- [缺任务索引自动恢复验收](acceptance/runtime-recovery-2026-09-29.md)：原始备份、历史重建、正常发消息和重启的开发版检查。
-- [文献研究领域与子 Agent](literature-research.md)：OpenAlex、候选确认、全文获取、独立委派与持久化；[开发版验收](acceptance/literature-research-2026-09-21.md)、[交互稳健性验收](acceptance/research-interactions-2026-09-23.md)。
-- [上下文与记忆管理](context-memory-refactor.md)：可靠交接、读取预算、本地归档与独立保留策略；[最新优化验收](acceptance/context-optimization-2026-09-08.md)、[完整修复验收](acceptance/context-system-repair-2026-09-08.md)、[基础验收](acceptance/context-memory-refactor-2026-09-08.md)与[专项实测及复现脚本](acceptance/context-memory-stress-2026-09-08.md)。
-- [请求恢复、标注批次与记忆审批验收](acceptance/request-recovery-batches-memory-2026-09-07.md)：请求恢复与记忆审批的自动回归、隔离 Zotero 操作与验证边界。
-- [界面设计准则](../../docs/design.md)：配色、边距与按钮规范，以 APP 为准；artifact 阅读界面无装饰性分割线。
-- [研究报告修订](research-reports.md)：同一报告的读取、局部修改、复核、恢复与成本验证。
-- [研读 harness 验收](acceptance/research-harness-2026-09-07.md)：单报告、上下文恢复、引用跳转与 M3/K3 挑战。
-- [历史升级验收](acceptance/upgrade-acceptance.md)：0.3.8 → 0.4.0-beta.1，macOS。
-- [Windows 验收清单](acceptance/windows-acceptance.md)：完整场景及复现入口。
-- [Windows 实测记录](acceptance/windows-acceptance-2026-09-06.md)：三引擎、PDF、恢复及明确未通过项。
-- [0.4.0 发布验收](acceptance/release-0.4.0.md)：正式版候选检查、旧版升级和发布后核对范围。
-- [0.4.1 发布验收](acceptance/release-0.4.1.md)：批注接口、合并后的本机实测和旧版升级。
-- [0.4.2 发布验收](acceptance/release-0.4.2.md)：报告修订、独立窗口、权限与耗时修复及安装升级。
-- [0.4.3-beta.1 发布验收](acceptance/release-0.4.3-beta.1.md)：研读与来源修复、引用写回、Beta 包与隔离升级。
-- [0.4.3-beta.2 发布验收](acceptance/release-0.4.3-beta.2.md)：请求恢复、标注批次与记忆审批、Beta 1 隔离升级。
+[User guide](../../docs/README.md) · [Project overview](../../README.md)
 
-- [0.4.3 发布验收](acceptance/release-0.4.3.md)：正式版候选、稳定版与 Beta 升级，以及公开更新资产核验。
-- [0.4.5 发布验收](acceptance/release-0.4.5.md)：陪读、私有问答、笔记保存、候选检查及公开安装包升级。
-- [0.4.4 发布验收](acceptance/release-0.4.4.md)：侧栏连续点击、流光可见性、无主窗口编码与旧包升级。
-- [自动热更新开发阶段验收](acceptance/update-window.md)：自动恢复会话、窗口／侧栏交接、实际安装状态和无需重启的验证。
+Start with [development setup](development.md) to build and preview the add-on.
+These guides describe current source, including unreleased work. Published
+behavior and validation belong to the corresponding version's release notes.
 
-过时的上下文 v3 设计、界面实现草稿及一次性代理设计计划已移出当前文档集，历史
-仍可从 Git 查询。验收结果只适用于记录中的安装包和环境。
+| Guide                                             | Covers                                                        |
+| ------------------------------------------------- | ------------------------------------------------------------- |
+| [Development setup](development.md)               | First build, Zotero preview, checks, repository map           |
+| [Documentation rules](documentation.md)           | Audience, bilingual navigation, evidence boundaries           |
+| [Knowledge and research memory](knowledge.md)     | Source ownership, indexing, personalization, protection       |
+| [Task execution and recovery](runtime.md)         | Run state, permissions, persistence, interrupted writes       |
+| [Context and memory](context-memory-refactor.md)  | Handoff, retrieval budgets, independent retention             |
+| [Literature research](literature-research.md)     | Candidate confirmation, full-text acquisition, subagents      |
+| [Research reports](research-reports.md)           | Revisions, citations, writeback, export                       |
+| [Interface design rules](../../docs/design.md)    | Shared colors, spacing, controls, interaction checklist       |
+| [Versioning and releases](releases.md)            | Versions, channels, artifacts, publication and upgrade checks |
+| [Built-in skills](../../skills/README.md)         | Skill usage and bundle maintenance                            |
+| [Scripted harness checks](../../evals/README.md)  | Local model-script fixtures                                   |
+| [Memory package](../../packages/memory/README.md) | Storage and package APIs                                      |
+
+## Historical evidence
+
+The [acceptance archive](acceptance/README.md) lists dated release, feature,
+platform, and migration records with their original language. Results apply
+only to the recorded package and environment; they are not current validation.
+
+Keep raw traces, machine paths, temporary plans, and test libraries under ignored
+`output/`. Obsolete drafts remain available in Git history. Preserve published
+Release evidence links pinned to old tags.
+
+- [PDF 搜集修复与固定样本复测（2026-10-08）](acceptance/pdf-acquisition-2026-10-08.md)

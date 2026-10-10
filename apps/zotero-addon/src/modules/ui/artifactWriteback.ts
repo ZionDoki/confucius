@@ -34,10 +34,6 @@ export function showArtifactWriteback(
   const rpc = host.rpc.bind(host);
   const targets = [
     { value: "zotero_note", label: getString("workspace-writeback-note") },
-    {
-      value: "knowledge_base",
-      label: getString("workspace-writeback-knowledge"),
-    },
   ];
   if (artifact.kind === "annotation_set")
     targets.unshift({
@@ -118,12 +114,7 @@ export function showArtifactWriteback(
   });
   destination.append(targetButton, menu);
   controls.append(destination);
-  const knowledgeInput = el(doc, "input") as HTMLInputElement;
-  knowledgeInput.id = "confucius-writeback-knowledge-id";
-  knowledgeInput.type = "text";
-  knowledgeInput.placeholder = getString("workspace-writeback-knowledge-id");
-  knowledgeInput.setAttribute("aria-label", knowledgeInput.placeholder);
-  knowledgeInput.hidden = true;
+  controls.hidden = targets.length === 1;
   const preview = el(doc, "div", "confucius-note-save-preview");
   const errorLine = el(doc, "div", "confucius-note-save-error");
   errorLine.setAttribute("role", "alert");
@@ -152,8 +143,6 @@ export function showArtifactWriteback(
     targetButton.textContent = `${getString("workspace-writeback-destination")} ▾`;
     targetButton.title = target.label;
     targetButton.disabled = busy || approval.pending;
-    knowledgeInput.hidden = target.value !== "knowledge_base";
-    knowledgeInput.disabled = busy || approval.pending;
     for (const item of targetButtons) {
       item.control.setAttribute("aria-checked", String(item.option === target));
       item.control.disabled = busy || approval.pending;
@@ -259,7 +248,6 @@ export function showArtifactWriteback(
           id: artifact.id,
           revision,
           target: target.value,
-          knowledgeBaseId: knowledgeInput.value.trim() || undefined,
         });
         if (!prepared || !overlay.isConnected) return;
         // Commit prepares a fresh snapshot; confirm exactly what will be saved.
@@ -286,15 +274,7 @@ export function showArtifactWriteback(
     }
   });
   actions.append(status, cancel, requestApproval);
-  panel.append(
-    heading,
-    meta,
-    controls,
-    knowledgeInput,
-    preview,
-    errorLine,
-    actions,
-  );
+  panel.append(heading, meta, controls, preview, errorLine, actions);
   overlay.append(panel);
   root.append(overlay);
   updateControls();

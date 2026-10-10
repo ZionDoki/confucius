@@ -1,45 +1,44 @@
-# Codex / Kimi 检测与连接
+# CLI connections
 
-先在本机安装并登录相应 CLI，再打开 Confucius 设置。可执行文件路径留空时使用
-自动检测；安装或登录后点击“重新检测”，无需重启 Zotero。
+English · [简体中文](runtime-discovery.zh-CN.md)
 
-## 自动检测范围
+[User guide](README.md) · [Model setup](model-selection.md)
 
-| 平台       | 常见安装位置                                                                           |
-| ---------- | -------------------------------------------------------------------------------------- |
-| macOS      | Homebrew、用户 bin 目录、Python 安装目录、Codex / ChatGPT 应用内附带的 CLI             |
-| Windows    | Codex Desktop、npm、Python Scripts、WinGet、Scoop、App Paths 和用户 bin 目录           |
-| Linux      | 系统和用户 bin 目录、Linuxbrew                                                         |
-| 各平台共有 | PATH、npm 自定义前缀、pnpm、Bun、Volta、uv / pipx，以及适用平台的 nvm、fnm、asdf、mise |
+## Connect Codex or Kimi
 
-设置会展示实际使用的程序位置和版本。安装了多份 CLI 时，可以填写路径来指定其中
-一份。自动检测覆盖这些常见布局，但不表示所有安装方式都经过实机验收。
+1. Install the CLI on the same computer as Zotero and complete its sign-in.
+2. Open **Confucius Settings → Runtime**.
+3. Leave the executable path empty and click **Check again**.
+4. Check the detected path and status, then choose the runtime and model in the composer.
 
-## 手动指定路径
+Automatic detection covers common PATH, package-manager and desktop-app layouts
+on macOS, Windows and Linux. It does not require Zotero to include Node.js.
 
-填写宿主系统可以运行的程序绝对路径。路径可以包含空格、中文、外层引号和 `~/`；
-Windows 也支持 `%USERPROFILE%` 等常用路径变量。
+## Use a custom installation
 
-- Windows 的 Codex 可以选择 npm 的 `.cmd` 入口，Confucius 会解析到随包安装的
-  原生程序。Kimi 请选择 `.exe`。
-- macOS / Linux 可以选择原生程序或受支持的 Kimi Python 启动入口。
-- 只在 shell 中定义的 alias 和 Windows 的 WSL 内安装不能直接作为宿主程序。
+Enter the executable's absolute path. Paths with spaces, Chinese characters,
+surrounding quotes and `~/` are supported; Windows also supports common path
+variables such as `%USERPROFILE%`.
 
-手动路径无效时会显示错误，不会静默改用其他安装。清空路径并重新检测即可恢复
-自动选择。
+- Windows Codex: an npm `.cmd` launcher can resolve to its packaged native binary.
+- Windows Kimi: select the `.exe`.
+- macOS/Linux: select a native executable or a supported Kimi Python entry point.
+- Shell aliases and a CLI installed only inside WSL are not host executables.
 
-## 常见问题
+An invalid manual path produces an error instead of silently selecting another
+installation. Clear the path to restore automatic detection.
 
-| 设置中显示的状态 | 处理方法                                                                                  |
+## Troubleshooting
+
+| Status           | Next step                                                                                 |
 | ---------------- | ----------------------------------------------------------------------------------------- |
-| 不可用           | 检查程序是否安装、路径是否存在及是否可执行；npm 安装缺少平台依赖时，修复该 CLI 安装后重试 |
-| 需要登录         | 在对应 CLI 完成登录，再点击“重新检测”                                                     |
-| 错误             | 核对显示的路径和版本，尝试更新 CLI；仍失败时保留错误信息并导出任务诊断报告                |
+| Unavailable      | Check installation, path and executable permissions; repair missing package dependencies. |
+| Sign-in required | Sign in through the CLI, then refresh.                                                    |
+| Error            | Check the displayed path/version and the error; update the CLI if needed.                 |
 
-如果终端能运行而 Confucius 找不到，填写程序的完整路径。图形界面启动的 Zotero
-可能没有继承终端的 PATH。版本检测成功也不代表账号有权使用所有模型，实际模型
-列表以服务返回为准。
+If a terminal can find the CLI but Zotero cannot, supply the full path: graphical
+apps may inherit a different PATH. A successful version check does not confirm
+model access. For other issues, see [troubleshooting](troubleshooting.md).
 
-0.4.0 的 Windows 实机任务使用 Zotero 10.0.1、Codex CLI 0.153.4 和 Kimi CLI
-0.40.1。此前 macOS Zotero 10 已验证两者的检测与连接；Linux 安装识别目前主要由
-自动化平台模拟覆盖。完整记录见[维护者验收文档](../.github/maintainers/README.md)。
+Detection tests cover more installation layouts than have been tested on real
+machines; support does not imply that every CLI version has passed a live task.

@@ -300,6 +300,9 @@ export class SubagentManager {
       schemaVersion: 4,
       title: record.title,
       titleState: "fixed",
+      responseLanguageContext:
+        taskSnapshot.responseLanguageContext &&
+        copy(taskSnapshot.responseLanguageContext),
       createdAt: now,
       updatedAt: now,
       backend: record.backend,
@@ -478,6 +481,14 @@ export class SubagentManager {
         await this.save(doc);
         return;
       }
+      // Older child records lack language evidence; recover it from their parent.
+      if (
+        !doc.task.responseLanguageContext &&
+        parent.task.responseLanguageContext
+      )
+        doc.task.responseLanguageContext = copy(
+          parent.task.responseLanguageContext,
+        );
       const run = this.createRun(doc, parent.budget);
       run.tools = this.options.tools(run);
       this.running.set(id, run);

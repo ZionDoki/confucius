@@ -101,9 +101,9 @@ Codex 公开报告的短任务用量为输入 9,626、输出 74、合计 9,700 t
 
 ## 文档、流程图及复核资料
 
-用户说明见[上下文、换窗与归档](../../../docs/context-system.md)和
-[任务与数据](../../../docs/tasks-and-data.md)，实现约定见
-[上下文与记忆管理](../context-memory-refactor.md)。
+用户说明见[上下文、换窗与归档](../../../docs/context-system.zh-CN.md)和
+[任务与数据](../../../docs/tasks-and-data.zh-CN.md)，实现约定见
+[上下文与记忆管理](../context-memory-refactor.zh-CN.md)。
 流程图使用[版本化 JSON 源文件](../diagrams/context-system.architecture.json)，
 包含日常运行、事务交接、归档保留三个视图；确定性图表检查 9/9 通过、无警告，
 浅色／深色图与交接导航已人工查看。

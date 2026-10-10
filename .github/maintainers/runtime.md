@@ -1,107 +1,105 @@
-# Harness v4：执行、效果与恢复
+# Execution and recovery contracts
 
-本次升级以一个请求的可恢复执行为单位。Native、Kimi 和 Codex 使用同一个 `RunCoordinator`；模型或外部进程的一次返回只是执行结果。完成状态由当前请求关联的领域实体决定。
+English · [简体中文](runtime.zh-CN.md)
 
-## 契约与事实来源
+[Maintainer guide](README.md) · [Development setup](development.md)
 
-- `RunState` 保存请求及补充、来源、修订、执行代次、累计预算和停止原因。恢复不会补充已消耗的额度。新任务或已完成任务上的新请求建立新账本。
-- `RunExecutor` 报告一次执行的停止原因、文本和恢复材料。外部引擎保留自己的内部循环；无法观测的内部请求数不伪造为宿主迭代数。
-- `WorkSnapshot` 查询当前 run、意图修订和来源关联的 artifact、候选及 operation。历史事件、旧成果、回答长度都不证明当前请求完成。
-- checkpoint 只保存消息配对、provider replay state 和上下文恢复材料。它不能把预算耗尽、断流或取消改写成完成。
+## One request, one recoverable run
 
-普通回答没有已知缺项时直接结束。已经建立的草稿或候选有未完成项时，宿主在同一预算内继续；反复没有进展时反馈具体缺项，一次针对性修复仍无进展则保存进度并停止。预设只描述来源和成果要求，不再驱动 research/review/delivery 回合。
+Native, Codex and Kimi share `RunCoordinator`. The provider finishing a turn
+does not establish that the user's request is complete.
 
-普通新任务默认没有论文来源，只有显式添加材料或确认文献候选才绑定；切换 PDF 不会改变来源。普通任务的来源不是排他的工具范围，只有工具准入同时执行的预设来源范围才会过滤领域工作。避免“允许写入候选，却在完成判断中遗漏候选”。文献池、确认安全边界与子 Agent 的维护契约见[文献研究领域与子 Agent](literature-research.md)。
+| Record               | Responsibility                                                            |
+| -------------------- | ------------------------------------------------------------------------- |
+| `RunState`           | Current request, intent revision, sources, generation and consumed budget |
+| `RunExecutor` result | One execution's stop reason, text and recovery material                   |
+| `WorkSnapshot`       | Current run's artifacts, candidates, operations and missing work          |
+| Checkpoint           | Paired messages, protocol replay state and context recovery               |
+| Operation journal    | Prepared intent and authoritative effects/receipts                        |
 
-停滞判断使用领域缺项、剩余数量及草稿正文的内容摘要。同一个候选批次逐项成功，或同一份草稿继续完善，都可以继续推进；仅更新记录版本、重复相同正文不算进展。
+Continue keeps the intent revision and consumed budget; new requirements can
+create a new intent revision. Old proposals do not automatically become new
+obligations. Delayed callbacks must match the current generation.
 
-候选待办按当前意图修订归属。按钮或文本“继续”保持同一修订；用户补充新要求后，旧候选仍可引用，但不再自动成为新要求的提交义务。明确复用旧 proposal ID 并成功准备后，宿主保留 ID、采用当前意图，重新核验已有回执。迟到的旧候选不能遮蔽当前候选。
+A plain answer may finish directly. Known incomplete artifacts or candidates
+continue within the remaining budget. Repeated identical content or revision
+bumps do not count as progress. Do not implement a separate preset stage machine.
 
-## 副作用与并发
+## Sources and permissions
 
-领域服务准备不可变的 `PreparedOperation`，声明参数、目标资源及核验材料。通用执行服务负责参数校验、资源协调、取消、时限和 intent/receipt 持久化。批量效果逐项记录；重放使用 operation ID 和原请求摘要，跨任务内容去重仍由领域规则处理。
+New tasks have no implicit current-PDF source. Explicit attachment and confirmed
+literature acquisition establish sources. Ordinary attached sources are not
+automatically an exclusive read scope; source-restricted presets enforce scope at
+tool admission and completion checks.
 
-未知效果由宿主直接查询权威 Zotero 状态。`get_annotations` 保留为用户和模型的读取工具，读取行为不再消费恢复凭证。部分批注成功后只修复剩余项，人工删除的已提交批注不会自动重建。无关字段变化不会使笔记、标签和批注写入无故冲突。
+Prepared writes declare immutable arguments, resource targets and verification
+data. The host validates schemas, coordinates resource locks and records effects.
+An approval must be well formed, explicitly allow the action and match the
+pending request ID. Invalid replies must not consume the pending request.
 
-只有当前执行或明确依赖成果的未知操作会阻止任务推进。其他未知记录仍保留，涉及同一资源的写入仍须对账。已生效结果不会因历史、索引或界面投影保存失败而被当成“未执行”。创建原生对象时保留已准备的 key，并使用 Zotero 的 `loadPrimaryData(false)` 建立新对象的可编辑状态；不以删除预分配 ID 来规避原生初始化约束。
+Tool grants do not replace protected-memory confirmation or annotation review.
+Literature import/download has its own exact-batch confirmation boundary.
 
-外部 MCP capability 绑定具体 executor dispatch。续接会轮替租约和 namespace，取消旧信号；旧请求不能获得新 run 的身份，同一个 JSON-RPC id 在不同 dispatch 中也不会混用 operation。已经生效的迟到结果仍由 operation 保存。宿主校验进入调用时的身份，并在准备和审批后再次核对。
+## Side effects and replay
 
-`ExecutionScope` 为准备、等锁、执行共享剩余时限。用户等待审批时暂停计时，取消仍然生效；批准后恢复剩余执行时间，相关目标状态仍须重新核验。
+- Record batch effects individually. A known successful write replays its receipt.
+- Reconcile unknown outcomes with authoritative Zotero state before retrying.
+  A manual deletion after a committed annotation must not recreate it.
+- Unrelated unknown operations do not block the entire application; same-resource
+  writes still require reconciliation.
+- A history/index/UI save failure cannot turn an applied native write into an
+  unapplied one.
+- Preserve prepared native keys and initialize Zotero item state correctly.
+  Do not remove preallocated IDs to bypass native initialization.
 
-## 协议与上下文
+`ExecutionScope` shares the remaining deadline across preparation, locks and
+execution. Waiting for user approval pauses that deadline, but cancellation
+remains effective and targets must be checked again after approval.
 
-近期原文与有限提炼记忆采用统一工具、预算和保留策略，见
-[上下文与记忆管理](context-memory-refactor.md)。`new_context` 只重建工作窗口；
-原文清理由独立维护批次在提炼保存成功后执行。已清理历史不再提供正文。
+External MCP capabilities belong to one executor dispatch. Resume rotates leases
+and namespaces; stale requests cannot borrow a new run's identity. Recheck
+ownership at admission, preparation and approval boundaries.
 
-Native checkpoint 的可选 `sourceReads` 保留最多 120 个已归档 PDF 页的来源、物理
-页码、URI 和精确历史 ID；换窗提示按剩余容量保留最多约 8,000 字符的索引，正文
-仍在历史中。它表明内容可检索，不证明模型读过所有归档页，也不能代替草稿保存后
-的原文复核。旧 checkpoint 无此字段仍可恢复；持久化失败仍禁止切换工作集。
+## Protocol and context
 
-精读模板 v2 只要求 `deep_read`。v1 任务继续时忽略模板遗留的 `annotation_set`
-完成义务，保留已保存成果。可读报告直接交付，宿主在正常完成前用当前模型独立做一次
-直接修订，复用原文和批注并补取缺失引用。修订不使用起草推理、不评分、不增加完成
-缺项；失败保留原报告。尝试记录绑定当前请求与成果版本，继续不会反复触发。
-外部分析使用独立临时会话，可取消并保留所选模型与推理设置；不改变任务原有会话。
-已发布版本的复核行为和实测保留在历史验收记录中。
+Only complete streamed tool calls may execute. Distinguish normal completion,
+tool calls, truncation, filtering, abnormal EOF and cancellation. Protocol replay
+data is restored only with the matching profile.
 
-模型结束原因区分正常结束、工具调用、截断、过滤、异常 EOF 与取消。SSE/NDJSON 必须确认响应完整后才能派发工具，部分文本不会变成可执行的半成品调用。provider replay state 随消息和 checkpoint 保存，仅由匹配的协议 profile 回放。Ollama 工具增量按 profile 合并。
+Ajv validates tool input before preparation; annotation batches retain per-item
+domain checks. Zotero's sandbox needs injected timers and safe logging rather
+than assumptions about Node globals.
 
-JSON Schema 由直接依赖的 Ajv 8 编译并缓存；别名与无损规范化独立处理。顶层非法参数在 prepare 前返回可修复错误，批注数组继续做逐项领域校验。Ajv 禁用默认 logger，网络时限通过宿主注入计时器，避免 Zotero 插件沙箱缺少 `console`、全局计时器导致加载失败。插件只创建一个 toolkit；卸载会移除全部窗口入口、监听和 SDK 补丁，保存恢复快照后阻止迟到回调再次写入任务状态。
+Context switching preserves originals, write receipts and budgets. History
+cleanup is independent of memory distillation. See [context contracts](context-memory-refactor.md).
 
-默认首响应、流空闲、绝对请求时限为 120 秒、120 秒、10 分钟，可在 endpoint 配置。传输重试、参数修复与上下文恢复共享请求预算。换窗必须先持久化独有材料；保存失败时保留原工作集。历史原文、模型工作笔记和写入回执各自保留来源与用途。
+Ready reports can receive one independent revision within the current request's
+remaining budget. A failed revision preserves the saved report and does not
+create an artificial completion gate. See [report contracts](research-reports.md).
 
-## 存储与迁移
+## Persistence and lifecycle
 
-继续使用 profile 下 `confucius/runtime-v1` 的 JSON 和原子写入。operation 按操作独立保存，索引可重建。任务状态 schema 为 v4；读取旧历史及本次升级前的未提交格式，保留 ID 和 artifact revision。迁移备份在新副本通过校验前保留；旧上下文副本在后续清理中再次校验后删除，成果副本不作为上下文清理。旧阶段信息只作为恢复线索，完成事实重新查询领域存储。
+Runtime JSON lives under the local profile's `confucius/runtime-v1/`.
+Task schema v4 supports older data; operations are stored separately and derived
+indexes can be rebuilt. Native library objects stay in Zotero.
 
-旧数据目录缺少总任务索引时，启动迁移自动进入恢复分支：先按 SHA-256 保全原始
-历史、日志、成果及已知索引备份，再重建可读取的任务和历史索引。较新的本机任务优先，
-恢复记录不继承工具授权、执行 checkpoint 或待执行操作；删除／清理标记优先于旧备份。
-损坏的单条历史只影响该记录，不阻止工作区初始化。文件系统读取、备份或原子提交失败
-则保持 `copying`，下次启动重试。恢复索引完成后才写 `active`；源文件与
-`recovery/missing-task-index/` 不进入常规迁移副本清理。
+Missing-index recovery first preserves and verifies surviving data, then rebuilds
+readable tasks. Newer local state and deletion markers take precedence. Recovered
+history does not restore old tool grants, checkpoints or queued writes. IO failure
+keeps recovery resumable instead of marking it active prematurely.
 
-进程重启后的活动任务成为可继续状态，按钮与文本“继续”走相同入口。恢复不会自动重新派发旧写操作。正式笔记、批注和文库对象仍由 Zotero 管理。
+After restart, active tasks become interrupted and require explicit continuation.
+Shutdown releases UI hooks, saves recovery state and prevents late callbacks from
+rewriting task state.
 
-独立 sidecar 的运行控制及事件 API 保留；它可接收宿主提供的 MCP 地址和 token。旧的 task-only 写代理不再借用宿主当前执行身份，必须迁移到宿主签发的执行租约。
+## Diagnostics and validation
 
-## 任务诊断报告
+`task/trace` exports retained public events, histories, notes, operations,
+annotation candidates and artifact versions. Export does not call models or
+reconcile writes. It respects task scope, redacts known credentials and reports
+missing/cleaned data; it cannot expose private CLI internals or recreate deleted text.
 
-任务页和任务列表的 `···` 菜单提供“导出诊断报告”。选择保存位置后生成单个离线 HTML，包含可搜索、分页的事件时间线及完整结构化记录；报告内可下载同一份 JSON。导出期间按钮禁用并显示“正在导出报告…”，保存、取消或失败后恢复。
-
-`task/trace` 读取当前任务状态、预算、消息与检查点、跨窗口历史原文、工作笔记的全部可用版本、operation intent/receipt、批注候选和成果版本。导出不会发起模型请求、对账或 Zotero 写入；运行中导出标注采集区间和任务变化，单个存储或文件读取失败时保留其余记录并列出缺失。
-
-新增宿主事件按批次归档到既有历史存储，待持久化批次也参与导出。诊断批次通过 `purpose: diagnostic` 排除在模型历史检索之外，不成为任务完成或恢复的事实来源。UI 事件裁剪不会再删除已归档事件。旧任务在启用归档之前丢失的事件无法重建；外部引擎未向宿主公开的内部上下文、模型请求和原始网络数据不在报告范围内。
-
-原文保留期结束且提炼成功后，诊断副本也随原文清理。导出显示清理状态，不从孤立
-文件或旧引擎会话重新拼回已清理内容；用户此前自行保存的导出文件不受自动清理影响。
-
-报告保留任务文本和来源材料，过滤配置中已知密钥、常见凭据字段、鉴权头和 URL 中的凭据；不打包 PDF 文件和二进制图片。分享前仍需检查正文内容。自动化覆盖长历史与重启、损坏索引、跨任务过滤、凭据脱敏以及 HTML 文本转义。macOS 开发 Zotero 已通过保存对话框导出实际任务，离线浏览器验证搜索、分页、完整 JSON 下载和按钮状态，记录见 `output/task-trace-browser-verification.json`。
-
-## 验证与证据
-
-```sh
-npm test
-npm run typecheck
-npm run build --workspace=@confucius/zotero-addon
-node scripts/live-http-check.mjs
-npm run test:live:zotero-tools
-node --import tsx scripts/live-zotero-recovery.mjs
-```
-
-确定性回归覆盖协议切块和异常结束、非法参数零派发、累计预算、取消竞态、部分成功与重放、迁移、receipt 保存失败及上下文恢复。`AgentHost.lifecycle.test.ts` 直接调用宿主生命周期方法验证准备失败、并发提交和迟到回调，而不以源码字符串代替行为。
-
-`0.4.0-beta.1` 发布候选曾通过 696 项测试及相应构建检查，历史安装记录见 [升级验收](acceptance/upgrade-acceptance.md)。之后针对 0.4.0 所含修复完成了 [Windows 三引擎与平台实测](acceptance/windows-acceptance-2026-09-06.md)：持久化与专项恢复通过，Native 语义召回未通过。按 [Windows 验收清单](acceptance/windows-acceptance.md) 区分已验证和剩余范围，不将历史结果作为所有版本的保证。
-
-`live-zotero-tools.mjs` 只接受 scaffold 开发 profile 和专用端口，以确定性模型驱动真实 Zotero API，并输出 `output/tool-e2e-report.json`。脚本核对实体和停止语义，记录清理结果；测试创建的开发库 fixture 单独列出，不操作真实主库。
-
-2026-09-06 在 macOS / Zotero 10.0.1 的开发 profile 完成最终构建的 60/60 工具、34/34 MCP 读取及 15/15 附加断言验证（`output/tool-e2e-sixth-run.json`），原配置、临时 endpoint、任务和知识库清理通过。批注辅助报告 `output/zotero-recovery-final-report.json` 核对首次 8 条真实写入、仅修复余下 2 条、无需读取凭证的重放新增 0 条、最终 10 个实体和原八条 key 不变；该套测试创建的批注已清理。辅助套通过配对的 `task/toolCall` 验证宿主及领域执行，不代表真实基础模型或外部引擎的端到端质量评测。最后再次点击工具栏图标，Confucius 工作区正常打开。
-
-当前真实 Reader 定位仍观察到约每条 5 秒的等待：十条首次准备和提交约 50.4 秒，仅修复两条约 10.1 秒。共享执行时限仍生效，但未证明大批量候选能在默认时限内全部定位。不能以直接字符匹配取代原生搜索的完成判断来提速：原生搜索的空白、重音和连字规范化可能揭示额外歧义。
-
-多模型评测使用 `scripts/live-matrix.mjs`，逐模型固定来源、profile、预算与声明的 modelRevision，保留每项结果、假完成、重复操作、参数修复、恢复和成本指标。`--dry-run` 仅验证配置，不代表模型效果通过。未取得升级前后相同模型与环境的实测结果前，不宣称成功率提升。
-
-当前 macOS 自动化与开发 Zotero 验收不能替代 Windows/WPS 的文件占用、权限拒绝、磁盘满、中断迁移及真实 Windows Worker 验证，也不能替代各真实模型的批注质量评测。这些结果需按平台和模型分别记录。
+Run the [development checks](development.md). Tests must exercise lifecycle and
+domain behavior, including partial writes, stale approval, cancellation, replay,
+failed persistence and recovery. Use isolated profiles for native tests.
+Historical results and their limits are in the [acceptance archive](acceptance/README.md).

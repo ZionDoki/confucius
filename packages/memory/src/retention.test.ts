@@ -9,6 +9,144 @@ import { serializeMemory } from "./markdown";
 import { tokenize } from "./tokenize";
 
 const day = 86400000;
+for (const action of ["maintain", "save", "update", "delete"] as const) {
+  test(`disk protection is authoritative before ${action}, even without a catalogue search`, async () => {
+    let now = day;
+    const fs = new InMemoryFileSystem();
+    const engine = new MemoryEngine({ fs, root: "/mem", now: () => now });
+    const record = await engine.save({
+      id: "protected-on-disk",
+      content: "old ordinary content",
+      protection: "none",
+    });
+    const path = "/mem/memories/protected-on-disk.md";
+    const edited = serializeMemory({
+      ...record,
+      content: "explicit user correction",
+      protection: "user",
+    });
+    await fs.writeFile(path, edited);
+    now += 91 * day;
+    if (action === "maintain") await engine.maintain();
+    else if (action === "save")
+      await engine.save({ id: "new", content: "new work", protection: "none" });
+    else if (action === "update")
+      await assert.rejects(
+        engine.update(
+          { id: record.id, content: "stale automatic replacement" },
+          true,
+        ),
+        /Protected memory/,
+      );
+    else
+      await assert.rejects(engine.delete(record.id, true), /Protected memory/);
+    assert.equal(await fs.readFile(path), edited);
+    assert.equal(engine.get(record.id)?.protection, "user");
+    assert.equal(engine.get(record.id)?.content, "explicit user correction");
+    assert.equal(engine.get(record.id)?.lastUsedAt, undefined);
+  });
+}
+
+test("queued automatic writes recheck newly protected memory at execution time", async (t) => {
+  let release!: () => void;
+  let announce!: () => void;
+  const writing = new Promise<void>((resolve) => {
+    announce = resolve;
+  });
+  const proceed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  class Fs extends InMemoryFileSystem {
+    override async writeFile(path: string, content: string) {
+      if (path.endsWith("/memories/blocker.md")) {
+        announce();
+        await proceed;
+      }
+      return super.writeFile(path, content);
+    }
+  }
+  const fs = new Fs();
+  const engine = new MemoryEngine({ fs, root: "/mem" });
+  const record = await engine.save({
+    id: "memory",
+    content: "original",
+    protection: "none",
+  });
+  const blocker = engine.save({ id: "blocker", content: "unrelated write" });
+  await writing;
+  const pending = assert.rejects(
+    engine.update({ id: record.id, content: "automatic replacement" }, true),
+    /Protected memory/,
+  );
+  const edited = serializeMemory({
+    ...record,
+    content: "user corrected while queued",
+    protection: "user",
+  });
+  await fs.writeFile("/mem/memories/memory.md", edited);
+  release();
+  await Promise.all([blocker, pending]);
+  assert.equal(await fs.readFile("/mem/memories/memory.md"), edited);
+});
+
+test("an automatic update does not resurrect a source deleted outside the plugin", async () => {
+  const fs = new InMemoryFileSystem();
+  const engine = new MemoryEngine({ fs, root: "/mem" });
+  await engine.save({ id: "removed", content: "original", protection: "none" });
+  await fs.deleteFile("/mem/memories/removed.md");
+  assert.equal(
+    await engine.update({ id: "removed", content: "stale replacement" }, true),
+    null,
+  );
+  assert.equal(engine.get("removed"), undefined);
+  assert.ok(!JSON.stringify(fs.snapshot()).includes("stale replacement"));
+});
+
+test("catalogue refresh waits for pending memory writes and retains their sources", async (t) => {
+  let release!: () => void;
+  let announce!: () => void;
+  const writing = new Promise<void>((resolve) => {
+    announce = resolve;
+  });
+  const proceed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  class Fs extends InMemoryFileSystem {
+    override async writeFile(path: string, content: string) {
+      if (path.endsWith("/memories/incoming.md")) {
+        announce();
+        await proceed;
+      }
+      return super.writeFile(path, content);
+    }
+  }
+  const fs = new Fs();
+  const engine = new MemoryEngine({ fs, root: "/mem" });
+  await engine.save({ id: "existing", content: "Earlier source" });
+  const pending = engine.save({
+    id: "incoming",
+    content: "Saved during refresh",
+  });
+  await writing;
+  let refreshed = false;
+  const refresh = engine.refresh().then((records) => {
+    refreshed = true;
+    return records;
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(refreshed, false);
+  release();
+  await pending;
+  assert.deepEqual(
+    new Set((await refresh).map((row) => row.id)),
+    new Set(["existing", "incoming"]),
+  );
+  assert.equal((await engine.search({ query: "during" })).length, 1);
+  assert.match(await fs.readFile("/mem/MEMORY.md"), /Saved during refresh/);
+});
+
 test("failed index cleanup is retried without leaving a deleted memory body in the overview", async () => {
   class Fs extends InMemoryFileSystem {
     failIndex = false;

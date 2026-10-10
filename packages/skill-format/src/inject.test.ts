@@ -45,6 +45,9 @@ describe("slashMenuToken", () => {
     assert.equal(slashMenuToken("hello"), null);
     assert.equal(slashMenuToken("/"), "");
     assert.equal(slashMenuToken("/pap"), "pap");
+    assert.equal(slashMenuToken(" \n/pap"), "pap");
+    assert.equal(slashMenuToken(" \n/"), "");
+    assert.equal(slashMenuToken(" \n/pap "), null);
     assert.equal(slashMenuToken("/paper-deep-reading"), "paper-deep-reading");
     assert.equal(slashMenuToken("/paper-deep-reading "), null);
     assert.equal(slashMenuToken("/paper-deep-reading please"), null);
@@ -80,6 +83,7 @@ describe("parseSkillInvocation", () => {
 
   it("does not treat reserved composer commands as skills", () => {
     assert.equal(parseSkillInvocation("/plan", catalog).slug, null);
+    assert.equal(parseSkillInvocation("/new-context", catalog).slug, null);
     assert.equal(
       parseSkillInvocation("/compact keep citations", catalog).slug,
       null,
@@ -89,6 +93,10 @@ describe("parseSkillInvocation", () => {
   it("ignores unknown slashes so they stay ordinary prompts", () => {
     assert.equal(parseSkillInvocation("/not-a-skill", catalog).slug, null);
     assert.equal(parseSkillInvocation("read this paper", catalog).slug, null);
+    assert.deepEqual(parseSkillInvocation(" \n/triage incoming", catalog), {
+      slug: "library-triage",
+      rest: "incoming",
+    });
   });
 });
 

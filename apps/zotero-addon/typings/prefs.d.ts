@@ -41,6 +41,7 @@ declare namespace _ZoteroTypes {
       "codexExecutable": string;
       "kimiExecutable": string;
       "openAlexApiKey": string;
+      "tavilyApiKey": string;
     };
   }
 }

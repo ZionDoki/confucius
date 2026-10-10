@@ -343,6 +343,74 @@ describe("TurnLoop", () => {
     }
   });
 
+  for (const invalid of [
+    null,
+    { verdict: undefined },
+    { verdict: "reject" },
+    { scope: undefined },
+    { scope: "all" },
+    { editedArgs: [] },
+    { id: "another-approval" },
+  ]) {
+    it(`does not execute writes for invalid or mismatched approvals: ${JSON.stringify(invalid)}`, async () => {
+      const { loop, events, tools } = createHarness({
+        script: [
+          {
+            toolCalls: [
+              {
+                id: "call_create",
+                name: "create_collection",
+                args: { name: "RLHF" },
+              },
+            ],
+          },
+          { text: "Write was denied." },
+        ],
+        resolve: (request) =>
+          (invalid === null
+            ? null
+            : {
+                id: request.id,
+                verdict: "allow",
+                scope: "once",
+                ...invalid,
+              }) as import("@confucius/protocol").ApprovalResolution,
+      });
+      tools.call = async () =>
+        assert.fail("invalid approval must not dispatch a tool");
+      await loop.run({
+        session: session(),
+        turnId: "invalid-approval",
+        userText: "Create a collection",
+      });
+      const result = events.events.find(
+        (event) => event.type === "tool_result",
+      );
+      assert.equal(result?.type, "tool_result");
+      if (result?.type === "tool_result") {
+        assert.equal(result.payload.result.ok, false);
+        if (!result.payload.result.ok)
+          assert.equal(result.payload.result.code, "permission_denied");
+      }
+      const request = events.events.find(
+        (event) => event.type === "approval_required",
+      );
+      const resolution = events.events.find(
+        (event) => event.type === "approval_resolved",
+      );
+      if (
+        request?.type === "approval_required" &&
+        resolution?.type === "approval_resolved"
+      ) {
+        assert.equal(
+          resolution.payload.resolution.id,
+          request.payload.request.id,
+        );
+        assert.equal(resolution.payload.resolution.verdict, "deny");
+      } else assert.fail("the same pending approval must be closed as denied");
+    });
+  }
+
   it("commits a write after approval", async () => {
     const { loop, events } = createHarness({
       script: [

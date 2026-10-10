@@ -1,3 +1,4 @@
+import type { KnowledgeIndex } from "./KnowledgeIndex";
 import {
   runtimePath,
   runtimeIoPath,
@@ -91,6 +92,8 @@ export function createConversationLogEngine(): ConversationLogEngine {
 }
 
 const MEMORY_TOOL_NAMES = new Set([
+  "knowledge_search",
+  "knowledge_read",
   "memory_search",
   "memory_list",
   "memory_save",
@@ -116,13 +119,16 @@ export class ConfuciusMemoryToolProvider implements ToolProvider {
       args: Record<string, unknown>,
       context: ToolExecutionContext,
     ) => Promise<ToolResult>,
+    private readonly knowledgeIndex?: KnowledgeIndex,
   ) {}
 
   listTools(): ToolDefinition[] {
     return TOOL_DEFINITIONS.filter(
       (tool) =>
         MEMORY_TOOL_NAMES.has(tool.name) &&
-        tool.name.startsWith("knowledge_base_"),
+        (this.knowledgeIndex
+          ? ["knowledge_search", "knowledge_read"].includes(tool.name)
+          : tool.name.startsWith("knowledge_base_")),
     );
   }
 
@@ -144,6 +150,19 @@ export class ConfuciusMemoryToolProvider implements ToolProvider {
   ) {
     const invalid = validateArgs(name, this.getSchema(name), args);
     if (invalid) return invalid;
+    if (
+      this.knowledgeIndex &&
+      name.startsWith("knowledge_base_") &&
+      this.getMeta(name)?.mutatesState
+    )
+      return {
+        ok: false as const,
+        toolName: name,
+        code: "unavailable" as const,
+        effect: "none" as const,
+        message:
+          "Knowledge is an index. Save documents as Zotero notes; research memory is maintained automatically.",
+      };
     if (name.startsWith("knowledge_base_") && this.getMeta(name)?.mutatesState)
       return prepareKnowledgeWrite(this.engine, name, args, context);
     // The memory index is one aggregate shared by all entries and knowledge bases.
@@ -165,6 +184,60 @@ export class ConfuciusMemoryToolProvider implements ToolProvider {
     _signal?: AbortSignal,
     context: ToolExecutionContext = {},
   ): Promise<ToolResult> {
+    if (this.knowledgeIndex && name === "knowledge_search")
+      return {
+        ok: true,
+        toolName: name,
+        data: await this.knowledgeIndex.search(
+          String(args.query ?? ""),
+          Number(args.offset),
+          Number(args.limit),
+        ),
+      };
+    if (this.knowledgeIndex && name === "knowledge_read") {
+      try {
+        const document = await this.knowledgeIndex.read(String(args.id), true);
+        const offset = Math.max(0, Math.trunc(Number(args.offset)) || 0);
+        const limit = Math.max(
+          1,
+          Math.min(12000, Math.trunc(Number(args.limit)) || 6000),
+        );
+        if (offset > document.content.length)
+          throw new Error("Offset is beyond the source document");
+        return {
+          ok: true,
+          toolName: name,
+          data: {
+            ...document,
+            content: document.content.slice(offset, offset + limit),
+            offset,
+            nextOffset:
+              offset + limit < document.content.length
+                ? offset + limit
+                : undefined,
+          },
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          toolName: name,
+          code: "not_found",
+          message: String(error),
+        };
+      }
+    }
+    if (
+      this.knowledgeIndex &&
+      name.startsWith("knowledge_base_") &&
+      this.getMeta(name)?.mutatesState
+    )
+      return {
+        ok: false,
+        toolName: name,
+        code: "unavailable",
+        effect: "none",
+        message: "Save documents as Zotero notes; knowledge is an index.",
+      };
     if (isMemoryProposalTool(name))
       return this.propose
         ? this.propose(name, args, context)

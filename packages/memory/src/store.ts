@@ -44,6 +44,15 @@ export class FileMemoryStore {
     return this.loadPromise;
   }
 
+  /** Refresh derived state without rewriting source files or renewing retention. */
+  async refresh(): Promise<void> {
+    await this.load();
+    // Preserve usage from explicit reads before replacing the cached records.
+    await this.flushAccess();
+    await this.loadNow();
+    this.indexDirty = true;
+  }
+
   private async loadNow(): Promise<void> {
     await this.fs.makeDirectory(this.memoriesDir);
     const files = await this.fs.listFiles(this.memoriesDir);

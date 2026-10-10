@@ -574,8 +574,8 @@ ${REPORT_STYLE_CSS}
   min-width: 0;
   min-height: 0;
   margin: auto;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   border: 0;
   border-radius: 16px;
@@ -591,149 +591,9 @@ ${REPORT_STYLE_CSS}
   border-bottom: 0;
   background: var(--confucius-elevated);
 }
-.confucius-knowledge-header-copy { min-width: 0; flex: 1; }
-.confucius-knowledge-eyebrow {
-  color: var(--confucius-muted);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: .12em;
-  text-transform: uppercase;
-}
-.confucius-knowledge-heading {
-  overflow: hidden;
-  color: var(--confucius-ink);
-  font: inherit; font-size: 1.3em; font-weight: 650;
-  letter-spacing: -0.01em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.confucius-knowledge-body {
-  display: grid;
-  grid-template-columns: minmax(170px, 220px) minmax(220px, .85fr) minmax(280px, 1.15fr);
-  min-width: 0;
-  min-height: 0;
-}
-.confucius-knowledge-pane {
-  min-width: 0;
-  min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
-  scroll-padding-block: 12px;
-  box-sizing: border-box;
-}
-.confucius-knowledge-topics {
-  padding: 8px 16px 20px;
-  border-right: 0;
-  background: var(--confucius-elevated);
-}
-.confucius-knowledge-entries {
-  padding: 8px 16px 20px;
-  border-right: 0;
-  background: var(--confucius-elevated);
-}
-.confucius-knowledge-editor { padding: 8px 24px 20px; background: var(--confucius-elevated); }
-.confucius-kb-row, .confucius-kb-entry-row {
-  display: block;
-  width: 100%;
-  height: auto;
-  max-height: none;
-  margin: 0 0 8px;
-  padding: 12px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--confucius-ink);
-  text-align: left;
-  cursor: pointer;
-  box-sizing: border-box;
-  font: inherit;
-  overflow-wrap: anywhere;
-}
-.confucius-kb-row:hover, .confucius-kb-entry-row:hover { background: var(--confucius-hover); }
-.confucius-kb-row.active, .confucius-kb-entry-row.active {
-  background: var(--confucius-surface);
-  color: var(--confucius-ink);
-  box-shadow: none;
-}
-.confucius-kb-meta { margin-top: 6px; color: var(--confucius-muted); font-size: .86em; }
-.confucius-kb-section-label {
-  margin: 12px 0 8px;
-  color: var(--confucius-muted);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: .1em;
-  text-transform: uppercase;
-}
-.confucius-kb-toolbar { display: flex; gap: 6px; align-items: center; margin-bottom: 10px; }
-.confucius-kb-toolbar input { flex: 1; min-width: 0; }
-.confucius-kb-filters { display: flex; flex-wrap: wrap; gap: 4px; overflow-x: scroll; overflow-y: hidden; padding-bottom: 8px; }
-.confucius-kb-filter {
-  flex: 0 0 auto;
-  padding: 4px 8px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--confucius-muted);
-  cursor: pointer;
-  font: inherit;
-  font-size: .9em;
-}
-.confucius-kb-filter.active { background: var(--confucius-surface); border-color: var(--confucius-ink); color: var(--confucius-ink); }
-.confucius-kb-field { display: grid; gap: 5px; margin-bottom: 12px; color: var(--confucius-secondary); font-size: 11px; }
-.confucius-kb-field input, .confucius-kb-field textarea, .confucius-kb-field select,
-.confucius-kb-toolbar input {
-  min-width: 0;
-  width: 100%;
-  padding: 8px 9px;
-  border: 0;
-  border-radius: 8px;
-  background: var(--confucius-surface);
-  color: var(--confucius-ink);
-  box-sizing: border-box;
-  font: inherit;
-}
-.confucius-kb-field input:focus, .confucius-kb-field textarea:focus, .confucius-kb-field select:focus,
-.confucius-kb-toolbar input:focus {
-  outline: 2px solid var(--confucius-focus);
-  outline-offset: 0;
-}
-.confucius-kb-field textarea { min-height: 180px; resize: vertical; line-height: 1.5; }
-.confucius-mindmap-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
-.confucius-mindmap-preview {
-  min-height: 220px;
-  overflow-x: scroll;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
-  padding: 12px;
-  border: 0;
-  border-radius: 8px;
-  background: var(--confucius-surface);
-}
-.confucius-mindmap-preview ul { margin: 4px 0 4px 14px; padding-left: 12px; border-left: 1px solid var(--confucius-line); }
-.confucius-mindmap-preview > ul { margin-left: 0; padding-left: 0; border-left: 0; }
-.confucius-mindmap-preview li { margin: 5px 0; color: var(--confucius-ink); }
-.confucius-kb-actions { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
-.confucius-kb-danger { margin-left: auto; color: var(--confucius-danger) !important; background: transparent !important; border-color: var(--confucius-danger) !important; }
-.confucius-kb-empty { display: grid; place-items: center; min-height: 180px; padding: 18px; color: var(--confucius-muted); text-align: center; }
-.confucius-kb-error { margin: 8px 0; color: var(--confucius-danger); font-size: 12px; white-space: pre-wrap; }
 @media (max-width: 760px) {
   .confucius-knowledge-overlay { padding: 0; }
   .confucius-knowledge-shell { border: 0; border-radius: 0; }
-  .confucius-knowledge-body { grid-template-columns: 132px minmax(0, 1fr); }
-  .confucius-knowledge-editor { grid-column: 1 / -1; border-top: 0; }
-  .confucius-knowledge-entries { border-right: 0; }
-  .confucius-mindmap-workspace { grid-template-columns: minmax(0, 1fr); }
-}
-@media (max-width: 430px) {
-  .confucius-knowledge-header { padding: 9px 10px; }
-  .confucius-knowledge-body { display: block; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; }
-  .confucius-knowledge-pane { overflow: visible; }
-  .confucius-knowledge-topics { border-right: 0; border-bottom: 0; }
-  .confucius-knowledge-entries { border-right: 0; border-bottom: 0; }
-  .confucius-kb-topic-list { display: flex; gap: 6px; overflow-x: scroll; overflow-y: hidden; }
-  .confucius-kb-row { flex: 0 0 140px; }
-  .confucius-kb-field textarea { min-height: 150px; }
 }
 .confucius-workspace-root a {
   color: var(--confucius-accent);
@@ -1294,4 +1154,28 @@ ${REPORT_STYLE_CSS}
 .confucius-attachment-chip { border-radius: 8px; }
 ${SURFACE_CSS}
 ${ANNOTATION_REVIEW_CSS}
+
+.confucius-knowledge-index .confucius-knowledge-header { display:flex; align-items:center; justify-content:space-between; padding:10px 14px; gap:10px; }
+.confucius-knowledge-index [hidden] { display:none !important; }
+.confucius-knowledge-index .confucius-knowledge-header h2 { margin:0; font-size:16px; }
+.confucius-knowledge-index-body { flex:1; min-height:0; display:grid; grid-template-columns:minmax(220px, 32%) minmax(0, 1fr); gap:24px; padding:18px 24px; overflow:hidden; }
+.confucius-knowledge-index-list { display:flex; flex-direction:column; min-height:0; min-width:0; gap:8px; }
+.confucius-knowledge-index-list input { width:100%; box-sizing:border-box; min-height:34px; border:0; border-radius:8px; padding:7px 10px; background:var(--confucius-surface); color:var(--confucius-ink); font:inherit; }
+.confucius-knowledge-results { flex:1; min-height:0; overflow:auto; }
+.confucius-knowledge-result { width:100%; height:auto; max-height:none; display:flex; flex-direction:column; align-items:stretch; text-align:left; white-space:normal; overflow-wrap:anywhere; gap:4px; margin-bottom:8px; padding:10px 12px; }
+.confucius-knowledge-result[aria-current=true] { background:var(--confucius-hover); }
+.confucius-knowledge-error { margin:0 14px; color:var(--confucius-danger); font-size:12px; white-space:pre-wrap; }
+.confucius-knowledge-error:empty { display:none; }
+.confucius-knowledge-result small, .confucius-knowledge-excerpt { color:var(--confucius-secondary); font-weight:400; }
+.confucius-knowledge-excerpt { font-size:12px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.confucius-knowledge-index-detail { overflow:auto; min-width:0; }
+.confucius-knowledge-index-detail h2 { overflow-wrap:anywhere; }
+.confucius-knowledge-actions { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:24px; }
+.confucius-knowledge-index-detail article { max-width:680px; overflow-wrap:anywhere; }
+.confucius-knowledge-memory-input { width:100%; min-height:260px; box-sizing:border-box; margin-bottom:8px; font:inherit; }
+@media (max-width:619px) {
+  .confucius-knowledge-index .confucius-knowledge-header { padding:8px; gap:6px; }
+  .confucius-knowledge-index-body { grid-template-columns:minmax(0, 1fr); grid-template-rows:minmax(120px, 35%) minmax(0, 1fr); padding:10px; gap:16px; }
+  .confucius-knowledge-actions { gap:4px; }
+}
 `;

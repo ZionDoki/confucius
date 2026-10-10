@@ -1,4 +1,5 @@
 import { SUBAGENT_TOOL_NAMES } from "@confucius/protocol";
+import { SKILL_TOOL_NAME } from "@confucius/skill-format";
 import type { ToolExecutionContext } from "@confucius/protocol";
 import { HISTORY_TOOL_NAMES } from "./HistoryTools";
 import { CONTEXT_TOOL_NAMES } from "./ContextTools";
@@ -72,6 +73,7 @@ export function presetToolNames(workflow: PresetWorkflow): ReadonlySet<string> {
     ...HISTORY_TOOL_NAMES,
     ...CONTEXT_TOOL_NAMES,
     ...ARTIFACT_TOOL_NAMES,
+    SKILL_TOOL_NAME,
     "load_skill",
     ...(workflow.annotationFirst
       ? [

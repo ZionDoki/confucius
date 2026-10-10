@@ -2,8 +2,8 @@
 
 本记录对应 2026-09-21 的 Unreleased 工作区改动，产品版本保持 0.4.6。
 已构建开发 XPI 并在隔离 Zotero 配置中安装验收；没有发布 tag、GitHub Release 或
-覆盖任何公开安装包。用户行为见[使用说明](../../../docs/literature-research.md)，
-领域约定见[维护契约](../literature-research.md)。
+覆盖任何公开安装包。用户行为见[使用说明](../../../docs/literature-research.zh-CN.md)，
+领域约定见[维护契约](../literature-research.zh-CN.md)。
 
 开发产物：`output/confucius-openalex-dev.xpi`（690,637 字节），manifest 版本为 0.4.6。
 SHA-256：`090bf77e84c4a074c62cfedf83915fa2ce30c543f0cc65f28619a8cbd21e59ec`。
@@ -69,4 +69,4 @@ Codex 与 Kimi 使用适配器模拟验证工具与生命周期契约，不能�
 
 实机范围限于上述 macOS 和 Zotero 版本；没有宣称 Windows、Linux 或 Zotero 7
 实机验收通过。未进行本次开发版本的公开升级／自动更新渠道验收。正式发布仍须按
-[发布规范](../releases.md)准备新版本并执行独立发布及安装后验收。
+[发布规范](../releases.zh-CN.md)准备新版本并执行独立发布及安装后验收。

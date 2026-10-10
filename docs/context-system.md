@@ -1,60 +1,62 @@
-# 上下文、换窗与归档
+# Context and history
 
-以下功能从 0.4.3 正式版开始提供。
+English · [简体中文](context-system.zh-CN.md)
 
-Confucius 把模型当前使用的工作窗口与本机原始记录分开保存。窗口满了以后，通过
-已保存的交接记录继续工作；需要其他材料时再搜索和读取，不必把全部旧聊天重新
-发送给模型。
+[User guide](README.md)
 
-## 换窗会带走什么
+## Why a long task can keep working
 
-当前用户要求、来源范围、完成与待办事项、最新进度笔记、下一步和关键证据引用。
-原始工具结果先保存在本机，下一步需要的片段优先带入新窗口，较大的正文按引用
-继续读取。已完成写入的凭据、审批状态和累计额度持续有效。
+The model has a limited working window. Confucius saves original conversation
+and tool records locally, then carries the current request, sources, progress,
+next action and selected evidence into a new window when needed.
 
-流程依次为“准备交接 → 校验并保存 → 准备新窗口或会话 → 提交切换 → 继续”。
-工具仍在执行、结果不确定或审批未处理时，会等待安全边界。准备失败会保留旧窗口
-与可恢复状态；更新要求或来源后，过时交接不会覆盖新任务状态。
+A context switch preserves saved reports, write receipts, approvals and consumed
+budget. It waits for safe tool/approval boundaries. If preparation or persistence
+fails, the old context and recovery state remain available.
 
-普通运行和信息完整的交接不增加模型调用。资料不足时，最多补充一次交接；它和
-记忆蒸馏共享每个用户轮次两次维护请求额度，重试也计入，重启不恢复额度。CLI 未
-公开的内部重试与 token 用量保持未知，不能据此计算完整费用。
+A complete handoff needs no extra organizing model call. Missing information may
+use one supplemental call, sharing a limit of two maintenance requests per user
+turn with research-memory extraction and distillation. External runtimes may have
+internal work or usage they do not report.
 
-## 找回证据与检查遗漏
+## Check what was actually covered
 
-搜索现在定位到具体页段，而不只返回一整条工具结果。交接会优先带入明确引用的
-片段，再补充不同待办所需的材料。较长结果后半部的证据可以直接回读；笔记或记忆
-已修改时，旧位置会提示版本变化，避免把同一个偏移用在不同内容上。
+Ask: “List each source, what you have read and the next unread page.”
 
-比较全部论文时，可以要求 Agent“列出当前任务每篇材料的处理情况和下一未读页”。
-清单按任务绑定的来源逐项列出，区分工具返回过的页面、截断页面、报告已分析的
-材料和失败项。它会跨窗口保存；搜索命中了几篇，不代表全部材料已经处理。
+A search hit, a returned page and a checked factual claim are different things.
+The Agent can retrieve archived passages, but important claims still need source
+verification. A saved collection does not by itself prove every member was read.
 
-页面返回和模型报告分析都不等于业务核验。仅绑定一个集合或保存的搜索时，系统
-不会假定其全部成员已经枚举；旧记录缺少可信读取信息时也不补造进度。实际源文件
-核验仍需要重新读取必要原文，搜索归档不能代替这一步。
+## How long history is kept
 
-保存笔记以有用发现、阶段变化和下一步为主，不要求每一步重写摘要。这些优化使用
-本地计算，不增加普通任务或完整交接的维护模型调用；正常工具轮次仍会消耗模型
-输入与输出 tokens。
+| State    | Default policy                                                                        |
+| -------- | ------------------------------------------------------------------------------------- |
+| Recent   | Target: 10 ended tasks, 30 days and 50 MiB; excess moves to local archives.           |
+| Archived | Remains searchable, readable and exportable; target retention is 90 days and 500 MiB. |
+| Cleaned  | Original content is no longer available. Saved status cannot restore it.              |
 
-## 原文能保存多久
+Actually reading archive text or continuing its task renews use. Search,
+background maintenance and diagnostic export do not. Active tasks, recovery work
+and unresolved operations can protect records and temporarily exceed targets.
 
-“近期”记录以最近 10 个已结束任务、30 天、50 MiB 为目标，超出后本地归档。
-归档不调用模型，也不改变原文引用。归档默认保留 90 天，容量目标 500 MiB；实际
-读取或继续任务会续期。搜索和后台维护不会续期。
+**Automatic history cleanup** is separate from **Maintain work memory
+automatically**. Turning off cleanup keeps archives. Memory extraction does not
+authorize deleting source history. Reports, native Zotero objects and authoritative
+write receipts are separate from disposable history.
 
-“历史自动清理”开关决定是否按期限和容量清理归档，与“自动维护普通记忆”独立。
-运行中或待恢复任务依赖的记录暂不删除，详情会显示保留原因。蒸馏只产生少量工作
-记忆，成功或失败都不决定原文删除。已清理的历史无法恢复，需要长期保留请提前导出。
+Selection-question side conversations use their own recent/archive retention
+under the same cleanup setting. See [selection questions](selection-questions.md).
 
-## 遇到停顿时
+## If work pauses
 
-- **交接资料不足**：保存当前进度，写明已完成内容、下一步和证据位置，再继续任务。
-- **维护额度耗尽**：原文仍在；可补充进度笔记完成本地交接，不必反复点换窗。
-- **容量不足**：必需提示、来源或工具交互本身过大，减少输入或选择更大窗口的模型。
-- **PDF 已变化**：重新打开当前文件，再进行真实读取和核验。
-- **历史已清理**：旧引用只能报告不可用；从原始文献、保存的成果或备份继续。
+- **Insufficient handoff information:** ask to save the current findings, next step
+  and source references, then continue.
+- **Maintenance allowance exhausted:** existing material remains; avoid repeatedly
+  requesting a context switch.
+- **Context capacity exceeded:** reduce input or choose a larger-context model.
+  More model steps do not increase context size.
+- **Earlier requirements missed:** restate them and ask to reread the relevant
+  history and original evidence.
 
-历史内容和模型笔记只提供证据，不产生新的操作权限。“已存档”和“已提供给后端”
-也不代表业务核验已完成。保留策略、保护记忆和备份方法见[任务与数据](tasks-and-data.md#上下文记忆与清理)。
+History is not a permanent backup. [Export and back up](tasks-and-data.md) material
+you need to retain.

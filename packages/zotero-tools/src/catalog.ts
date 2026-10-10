@@ -64,7 +64,7 @@ export const annotationSchema = {
     comment: {
       type: "string",
       description:
-        "In the user's configured response language, explain what this passage establishes and its evidence, assumptions, limitations, or relevance. Distinguish the paper's findings from your inference; do not merely repeat or translate the quote.",
+        "In the user's response language, explain what this passage establishes and its evidence, assumptions, limitations, or relevance. Distinguish the paper's findings from your inference; do not merely repeat or translate the quote.",
     },
     importance: { type: "string", enum: ["key", "supporting"] },
     rationale: {
@@ -514,7 +514,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   ),
   def(
     "commit_annotations",
-    "Create native PDF annotations in one call: pass annotations:[{anchor,comment}] using IDs from get_pages. One entry or a batch is supported; no propose call is needed. Type defaults to highlight for anchors; underline and color are optional. Comments must use the user's configured response language. The tool resolves text, page and geometry, previews the actual passages, saves eligible entries, and retains partial successes. Only returned annotationKeys confirm writes. If using an optional saved proposal, pass proposalId alone. Repair only failed entries; do not repeat unchanged non-retryable failures or recreate completed/manually removed marks. Copy returned Zotero URIs exactly.",
+    "Create native PDF annotations in one call: pass annotations:[{anchor,comment}] using IDs from get_pages. One entry or a batch is supported; no propose call is needed. Type defaults to highlight for anchors; underline and color are optional. Comments must use the user's response language. The tool resolves text, page and geometry, previews the actual passages, saves eligible entries, and retains partial successes. Only returned annotationKeys confirm writes. If using an optional saved proposal, pass proposalId alone. Repair only failed entries; do not repeat unchanged non-retryable failures or recreate completed/manually removed marks. Copy returned Zotero URIs exactly.",
     {
       ...itemRef,
       proposalId: {
@@ -615,6 +615,25 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     "Delete a memory by id. Requires approval.",
     {
       id: { type: "string" },
+    },
+    ["id"],
+  ),
+  def(
+    "knowledge_search",
+    "Search the unified knowledge index: live Zotero notes, research topics, preferences and legacy knowledge files. Returns source references, never a separate copy. Use offset to continue.",
+    {
+      query: { type: "string" },
+      offset: { type: "integer", minimum: 0 },
+      limit: { type: "integer", minimum: 1, maximum: 100 },
+    },
+  ),
+  def(
+    "knowledge_read",
+    "Read the current source document from a knowledge_search result. Zotero notes are authoritative; missing sources are reported as unavailable.",
+    {
+      id: { type: "string" },
+      offset: { type: "integer", minimum: 0 },
+      limit: { type: "integer", minimum: 1, maximum: 12000 },
     },
     ["id"],
   ),

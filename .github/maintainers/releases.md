@@ -1,91 +1,61 @@
-# 版本与发布规范
+# Versioning and releases
 
-本文约束 Confucius 的版本号、Beta 开关、更新说明和 GitHub Release 流程。
-[AGENTS.md](../../AGENTS.md) 要求涉及发布的修改遵循本文。产品版本以根
-`package.json` 为准，发布说明以 [CHANGELOG.md](../../CHANGELOG.md) 为准。
+English · [简体中文](releases.zh-CN.md)
 
-## 版本号与渠道
+This governs versions, update channels, release notes, and GitHub Releases. [AGENTS.md](../../AGENTS.md) requires it for release-related changes. The root `package.json` owns the product version; [CHANGELOG.md](../../CHANGELOG.md) owns release-note bodies.
 
-| 类型   | 包版本示例     | Git tag         | GitHub Release                                           |
-| ------ | -------------- | --------------- | -------------------------------------------------------- |
-| 稳定版 | `0.4.0`        | `v0.4.0`        | `prerelease: false`；发布当前稳定线的新版本时设为 Latest |
-| Beta   | `0.4.0-beta.2` | `v0.4.0-beta.2` | `prerelease: true`；`make_latest: false`                 |
+## Versions and channels
 
-- 使用 SemVer 的数值顺序，不按字符串或发布时间排序。数字不能有前导零，Beta
-  序号从 1 开始；公开版本暂只使用稳定版和 `beta.N`，不用 `latest`、日期、
-  `-dev`、`+build` 或临时后缀作产品版本。
-- 稳定线的兼容修复递增 PATCH；新增功能通常递增 MINOR；破坏性公共接口变更
-  在 1.0 之后递增 MAJOR。0.x 阶段的破坏性变更递增 MINOR，并在升级说明中列明。
-- 同一个目标版本的 Beta 递增序号，例如
-  `0.4.0-beta.1 → 0.4.0-beta.2 → 0.4.0`。`beta.10` 高于 `beta.2`，
-  同基础版本的稳定版高于所有 Beta。
-- 已发布的代码或 XPI 有变化就必须使用新版本。不要移动已发布的 tag、覆盖同版本
-  XPI，或把同版本不同内容当作可自动更新的修复。仅补正文错字时保留事实与原版本。
-- 普通开发不必每次改动都升版，先维护 `Unreleased`；准备发布候选时再统一升版。
-  Beta 转正式版时使用同基础版本的稳定版号；每次发版先核对远端，不能照抄示例。
+| Channel | Package example | Git tag         | GitHub Release                                                             |
+| ------- | --------------- | --------------- | -------------------------------------------------------------------------- |
+| Stable  | `0.4.0`         | `v0.4.0`        | `prerelease: false`; Latest for a newer release on the current stable line |
+| Beta    | `0.4.0-beta.2`  | `v0.4.0-beta.2` | `prerelease: true`; `make_latest: false`                                   |
 
-`releases/latest`、README 下载链接和徽章代表稳定渠道。需要维护旧稳定线时，
-不要让较低版本的补丁覆盖当前稳定线的 Latest；修改发布工作流的 Latest 设置后
-核对实际结果。
+- Compare numeric SemVer components, not strings or publication dates. No leading zeroes; Beta numbering starts at 1. Public versions use only stable or `beta.N`, without `latest`, dates, `-dev`, build metadata, or temporary suffixes.
+- Increment PATCH for compatible fixes and usually MINOR for features. Breaking public APIs increment MAJOR after 1.0. During 0.x, increment MINOR and document migration.
+- Advance Betas for one target version: `0.4.0-beta.1 → 0.4.0-beta.2 → 0.4.0`. `beta.10` is newer than `beta.2`; stable is newer than every Beta with the same base.
+- Changed published code or XPI bytes require a new version. Never move published tags, replace same-version XPIs, or treat changed bytes under one version as an automatic update. Typo-only release-note corrections must preserve original facts.
+- During development, maintain Unreleased without bumping every change. Align versions when preparing a candidate. A stable release after Beta uses the same base version. Check remote versions first; never copy an example blindly.
 
-## 插件更新与 Beta 开关
+`releases/latest`, README download links, and badges represent the stable channel. A patch for an older stable line must not replace the current line's Latest. Verify the result if changing workflow Latest behavior.
 
-入口是 **Confucius 设置 → 更新 → 接收测试版更新（可能不稳定）**。
+## Updater and Beta preference
 
-| 状态                                 | 检查行为                                          |
-| ------------------------------------ | ------------------------------------------------- |
-| 关闭测试版开关                       | 只比较已公开的稳定版                              |
-| 开启测试版开关                       | 比较稳定版和 Beta，提供其中高于当前版本的最高版本 |
-| Beta 用户关闭开关                    | 保留当前安装版本；等待更高的稳定版，不自动降级    |
-| 没有更高版本                         | 成功获取并比较发布信息后显示“已是最新版本”        |
-| 网络错误、限流、发布包缺失或校验失败 | 显示错误或稍后重试提示，不显示“已是最新版本”      |
+The entry is **Confucius Settings → Update → Include prereleases**.
 
-“自动检查更新”是另一项独立设置：启动约 30 秒后检查，之后每 6 小时检查，
-安装由用户点击“下载并安装”触发。关闭自动检查仍可手动检查，也不会改变 Beta 选择。
+| State                                               | Behavior                                                                              |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Prereleases off                                     | Compare public stable versions only                                                   |
+| Prereleases on                                      | Offer the highest stable or Beta version newer than the installed version             |
+| Beta user turns prereleases off                     | Keep the installed version and wait for a newer stable; never downgrade automatically |
+| No higher version                                   | Show up to date only after a successful fetch and comparison                          |
+| Network, rate-limit, asset, or verification failure | Show an error/retry state, never up to date                                           |
 
-用户的显式渠道选择保存在 `extensions.zotero.confucius.updateChannel`：
-`stable` 表示关闭，`beta` 表示开启。初始 `auto` 状态按当前安装包决定：稳定包默认
-关闭，手动安装的 Beta 包默认开启。一旦用户切换，后续升级不得按新包类型覆盖选择。
+Automatic checks are independent: about 30 seconds after startup, then every six hours. Installation requires the user's Download and install action. Disabling automatic checks preserves manual checks and the Beta choice.
 
-更新服务直接读取 GitHub Releases API，过滤 draft 和不符合渠道的版本；下载
-`confucius.xpi` 时使用该资产的 GitHub API 地址，核对资产大小和 SHA-256，再确认
-插件 ID、包版本和 Zotero 兼容性。Zotero 只承担最终 XPI 安装接口；检查和定时器
-不依赖 Zotero 的全局自动更新开关。
+Explicit channel selection lives in `extensions.zotero.confucius.updateChannel`: `stable` means off and `beta` means on. Initial `auto` follows the installed package: stable defaults off, a manually installed Beta defaults on. Upgrades must preserve an explicit choice regardless of package type.
 
-若列表中最高可升级版本缺少 uploaded 的 `confucius.xpi`，更新器按该版本的数值 ID
-查询本仓库的独立附件接口，再执行同样的下载地址、大小和 SHA-256 校验。仅补查选中
-的版本，不逐个请求历史版本；错误仍显示为错误，不退选旧版或误报“已是最新版本”。
-列表与附件查询共同受一次检查的总时限约束。
+Confucius reads GitHub Releases directly, excluding drafts and ineligible channels. It downloads `confucius.xpi` through the asset API, verifies size and SHA-256, then checks addon ID, package version, and Zotero compatibility. Zotero supplies the final installation interface; checks and timers do not depend on Zotero's global automatic-update setting.
 
-旧安装包仍运行旧更新逻辑，发布端必须继续满足旧客户端的匿名列表与下载接口约定。
-只验证新版的附件补查，或把新版运行时的当前版本临时改小，不能证明旧版能取得修复。
-必须使用未修改的公开旧 XPI，通过它自身的检查、下载、校验、安装流程验收；不能用
-要求用户手动安装替代这项兼容性修复。`npm start` 的临时开发插件也不能替代普通
-安装包的升级与重启验收。
+If the highest eligible version lacks an uploaded XPI in the release list, query this repository's separate assets endpoint using that release's numeric ID. Apply the same URL, size, and SHA-256 checks. Query only the selected release, not every historical one. Failure remains an error: do not choose an older version or report up to date. List and asset requests share one overall check deadline.
 
-## 更新说明
+Old installed packages still run old updater code. Publication must preserve their anonymous list/download contract. Testing only the new fallback, or lowering the new updater's reported current version, does not establish compatibility. Use an unchanged public old XPI and its own check/download/verify/install flow. A manual-install workaround or temporary `npm start` addon does not replace ordinary-package upgrade and restart acceptance.
 
-日常修改在 `## Unreleased` 下记录。准备发版时，将本次实际包含的改动整理为
-`## <完整版本号> - YYYY-MM-DD`，日期使用发布日的 UTC 日期，按新到旧排列。
-同一版本只能有一个条目；`Unreleased` 不进入 GitHub Release 正文。
+## Release notes
 
-Beta 说明记录相对上一次公开版本的变化；转为稳定版时，汇总自上一个稳定版以来
-已经验收的用户变化，不能只写最后一个 Beta 的增量。稳定版的 Full Changelog
-链接比较前一个稳定版，Beta 的链接比较前一个公开版本。
+Record development changes under `## Unreleased`. At release, create exactly one `## <full-version> - YYYY-MM-DD` entry using the release day's UTC date, newest first. Unreleased is excluded from GitHub Release bodies.
 
-CHANGELOG 继续使用英文作为发布正文，中文操作说明放在本文和中文 README。
-每条说明交代用户遇到的情况和改变后的行为；技术实现仅在解释兼容性、迁移或
-限制时展开。不得直接粘贴 commit 列表，也不得把历史验证结果写成新版本实测。
+Beta notes describe changes since the previous public version. Stable notes summarize verified user-facing changes since the previous stable, not just the last Beta increment. Full Changelog compares the previous stable for stable releases and the previous public version for Betas.
 
-每个新发布条目包含以下内容：
+CHANGELOG stays in English as the single release-body source. Chinese instructions live in this guide's Chinese counterpart and the Chinese README. Describe the user's situation and resulting behavior. Include internals only when they explain compatibility, migration, or limits. Do not paste commit lists or present historical checks as new validation.
 
-1. 用户可感知的新增、变化和修复，可按 `Added`、`Changed`、`Fixed` 分组，空组省略。
-2. `Upgrade notes`：适用渠道、进入 Beta 的方法、需要重启／重新配置的步骤、迁移与
-   回退限制；没有迁移时明确说明，无需重复完整安装教程。
-3. `Validation and known limits`：本次实际执行的检查、OS／Zotero 环境、结果和证据
-   链接；未执行或失败的验收必须明确标注，Beta 尤其需要说明剩余限制。
+Each new release entry includes:
 
-以下是格式示例，不表示这些测试已经执行；正式发布必须用本次事实替换说明：
+1. User-visible additions, changes, and fixes; optional Added/Changed/Fixed groups, omitting empty groups.
+2. Upgrade notes: channel, Beta enrollment, any restart/reconfiguration, migration, and rollback limits. Explicitly say when no migration is required.
+3. Validation and known limits: checks actually run, OS/Zotero environment, results, and evidence. Explicitly list unrun or failed acceptance checks, especially for Betas.
+
+This is a format example, not evidence that its checks ran:
 
 ```markdown
 ## 0.4.0-beta.2 - 2026-09-06
@@ -107,33 +77,25 @@ CHANGELOG 继续使用英文作为发布正文，中文操作说明放在本文�
 - List remaining limitations and link to the corresponding acceptance records.
 ```
 
-发布前用 `npm run release:check -- v<版本号>` 检查版本一致性、tag 和更新说明。
-该命令检查版本格式、tag 完全匹配、条目唯一性、真实日期和非空正文／占位符；
-变化描述是否准确、验收是否充分仍须人工按本文核对。
-GitHub Release 正文通过 `node scripts/release-notes.mjs v<版本号>` 提取，脚本补充
-Full Changelog 比较链接；不要单独手写一份不同的 Release 正文。标题固定为
-`Confucius v<版本号>`，tag、标题、正文所属版本和 XPI 版本必须一致。
-正式条目中的仓库文档链接使用固定到本次 tag 的完整 GitHub URL，避免相对链接在
-Release 页面失效，或链接到后来已变化的 `master` 文档。
+`npm run release:check -- v<version>` checks version consistency, exact tag, unique entry, real date, and nonempty/non-placeholder content. Maintainers must still assess accuracy and sufficient validation.
 
-## 准备与本地检查
+Generate the GitHub body with `node scripts/release-notes.mjs v<version>`; it adds the Full Changelog link. Do not write a separate competing body. Use the title `Confucius v<version>`. Tag, title, notes, and XPI must agree. Repository documentation links in published entries must be full GitHub URLs pinned to that release tag, not relative paths or changing `master` pages.
 
-以下命令在仓库根目录执行，`0.4.0-beta.2` 仅作示例。
+## Prepare and check locally
 
-1. 检查 `git status`、同步远端，查看现有 tag 和 Release，确定版本未被使用、提交
-   范围正确。保留与本次发布无关的用户改动。
-2. 用 npm 同步根包和全部 workspace 的版本：
+Run from the repository root. `0.4.0-beta.2` below is only an example.
+
+1. Inspect `git status`, synchronize remote information, and inspect tags/releases. Verify the version is unused and the commit scope is correct. Preserve unrelated user changes.
+2. Align root and workspace package versions:
 
    ```sh
    npm version 0.4.0-beta.2 --workspaces --include-workspace-root --no-git-tag-version
    ```
 
-   同步修改 `packages/protocol/src/version.ts` 的 `CONFUCIUS_VERSION`。确认
-   `package-lock.json` 顶层、`packages[""]` 和所有本地 workspace 条目的版本
-   也已更新，随后运行 `npm run versions:check`。
+   Update `CONFUCIUS_VERSION` in `packages/protocol/src/version.ts`. Check the lockfile's top-level version, `packages[""]`, and every local workspace version. Run `npm run versions:check`.
 
-3. 整理 CHANGELOG 的对应版本条目及受影响的 README、迁移与验收文档。
-4. 完成发布前检查：
+3. Prepare the CHANGELOG entry and affected README, migration, and acceptance documents.
+4. Run all checks:
 
    ```sh
    npm run release:check -- v0.4.0-beta.2
@@ -144,81 +106,60 @@ Release 页面失效，或链接到后来已变化的 `master` 文档。
    npm run build
    ```
 
-5. 核对以下产物，并在隔离的 Zotero 配置中验证安装和升级。测试报告记录提交号、
-   XPI 摘要、环境与结果。构建成功不等于安装验收通过；本地构建与 CI 构建的时间戳
-   可能不同，不应声称它们的二进制摘要必然相同。
+5. Inspect artifacts below and test installation/upgrades in an isolated Zotero profile. Record commit, XPI digest, environment, and results. A build is not an installation test. Local and CI builds may differ in timestamps; do not assume identical binary digests.
 
-### 必须核对的产物
+### Required artifact checks
 
-构建目录：`apps/zotero-addon/.scaffold/build/`。
+Build directory: `apps/zotero-addon/.scaffold/build/`.
 
-| 产物／字段                | 要求                                                                                                                        |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `confucius.xpi`           | 固定文件名；内含 `manifest.json`；插件 ID 为 `confucius@zotero.plugin`                                                      |
-| XPI manifest 的 `version` | 等于根包版本，不能带 `v`                                                                                                    |
-| Zotero 兼容范围           | manifest 与更新文件一致，声明范围内有相应验证依据                                                                           |
-| Beta 更新文件             | 必须有 `update-beta.json`；不得把 Beta 写进稳定 `update.json`                                                               |
-| 稳定版更新文件            | 必须有 `update.json`；当前 scaffold 同时生成 `update-beta.json`                                                             |
-| 更新记录的 `version`      | 等于本次发布的完整版本                                                                                                      |
-| `update_link`             | 指向本次 tag 下的 `confucius.xpi`，格式为 `https://github.com/ZionDoki/confucius/releases/download/v<版本号>/confucius.xpi` |
-| 更新文件的 `update_hash`  | 与本次实际 XPI 的 SHA-512 一致                                                                                              |
-| GitHub XPI 资产           | `state: uploaded`，正确的非零 `size`，存在 `sha256:<64 位十六进制>` 的 `digest`；与下载包核对                               |
+| Artifact or field         | Requirement                                                                               |
+| ------------------------- | ----------------------------------------------------------------------------------------- |
+| `confucius.xpi`           | Fixed filename; includes `manifest.json`; addon ID `confucius@zotero.plugin`              |
+| XPI manifest `version`    | Root package version, without `v`                                                         |
+| Zotero compatibility      | Manifest and update files agree; declared range has supporting validation                 |
+| Beta update files         | `update-beta.json` exists; no Beta in stable `update.json`                                |
+| Stable update files       | `update.json` exists; current scaffold also creates `update-beta.json`                    |
+| Update record `version`   | Full release version                                                                      |
+| `update_link`             | `https://github.com/ZionDoki/confucius/releases/download/v<version>/confucius.xpi`        |
+| Update file `update_hash` | SHA-512 of the actual release XPI                                                         |
+| GitHub XPI asset          | `state: uploaded`, correct nonzero `size`, and a matching `sha256:<64 hex digits>` digest |
 
-JSON 更新文件保留给 Zotero 原生更新地址的兼容用途；插件自己的更新器读取
-GitHub Release 与资产信息。两者都要正确，不能只上传 JSON 而遗漏 XPI。
-构建应从干净的输出开始，不能把上次稳定构建留下的 `update.json` 混入 Beta。
+JSON update files serve Zotero's native update-address compatibility; Confucius uses GitHub release/asset metadata. Both must be correct. Uploading JSON without the XPI is insufficient. Start with clean build output so a previous stable `update.json` cannot leak into a Beta.
 
-## 发布与发布后验收
+## Publish and verify
 
-完成准备后，在本次发布提交上创建与版本完全一致的 tag。将发布提交和 tag 推送
-到远端会触发 `.github/workflows/ci.yml`；按当前任务已有的发布授权执行这一步。
-仅准备代码和文档时，不应把工作描述成“已发布”。
+After preparation, tag the release commit with the exact version. Pushing the commit and tag triggers `.github/workflows/ci.yml`; act within the release authorization already given for the task. Preparing code/docs alone is not publication.
 
-CI 会在 Node.js 22、24 上验证，再构建并上传 Release 产物。Beta 必须保持
-prerelease 且不成为 Latest。发布说明必须由版本条目生成，所有资产上传完成后
-再以用户视角检查：
+CI verifies on Node.js 22 and 24, then builds and uploads artifacts. Betas remain prereleases and cannot become Latest. Generate notes from CHANGELOG.
 
-发布工作流先检查目标尚未公开，在 draft 中上传；禁止覆盖已有同名文件。附件接口
-返回的文件名、uploaded 状态、大小和 SHA-256 必须与校验过的构建完全一致，才公开
-Release。公开后连续三次匿名读取与旧客户端相同的发布列表，中间任何缺包响应都会
-清空连续计数；再从旧客户端的资产 API 地址及浏览器下载地址分别取得 XPI 核对摘要，
-避免把认证接口可见、公开列表不可见的版本记为发布验收成功。
-附件显示名保留 `confucius.xpi` 和实际更新文件名，不用标签隐藏扩展名。
-若公开验收失败，工作流将本次 Release 恢复为 draft，从更新列表撤下，保留原 tag、
-源码及安装包，不覆盖或重建已发布的同版产物。排除发布端问题并通过旧版在线升级
-验收前，不把该版本交付为可更新的修复。
+The workflow checks that the target is not already public, then uploads into a draft without replacing same-name assets. Publish only after the assets endpoint matches verified filenames, uploaded states, sizes, and SHA-256 digests. After publication, obtain three consecutive successful anonymous reads of the same release list used by old clients; a missing-package response resets the streak. Download the XPI through both the old client's asset API URL and the browser download URL and verify digests. Authenticated visibility alone is not public acceptance.
 
-已发布包的只读复验可以指定存放原始公开产物的目录，不能以重新构建的字节替换它：
+Keep asset display names as `confucius.xpi` and the actual update filenames, including extensions. If public acceptance fails, return the release to draft so it leaves update lists. Preserve the original tag, source, and package; do not overwrite or rebuild published same-version artifacts. Do not deliver the version as an available updater fix until publication issues and old-client online upgrade checks pass.
+
+For read-only rechecks, point at saved original public artifacts, never substitute a fresh build:
 
 ```sh
-node scripts/release-assets.mjs v<版本号> --public output/release-<版本号>/public
-node scripts/live-legacy-update.mjs output/release-<旧版>/public/confucius.xpi output/release-<新版>/public/confucius.xpi output/release-<新版>/legacy-<旧版>.json
+node scripts/release-assets.mjs v<version> --public output/release-<version>/public
+node scripts/live-legacy-update.mjs output/release-<old>/public/confucius.xpi output/release-<new>/public/confucius.xpi output/release-<new>/legacy-<old>.json
 ```
 
-后一项在隔离 Zotero 中正常安装旧包，使用真实公开接口升级；不替换更新器、当前版本
-或网络响应。它核对安装前后 XPI 摘要、重启后的版本、任务草稿、渠道及禁止降级。
-涉及研究数据迁移时仍须另跑完整升级验收。
+The second command normally installs the old package in isolated Zotero and upgrades through public endpoints without replacing updater code, reported version, or network responses. It checks pre/post-install digests, version after restart, task drafts, channel persistence, and no downgrade. Data migrations still need full upgrade acceptance.
 
-| 场景                            | 预期                                             |
-| ------------------------------- | ------------------------------------------------ |
-| 旧稳定版、Beta 开关关闭         | 看不到 Beta；存在更高稳定版时可发现它            |
-| 同一安装、Beta 开关开启         | 能发现更高的 Beta，并下载、校验、安装            |
-| Beta 1 → Beta 2                 | 正确比较序号并发现更新                           |
-| Beta → 同基础版本的稳定版       | 能升级至稳定版                                   |
-| Beta 用户关闭开关               | 不降级；开关状态重启后保留                       |
-| Zotero 全局自动更新关闭         | Confucius 手动检查及自身自动检查仍正常           |
-| 网络中断、HTTP 限流或资产不完整 | 明确显示失败，可重试，不误报最新                 |
-| 打开工作区设置点击安装          | 自动重载插件和工作区，保留所选会话、草稿、布局和设置页；显示新版本，无需手动开窗 |
-| 连续热更新、工作区预先关闭      | 后续仍可检查更新、切换渠道；已关闭的工作区不会被自动打开 |
-| 安装后重启                      | 实际版本已改变，已有配置、任务与数据符合迁移约定 |
+| Scenario                                            | Expected result                                                                                                       |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Old stable, prereleases off                         | No Betas; discover a higher stable                                                                                    |
+| Same installation, prereleases on                   | Discover, download, verify, and install a higher Beta                                                                 |
+| Beta 1 → Beta 2                                     | Correct numeric sequence comparison                                                                                   |
+| Beta → stable with the same base                    | Stable upgrade available                                                                                              |
+| Beta user disables prereleases                      | No downgrade; choice survives restart                                                                                 |
+| Zotero global automatic updates off                 | Confucius manual and automatic checks still work                                                                      |
+| Network interruption, rate limit, incomplete assets | Clear failure/retry state, never false up to date                                                                     |
+| Install from open workspace settings                | Reload addon/workspace; retain selected task, draft, layout, settings page; show new version without manual reopening |
+| Repeated hot updates; workspace already closed      | Later checks/channel changes still work; do not reopen a previously closed workspace                                  |
+| Restart after installation                          | Actual version changed; settings, tasks, and data satisfy migration contracts                                         |
 
-安装后重启是额外的持久化验收，不代表所有更新都必须重启。分别验证安装已完成与
-暂存等待重启的结果；发布操作说明按实际状态描述，不能统一要求重启。
+A restart is additional persistence validation, not a requirement for every update. Test completed installation and staged-until-restart outcomes separately. Instructions must reflect the actual state.
 
-涉及数据或运行时迁移时，按 [升级验收](acceptance/upgrade-acceptance.md) 的方法建立新的
-版本验收记录；Windows 的专项检查参考 [Windows 验收](acceptance/windows-acceptance.md)。
-旧文档的“已通过”仅适用于其明确记录的版本和环境。
+For data/runtime migration, create a new version-specific record using the historical [upgrade acceptance method (Chinese original)](acceptance/upgrade-acceptance.md). Windows scenarios are in the historical [Windows checklist (Chinese original)](acceptance/windows-acceptance.md). Old passing results apply only to their recorded versions and environments.
 
-若发布资产上传失败，可对同一源码提交重试尚未完成的发布，但不要用新代码替换
-已经可供用户下载的同版 XPI。已公开的版本存在功能缺陷时发布更高补丁版或下一个
-Beta；必要时在原 Release 说明中标明缺陷和替代版本。
+Retry an unfinished upload from the same source commit when appropriate, but never replace an already downloadable same-version XPI with new code. A defective public version needs a higher patch or next Beta; if needed, annotate the original release with the defect and replacement version.

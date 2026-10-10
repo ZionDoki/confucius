@@ -20,6 +20,7 @@ export type { ConfuciusHealthResponse } from "./http";
 export { itemRefKey, parseItemRefKey } from "./item";
 export type { CollectionRef, ItemRef } from "./item";
 
+export { isApprovalResolution } from "./permissions";
 export type {
   ApprovalRequest,
   ApprovalKind,

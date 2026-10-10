@@ -1,117 +1,105 @@
-# 文献研究领域与子 Agent
+# Literature and subagent contracts
 
-本契约对应 0.5.0 Beta；使用方法见[用户说明](../../docs/literature-research.md)，
-验证范围见[验收记录](acceptance/literature-research-2026-09-21.md)。
+English · [简体中文](literature-research.zh-CN.md)
 
-## 文献状态与确认边界
+[Maintainer guide](README.md) · [User guide](../../docs/literature-research.md)
 
-`LiteratureService` 是工作区 RPC 与 `LiteratureToolProvider` 的共同领域服务。
-Native、Codex、Kimi 使用相同工具定义及实现。检索只更新任务工作材料；入库与附件
-写入由用户确认 RPC 驱动，模型调用 `literature_acquire` 只能登记等待。
+## Pool and confirmation
 
-`LiteraturePool` 分别保存查询、按 OpenAlex ID／规范化 DOI 去重的条目、候选决定、
-确认版本及获取回执。没有 DOI 时仅按 OpenAlex ID 匹配。身份合并保留查询来源，优先
-保留用户决定；变更候选版本以使旧选择提交失效。候选并发控制使用 `candidateRevision`，
-下载进度等记录使用独立的池修订。API 总命中数不参与池数量统计。
+`LiteratureService` is shared by UI RPC and `LiteratureToolProvider` across
+Native, Codex and Kimi. Search updates task material; import/download requires
+user confirmation. `literature_acquire` registers a wait, not self-authorization.
 
-批次确认先持久化授权版本，再逐项记录 Zotero 条目回执，最后应用来源并排队下载。
-重复提交复用条目与有效附件。部分入库失败允许在原确认范围内单项重试。来源移除只
-操作 `literatureSourceKeys` 中由本领域添加的绑定，不删除原生文库对象。
+The pool separates fetched records, decisions, confirmed candidate revision,
+queries and acquisition receipts. Deduplicate by OpenAlex IDs or normalized DOI;
+similar titles alone do not merge. Preserve user choices and source provenance.
+Candidate edits/identity joins invalidate old confirmations; progress uses a
+separate pool revision. API total hits are not the fetched pool size.
 
-主请求只有在空闲或当前执行真实阻塞于确认等待时才能应用来源。持久化的等待标记不能
-自行授予运行中修改权限；运行时等待还匹配 run ID 和取消信号。确认等待期间更新主
-run 的来源快照，使其可以在同一请求继续研究；已委派子任务继续使用各自的快照。
-等待确认／缺失全文使用宿主事件唤醒，并暂停工具执行时限，不要求模型重复轮询。
+Confirm persists the authorized revision, then item receipts, source bindings and
+the download queue. Reuse existing items and verified attachments. Removal only
+unbinds sources introduced by this domain.
 
-`literature/continue` 是用户独占的提前继续入口，校验当前 `candidateRevision`，
-持久化 `continuation`（`abstracts` 或 `current`，含候选 ID 与时间），清除确认及
-全文等待并唤醒原工具。它不导入、绑定、下载或取消已授权的后台下载；工具不能伪造此选择。
-确认前、两个等待阶段之间以及下载未完成时都可以继续，同一版本的后续 acquire 直接
-返回该选择及证据限制。候选版本变化使选择失效；重新确认获取全文会清除选择。
-全文等待使用运行时 owner 隔离替换与取消，结束、取消和重启清除过期全文等待状态。
-远端检索单独串行化分页游标，网络期间不持有文献池锁；返回后合入最新池，保留
-期间发生的用户选择、摘要与下载结果。确认批次在写入前保留待确认标记，绑定成功后
-才清除；失败仍有复核和重试入口，不能把部分写入当作来源已全部应用。
+Changing sources is allowed while idle or at the current run's live confirmation
+wait, matched by run ID and signal. A persisted waiting flag is insufficient.
+Existing children keep their delegated source snapshot.
 
-`literature_get` 与用户的 `literature/abstract` 按需补充缺失摘要；普通分页、预览和
-`literature/get` RPC 保持本地读取。`LiteratureAbstracts` 按本地精确 ID／DOI、
-OpenAlex 单篇详情、Crossref DOI 元数据的顺序查找，记录来源，JATS 转为纯文本。
-本地查找最多 2 秒，两个远端各最多 5 秒；即使底层不响应取消，当前查找也按时返回。
-Crossref 请求不携带 OpenAlex Key，返回 DOI 必须匹配。不成功的尝试冷却 5 分钟，
-取消不写入失败缓存。查找不持有文献池锁，迟到结果合入最新池而不覆盖用户决定，
-不会改变 PDF 获取状态或已读全文证据。摘要缺失是有效结果，不得捏造或无限轮询。
+User-only continuation records `abstracts` or `current` for the candidate
+revision and wakes host waits. It does not cancel already authorized background
+downloads, but prevents new supplemental exploration. Candidate changes require
+a new decision. No repeated model polling is needed.
 
-`ZoteroLiteratureAcquirer` 按已有有效 PDF、OA 直链、OpenAlex 缓存的顺序尝试，最多
-并发两个条目；请求超时 60 秒，限制 100 MiB。导入前检查 PDF 头尾并用 Zotero PDF
-worker 解析；导入的是已验证字节的临时副本，用户原文件不移动。附件按原生条目加锁，
-浏览器补齐成功后迟到的下载失败不能覆盖成功状态。浏览器入口只打开落地页，不读取
-Cookie、不监视下载目录。收集任务不会因手工补齐启动新的模型调用。
+## Abstracts and full text
 
-OpenAlex Key 只存于宿主偏好并用于 HTTP 请求；普通配置只返回 `hasKey`。
-公共 URL 去掉凭据参数，缓存 Key 仅发给 HTTPS `content.openalex.org`。
-导出诊断时将该 Key 纳入现有秘密脱敏集合。OpenAlex 429 使用有限退避，额度耗尽
-不重复请求；认证、额度、限流、网络和假 PDF 分别记录。
+Abstract lookup tries exact local metadata, OpenAlex and Crossref within bounded
+deadlines, preserving the matching DOI and provenance. Failure has a short
+cooldown; cancellation is not cached. It does not import papers, change candidate
+choices or establish full-text reading.
 
-## 对话卡片与浮层
+Full-text modules divide responsibilities:
 
-池摘要只增加轻量的 `latestQuery`、候选草案和下载中计数，完整结果仍通过分页 RPC
-读取。`literature_updated` 的首次查询 ID 和 `subagent_updated` 的首次子记录 ID 作为
-时间线锚点；后续状态只更新原位置，工具回执可跨这些锚点完成原有工具记录。
+| Module                    | Responsibility                                                            |
+| ------------------------- | ------------------------------------------------------------------------- |
+| `LiteratureAcquisition`   | Existing-file reuse, ordered acquisition, verified import and receipts    |
+| `LiteratureResolvers`     | Native resolvers, translators and observed page links                     |
+| `LiteratureRepositories`  | DOI-matched Europe PMC / PMC metadata                                     |
+| `LiteratureNetwork`       | Public URL/DNS checks, redirects, credentials and response limits         |
+| `LiteratureBrowser`       | Isolated cookie context, public-request guards and PDF capture            |
+| `LiteraturePdf`           | PDF structure, parsing, first-page identity and explicit version evidence |
+| `LiteratureFulltextAgent` | Observed-link IDs, bounded exploration, cache and session handoff         |
 
-`createLiteraturePanel` 管理任务共用的文献胶囊与单一候选编辑器。胶囊固定在输入区
-上方，与「回到最新」共享布局行；向上展开浮层，时间线只保留工具活动。展开、关闭
-保留列表位置而不改变对话位置，ResizeObserver 按可用空间约束浮层。
-按任务隔离异步响应，切换／卸载后迟到的页面及确认结果不能覆盖新任务；卸载清理
-窗口监听、观察器与定时器。旧池缺少锚点事件时通过分页结果提供兼容入口。
+Try existing verified attachments, OA links, OpenAlex cache, source locations,
+native resolvers and repository candidates before failure. Browser fallback is
+feature-detected. HTML is limited to 5 MiB and PDFs to 100 MiB. Two workers
+download concurrently; each acquisition has an approximately three-minute deadline.
 
-候选仍使用同一版本化接口。确认预览通过 `literature/get` 补全跨页论文标题，显示
-新增、移除及获取范围；候选版本发生变化时禁用旧确认，要求返回后重新核对。
-固定底部显示候选的全文／摘要覆盖数及提前继续按钮；继续请求独立于通用 busy 状态，
-摘要查找也独立于候选编辑。切换任务后旧请求不能清理新任务的 busy、预览或焦点。
-继续和关闭确认会使旧预览失效，迟到响应不能重新打开；忙碌结束后补刷期间的状态更新。
-检索、确认、获取和后台子任务均由宿主管理，UI 的收起或关闭不会触发取消。
+Relative/malformed links and malformed records must not discard other valid
+candidates. Missing version metadata stays unknown. File identity requires title
+plus DOI or author, with supplement/review rejection; byte caches do not bypass
+verification. Import only the verified temporary bytes and preserve the original.
 
-## 子 Agent 与执行预算
+Host-only transfer carries a page's isolated session or prepared PDF to download.
+Never serialize cookies or browser objects to model output. Preserve durable
+import receipts even when cancellation follows. Match identity aliases when a
+paper merges during an in-flight import.
 
-`SubagentManager` 管理独立记录和调度队列，全局最多三个运行项。合成任务不注册到
-主任务侧栏；父任务引用子记录，时间线保存轻量更新事件。每个子任务绑定父 run、意图
-修订和明确来源，复制创建时的引擎、模型和思考配置；不复制整个父会话。
+## Supplemental exploration and failure handling
 
-`SubagentResearchTools` 在宿主处执行只读白名单和来源校验，子任务无法调用委派、
-候选修改、入库、批注、笔记或记忆写入。预设内子任务保留原有来源范围，不能联网扩展。
-通用子任务可以检索并将发现合入父 pool，自身只读取明确传入或自己检索到的元数据。
+Only failed, confirmed, unchanged candidates are eligible; cancelled or continued
+batches cannot restart through AI tools. Capture invalidation before asynchronous
+pool loading and abort active exploration on changes.
 
-Native 子任务使用独立 `TurnLoop`、`WindowContext`、归档和检查点。重试恢复检查点，
-归档 ID 包含执行代次以避免覆盖。外部子任务走统一后端的独立会话、只读工具网关与
-执行租约，恢复时携带自己的结果及可回读归档。主任务通过 `subagent_read` 分页读取
-公开活动和工具／文献证据，内部模型消息不暴露为公开进度。
+Limit each paper/revision to two searches, three download candidates and twelve
+steps. Shared provider cooldowns do not consume per-paper attempts; source-only
+listing is available. Recent failed URLs need fresh PDF/session evidence for a
+bounded retry. Failed browser rendering is not immediately repeated.
 
-气泡按事件游标持续拉取全部公开活动，按工具调用／模型请求聚合呈现，保留展开项和
-阅读位置。同一工作区复用一个固定居中的子任务气泡；切换时缓存独立阅读面板，仅挂载并
-刷新当前面板，废弃切换前未完成的活动请求。入口与聊天内容列等宽，常规委派工具由独立入口表达。`task/trace`
-增加 `subagents` 节，保留子任务公开事件和完整工具／来源归档，继续走统一脱敏。
-工具初始化或首次保存失败会释放运行名额、标记失败并唤醒等待者；旧尝试的迟到事件
-和工具读取不能写入重试后的独立文档，并发重试只允许一次进入队列。并发冷读取共用
-一次恢复；创建来源快照期间发生取消或删除会使提交失效。父任务取消采用计数屏障，
-重叠取消和删除期间不能重新派发；删除与索引写入共用锁，迟到保存不能重建已删记录。
-父任务的等待须同时满足子任务终态及最终保存结束；保存失败会标记失败，不冒充可恢复
-的完成结果。Native 证据交付使用 `WindowContext.provided`，模型请求失败不记送达。
+Dispose session resources on success, cancel, revision change, removal or idle
+expiry. Each cleanup must allow the rest to run. Malformed provider data and
+resolver failures remain recorded fallback failures. Persistent storage failure
+stops workers rather than restarting queued state forever; waiters must exit,
+and a failed worker must not hide another still-active worker.
 
-共享父 `BudgetAccountant`，重试和重启恢复只恢复已消耗的最大值，不补充额度。
-外部引擎未报告的内部请求与用量保持未知。全文证据只在实际交付到模型后记录，保留
-文库、条目、附件、页码及可获得的内容版本，区分子任务读取和主任务直接读取。
+OpenAlex credentials go only to the allowed cache origin; authenticated search
+requests refuse redirects. URL, DNS, redirect and browser-subresource checks
+reject private targets. User-browser cookies and login automation are unavailable.
 
-父任务中止、替换或删除取消排队与运行工作；迟到的结果不能发布到新请求。重启后
-已完成结果保留，未完成记录变为 `interrupted`，由用户重试。原 run 已被替换时不得
-恢复旧委派，需要在新请求重新创建。
+## UI, subagents and storage
 
-## 持久化与分支
+One task owns one literature capsule and pool. Async UI results stay bound to that
+task; closing a viewer does not cancel host work. Counts distinguish candidates,
+fetched records, available PDFs and actually delivered reading evidence.
 
-领域数据使用现有 runtime JSON 存储：`literature/<task>.json` 与不可变的修订快照，
-`subagents/<id>.json` 与父任务索引。主任务索引只保存池摘要、受管来源键及子记录 ID。
-旧任务的新增字段均可缺省；不迁移或删除既有来源、报告、批注。
+`SubagentManager` runs at most three children. Each receives explicit sources,
+background, runtime/model settings and a parent run/intent binding. Host tools
+enforce read-only scope; children cannot delegate, alter candidates or write
+library/memory data. Parent cancellation/deletion fences queued and late work.
 
-`turn_completed.researchState` 固定当时的文献修订、来源及已完成子任务引用。按回复
-分支复制对应历史修订和已完成子记录，后续候选互不影响，不复制正在执行的工作。
-删除父任务清理其领域文件；分支拥有独立副本，原生 Zotero 文献和 PDF 不受影响。
-主上下文清理不会清除文献池或子任务归档。
+Child retries share consumed parent budgets. Completion requires both terminal
+state and completed persistence. Unreported external usage remains unknown.
+
+Pool revisions and child records live outside the main task index. A branch
+copies the selected reply's literature revision and completed child results,
+not running jobs. Deleting a task does not delete native library papers or PDFs.
+
+See [development checks](development.md) and [historical evidence](acceptance/README.md).

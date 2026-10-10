@@ -146,6 +146,31 @@ describe("FileMemoryStore", () => {
     assert.equal(store.get("mem_good") !== undefined, true);
   });
 
+  it("refresh preserves pending access and hides unreadable sources without rewriting them", async () => {
+    const fs = new InMemoryFileSystem();
+    const store = new FileMemoryStore(fs, "/mem");
+    await store.load();
+    const original = record();
+    await store.put(original);
+    store.touch(original.id, 9999);
+    const path = `/mem/memories/${original.id}.md`;
+    const edited = serializeMemory(record({ content: "External revision" }));
+    await fs.writeFile(path, edited);
+    await store.refresh();
+    assert.equal(store.get(original.id)?.content, "External revision");
+    assert.equal(store.get(original.id)?.lastUsedAt, 9999);
+    assert.equal(store.get(original.id)?.accessCount, 4);
+    assert.equal(await fs.readFile(path), edited);
+    await fs.writeFile(path, "incomplete source edit");
+    await store.refresh();
+    assert.equal(store.get(original.id), undefined);
+    assert.equal(await fs.readFile(path), "incomplete source edit");
+    await fs.writeFile(path, edited);
+    await store.refresh();
+    assert.equal(store.get(original.id)?.content, "External revision");
+    assert.equal(store.get(original.id)?.accessCount, 4);
+  });
+
   it("defers access counter writes to flushAccess", async () => {
     const fs = new InMemoryFileSystem();
     const store = new FileMemoryStore(fs, "/mem");

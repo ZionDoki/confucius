@@ -1,4 +1,8 @@
-import type { ApprovalRequest, ApprovalResolution } from "@confucius/protocol";
+import {
+  isApprovalResolution,
+  type ApprovalRequest,
+  type ApprovalResolution,
+} from "@confucius/protocol";
 
 interface PendingApproval {
   request: ApprovalRequest;
@@ -14,7 +18,8 @@ export class ApprovalBroker {
     });
   }
 
-  resolve(resolution: ApprovalResolution): boolean {
+  resolve(resolution: unknown): boolean {
+    if (!isApprovalResolution(resolution)) return false;
     const pending = this.pending.get(resolution.id);
     if (!pending) return false;
     this.pending.delete(resolution.id);

@@ -12,6 +12,8 @@ export interface RunState {
   generation: number;
   intentRevision: number;
   request: string;
+  /** Explicit invocation captured from an accepted user message, never a retry. */
+  skillInvocation?: { slug: string; rest: string };
   sources: LockedContextSnapshot;
   templateId?: string;
   templateVersion: number;
@@ -93,6 +95,10 @@ export function restoreRun(value: unknown): RunState | undefined {
     run.version !== 1 ||
     typeof run.id !== "string" ||
     typeof run.request !== "string" ||
+    (run.skillInvocation !== undefined &&
+      (!run.skillInvocation ||
+        typeof run.skillInvocation.slug !== "string" ||
+        typeof run.skillInvocation.rest !== "string")) ||
     !isLockedContextSnapshot(run.sources) ||
     !Number.isSafeInteger(run.templateVersion) ||
     run.templateVersion < 1 ||

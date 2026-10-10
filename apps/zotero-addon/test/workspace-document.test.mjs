@@ -18,10 +18,10 @@ const workspaceSource = () =>
     "workspaceMenus",
     "workspaceControls",
     "workspaceSurface",
-    "workspaceDrafts",
     "workspaceTypography",
     "artifactWindowView",
     "artifactWriteback",
+    "knowledgeLibrary",
   ]
     .map((name) =>
       readFileSync(join(root, `src/modules/ui/${name}.ts`), "utf8"),
@@ -504,8 +504,8 @@ test("activity stream is the primary workspace and artifacts open as files", () 
   assert.equal(view.includes("renderArtifactFileBlock"), true);
   assert.equal(view.includes("confucius-artifact-file"), true);
   assert.equal(view.includes("openArtifactViewer"), true);
-  assert.equal(view.includes('role: "dialog"'), true);
-  assert.equal(view.includes('"aria-modal": "true"'), true);
+  assert.equal(view.includes('setAttribute("role", "dialog")'), true);
+  assert.equal(view.includes('setAttribute("aria-modal", "true")'), true);
   assert.equal(view.includes("confucius-artifact-dialog-body"), true);
   assert.equal(view.includes('key === "Escape"'), true);
   assert.equal(view.includes("confucius-activity-toggle"), false);
@@ -660,16 +660,16 @@ test("settings can add and save multiple model endpoints", () => {
   assert.equal(host.includes("new BudgetAccountant"), true);
 });
 
-test("workspace exposes an editable research knowledge base and mind maps", () => {
+test("workspace exposes one knowledge index with source editing and export", () => {
   const view = workspaceSource();
-  assert.equal(view.includes("knowledge/list"), true);
-  assert.equal(view.includes("knowledge/get"), true);
-  assert.equal(view.includes("knowledge/saveEntry"), true);
-  assert.equal(view.includes("knowledge/deleteEntry"), true);
-  assert.equal(view.includes("parseMindMapOutline"), true);
-  assert.equal(view.includes("mindmap-preview"), true);
+  assert.equal(view.includes("knowledge/index"), true);
+  assert.equal(view.includes("knowledge/read"), true);
+  assert.equal(view.includes("knowledge/saveEntry"), false);
+  assert.equal(view.includes("knowledge/deleteEntry"), false);
+  assert.equal(view.includes("knowledge/correct"), true);
+  assert.equal(view.includes("knowledge/forget"), true);
   assert.equal(view.includes('id: "confucius-knowledge"'), true);
-  assert.equal(view.includes("workspaceKnowledgeIcon"), true);
+  assert.equal(view.includes("exportKnowledgeDocument"), true);
 });
 
 test("tasks preserve their sources and expose context controls", () => {

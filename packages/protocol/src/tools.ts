@@ -59,6 +59,8 @@ export const PAPER_WRITE_TOOLS = [
 ] as const;
 
 export const MEMORY_READ_TOOLS = [
+  "knowledge_search",
+  "knowledge_read",
   "memory_search",
   "memory_list",
   "knowledge_base_list",

@@ -132,6 +132,12 @@ describe("in-plugin Runtime support", () => {
       riskLevel: "command",
       createdAt: Date.now(),
     });
+    for (const invalid of [
+      { id: "approval-a", scope: "once" },
+      { id: "approval-a", verdict: "reject", scope: "once" },
+      { id: "approval-a", verdict: "allow", scope: "invalid" },
+    ])
+      assert.equal(broker.resolve(invalid), false);
     assert.equal(
       broker.resolve({ id: "approval-a", verdict: "allow", scope: "once" }),
       true,

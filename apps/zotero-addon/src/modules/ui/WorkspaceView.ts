@@ -1,3 +1,4 @@
+import { createKnowledgeLibrary } from "./knowledgeLibrary";
 import {
   createSubagentEntries,
   closeSubagentPopup,
@@ -23,7 +24,6 @@ import { artifactWindows } from "./artifactWindow";
 import { mountWorkspaceArtifact } from "./artifactWorkspace";
 import { UI_FONT_STACKS } from "./workspaceTypography";
 import { getPref, setPref } from "../../utils/prefs";
-import { WorkspaceFormDrafts } from "./workspaceDrafts";
 import {
   createComposerStatusChip,
   createWorkspaceButton,
@@ -38,7 +38,6 @@ import {
   createMenuGlyph,
   bindMenuNavigation,
 } from "./workspaceMenus";
-import { renderReadingSurface } from "./workspaceReading";
 import { openReportStyleDialog, reportStyleLabel } from "./reportStyleDialog";
 import { TUI_CSS } from "./workspaceTheme";
 import { ensurePaletteStyles } from "./workspaceSurface";
@@ -112,10 +111,8 @@ import {
   isUiTheme,
   isUiLanguage,
   isUiLineHeight,
-  parseMindMapOutline,
   renderMarkdownHtml,
   type TimelineBlock,
-  type MindMapNode,
   type UiFont,
   type UiTheme,
   type UiLanguage,
@@ -124,7 +121,6 @@ import {
   type LiveContextResult,
   taskTemplate,
 } from "@confucius/protocol";
-import { durableExcerpt } from "@confucius/memory";
 import { slashMenuToken, type ConfuciusSkill } from "@confucius/skill-format";
 import { renderToString as katexRender } from "katex";
 import { getString } from "../../utils/locale";
@@ -267,32 +263,6 @@ type MemoryRow = {
   content: string;
   tags?: string[];
 };
-
-type KnowledgeEntryKind =
-  "paper" | "note" | "insight" | "method" | "discussion" | "mindmap";
-
-type KnowledgeEntryRow = {
-  id: string;
-  knowledgeBaseId: string;
-  kind: KnowledgeEntryKind;
-  title: string;
-  content: string;
-  tags: string[];
-  source?: { libraryID: number; key: string };
-  updatedAt: number;
-};
-
-type KnowledgeBaseRow = {
-  id: string;
-  title: string;
-  description: string;
-  tags: string[];
-  entryCount: number;
-  counts: Partial<Record<KnowledgeEntryKind, number>>;
-  updatedAt: number;
-};
-
-type KnowledgeBaseDetail = KnowledgeBaseRow & { entries: KnowledgeEntryRow[] };
 
 type ModelConfig = {
   runtimeStoragePath?: string;
@@ -1879,6 +1849,7 @@ function bindWorkspace(
     };
   });
   layoutCleanups.set(root, () => {
+    knowledgeLibrary.close();
     annotationReview.destroy();
     literaturePanel.destroy();
     closeSubagentPopup(doc);
@@ -2108,7 +2079,7 @@ function bindWorkspace(
     if (!prompt.isConnected || !composer.isConnected || prompt.disabled) {
       return false;
     }
-    if (knowledgeUi.open) {
+    if (knowledgeLibrary.isOpen) {
       return false;
     }
     for (const id of [
@@ -2147,1064 +2118,48 @@ function bindWorkspace(
     showAttachmentDrop(false);
   }
 
-  const knowledgeKinds: KnowledgeEntryKind[] = [
-    "paper",
-    "note",
-    "insight",
-    "method",
-    "discussion",
-    "mindmap",
-  ];
-  const knowledgeUi = {
-    open: false,
-    loading: false,
-    bases: [] as KnowledgeBaseRow[],
-    base: null as KnowledgeBaseDetail | null,
-    baseId: "",
-    entryId: "",
-    filter: "all" as "all" | KnowledgeEntryKind,
-    editor: "empty" as "empty" | "base" | "entry",
-    creatingBase: false,
-    entryEditing: false,
-    stage: "topics" as "topics" | "entries" | "editor",
-    memoriesOpen: false,
-    topicQuery: "",
-    entryQuery: "",
-    error: "",
-  };
-  const knowledgeDrafts = new WorkspaceFormDrafts();
-  let knowledgeLoadGeneration = 0;
-  const knowledgeScrolls = new Map<string, number>();
-  let knowledgeReturnFocus: HTMLElement | null = null;
-  const knowledgeEditor = () =>
-    doc.querySelector<HTMLElement>(".confucius-knowledge-editor");
-  const clearKnowledgeDraft = () => knowledgeDrafts.clear(knowledgeEditor());
-
-  const knowledgeKindLabel = (kind: KnowledgeEntryKind): string =>
-    getString(`workspace-knowledge-kind-${kind}`);
-
-  async function openKnowledgeWindow(): Promise<void> {
-    if (!knowledgeUi.open)
-      knowledgeReturnFocus = doc.activeElement as HTMLElement | null;
-    knowledgeUi.open = true;
-    knowledgeUi.loading = true;
-    knowledgeUi.error = "";
-    renderKnowledgeWindow();
-    void refreshMemories().then(() => renderKnowledgeWindow());
-    try {
-      await refreshKnowledgeBases(knowledgeUi.baseId);
-    } catch (error) {
-      knowledgeUi.error =
-        error instanceof Error ? error.message : String(error);
-    } finally {
-      knowledgeUi.loading = false;
-      renderKnowledgeWindow();
-    }
-  }
-
-  async function refreshKnowledgeBases(preferredId = ""): Promise<void> {
-    const result = (await rpc("knowledge/list", { limit: 200 })) as {
-      knowledgeBases?: KnowledgeBaseRow[];
-    };
-    knowledgeUi.bases = result.knowledgeBases ?? [];
-    const nextId =
-      (preferredId &&
-        knowledgeUi.bases.some((base) => base.id === preferredId) &&
-        preferredId) ||
-      knowledgeUi.bases[0]?.id ||
-      "";
-    if (nextId) {
-      await loadKnowledgeBase(nextId, false);
-    } else {
-      knowledgeUi.baseId = "";
-      knowledgeUi.base = null;
-      knowledgeUi.entryId = "";
-      knowledgeUi.editor = "empty";
-    }
-  }
-
-  async function loadKnowledgeBase(id: string, repaint = true): Promise<void> {
-    const generation = ++knowledgeLoadGeneration;
-    const result = (await rpc("knowledge/get", { id, limit: 2_000 })) as {
-      knowledgeBase?: KnowledgeBaseDetail;
-    };
-    if (generation !== knowledgeLoadGeneration || !knowledgeUi.open) return;
-    const preserveSelection =
-      !repaint &&
-      knowledgeUi.baseId === id &&
-      result.knowledgeBase?.entries.some(
-        (entry) => entry.id === knowledgeUi.entryId,
-      );
-    knowledgeUi.baseId = id;
-    knowledgeUi.creatingBase = false;
-    knowledgeUi.error = "";
-    knowledgeUi.base = result.knowledgeBase ?? null;
-    if (!preserveSelection) {
-      knowledgeUi.entryId = "";
-      knowledgeUi.editor = "empty";
-      knowledgeUi.entryEditing = false;
-      if (!repaint && knowledgeUi.stage === "editor")
-        knowledgeUi.stage = "entries";
-    }
-    if (repaint) {
-      knowledgeUi.stage = "entries";
-      renderKnowledgeWindow();
-    }
-  }
-
-  function closeKnowledgeWindow(): void {
-    knowledgeLoadGeneration += 1;
-    knowledgeDrafts.remember(knowledgeEditor());
-    knowledgeUi.open = false;
-    doc.getElementById("confucius-knowledge-overlay")?.remove();
-    if (knowledgeReturnFocus?.isConnected)
-      knowledgeReturnFocus.focus({ preventScroll: true });
-  }
-
-  function renderKnowledgeWindow(): void {
-    const previous = doc.getElementById("confucius-knowledge-overlay");
-    const previousKey = knowledgeEditor()?.dataset.viewKey;
-    const active = previous?.contains(doc.activeElement)
-      ? (doc.activeElement as HTMLInputElement)
-      : null;
-    const focusId = active?.id;
-    const selection =
-      active && "selectionStart" in active
-        ? [active.selectionStart, active.selectionEnd]
-        : null;
-    knowledgeDrafts.remember(knowledgeEditor());
-    for (const pane of Array.from(
-      previous?.querySelectorAll("[data-view-key]") ?? [],
-    ) as HTMLElement[]) {
-      knowledgeScrolls.set(pane.dataset.viewKey!, pane.scrollTop);
-    }
-    previous?.remove();
-    if (!knowledgeUi.open) return;
-
-    const overlay = el(doc, "div", undefined, {
-      id: "confucius-knowledge-overlay",
-      role: "dialog",
-      "aria-modal": "true",
-      "aria-label": getString("workspace-knowledge"),
-    });
-    overlay.className = "confucius-knowledge-overlay";
-    const shell = el(doc, "section");
-    shell.className = "confucius-knowledge-shell";
-    shell.dataset.stage = knowledgeUi.stage;
-    bindDialogNavigation(overlay, closeKnowledgeWindow);
-    overlay.appendChild(shell);
-    overlay.addEventListener("click", (event) => {
-      if (event.target === overlay) closeKnowledgeWindow();
-    });
-
-    const header = el(doc, "header");
-    header.className = "confucius-knowledge-header";
-    const back = button(doc, "confucius-kb-back", "←");
-    back.classList.add("confucius-kb-back");
-    back.setAttribute("aria-label", getString("workspace-back"));
-    back.addEventListener("click", () => {
-      knowledgeUi.stage =
-        knowledgeUi.stage === "editor" && knowledgeUi.base
-          ? "entries"
-          : "topics";
-      renderKnowledgeWindow();
-    });
-    header.appendChild(back);
-    const icon = el(doc, "div", { color: "var(--confucius-ink)" });
-    icon.appendChild(workspaceKnowledgeIcon(doc));
-    const copy = el(doc, "div");
-    copy.className = "confucius-knowledge-header-copy";
-    const eyebrow = el(doc, "div");
-    eyebrow.className = "confucius-knowledge-eyebrow";
-    eyebrow.textContent = getString("workspace-knowledge-research-memory");
-    const heading = el(doc, "div");
-    heading.className = "confucius-knowledge-heading";
-    heading.textContent =
-      knowledgeUi.base?.title || getString("workspace-knowledge");
-    copy.appendChild(eyebrow);
-    copy.appendChild(heading);
-    const close = el(doc, "button", undefined, {
-      type: "button",
-      title: getString("workspace-knowledge-close"),
-      "aria-label": getString("workspace-knowledge-close"),
-    });
-    close.className = "confucius-icon-button";
-    close.textContent = "×";
-    close.style.fontSize = "24px";
-    close.addEventListener("click", closeKnowledgeWindow);
-    header.appendChild(icon);
-    header.appendChild(copy);
-    header.appendChild(close);
-    shell.appendChild(header);
-
-    const body = el(doc, "div");
-    body.className = "confucius-knowledge-body";
-    body.appendChild(renderKnowledgeTopics());
-    body.appendChild(renderKnowledgeEntries());
-    body.appendChild(renderKnowledgeEditor());
-    shell.appendChild(body);
-    root.appendChild(overlay);
-    const editor = knowledgeEditor();
-    if (editor) {
-      editor.dataset.viewKey = `${knowledgeUi.baseId}:${knowledgeUi.editor}:${knowledgeUi.entryId}:${knowledgeUi.creatingBase}`;
-      if (editor.querySelector("input"))
-        knowledgeDrafts.restore(editor, editor.dataset.viewKey);
-    }
-    for (const pane of Array.from(
-      overlay.querySelectorAll("[data-view-key]"),
-    ) as HTMLElement[]) {
-      pane.scrollTop = knowledgeScrolls.get(pane.dataset.viewKey!) ?? 0;
-    }
-    const restore =
-      previousKey === editor?.dataset.viewKey && focusId
-        ? (doc.getElementById(focusId) as HTMLInputElement | null)
-        : null;
-    const focusTarget = restore?.getClientRects().length
-      ? restore
-      : knowledgeUi.stage === "topics"
-        ? doc.getElementById("confucius-kb-topic-search")
-        : knowledgeUi.stage === "entries"
-          ? doc.getElementById("confucius-kb-entry-search")
-          : (editor?.querySelector<HTMLElement>("input, button") ?? close);
-    (focusTarget as HTMLElement | null)?.focus({ preventScroll: true });
-    if (
-      restore &&
-      restore === focusTarget &&
-      selection &&
-      selection[0] !== null
-    ) {
-      try {
-        restore.setSelectionRange(selection[0], selection[1] ?? selection[0]);
-      } catch {
-        /* Number inputs have no caret. */
-      }
-    }
-  }
-
-  function sectionLabel(text: string): HTMLElement {
-    const label = el(doc, "div");
-    label.className = "confucius-kb-section-label";
-    label.textContent = text;
-    return label;
-  }
-
-  function renderKnowledgeTopics(): HTMLElement {
-    const pane = el(doc, "aside");
-    pane.className = "confucius-knowledge-pane confucius-knowledge-topics";
-    pane.dataset.viewKey = "topics";
-    const toolbar = el(doc, "div");
-    toolbar.className = "confucius-kb-toolbar";
-    const search = el(doc, "input", undefined, {
-      id: "confucius-kb-topic-search",
-      type: "search",
-      placeholder: getString("workspace-knowledge-search-topics"),
-      "aria-label": getString("workspace-knowledge-search-topics"),
-    }) as HTMLInputElement;
-    const add = button(doc, "confucius-kb-add-base", "+");
-    add.setAttribute("aria-label", getString("workspace-knowledge-new"));
-    add.setAttribute("title", getString("workspace-knowledge-new"));
-    add.style.width = "34px";
-    add.style.padding = "4px";
-    add.addEventListener("click", () => {
-      knowledgeLoadGeneration += 1;
-      knowledgeUi.creatingBase = true;
-      knowledgeUi.editor = "base";
-      knowledgeUi.stage = "editor";
-      knowledgeUi.entryId = "";
-      renderKnowledgeWindow();
-    });
-    toolbar.appendChild(search);
-    toolbar.appendChild(add);
-    pane.appendChild(toolbar);
-    pane.appendChild(sectionLabel(getString("workspace-knowledge-topics")));
-
-    const list = el(doc, "div");
-    list.className = "confucius-kb-topic-list";
-    if (knowledgeUi.loading) {
-      list.appendChild(muted(doc, getString("workspace-knowledge-loading")));
-    } else if (!knowledgeUi.bases.length) {
-      list.appendChild(muted(doc, getString("workspace-knowledge-no-topics")));
-    }
-    for (const base of knowledgeUi.bases) {
-      const row = el(doc, "button", undefined, {
-        id: `confucius-kb-topic-${base.id}`,
-        type: "button",
-        "data-search":
-          `${base.title} ${base.description} ${base.tags.join(" ")}`.toLowerCase(),
-      });
-      row.className = `confucius-kb-row${
-        base.id === knowledgeUi.baseId ? " active" : ""
-      }`;
-      const title = el(doc, "div", { fontWeight: "650" });
-      title.textContent = base.title;
-      const meta = el(doc, "div");
-      meta.className = "confucius-kb-meta";
-      meta.textContent = `${base.entryCount} ${getString("workspace-knowledge-items")}`;
-      row.appendChild(title);
-      row.appendChild(meta);
-      row.addEventListener("click", () => void loadKnowledgeBase(base.id));
-      list.appendChild(row);
-    }
-    search.value = knowledgeUi.topicQuery;
-    const filterTopics = () => {
-      knowledgeUi.topicQuery = search.value;
-      const query = search.value.trim().toLowerCase();
-      for (const row of Array.from(
-        list.querySelectorAll("[data-search]"),
-      ) as HTMLElement[]) {
-        row.style.display =
-          !query || (row.dataset.search ?? "").includes(query) ? "" : "none";
-      }
-    };
-    search.addEventListener("input", filterTopics);
-    filterTopics();
-    pane.appendChild(list);
-
-    const memories = el(doc, "details");
-    memories.className = "confucius-kb-memories";
-    if (knowledgeUi.memoriesOpen) memories.setAttribute("open", "");
-    const memoryHeading = el(doc, "summary");
-    memoryHeading.textContent = `${getString("workspace-memory")} · ${state.memories.length}`;
-    memories.appendChild(memoryHeading);
-    memories.addEventListener("toggle", () => {
-      knowledgeUi.memoriesOpen = memories.hasAttribute("open");
-    });
-    if (state.logCount > 0) {
-      memories.appendChild(
-        muted(doc, `${state.logCount} ${getString("workspace-session-logs")}`),
-      );
-    }
-    if (!state.memories.length) {
-      memories.appendChild(muted(doc, getString("workspace-no-memory")));
-    }
-    const existingTaskIds = new Set(state.sessions.map((task) => task.id));
-    for (const proposal of state.memoryProposals.filter(
-      (proposal) =>
-        !existingTaskIds.has(proposal.taskId) && proposal.status === "pending",
-    )) {
-      memories.appendChild(
-        renderMemoryProposal(
-          doc,
-          proposal,
-          getPref("uiLanguage") !== "en-US",
-          async (id, verdict) => {
-            await rpc("memory/proposal/resolve", { id, verdict });
-            await refreshMemoryProposals();
-            await refreshMemories();
-            renderLists();
-            renderKnowledgeWindow();
-          },
-        ),
-      );
-    }
-    for (const memory of state.memories) {
-      const card = el(doc, "div");
-      card.className = "confucius-kb-memory";
-      const memoryTitle = el(doc, "div", {
-        fontSize: "11px",
-        color: "var(--confucius-ink)",
-        fontWeight: "700",
-      });
-      const tags = memory.tags ?? [];
-      const pinned = memory.protection === "user";
-      const fromLog = tags.includes("promoted-from-log");
-      memoryTitle.textContent = `${pinned ? "★ " : ""}[${memory.type}] ${durableExcerpt(memory.title)}${
-        fromLog ? ` · ${getString("workspace-memory-from-log")}` : ""
-      }`;
-      const memoryBody = el(doc, "div", { fontSize: "12px" });
-      fillAnswerHtml(memoryBody, durableExcerpt(memory.content));
-      const del = el(
-        doc,
-        "button",
-        {
-          border: "none",
-          background: "transparent",
-          color: "var(--confucius-danger)",
-          cursor: "pointer",
-          font: "inherit",
-          fontSize: "11px",
-          padding: "0",
-        },
-        { type: "button" },
-      );
-      del.textContent = getString("workspace-memory-delete");
-      del.addEventListener("click", () => {
-        void (async () => {
-          await rpc("memory/delete", { id: memory.id });
-          await refreshMemoryProposals();
-          await refreshMemories();
-          renderKnowledgeWindow();
-          renderLists();
-        })();
-      });
-      card.appendChild(memoryTitle);
-      card.appendChild(memoryBody);
-      const english = getPref("uiLanguage") === "en-US";
-      card.appendChild(
-        muted(
-          doc,
-          `${english ? "Last active read" : "最后主动读取"}: ${memory.lastUsedAt ? new Date(memory.lastUsedAt).toLocaleString() : english ? "Never read" : "从未主动读取"} · ${pinned ? (english ? "Protected" : "受保护") : english ? "May expire after 90 days" : "90 天未读取后可清退"}`,
-        ),
-      );
-      const protect = button(
-        doc,
-        "",
-        pinned
-          ? english
-            ? "Unprotect"
-            : "取消保护"
-          : english
-            ? "Protect"
-            : "保护",
-      );
-      let protectionRequestId: string | undefined;
-      protect.addEventListener("click", async () => {
-        if (protect.disabled) return;
-        protect.disabled = true;
-        protectionRequestId ??= `protect_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-        try {
-          await rpc("memory/protect", {
-            id: memory.id,
-            protected: !pinned,
-            requestId: protectionRequestId,
-          });
-          protectionRequestId = undefined;
-          await refreshMemoryProposals();
-          renderKnowledgeWindow();
-        } catch (error) {
-          card.appendChild(muted(doc, String(error)));
-        } finally {
-          protect.disabled = false;
-        }
-      });
-      card.appendChild(protect);
-      card.appendChild(del);
-      memories.appendChild(card);
-    }
-    pane.appendChild(memories);
-    return pane;
-  }
-
-  function renderKnowledgeEntries(): HTMLElement {
-    const pane = el(doc, "main");
-    pane.className = "confucius-knowledge-pane confucius-knowledge-entries";
-    pane.dataset.viewKey = `entries:${knowledgeUi.baseId}`;
-    if (!knowledgeUi.base) {
-      const empty = el(doc, "div");
-      empty.className = "confucius-kb-empty";
-      empty.textContent = getString("workspace-knowledge-create-first");
-      pane.appendChild(empty);
-      return pane;
-    }
-    const titleRow = el(doc, "div", {
-      display: "flex",
-      gap: "8px",
-      alignItems: "flex-start",
-      marginBottom: "10px",
-    });
-    const titleCopy = el(doc, "div", { flex: "1", minWidth: "0" });
-    const title = el(doc, "div", {
-      fontFamily: 'Inter, "Segoe UI", system-ui, sans-serif',
-      fontSize: "18px",
-      fontWeight: "700",
-    });
-    title.textContent = knowledgeUi.base.title;
-    const description = el(doc, "div", {
-      marginTop: "3px",
-      color: "var(--confucius-muted)",
-      fontSize: "12px",
-      lineHeight: "1.45",
-    });
-    description.textContent =
-      knowledgeUi.base.description ||
-      getString("workspace-knowledge-no-description");
-    titleCopy.appendChild(title);
-    titleCopy.appendChild(description);
-    const editBase = button(
-      doc,
-      "confucius-kb-edit-base",
-      getString("workspace-knowledge-edit-topic"),
-    );
-    editBase.style.background = "var(--confucius-elevated)";
-    editBase.style.padding = "4px 8px";
-    editBase.addEventListener("click", () => {
-      knowledgeLoadGeneration += 1;
-      knowledgeUi.creatingBase = false;
-      knowledgeUi.editor = "base";
-      knowledgeUi.stage = "editor";
-      knowledgeUi.entryId = "";
-      renderKnowledgeWindow();
-    });
-    titleRow.appendChild(titleCopy);
-    titleRow.appendChild(editBase);
-    pane.appendChild(titleRow);
-
-    const filters = el(doc, "div");
-    filters.className = "confucius-kb-filters";
-    const choices: Array<"all" | KnowledgeEntryKind> = [
-      "all",
-      ...knowledgeKinds,
-    ];
-    for (const choice of choices) {
-      const filter = el(doc, "button", undefined, { type: "button" });
-      filter.className = `confucius-kb-filter${
-        knowledgeUi.filter === choice ? " active" : ""
-      }`;
-      const count =
-        choice === "all"
-          ? knowledgeUi.base.entryCount
-          : (knowledgeUi.base.counts[choice] ?? 0);
-      if (choice !== "all" && count === 0 && knowledgeUi.filter !== choice)
-        continue;
-      filter.textContent = `${
-        choice === "all"
-          ? getString("workspace-knowledge-kind-all")
-          : knowledgeKindLabel(choice)
-      } ${count}`;
-      filter.addEventListener("click", () => {
-        knowledgeUi.filter = choice;
-        renderKnowledgeWindow();
-      });
-      filters.appendChild(filter);
-    }
-    pane.appendChild(filters);
-
-    const toolbar = el(doc, "div");
-    toolbar.className = "confucius-kb-toolbar";
-    const search = el(doc, "input", undefined, {
-      id: "confucius-kb-entry-search",
-      type: "search",
-      placeholder: getString("workspace-knowledge-search-entries"),
-      "aria-label": getString("workspace-knowledge-search-entries"),
-    }) as HTMLInputElement;
-    const add = button(
-      doc,
-      "confucius-kb-add-entry",
-      getString("workspace-knowledge-add-entry"),
-    );
-    add.addEventListener("click", () => {
-      knowledgeLoadGeneration += 1;
-      knowledgeUi.entryId = "";
-      knowledgeUi.editor = "entry";
-      knowledgeUi.stage = "editor";
-      knowledgeUi.entryEditing = true;
-      renderKnowledgeWindow();
-    });
-    toolbar.appendChild(search);
-    toolbar.appendChild(add);
-    pane.appendChild(toolbar);
-
-    const list = el(doc, "div");
-    const entries = knowledgeUi.base.entries.filter(
-      (entry) =>
-        knowledgeUi.filter === "all" || entry.kind === knowledgeUi.filter,
-    );
-    if (!entries.length) {
-      list.appendChild(muted(doc, getString("workspace-knowledge-no-entries")));
-    }
-    for (const entry of entries) {
-      const row = el(doc, "button", undefined, {
-        id: `confucius-kb-entry-${entry.id}`,
-        type: "button",
-        "data-search":
-          `${entry.title} ${entry.content} ${entry.tags.join(" ")}`.toLowerCase(),
-      });
-      row.className = `confucius-kb-entry-row${
-        entry.id === knowledgeUi.entryId ? " active" : ""
-      }`;
-      const kind = el(doc, "div", {
-        color: "var(--confucius-ink)",
-        fontSize: "10px",
-        fontWeight: "700",
-        letterSpacing: ".08em",
-        textTransform: "uppercase",
-      });
-      kind.textContent = knowledgeKindLabel(entry.kind);
-      const entryTitle = el(doc, "div", {
-        marginTop: "2px",
-        fontWeight: "650",
-      });
-      entryTitle.textContent = entry.title;
-      const excerpt = el(doc, "div");
-      excerpt.className = "confucius-kb-meta";
-      excerpt.textContent = entry.content
-        .replace(/[#*_`>|]/g, "")
-        .replace(/\s+/g, " ")
-        .slice(0, 90);
-      row.appendChild(kind);
-      row.appendChild(entryTitle);
-      row.appendChild(excerpt);
-      row.addEventListener("click", () => {
-        knowledgeLoadGeneration += 1;
-        knowledgeUi.entryId = entry.id;
-        knowledgeUi.editor = "entry";
-        knowledgeUi.stage = "editor";
-        knowledgeUi.entryEditing = false;
-        renderKnowledgeWindow();
-      });
-      list.appendChild(row);
-    }
-    search.value = knowledgeUi.entryQuery;
-    const filterEntries = () => {
-      knowledgeUi.entryQuery = search.value;
-      const query = search.value.trim().toLowerCase();
-      for (const row of Array.from(
-        list.querySelectorAll("[data-search]"),
-      ) as HTMLElement[]) {
-        row.style.display =
-          !query || (row.dataset.search ?? "").includes(query) ? "" : "none";
-      }
-    };
-    search.addEventListener("input", filterEntries);
-    filterEntries();
-    pane.appendChild(list);
-    return pane;
-  }
-
-  function kbField(labelText: string, control: HTMLElement): HTMLElement {
-    const label = el(doc, "label");
-    label.className = "confucius-kb-field";
-    const caption = el(doc, "span");
-    caption.textContent = labelText;
-    label.appendChild(caption);
-    label.appendChild(control);
-    return label;
-  }
-
-  function renderKnowledgeEditor(): HTMLElement {
-    const pane = el(doc, "section");
-    pane.className = "confucius-knowledge-pane confucius-knowledge-editor";
-    if (knowledgeUi.error) {
-      const error = el(doc, "div");
-      error.className = "confucius-kb-error";
-      error.textContent = knowledgeUi.error;
-      pane.appendChild(error);
-    }
-    if (knowledgeUi.editor === "base") {
-      pane.appendChild(renderKnowledgeBaseForm());
-      return pane;
-    }
-    if (knowledgeUi.editor === "entry" && knowledgeUi.base) {
-      const entry = knowledgeUi.base.entries.find(
-        (item) => item.id === knowledgeUi.entryId,
-      );
-      if (entry && !knowledgeUi.entryEditing) {
-        const actions = el(doc, "div");
-        actions.className = "confucius-kb-editor-actions";
-        actions.appendChild(sectionLabel(knowledgeKindLabel(entry.kind)));
-        const edit = button(
-          doc,
-          "confucius-kb-edit-entry",
-          getString("workspace-knowledge-edit-entry"),
-        );
-        edit.addEventListener("click", () => {
-          knowledgeUi.entryEditing = true;
-          renderKnowledgeWindow();
-        });
-        actions.appendChild(edit);
-        const title = el(doc, "h2", {
-          margin: "0 0 20px",
-          fontSize: "1.5em",
-          lineHeight: "1.3",
-          overflowWrap: "anywhere",
-        });
-        title.textContent = entry.title;
-        pane.append(
-          actions,
-          title,
-          renderReadingSurface(
+  const knowledgeLibrary = createKnowledgeLibrary(
+    win!,
+    root,
+    host ?? { rpc },
+    () =>
+      state.memoryProposals
+        .filter((proposal) => proposal.status === "pending")
+        .map((proposal) =>
+          renderMemoryProposal(
             doc,
-            { type: "markdown", markdown: entry.content },
-            { fillAnswerHtml, locateLink },
+            proposal,
+            getPref("uiLanguage") !== "en-US",
+            async (id, verdict) => {
+              await rpc("memory/proposal/resolve", { id, verdict });
+              await refreshMemoryProposals();
+              await refreshMemories();
+              renderLists();
+              renderKnowledgeWindow();
+            },
           ),
-        );
-        if (entry.source)
-          pane.appendChild(
-            locateLink(doc, {
-              libraryID: entry.source.libraryID,
-              key: entry.source.key,
-            }),
-          );
-        return pane;
-      }
-      pane.appendChild(renderKnowledgeEntryForm());
-      return pane;
-    }
-    const empty = el(doc, "div");
-    empty.className = "confucius-kb-empty";
-    empty.textContent = getString("workspace-knowledge-select-entry");
-    pane.appendChild(empty);
-    return pane;
+        ),
+    async () => {
+      await refreshMemoryProposals();
+      await refreshMemories();
+      renderLists();
+    },
+    (taskId) => {
+      const task = state.sessions.find((item) => item.id === taskId);
+      return task
+        ? {
+            title: task.title,
+            open: () => void loadTask(taskId).then(renderLists),
+          }
+        : undefined;
+    },
+  );
+  async function openKnowledgeWindow(): Promise<void> {
+    await refreshMemoryProposals();
+    await knowledgeLibrary.open();
   }
-
-  function renderKnowledgeBaseForm(): HTMLElement {
-    const wrap = el(doc, "div");
-    wrap.appendChild(
-      sectionLabel(
-        knowledgeUi.creatingBase
-          ? getString("workspace-knowledge-new")
-          : getString("workspace-knowledge-edit-topic"),
-      ),
-    );
-    const current = knowledgeUi.creatingBase ? null : knowledgeUi.base;
-    const title = el(doc, "input", undefined, {
-      id: "confucius-kb-base-title",
-      type: "text",
-      value: current?.title ?? "",
-      placeholder: getString("workspace-knowledge-topic-title-placeholder"),
-    }) as HTMLInputElement;
-    const description = el(doc, "textarea", undefined, {
-      id: "confucius-kb-base-description",
-      placeholder: getString(
-        "workspace-knowledge-topic-description-placeholder",
-      ),
-    }) as HTMLTextAreaElement;
-    description.value = current?.description ?? "";
-    description.style.minHeight = "110px";
-    const tags = el(doc, "input", undefined, {
-      id: "confucius-kb-base-tags",
-      type: "text",
-      value: current?.tags.join(", ") ?? "",
-      placeholder: getString("workspace-knowledge-tags-placeholder"),
-    }) as HTMLInputElement;
-    wrap.appendChild(kbField(getString("workspace-knowledge-title"), title));
-    wrap.appendChild(
-      kbField(getString("workspace-knowledge-description"), description),
-    );
-    wrap.appendChild(kbField(getString("workspace-knowledge-tags"), tags));
-    const actions = el(doc, "div");
-    actions.className = "confucius-kb-actions";
-    const save = button(
-      doc,
-      "confucius-kb-save-base",
-      getString("workspace-knowledge-save"),
-      "primary",
-    );
-    save.addEventListener("click", async () => {
-      if (!title.value.trim()) {
-        showKnowledgeError(getString("workspace-knowledge-title-required"));
-        return;
-      }
-      save.setAttribute("disabled", "true");
-      try {
-        const payload = {
-          title: title.value.trim(),
-          description: description.value.trim(),
-          tags: splitTags(tags.value),
-        };
-        const result = (await rpc(
-          knowledgeUi.creatingBase ? "knowledge/create" : "knowledge/update",
-          knowledgeUi.creatingBase
-            ? payload
-            : { ...payload, id: knowledgeUi.baseId },
-        )) as { knowledgeBase?: KnowledgeBaseRow };
-        clearKnowledgeDraft();
-        knowledgeUi.creatingBase = false;
-        await refreshKnowledgeBases(
-          result.knowledgeBase?.id ?? knowledgeUi.baseId,
-        );
-        knowledgeUi.editor = "base";
-        renderKnowledgeWindow();
-      } catch (error) {
-        showKnowledgeError(
-          error instanceof Error ? error.message : String(error),
-        );
-        save.removeAttribute("disabled");
-      }
-    });
-    actions.appendChild(save);
-    if (current) {
-      const remove = button(
-        doc,
-        "confucius-kb-delete-base",
-        getString("workspace-knowledge-delete-topic"),
-      );
-      remove.className = "confucius-kb-danger";
-      remove.addEventListener("click", async () => {
-        if (
-          !win?.confirm(getString("workspace-knowledge-delete-topic-confirm"))
-        ) {
-          return;
-        }
-        await rpc("knowledge/delete", { id: current.id });
-        await refreshKnowledgeBases();
-        renderKnowledgeWindow();
-      });
-      actions.appendChild(remove);
-    }
-    wrap.appendChild(actions);
-    return wrap;
-  }
-
-  function renderKnowledgeEntryForm(): HTMLElement {
-    const wrap = el(doc, "div");
-    const current =
-      knowledgeUi.base?.entries.find(
-        (entry) => entry.id === knowledgeUi.entryId,
-      ) ?? null;
-    wrap.appendChild(
-      sectionLabel(
-        current
-          ? getString("workspace-knowledge-edit-entry")
-          : getString("workspace-knowledge-add-entry"),
-      ),
-    );
-    let selectedKind: KnowledgeEntryKind = current?.kind ?? "note";
-    const kind = el(doc, "div", undefined, {
-      id: "confucius-kb-entry-kind",
-      role: "radiogroup",
-      "aria-label": getString("workspace-knowledge-kind"),
-    });
-    kind.className = "confucius-kb-filters";
-    const kindButtons = new Map<KnowledgeEntryKind, HTMLElement>();
-    const paintKinds = () => {
-      for (const [choice, option] of kindButtons) {
-        const active = choice === selectedKind;
-        option.className = `confucius-kb-filter${active ? " active" : ""}`;
-        option.setAttribute("aria-checked", active ? "true" : "false");
-      }
-    };
-    for (const choice of knowledgeKinds) {
-      const option = el(doc, "button", undefined, {
-        type: "button",
-        role: "radio",
-        "data-value": choice,
-      });
-      option.textContent = knowledgeKindLabel(choice);
-      option.addEventListener("click", () => {
-        selectedKind = choice;
-        paintKinds();
-        syncKind();
-      });
-      kindButtons.set(choice, option);
-      kind.appendChild(option);
-    }
-    paintKinds();
-    const title = el(doc, "input", undefined, {
-      id: "confucius-kb-entry-title",
-      type: "text",
-      value: current?.title ?? "",
-      placeholder: getString("workspace-knowledge-entry-title-placeholder"),
-    }) as HTMLInputElement;
-    const tags = el(doc, "input", undefined, {
-      id: "confucius-kb-entry-tags",
-      type: "text",
-      value: current?.tags.join(", ") ?? "",
-      placeholder: getString("workspace-knowledge-tags-placeholder"),
-    }) as HTMLInputElement;
-    const source = el(doc, "div", {
-      display: "grid",
-      gridTemplateColumns: "minmax(0, .55fr) minmax(0, 1fr)",
-      gap: "8px",
-    });
-    source.id = "confucius-kb-source-fields";
-    const libraryID = el(doc, "input", undefined, {
-      type: "number",
-      min: "1",
-      value: current?.source ? String(current.source.libraryID) : "",
-      id: "confucius-kb-source-library",
-      placeholder: "libraryID",
-      "aria-label": "Zotero libraryID",
-    }) as HTMLInputElement;
-    const key = el(doc, "input", undefined, {
-      type: "text",
-      value: current?.source?.key ?? "",
-      id: "confucius-kb-source-key",
-      placeholder: "Zotero key",
-      "aria-label": "Zotero key",
-    }) as HTMLInputElement;
-    source.appendChild(libraryID);
-    source.appendChild(key);
-    const content = el(doc, "textarea", undefined, {
-      id: "confucius-kb-entry-content",
-      placeholder: getString("workspace-knowledge-content-placeholder"),
-    }) as HTMLTextAreaElement;
-    content.value = current?.content ?? "";
-    const kindField = el(doc, "div");
-    kindField.className = "confucius-kb-field";
-    const kindCaption = el(doc, "span");
-    kindCaption.textContent = getString("workspace-knowledge-kind");
-    kindField.appendChild(kindCaption);
-    kindField.appendChild(kind);
-    wrap.appendChild(kindField);
-    wrap.appendChild(kbField(getString("workspace-knowledge-title"), title));
-    wrap.appendChild(kbField(getString("workspace-knowledge-tags"), tags));
-    const sourceField = kbField(
-      getString("workspace-knowledge-paper-source"),
-      source,
-    );
-    wrap.appendChild(sourceField);
-    const contentField = kbField(
-      getString("workspace-knowledge-content"),
-      content,
-    );
-    const mindWorkspace = el(doc, "div");
-    mindWorkspace.className = "confucius-mindmap-workspace";
-    const preview = el(doc, "div", undefined, {
-      id: "confucius-mindmap-preview",
-    });
-    preview.className = "confucius-mindmap-preview";
-    const paintPreview = () => {
-      preview.textContent = "";
-      const nodes = parseMindMapOutline(content.value);
-      if (!nodes.length) {
-        preview.appendChild(
-          muted(doc, getString("workspace-knowledge-mindmap-empty")),
-        );
-      } else {
-        appendMindMapTree(preview, nodes);
-      }
-    };
-    content.addEventListener("input", paintPreview);
-    mindWorkspace.appendChild(contentField);
-    mindWorkspace.appendChild(preview);
-    const mdPreview = el(doc, "div");
-    mdPreview.className = "confucius-kb-md-preview";
-    const previewCaption = el(doc, "div");
-    previewCaption.className = "confucius-kb-section-label";
-    previewCaption.textContent = getString("workspace-knowledge-preview");
-    const paintMarkdownPreview = () => {
-      const hidden = selectedKind === "mindmap" || !content.value.trim();
-      previewCaption.style.display = hidden ? "none" : "";
-      mdPreview.style.display = hidden ? "none" : "";
-      if (!hidden) {
-        fillAnswerHtml(mdPreview, content.value);
-      }
-    };
-    content.addEventListener("input", paintMarkdownPreview);
-    const syncKind = () => {
-      const isPaper = selectedKind === "paper";
-      const isMindMap = selectedKind === "mindmap";
-      sourceField.style.display = isPaper ? "grid" : "none";
-      mindWorkspace.style.display = isMindMap ? "grid" : "block";
-      contentField.style.display = "grid";
-      preview.style.display = isMindMap ? "block" : "none";
-      if (isMindMap) paintPreview();
-      paintMarkdownPreview();
-    };
-    wrap.appendChild(mindWorkspace);
-    const previewDisclosure = el(doc, "details");
-    previewDisclosure.className = "confucius-settings-advanced";
-    const previewSummary = el(doc, "summary");
-    previewSummary.textContent = getString("workspace-knowledge-preview");
-    previewDisclosure.append(previewSummary, mdPreview);
-    wrap.appendChild(previewDisclosure);
-    syncKind();
-
-    const actions = el(doc, "div");
-    actions.className = "confucius-kb-actions";
-    const save = button(
-      doc,
-      "confucius-kb-save-entry",
-      getString("workspace-knowledge-save"),
-      "primary",
-    );
-    save.addEventListener("click", async () => {
-      if (!title.value.trim() || !content.value.trim()) {
-        showKnowledgeError(getString("workspace-knowledge-entry-required"));
-        return;
-      }
-      save.setAttribute("disabled", "true");
-      try {
-        const result = (await rpc("knowledge/saveEntry", {
-          id: current?.id,
-          knowledgeBaseId: knowledgeUi.baseId,
-          kind: selectedKind,
-          title: title.value.trim(),
-          content: content.value.trim(),
-          tags: splitTags(tags.value),
-          libraryID: Number(libraryID.value) || undefined,
-          key: key.value.trim() || undefined,
-          clearSource:
-            selectedKind !== "paper" ||
-            !Number(libraryID.value) ||
-            !key.value.trim(),
-        })) as { entry?: KnowledgeEntryRow };
-        clearKnowledgeDraft();
-        await loadKnowledgeBase(knowledgeUi.baseId, false);
-        knowledgeUi.entryId = result.entry?.id ?? "";
-        knowledgeUi.editor = "entry";
-        knowledgeUi.entryEditing = false;
-        const list = (await rpc("knowledge/list", { limit: 200 })) as {
-          knowledgeBases?: KnowledgeBaseRow[];
-        };
-        knowledgeUi.bases = list.knowledgeBases ?? knowledgeUi.bases;
-        renderKnowledgeWindow();
-      } catch (error) {
-        showKnowledgeError(
-          error instanceof Error ? error.message : String(error),
-        );
-        save.removeAttribute("disabled");
-      }
-    });
-    actions.appendChild(save);
-    if (current) {
-      const remove = button(
-        doc,
-        "confucius-kb-delete-entry",
-        getString("workspace-knowledge-delete-entry"),
-      );
-      remove.className = "confucius-kb-danger";
-      remove.addEventListener("click", async () => {
-        if (
-          !win?.confirm(getString("workspace-knowledge-delete-entry-confirm"))
-        ) {
-          return;
-        }
-        await rpc("knowledge/deleteEntry", {
-          knowledgeBaseId: knowledgeUi.baseId,
-          id: current.id,
-        });
-        await loadKnowledgeBase(knowledgeUi.baseId, false);
-        knowledgeUi.entryId = "";
-        knowledgeUi.editor = "base";
-        renderKnowledgeWindow();
-      });
-      actions.appendChild(remove);
-    }
-    wrap.appendChild(actions);
-    return wrap;
-  }
-
-  function appendMindMapTree(parent: HTMLElement, nodes: MindMapNode[]): void {
-    const list = el(doc, "ul");
-    for (const node of nodes) {
-      const item = el(doc, "li");
-      if (node.children.length) {
-        const details = el(doc, "details", undefined, { open: "" });
-        const summary = el(doc, "summary");
-        summary.textContent = node.label;
-        details.appendChild(summary);
-        appendMindMapTree(details, node.children);
-        item.appendChild(details);
-      } else {
-        item.textContent = node.label;
-      }
-      list.appendChild(item);
-    }
-    parent.appendChild(list);
-  }
-
-  function splitTags(value: string): string[] {
-    return value
-      .split(/[,，]/)
-      .map((tag) => tag.trim())
-      .filter(Boolean);
-  }
-
-  function showKnowledgeError(message: string): void {
-    knowledgeUi.error = message;
-    const current = doc.querySelector(
-      ".confucius-knowledge-editor .confucius-kb-error",
-    );
-    if (current) {
-      current.textContent = message;
-      return;
-    }
-    const error = el(doc, "div");
-    error.className = "confucius-kb-error";
-    error.textContent = message;
-    doc.querySelector(".confucius-knowledge-editor")?.prepend(error);
+  function renderKnowledgeWindow(): void {
+    knowledgeLibrary.refresh();
   }
 
   async function copyAnswerText(
@@ -7979,7 +6934,7 @@ function bindWorkspace(
       return;
     }
     if (command.kind === "skill" && command.slug) {
-      const remainder = prompt.value.replace(/^\/[^\s]*/, "").trim();
+      const remainder = prompt.value.replace(/^\s*\/[^\s]*/, "").trim();
       prompt.value = remainder
         ? `/${command.slug} ${remainder}`
         : `/${command.slug} `;
@@ -7991,7 +6946,7 @@ function bindWorkspace(
     }
     if (command.kind === "template") {
       const template = taskTemplate(command.templateId);
-      const remainder = prompt.value.replace(/^\/[^\s]*/, "").trim();
+      const remainder = prompt.value.replace(/^\s*\/[^\s]*/, "").trim();
       closeSlashMenu();
       if (template) {
         const basePrompt = localizedTemplatePrompt(template);
@@ -8848,9 +7803,11 @@ function bindWorkspace(
           await annotationReview.refresh();
         if (incoming.some((event) => event.type === "memory_updated")) {
           await refreshMemories();
+          renderKnowledgeWindow();
         }
         if (incoming.some((event) => event.type === "memory_proposed")) {
           await refreshMemoryProposals();
+          renderKnowledgeWindow();
         }
         if (
           !state.artifacts.length ||

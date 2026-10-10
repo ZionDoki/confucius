@@ -254,15 +254,6 @@ export const SURFACE_CSS = `
 .confucius-settings-shell [role=radio][aria-checked=true] { background: var(--confucius-surface) !important; color: var(--confucius-ink) !important; }
 .confucius-settings-shell .confucius-settings-select { border: 0; background: var(--confucius-surface); }
 .confucius-settings-shell .confucius-button { border: 0 !important; }
-.confucius-kb-back { display: none; }
-.confucius-kb-memories { margin-top: 20px; color: var(--confucius-muted); }
-.confucius-kb-memories > summary { cursor: pointer; padding: 8px; font-size: .9em; }
-.confucius-kb-entry-row .confucius-kb-meta { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.5; }
-.confucius-kb-memory { padding: 12px 8px; margin: 4px 0; border-radius: 8px; }
-.confucius-kb-actions { position: sticky; bottom: -16px; padding: 12px 0; background: var(--confucius-elevated); }
-.confucius-kb-preview-toggle { margin-bottom: 12px; }
-.confucius-kb-editor-actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 16px; }
-.confucius-kb-draft-hint { color: var(--confucius-muted); font-size: .86em; }
 #confucius-preferences { --confucius-control-height: 36px; color: var(--confucius-ink); padding: 8px 16px 32px; font: 13px/1.55 system-ui, sans-serif; }
 #confucius-preferences groupbox { appearance: none; margin: 0 0 20px; padding: 16px 0; border: 0; background: transparent; }
 #confucius-preferences h2 { margin: 0 0 8px; font-size: 17px; font-weight: 650; letter-spacing: -.02em; }
@@ -287,13 +278,5 @@ export const SURFACE_CSS = `
 .confucius-workspace-root:is([data-confucius-density=compact], [data-confucius-density=narrow]) .confucius-settings-content { padding: 12px 16px 24px; }
 .confucius-workspace-root:is([data-confucius-density=compact], [data-confucius-density=narrow]) .confucius-settings-footer { padding: 12px 16px; }
 .confucius-workspace-root[data-confucius-compact-panels=true] .confucius-knowledge-overlay { padding: 8px; }
-.confucius-workspace-root[data-confucius-compact-panels=true] .confucius-knowledge-body { display: block; overflow: hidden; }
-.confucius-workspace-root[data-confucius-compact-panels=true] .confucius-knowledge-pane { display: none; height: 100%; overflow-x: hidden; overflow-y: auto; padding: 16px; }
-.confucius-workspace-root[data-confucius-compact-panels=true] .confucius-knowledge-shell[data-stage=topics] .confucius-knowledge-topics,
-.confucius-workspace-root[data-confucius-compact-panels=true] .confucius-knowledge-shell[data-stage=entries] .confucius-knowledge-entries,
-.confucius-workspace-root[data-confucius-compact-panels=true] .confucius-knowledge-shell[data-stage=editor] .confucius-knowledge-editor { display: block; }
-.confucius-workspace-root[data-confucius-compact-panels=true] .confucius-kb-topic-list { display: block; }
-.confucius-workspace-root[data-confucius-compact-panels=true] .confucius-kb-back { display: inline-flex; padding: 4px; background: transparent; }
-.confucius-knowledge-shell[data-stage=topics] .confucius-kb-back { display: none !important; }
 @media (prefers-reduced-motion: reduce) { .confucius-dialog *, #confucius-knowledge-overlay *, #confucius-artifact-window * { animation: none !important; transition: none !important; } }
 `;

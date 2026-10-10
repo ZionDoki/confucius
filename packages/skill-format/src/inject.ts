@@ -15,6 +15,7 @@ export const RESERVED_SLASH_COMMANDS = new Set([
   "deny-writes",
   "model",
   "compact",
+  "new-context",
 ]);
 
 export const DEFAULT_SKILL_USER_TEXT =
@@ -31,10 +32,11 @@ export interface SkillInvocation {
  * user is typing arguments, so the menu hides.
  */
 export function slashMenuToken(value: string): string | null {
-  if (!value.startsWith("/")) {
+  const leading = value.trimStart();
+  if (!leading.startsWith("/")) {
     return null;
   }
-  const inner = value.slice(1);
+  const inner = leading.slice(1);
   if (/\s/.test(inner)) {
     return null;
   }

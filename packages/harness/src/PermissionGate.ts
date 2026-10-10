@@ -1,8 +1,9 @@
-import type {
-  ApprovalRequest,
-  ApprovalResolution,
-  PermissionMode,
-  ToolRiskLevel,
+import {
+  isApprovalResolution,
+  type ApprovalRequest,
+  type ApprovalResolution,
+  type PermissionMode,
+  type ToolRiskLevel,
 } from "@confucius/protocol";
 import type { IdFactory } from "./ids";
 
@@ -26,8 +27,16 @@ export class PermissionGate {
     args: Record<string, unknown>;
     onRequest?: (request: ApprovalRequest) => void;
   }): Promise<
-    | { verdict: "allow"; request?: ApprovalRequest; resolution?: ApprovalResolution }
-    | { verdict: "deny"; request?: ApprovalRequest; resolution?: ApprovalResolution }
+    | {
+        verdict: "allow";
+        request?: ApprovalRequest;
+        resolution?: ApprovalResolution;
+      }
+    | {
+        verdict: "deny";
+        request?: ApprovalRequest;
+        resolution?: ApprovalResolution;
+      }
   > {
     const mode = this.options.modeFor(input.toolName);
     if (mode === "auto_allow") {
@@ -57,6 +66,13 @@ export class PermissionGate {
     }
 
     const resolution = await this.options.resolve(request);
+    if (!isApprovalResolution(resolution) || resolution.id !== request.id) {
+      return {
+        verdict: "deny",
+        request,
+        resolution: { id: request.id, verdict: "deny", scope: "once" },
+      };
+    }
     return {
       verdict: resolution.verdict,
       request,

@@ -1,8 +1,9 @@
-import type {
-  ApprovalRequest,
-  ApprovalResolution,
-  ConfuciusEvent,
-  RuntimeTurnLease,
+import {
+  isApprovalResolution,
+  type ApprovalRequest,
+  type ApprovalResolution,
+  type ConfuciusEvent,
+  type RuntimeTurnLease,
 } from "@confucius/protocol";
 import type { PluginRuntimeEventSink } from "./PluginRuntimeTypes";
 import { createAbortController } from "../../utils/webPlatform";
@@ -151,7 +152,8 @@ export class PluginApprovalBroker {
     });
   }
 
-  resolve(resolution: ApprovalResolution): boolean {
+  resolve(resolution: unknown): boolean {
+    if (!isApprovalResolution(resolution)) return false;
     const pending = this.pending.get(resolution.id);
     if (!pending) return false;
     this.pending.delete(resolution.id);

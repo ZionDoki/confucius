@@ -2,8 +2,8 @@
 
 范围：当前未发布源码的上下文管理、有限记忆、提炼清理、四个模型工具和 loading
 状态。未修改版本号、打 tag 或发布 Release。方案见
-[上下文与记忆管理](../context-memory-refactor.md)，用户行为见
-[任务与数据](../../../docs/tasks-and-data.md#上下文记忆与清理)。
+[上下文与记忆管理](../context-memory-refactor.zh-CN.md)，用户行为见
+[任务与数据](../../../docs/context-system.zh-CN.md)。
 
 本文记录首轮基础验收。后续的 30 个安装后场景、真实模型提炼、崩溃恢复及两处修复
 见[专项实测](context-memory-stress-2026-09-08.md)；修复后完整回归为 881 项通过。

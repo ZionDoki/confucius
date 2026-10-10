@@ -9,11 +9,6 @@ import {
   type AnnotationOwnerContext,
 } from "./AnnotationOwnership";
 import {
-  annotationBatchTag,
-  annotationBatchTime,
-  legacyBatchTagChange,
-} from "./AnnotationBatchLabels";
-import {
   annotationMatchesFilter,
   type AnnotationBatchFilter,
   type AnnotationBatchView,
@@ -1500,91 +1495,6 @@ export class ZoteroToolHost {
       agent: context.agent,
       runtime: context.runtime,
     };
-  }
-
-  /** One background pass over our receipts, without reader hooks or library-wide scans. */
-  async migrateAnnotationBatchLabels(keepGoing = () => true): Promise<void> {
-    for (const key of (await this.storage.keys?.("ownership_")) ?? []) {
-      await Zotero.Promise.delay(0);
-      if (!keepGoing()) return;
-      const identity = /^ownership_(\d+)_([A-Z0-9]+)$/.exec(key);
-      if (!identity) continue;
-      const token = key.slice("ownership_".length);
-      try {
-        await this.annotationLocks.run([token], async () => {
-          const record = await this.ownership.read(token);
-          if (!keepGoing() || record.batchLabelsVersion === 1) return;
-          const pdf = getItem(Number(identity[1]), identity[2]);
-          const library = pdf && Zotero.Libraries.get(pdf.libraryID);
-          if (
-            !pdf?.isAttachment?.() ||
-            pdf.deleted ||
-            (library && library.editable === false)
-          )
-            return;
-          // Persist the same display time in both indexes before touching native tags.
-          for (const { batch } of Object.values(record.batches)) {
-            if (!keepGoing()) return;
-            const stored = await this.ownership.batch({
-              taskId: batch.taskId,
-              createdAt: batch.createdAt,
-            });
-            if (stored.id !== batch.id || stored.createdAt !== batch.createdAt)
-              throw new Error(
-                "Annotation batch identity disagrees with its PDF record",
-              );
-            batch.timeLabel =
-              stored.timeLabel ?? annotationBatchTime(batch.createdAt);
-          }
-          await this.ownership.change(token, (current) => {
-            for (const [id, { batch }] of Object.entries(record.batches))
-              current.batches[id].batch.timeLabel = batch.timeLabel;
-          });
-          for (const [annotationKey, mark] of Object.entries(record.marks)) {
-            if (!keepGoing()) return;
-            const batch = record.batches[mark.batchId ?? ""]?.batch;
-            if (
-              mark.status !== "created" ||
-              mark.createdBy !== "confucius-agent" ||
-              !batch ||
-              batch.taskId !== mark.taskId
-            )
-              continue;
-            const item = getItem(pdf.libraryID, annotationKey);
-            if (
-              !item?.isAnnotation?.() ||
-              item.deleted ||
-              item.parentItemID !== pdf.id ||
-              item.isEditable?.() === false
-            )
-              continue;
-            const change = legacyBatchTagChange(
-              item.getTags().map(({ tag }) => tag),
-              batch,
-            );
-            if (!change) continue;
-            try {
-              for (const tag of change.remove) item.removeTag(tag);
-              item.addTag(change.add);
-              await item.saveTx({ skipDateModifiedUpdate: true });
-            } catch (error) {
-              await item.reload?.(["tags"], true);
-              throw error;
-            }
-            await Zotero.Promise.delay(0);
-          }
-          if (keepGoing())
-            await this.ownership.change(token, (current) => {
-              current.batchLabelsVersion = 1;
-            });
-        });
-      } catch (error) {
-        ztoolkit.log(
-          "[Confucius] Annotation labels will be retried on next startup",
-          error,
-        );
-      }
-    }
   }
 
   async freezeTaskPdf(
@@ -5153,7 +5063,7 @@ export class ZoteroToolHost {
                 {
                   key: entry.annotationKey,
                   ...entry.located!,
-                  tags: [{ name: annotationBatchTag(batch) }],
+                  tags: [],
                   readOnly: false,
                 } as unknown as _ZoteroTypes.Annotations.AnnotationJson,
                 { notifierData: { instanceID: ready!.reader._instanceID } },
