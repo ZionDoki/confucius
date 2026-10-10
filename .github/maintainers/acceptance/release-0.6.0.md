@@ -109,3 +109,57 @@ This record distinguishes local preparation from tag CI, public assets and old
 clients' real online upgrade. Those checks must complete before the release is
 reported as publicly available. Raw logs, reports and original candidate/public
 archives are retained under ignored `output/release-0.6.0/`.
+
+## Public package acceptance
+
+Release source: `4482bbdd53883c0acf033a8f5e422eef613996a0`.
+[Tag CI](https://github.com/ZionDoki/confucius/actions/runs/38019384067) and
+[master CI](https://github.com/ZionDoki/confucius/actions/runs/38019383782) passed
+on Node.js 22 and 24. The release job verified the uploaded draft before making
+it public, then passed consecutive anonymous discovery and both download paths.
+
+[Confucius v0.6.0](https://github.com/ZionDoki/confucius/releases/tag/v0.6.0)
+was published at **2026-10-10T03:08:30Z**, release ID `408577728`, with
+`draft=false`, `prerelease=false`. The Latest endpoint returns `v0.6.0`.
+Title, tag and body match the CHANGELOG-generated release notes.
+
+| Original public CI artifact |  Bytes | SHA-256                                                            |
+| --------------------------- | -----: | ------------------------------------------------------------------ |
+| `confucius.xpi`             | 754442 | `bec8acf2a0c31ed96cf0b60983cce5767d82136b86f87b850839124c97cdc3ec` |
+| `update.json`               |    573 | `14f6af8690d807c71324f586391f95c9438672120dbc24a64f6f8f84ea594e63` |
+| `update-beta.json`          |    573 | `14f6af8690d807c71324f586391f95c9438672120dbc24a64f6f8f84ea594e63` |
+
+Independent local verification passed three consecutive anonymous reads of the
+old clients' release list, then downloaded the XPI through both the asset API and
+browser URL and checked the original bytes. Manifest and update JSON checks
+passed against the public archive. **All 19 unpacked files match the tested
+candidate byte for byte**; ZIP metadata accounts for the different archive hash.
+The first comparison command exceeded Node's default output buffer; rerunning
+with a 32 MiB limit completed the full comparison. No public bytes were replaced.
+
+Both original old packages upgraded through their own updater and real GitHub
+endpoints, without modified versions, updater code or discovery responses:
+
+| Public online acceptance                     | Explicit channel | Checks | Result |
+| -------------------------------------------- | ---------------- | -----: | ------ |
+| 0.5.0 → 0.6.0, updater/draft/settings        | stable           |     13 | Passed |
+| 0.6.0-beta.1 → 0.6.0, updater/draft/settings | beta             |     13 | Passed |
+| 0.5.0 → 0.6.0, complete research data        | stable           |     28 | Passed |
+| 0.6.0-beta.1 → 0.6.0, complete research data | stable           |     34 | Passed |
+
+The first two runs used `scripts/live-legacy-update.mjs`; the latter two used
+`scripts/live-release-upgrade.mjs --public`. Stable discovery works with Betas
+disabled, and an explicitly enabled Beta installation also discovers the same
+base stable version. Installation took effect with `restartRequired=false`;
+full restarts independently confirmed version and public-XPI digest.
+
+The complete-data runs retained all 28/40 original history and working-note
+bodies, drafts, annotations, reports, memory proposals and consumed budgets.
+The Beta's literature selections and child results/traces survived. Upgrade
+did not invoke the model; explicit continuation reused the existing successful
+write. Channel choices, independent automatic-check settings, already-current
+behavior and no downgrade all passed subsequent restarts.
+
+All isolated acceptance processes exited. The original downloaded CI assets,
+metadata, per-file comparison and four online-upgrade reports remain in the same
+ignored output directory. Device/CLI/model-quality limits above still apply.
