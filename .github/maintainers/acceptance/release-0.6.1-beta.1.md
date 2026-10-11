@@ -112,5 +112,69 @@ OS font scaling or OS high-contrast device test was run. UI media fixtures cover
 reduced motion and contrast behavior. Raw reports, private profiles, screenshots
 and package copies remain in ignored `output/`.
 
-At this preparation stage no tag or public Release has been created. Publication
-and original-old-package online upgrades require separate acceptance.
+At tag preparation, publication and original-old-package online upgrades were
+not yet complete. The following follow-up records their separate acceptance.
+
+## Public package acceptance
+
+Release source: `0771afc65555c68854c18064776882eeee22a83b`.
+[Tag CI](https://github.com/ZionDoki/confucius/actions/runs/38113220888) and
+[master CI](https://github.com/ZionDoki/confucius/actions/runs/38113220998) passed
+on Node.js 22 and 24. Both Node versions passed all 1,354 tests with zero failures,
+skips or cancellations. Type checking, lint, skills/version checks and production
+builds passed. The release job verified the complete uploaded draft before publication and passed three consecutive anonymous discovery reads
+and both XPI download paths.
+
+[Confucius v0.6.1-beta.1](https://github.com/ZionDoki/confucius/releases/tag/v0.6.1-beta.1)
+was published at **2026-10-11T05:00:01Z**, release ID `409427369`, with
+`draft=false`, `prerelease=true`. Title, tag and body match CHANGELOG-generated
+notes. Stable Latest remains `v0.6.0`.
+
+| Original public CI artifact |  Bytes | SHA-256                                                            |
+| --------------------------- | -----: | ------------------------------------------------------------------ |
+| `confucius.xpi`             | 756682 | `48a850dd396021f390417ff019fe964bc6a196b4a5266c9c8ce449a410574084` |
+| `update-beta.json`          |    587 | `34b7ff4e43e62694896944497f0f8a32dcd1b3a176af625d172b46c5e1bab69e` |
+
+The CI archive differs from the local candidate in ZIP metadata/compression.
+All **19 unpacked files** (25 ZIP entries including directories) have identical
+names and SHA-256 digests, including manifest, scripts, locales and styles. Original downloaded public files were
+retained; they were not replaced with a local rebuild.
+
+A separate local run of `scripts/release-assets.mjs --public` used those original
+public files and also passed three consecutive anonymous release-list reads and
+both asset-API/browser downloads with the recorded sizes and hashes. Manifest,
+Beta-only update file, SHA-512 and versioned download address passed inspection.
+
+## Original-old-package online upgrades
+
+The following suites installed unchanged original public old XPIs in isolated
+Zotero, with their original updater implementations and real GitHub endpoints.
+No reported current version, release metadata, asset response or download bytes
+were replaced. Every installed new XPI matched the original public CI digest
+above after a full restart.
+
+| Suite                                       | From         | Checks | Result |
+| ------------------------------------------- | ------------ | -----: | ------ |
+| `scripts/live-legacy-update.mjs`            | 0.6.0        |     12 | Passed |
+| `scripts/live-legacy-update.mjs`            | 0.6.0-beta.1 |     12 | Passed |
+| `scripts/live-release-upgrade.mjs --public` | 0.6.0        |     27 | Passed |
+| `scripts/live-release-upgrade.mjs --public` | 0.6.0-beta.1 |     33 | Passed |
+
+Old stable-only checks excluded the new Beta. Enabling prereleases discovered
+0.6.1-beta.1 and downloaded, verified and installed it through each old updater.
+The new version and Chinese draft survived a full restart. Explicit channel
+choices and disabled automatic checks stayed independent; an already-current
+package was not offered again. Disabling Betas did not downgrade and the stable
+choice survived another restart.
+
+The full data suites retained all original history/working-note hashes (28 files
+from stable, 40 from old Beta), source annotations, notes, report revisions,
+memory/proposals, drafts and run/maintenance budgets. Upgrade and restart did not
+request a model or repeat a confirmed write. Explicit continuation reused the
+saved write. The old Beta research fixture retained literature queries, candidate
+choices, child research identities, results and trace events through two restarts.
+
+Source preparation, ordinary-package feature tests, candidate data upgrades,
+Node.js 22/24 CI, public assets/discovery/downloads and original-old-package online
+upgrades are complete. No installed personal Zotero profile was changed. The
+original tag, source and public artifacts remain unchanged.
