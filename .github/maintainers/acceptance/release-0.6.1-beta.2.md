@@ -132,3 +132,74 @@ At tag preparation, local source checks, ordinary-package feature acceptance,
 candidate data upgrades and hot-update acceptance are complete. CI publication,
 anonymous discovery/download verification and original-old-package online
 upgrades are separate steps and are not yet claimed by this preparation record.
+
+## Public package acceptance
+
+Release source: `df6788a9a38386c4640b92fa8a369c4219a52a6a`.
+[Tag CI](https://github.com/ZionDoki/confucius/actions/runs/38128995963) and
+[master CI](https://github.com/ZionDoki/confucius/actions/runs/38128995900) passed
+on Node.js 22 and 24. Each Node version passed all **1,371 tests** with zero
+failures, skips or cancellations. Type checking, lint, skill/version checks and
+production builds passed. The release job verified complete uploaded draft
+assets before publication and passed consecutive anonymous discovery and both
+XPI download paths.
+
+[Confucius v0.6.1-beta.2](https://github.com/ZionDoki/confucius/releases/tag/v0.6.1-beta.2)
+was published at **2026-10-11T09:39:31Z**, release ID `409573584`, with
+`draft=false` and `prerelease=true`. Title, tag and body match the notes generated
+from CHANGELOG. Stable Latest remains `v0.6.0`.
+
+| Original public CI artifact |  Bytes | SHA-256                                                            |
+| --------------------------- | -----: | ------------------------------------------------------------------ |
+| `confucius.xpi`             | 799485 | `3f35c4d98e4e3d90d07db7b431b8e8e2d16366c18db0eb5555d99d127166d56a` |
+| `update-beta.json`          |    587 | `6d5c849c0556b47b4f63c428eb51726500079f90adea87326ea490b154fbdde3` |
+
+All **19 unpacked files** have identical names and SHA-256 digests between the
+tested local candidate and the original public CI XPI. ZIP metadata/compression
+accounts for the archive-byte difference. Public artifacts were retained as
+downloaded and were not substituted with a local rebuild.
+
+A separate local run of `scripts/release-assets.mjs --public` used those original
+public files and passed three consecutive anonymous release-list reads plus both
+the asset-API and browser download paths. Uploaded states, display filenames,
+sizes, SHA-256 digests, manifest, Beta-only update metadata, SHA-512 and versioned
+download address all passed inspection.
+
+## Original-old-package online upgrades
+
+`scripts/live-legacy-update.mjs` passed **12 checks each** from public 0.6.0 and
+0.6.1-beta.1 to the original public 0.6.1-beta.2 package. Tests used each old XPI's
+unchanged updater and real GitHub endpoints in isolated Zotero, without replacing
+reported versions, discovery responses, asset responses or download bytes.
+
+Stable-only checks excluded the new Beta. Enabling prereleases discovered,
+downloaded, verified and installed 0.6.1-beta.2. A full restart confirmed the new
+version and exact public XPI digest. Tasks, Chinese drafts and explicit channel
+choices survived; automatic checks remained independent. Already-current checks
+did not reinstall, disabling Betas did not downgrade, and the stable choice
+survived another restart.
+
+The full `scripts/live-release-upgrade.mjs --public` data suites also used the
+unchanged old updaters and original public new package:
+
+| Suite                                       | From         | Checks | Result |
+| ------------------------------------------- | ------------ | -----: | ------ |
+| `scripts/live-legacy-update.mjs`            | 0.6.0        |     12 | Passed |
+| `scripts/live-legacy-update.mjs`            | 0.6.1-beta.1 |     12 | Passed |
+| `scripts/live-release-upgrade.mjs --public` | 0.6.0        |     27 | Passed |
+| `scripts/live-release-upgrade.mjs --public` | 0.6.1-beta.1 |     33 | Passed |
+
+Every installed new XPI matched the original public CI digest after a full
+restart. All original history/working-note hashes remained intact (28 files from
+stable and 40 from the previous Beta). Source annotations, notes, report
+revisions, memory/proposals, drafts, creation grouping and consumed budgets
+survived. Upgrade/restart did not request a model or repeat a confirmed write;
+explicit continuation reused the stored receipt. The old Beta's saved research
+queries, papers, decisions, child identities/results and trace events survived
+another restart.
+
+Source preparation, local ordinary-package feature/regression tests, candidate
+upgrades, hot updates, Node.js 22/24 CI, public asset/discovery/download checks and
+original-old-package online data upgrades are complete. The tag, release source
+and public artifacts remain unchanged. No personal Zotero installation or
+library was modified.
