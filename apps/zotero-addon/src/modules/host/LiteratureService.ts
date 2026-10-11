@@ -20,6 +20,7 @@ import { createAbortController } from "../../utils/webPlatform";
 import { LiteratureFulltextAgent } from "./LiteratureFulltextAgent";
 import type { FulltextCandidate } from "./LiteratureResolvers";
 import type { FulltextTransfer } from "./LiteratureBrowser";
+import { matchVenueRatings } from "./VenueRatings";
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 const continuation = (pool: LiteraturePool) =>
@@ -94,6 +95,7 @@ interface Options {
     }>;
   };
   storage?: JsonStorage;
+  ratings?: { enrich(works: LiteratureWork[]): Promise<LiteratureWork[]> };
   acquire: LiteratureAcquirer;
   fulltext?: LiteratureFulltextAgent;
   /** Must reject during active research; user confirmation is an execution boundary. */
@@ -147,6 +149,21 @@ export class LiteratureService {
   private assert(taskId: string) {
     if (this.removed.has(taskId) || !this.options.exists(taskId))
       throw new Error("Research task no longer exists");
+  }
+  private enrich(works: LiteratureWork[]) {
+    if (this.options.ratings) return this.options.ratings.enrich(works);
+    return Promise.resolve(
+      works.map((work) => {
+        const venueRatings = matchVenueRatings(work);
+        return {
+          ...work,
+          venueRatings,
+          venueRatingStatus: venueRatings.length
+            ? ("matched" as const)
+            : ("unmatched" as const),
+        };
+      }),
+    );
   }
   async load(taskId: string): Promise<LiteraturePool> {
     this.assert(taskId);
@@ -226,7 +243,7 @@ export class LiteratureService {
           Math.max(0, Math.floor(options.queryOffset ?? 0)),
           Math.max(0, Math.floor(options.queryOffset ?? 0)) + 10,
         ),
-      items: rows.slice(offset, offset + limit),
+      items: await this.enrich(rows.slice(offset, offset + limit)),
       total: rows.length,
       nextOffset: offset + limit < rows.length ? offset + limit : null,
     };
@@ -236,7 +253,7 @@ export class LiteratureService {
       (w) => w.id === id || w.openAlexIds.includes(id),
     );
     if (!work) throw new Error("Paper is not in this task's pool");
-    return work;
+    return (await this.enrich([work]))[0];
   }
   /** One consistent snapshot for the shared review UI; long lists mount in chunks. */
   async review(taskId: string): Promise<LiteraturePage> {
@@ -244,7 +261,7 @@ export class LiteratureService {
     return {
       summary: literatureSummary(pool),
       queries: [...pool.queries].reverse(),
-      items: clone(pool.works),
+      items: await this.enrich(clone(pool.works)),
       total: pool.works.length,
       nextOffset: null,
     };
@@ -320,6 +337,10 @@ export class LiteratureService {
                   ...(found.locations ?? []),
                   ...(duplicate.locations ?? []),
                 ];
+                found.venues = [
+                  ...(found.venues ?? []),
+                  ...(duplicate.venues ?? []),
+                ];
                 found.cachedPdfUrl ??= duplicate.cachedPdfUrl;
                 found.reads = [
                   ...(found.reads ?? []),
@@ -345,6 +366,16 @@ export class LiteratureService {
                 pool.candidateRevision++;
               }
               found.doi = incoming.doi ?? found.doi;
+              found.venue ??= incoming.venue;
+              found.publicationType =
+                incoming.publicationType ?? found.publicationType;
+              found.venues = [
+                ...new Map(
+                  [...(found.venues ?? []), ...(incoming.venues ?? [])].map(
+                    (venue) => [JSON.stringify(venue), venue],
+                  ),
+                ).values(),
+              ];
               found.queryIds = [...new Set([...found.queryIds, id])];
               found.openAlexIds = [
                 ...new Set([...found.openAlexIds, ...incoming.openAlexIds]),

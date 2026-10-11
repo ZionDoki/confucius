@@ -16,6 +16,7 @@ behavior and validation belong to the corresponding version's release notes.
 | [Task execution and recovery](runtime.md)         | Run state, permissions, persistence, interrupted writes       |
 | [Context and memory](context-memory-refactor.md)  | Handoff, retrieval budgets, independent retention             |
 | [Literature research](literature-research.md)     | Candidate confirmation, full-text acquisition, subagents      |
+| [Venue rating catalogs](venue-ratings.md)         | CCF/CORE snapshots, matching, ShowJCR CSV imports             |
 | [Research reports](research-reports.md)           | Revisions, citations, writeback, export                       |
 | [Interface design rules](../../docs/design.md)    | Shared colors, spacing, controls, interaction checklist       |
 | [Versioning and releases](releases.md)            | Versions, channels, artifacts, publication and upgrade checks |

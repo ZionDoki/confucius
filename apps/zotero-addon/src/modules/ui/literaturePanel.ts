@@ -9,6 +9,7 @@ import { droppedFilePaths, hasDroppedFiles } from "./fileDrop";
 import { createReviewPanel } from "./reviewPanel";
 import type { ReviewEntry, ReviewPool, ReviewRow } from "./reviewModel";
 import { getString } from "../../utils/locale";
+import { createVenueRatingSettings, createVenueRatings } from "./venueRatings";
 
 type Rpc = (
   method: string,
@@ -119,6 +120,20 @@ export function createLiteraturePanel(
   history.className = "confucius-literature-history";
   refine.append(form, history);
   tools.append(refine);
+  const ratingTools = node(doc, "details");
+  ratingTools.className = "confucius-literature-refine";
+  ratingTools.append(node(doc, "summary", text("ratings-manage")));
+  const ratingSettings = createVenueRatingSettings(doc, options.rpc, {
+    compact: true,
+    changed: async () => {
+      if (!disposed && taskId) await panel.refresh();
+    },
+  });
+  ratingTools.append(ratingSettings.node);
+  ratingTools.addEventListener("toggle", () => {
+    if (ratingTools.open && !disposed) void ratingSettings.refresh();
+  });
+  tools.append(ratingTools);
   const confirmation = node(doc, "section");
   confirmation.className = "confucius-literature-confirmation";
   const footer = node(doc, "div");
@@ -231,6 +246,13 @@ export function createLiteraturePanel(
     return {
       taskId: value.summary.id,
       revision: value.summary.revision,
+      metadataKey: JSON.stringify(
+        value.items.map((work) => [
+          work.id,
+          work.venueRatings,
+          work.venueRatingStatus,
+        ]),
+      ),
       batches,
     };
   }
@@ -288,6 +310,7 @@ export function createLiteraturePanel(
         .filter(Boolean)
         .join(" · "),
     renderEntry,
+    renderMetadata,
     rendered: (state) => labels(state.busy),
     locate: async (row) => {
       const work = row.entry.work;
@@ -580,6 +603,45 @@ export function createLiteraturePanel(
       history.append(line);
     }
   }
+  function renderMetadata(target: HTMLElement, row: ReviewRow<CandidateEntry>) {
+    const work = row.entry.work;
+    const signature = JSON.stringify([
+      work.venue,
+      work.citedBy,
+      work.venueRatings?.map((rating) => [
+        rating.system,
+        rating.year,
+        rating.rank,
+        rating.source.name,
+        rating.source.url,
+        rating.source.filename,
+      ]),
+      work.venueRatingStatus,
+    ]);
+    if (extraViews.get(target) === signature) return;
+    extraViews.set(target, signature);
+    const focused =
+      target.dataset.workId === work.id && target.contains(doc.activeElement)
+        ? (doc.activeElement as HTMLElement).dataset.action
+        : undefined;
+    target.dataset.workId = work.id;
+    const info = node(
+      doc,
+      "p",
+      [work.venue, `${text("citations")} ${work.citedBy}`]
+        .filter(Boolean)
+        .join(" · "),
+    );
+    info.className = "confucius-literature-meta";
+    target.replaceChildren(
+      info,
+      createVenueRatings(doc, work, false, "summary"),
+    );
+    if (focused)
+      target
+        .querySelector<HTMLElement>(`[data-action="${focused}"]`)
+        ?.focus({ preventScroll: true });
+  }
   function renderEntry(
     target: HTMLElement,
     row: ReviewRow<CandidateEntry>,
@@ -593,23 +655,23 @@ export function createLiteraturePanel(
     if (extraViews.get(target) === signature) return;
     extraViews.set(target, signature);
     const same = target.dataset.workId === work.id;
-    const opened = target.querySelector("details")?.open;
+    const opened = target.querySelector<HTMLDetailsElement>(
+      ".confucius-literature-abstract",
+    )?.open;
+    const ratingsOpened = target.querySelector<HTMLDetailsElement>(
+      ".confucius-venue-rating-details",
+    )?.open;
     const focused = target.contains(doc.activeElement)
       ? (doc.activeElement as HTMLElement).dataset.action
       : undefined;
     target.dataset.workId = work.id;
     target.replaceChildren();
     const current = () => epoch === era && !disposed && taskId === id;
-    const info = node(
-      doc,
-      "p",
-      [work.venue, `${text("citations")} ${work.citedBy}`]
-        .filter(Boolean)
-        .join(" · "),
+    target.append(
+      createVenueRatings(doc, work, same && !!ratingsOpened, "details"),
     );
-    info.className = "confucius-literature-meta";
-    target.append(info);
     const details = node(doc, "details");
+    details.className = "confucius-literature-abstract";
     details.open = same ? !!opened : view === "card";
     details.append(
       node(doc, "summary", text("abstract")),
@@ -819,6 +881,7 @@ export function createLiteraturePanel(
         oa.checked = false;
         sort.value = "relevance";
         refine.open = false;
+        ratingTools.open = false;
         history.replaceChildren();
         delete history.dataset.signature;
         confirmation.replaceChildren();
@@ -847,10 +910,13 @@ export function createLiteraturePanel(
 }
 export function createOpenAlexSettings(doc: Document, rpc: Rpc) {
   const container = node(doc, "div");
+  const ratings = createVenueRatingSettings(doc, rpc);
   container.append(
     createLiteratureKeySettings(doc, rpc, "openalex"),
     createLiteratureKeySettings(doc, rpc, "tavily"),
+    ratings.node,
   );
+  void ratings.refresh();
   return container;
 }
 function createLiteratureKeySettings(

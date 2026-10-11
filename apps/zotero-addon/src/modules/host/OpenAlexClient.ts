@@ -4,7 +4,9 @@ import type {
   LiteratureWork,
   LiteratureAttempt,
   LiteratureVersion,
+  LiteratureVenue,
 } from "@confucius/protocol";
+import { venueIssns } from "./VenueRatings";
 
 export class LiteratureError extends Error {
   constructor(
@@ -82,6 +84,31 @@ export function openAlexWork(raw: Obj, queryId: string): LiteratureWork | null {
     raw.has_content?.pdf === true
       ? publicUrl(raw.content_urls?.pdf)
       : undefined;
+  const venues: LiteratureVenue[] = [];
+  for (const location of [
+    raw.primary_location,
+    ...(Array.isArray(raw.locations) ? raw.locations : []),
+  ]) {
+    const source = location?.source;
+    if (!source || typeof source.display_name !== "string") continue;
+    const venue: LiteratureVenue = {
+      id: typeof source.id === "string" ? source.id : undefined,
+      name: source.display_name,
+      type: typeof source.type === "string" ? source.type : undefined,
+      issns: venueIssns(
+        [
+          source.issn_l,
+          ...(Array.isArray(source.issn) ? source.issn : []),
+        ].join(" "),
+      ),
+      rawName:
+        typeof location.raw_source_name === "string"
+          ? location.raw_source_name
+          : undefined,
+    };
+    if (!venues.some((v) => JSON.stringify(v) === JSON.stringify(venue)))
+      venues.push(venue);
+  }
   return {
     id,
     openAlexIds: [id],
@@ -99,7 +126,12 @@ export function openAlexWork(raw: Obj, queryId: string): LiteratureWork | null {
           .map((w) => w[1])
           .join(" ")
       : undefined,
-    venue: raw.primary_location?.source?.display_name,
+    venue:
+      typeof raw.primary_location?.source?.display_name === "string"
+        ? raw.primary_location.source.display_name
+        : undefined,
+    publicationType: typeof raw.type === "string" ? raw.type : undefined,
+    venues,
     citedBy: Number(raw.cited_by_count) || 0,
     openAccess: raw.open_access?.is_oa === true,
     landingUrl:

@@ -2,6 +2,59 @@
 
 ## Unreleased
 
+## 0.6.1-beta.2 - 2026-10-11
+
+This Beta adds dated venue ratings to literature review and local ShowJCR
+catalog imports.
+
+### Added
+
+- Literature review cards and list rows show matching CCF seventh-edition 2026
+  and CORE / ICORE2026 venue ratings, with catalog years, official source links
+  and expandable categories. Unknown or ambiguous venues remain explicitly
+  unmatched; conference companion tracks do not borrow main-conference grades.
+- Import UTF-8 ShowJCR journal CSVs for JCR, CAS through 2025 and Xinrui in Runtime
+  settings or literature review. Preserve all subject/major/minor partitions,
+  Top flags, impact factors and positions. Imports refresh existing results,
+  retain candidate choices and survive Zotero restart without changing library
+  fields or tags. Same-system/year imports replace that edition; each system
+  displays its newest imported year. These datasets are not bundled.
+
+### Upgrade notes
+
+- This is a Beta release. Enable **Include prereleases** in Confucius Settings →
+  Update to upgrade from 0.6.0 or an earlier Beta. Stable Latest remains 0.6.0.
+- No data migration or reconfiguration is required. Existing tasks, drafts,
+  candidate choices, annotations and library tags remain intact. Imported
+  catalogs stay in the local Zotero profile; removing one changes the rating
+  display without editing library items.
+
+### Validation and known limits
+
+- `npm test` passed 1,371 tests with no failures, skips or cancellations.
+  Version consistency, skill/catalog synchronization, type checking, lint and
+  the full production build passed.
+- The ordinary Beta XPI passed seven venue-rating check groups on macOS 26.6.2
+  (ARM64), Zotero 10.0.6: display/source links, real local CSV reads and storage,
+  import/removal refresh, preserved review choices and restart recovery. English,
+  Chinese, light/dark, narrow layouts, enlarged fonts and native accessibility
+  contrast were checked. The file-picker selection used a test fixture.
+- The same ordinary package passed 128 native annotation/candidate review
+  checks and 37 literature/attachment check groups, with no UI errors.
+- Upgrades from unchanged public 0.6.0 and 0.6.1-beta.1 XPIs passed 20 and 26
+  data-preservation checks, including history, notes, report revisions, candidate
+  decisions, research-child results, drafts, budgets and explicit channel
+  preferences. Seven hot-update checks retained the open workspace, selected
+  task, draft and settings without reopening a previously closed workspace.
+- Windows/Linux, other Zotero versions, online model responses and the
+  interactive OS file dialog were not tested. Ratings describe a catalog
+  edition, not the individual paper's quality or historical publication-year
+  rank. Conflicting identities and unsupported tracks remain unmatched.
+- Source verification and matching limits are recorded in the
+  [venue-rating acceptance record](https://github.com/ZionDoki/confucius/blob/v0.6.1-beta.2/.github/maintainers/acceptance/venue-ratings-2026-10-11.md).
+  Package and upgrade results are recorded in the
+  [Beta acceptance record](https://github.com/ZionDoki/confucius/blob/v0.6.1-beta.2/.github/maintainers/acceptance/release-0.6.1-beta.2.md).
+
 ## 0.6.1-beta.1 - 2026-10-11
 
 This Beta fixes review-card layout and arrival feedback, shares candidate and

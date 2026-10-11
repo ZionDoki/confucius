@@ -27,6 +27,8 @@ export interface ReviewBatch<E extends ReviewEntry = ReviewEntry> {
 export interface ReviewPool<E extends ReviewEntry = ReviewEntry> {
   taskId: string;
   revision: number;
+  /** Serialized loaders may refresh projected metadata at the same domain revision. */
+  metadataKey?: string;
   batches: ReviewBatch<E>[];
 }
 export interface ReviewModelOptions<E extends ReviewEntry = ReviewEntry> {
@@ -123,7 +125,12 @@ export class ReviewModel<E extends ReviewEntry = ReviewEntry> {
     return view;
   }
   update(pool: ReviewPool<E>): boolean {
-    if (pool.taskId !== this.pool.taskId || pool.revision <= this.pool.revision)
+    if (
+      pool.taskId !== this.pool.taskId ||
+      pool.revision < this.pool.revision ||
+      (pool.revision === this.pool.revision &&
+        (!pool.metadataKey || pool.metadataKey === this.pool.metadataKey))
+    )
       return false;
     const previous = new Set(this.pool.batches.map((b) => b.id));
     if (this.pool.revision >= 0)

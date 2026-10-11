@@ -15,6 +15,7 @@
 | [任务执行与恢复](runtime.zh-CN.md)               | 执行状态、授权、存储与中断写入            |
 | [上下文与记忆](context-memory-refactor.zh-CN.md) | 交接、检索预算与独立保留策略              |
 | [文献研究](literature-research.zh-CN.md)         | 候选确认、全文获取与子 Agent              |
+| [发表场所评级](venue-ratings.zh-CN.md)           | CCF/CORE 快照、匹配与 ShowJCR CSV 导入    |
 | [研究报告](research-reports.zh-CN.md)            | 修订、引用、笔记保存与导出                |
 | [界面设计准则](../../docs/design.zh-CN.md)       | 公共配色、边距、控件与交互检查            |
 | [版本与发布规范](releases.zh-CN.md)              | 版本、渠道、产物、发布与升级验收          |

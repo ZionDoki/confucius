@@ -72,6 +72,8 @@ export const SURFACE_CSS = `
 .confucius-workspace-root .confucius-literature-review summary { min-height:20px; cursor:pointer; color:var(--confucius-secondary); font-size:12px; padding:4px 0; }
 .confucius-literature-review details p { line-height:1.65; color:var(--confucius-secondary); }
 .confucius-literature-refine { font-size:12px; }
+.confucius-literature-review .ar-tools { display:flex; flex-wrap:wrap; align-items:flex-start; gap:4px 12px; }
+.confucius-literature-refine[open] { flex:1 1 100%; min-width:0; }
 .confucius-literature-refine > .confucius-literature-controls { margin-top:8px; }
 .confucius-literature-history { display:grid; gap:8px; margin-top:12px; color:var(--confucius-muted); }
 .confucius-literature-query { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
@@ -84,6 +86,19 @@ export const SURFACE_CSS = `
 .confucius-literature-confirmation .confucius-literature-controls { justify-content:flex-end; margin-top:16px; }
 .confucius-literature-settings { margin-bottom:24px; }
 .confucius-literature-settings .confucius-button { margin:4px; }
+.confucius-venue-rating-badges { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+.confucius-venue-rating { display:inline-flex; flex-wrap:wrap; align-items:baseline; gap:4px 8px; max-width:100%; box-sizing:border-box; padding:4px 8px; border-radius:8px; background:var(--confucius-surface); color:var(--confucius-secondary); font-size:12px; overflow-wrap:anywhere; }
+.confucius-venue-rating strong { font-weight:550; color:var(--confucius-ink); }
+.confucius-venue-ratings a { color:var(--confucius-secondary); text-decoration:underline; text-underline-offset:3px; overflow-wrap:anywhere; }
+.confucius-venue-ratings a:focus-visible { outline:2px solid var(--confucius-focus); outline-offset:2px; border-radius:4px; }
+.confucius-venue-rating-details ul { margin:8px 0; padding-left:20px; }
+.confucius-venue-rating-settings { margin-bottom:24px; min-width:0; overflow-wrap:anywhere; }
+.ar-tools .confucius-venue-rating-settings { font-size:12px; margin:8px 0; }
+.confucius-venue-rating-settings h3 { margin:0 0 8px; }
+.confucius-venue-rating-settings p { margin:8px 0; }
+.confucius-venue-rating-catalogs { display:grid; gap:8px; margin-top:12px; }
+.confucius-venue-rating-catalog { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+.confucius-venue-rating-catalog > span { flex:1 1 180px; min-width:0; }
 .confucius-subagent-entries { display:flex; width:100%; min-width:0; flex-wrap:wrap; gap:8px; margin:8px 0 16px; }
 .confucius-subagent-entry.confucius-button { width:100%; max-width:100%; gap:12px; padding:10px 12px; text-align:left; font-size:13px; white-space:normal; }
 .confucius-subagent-entry[aria-expanded=true] { background:var(--confucius-hover); }

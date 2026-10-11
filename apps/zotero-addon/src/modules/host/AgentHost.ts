@@ -15,6 +15,7 @@ import {
 } from "./SubagentExecution";
 import { isApprovalResolution, SUBAGENT_TOOL_NAMES } from "@confucius/protocol";
 import { LiteratureService } from "./LiteratureService";
+import { VenueRatingStore } from "./VenueRatingStore";
 import { OpenAlexClient } from "./OpenAlexClient";
 import { LiteratureFulltextAgent } from "./LiteratureFulltextAgent";
 import { tavilySearch } from "./LiteratureSearch";
@@ -856,8 +857,10 @@ export class AgentHost {
   private readonly literatureAcquirer = new ZoteroLiteratureAcquirer(() =>
     String(getPref("openAlexApiKey") || ""),
   );
+  private readonly venueRatings = new VenueRatingStore();
   private readonly literature = new LiteratureService({
     client: this.openAlex,
+    ratings: this.venueRatings,
     acquire: this.literatureAcquirer,
     fulltext: new LiteratureFulltextAgent(() =>
       String(getPref("tavilyApiKey") || ""),
@@ -2509,6 +2512,28 @@ export class AgentHost {
           return { hasKey: true };
         }
         return this.openAlex.test();
+      case "literature/ratings/list":
+        return this.venueRatings.list();
+      case "literature/ratings/import":
+      case "literature/ratings/remove": {
+        const result =
+          method === "literature/ratings/import"
+            ? await this.venueRatings.importFile(String(params.path ?? ""))
+            : await this.venueRatings.remove(String(params.id ?? ""));
+        for (const state of this.sessions.values()) {
+          if (!state.record.literature) continue;
+          this.emitSessionEvent(
+            state,
+            state.activeTurnId ?? undefined,
+            "literature_updated",
+            {
+              summary: state.record.literature,
+              sources: state.record.lockedContext,
+            },
+          );
+        }
+        return result;
+      }
       case "literature/list":
         return this.literature.list(String(params.taskId), params);
       case "literature/review/list":

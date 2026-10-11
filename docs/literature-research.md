@@ -36,6 +36,38 @@ It is not the search service's total hit count.
 only the local pool. Each OpenAlex page fetches at most 100 records. Missing
 abstracts can be looked up from local Zotero, OpenAlex and Crossref metadata.
 
+## Venue ratings
+
+Since 0.6.1-beta.2, cards and list rows automatically match **CCF 2026 (seventh edition)** and
+**CORE / ICORE2026**. Each rating shows its catalog year and a source link;
+**Rating details** includes categories and a link to the pinned data snapshot.
+The year describes the rating edition, not the paper's publication year.
+
+Open **Venue catalogs → Import ShowJCR CSV** in the literature review, or
+**Settings → Runtime → Venue ratings**. Select a UTF-8 journal CSV from
+[ShowJCR](https://github.com/hitfyd/ShowJCR), up to 32 MiB:
+
+- `JCR2025-UTF8.csv` (or another supported year): JCR quartiles by subject,
+  impact factor and ranking positions.
+- `FQBJCR2025-UTF8.csv`: CAS major/minor categories and Top flags. Historical
+  editions are supported; CAS editions after 2025 are rejected.
+- `XR2026-UTF8.csv`: Xinrui major/minor categories and Top flags. Xinrui is
+  displayed separately from CAS. The conference CSV is not supported.
+
+Importing the same system and year replaces that catalog. Each system displays
+its newest imported edition; **Remove** can reveal an older retained edition.
+Imports stay in the local Zotero profile, survive restarting Zotero and refresh
+existing research results. They do not add tags, change candidate decisions or
+edit library fields. Confucius does not download these three datasets for you.
+
+ISSNs take priority over exact names and recognized conference abbreviations.
+Repositories, explicit preprints, ambiguous identities and unmatched proceedings
+stay without a rating. Conference grades apply to regular/full papers;
+Findings, demonstrations and companion workshops do not borrow the main
+conference's grade. Independently listed workshops can match their own entry.
+**No venue rating matched** does not mean unranked. Venue ratings do not measure
+the quality of an individual paper.
+
 ## Continue without every PDF
 
 | Choice                        | What happens                                                                                 |

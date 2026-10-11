@@ -86,6 +86,7 @@ export function createReviewPanel<E extends ReviewEntry>(
     batch?: (batch: ReviewPool<E>["batches"][number], index: number) => string;
     allowed?: (action: ReviewAction, row: ReviewRow<E>) => boolean;
     restoredStatus?: "pending" | "accepted";
+    renderMetadata?: (target: HTMLElement, row: ReviewRow<E>) => void;
     renderEntry?: (
       target: HTMLElement,
       row: ReviewRow<E>,
@@ -167,8 +168,9 @@ export function createReviewPanel<E extends ReviewEntry>(
     quote = node(doc, "blockquote", "ar-quote"),
     comment = node(doc, "p", "ar-comment");
   const cardReason = node(doc, "p", "ar-row-error");
+  const cardMetadata = node(doc, "div", "ar-entry-metadata");
   const cardExtra = node(doc, "div", "ar-entry-extra");
-  body.append(quote, comment, cardReason, cardExtra);
+  body.append(quote, cardMetadata, comment, cardReason, cardExtra);
   body.id = `${radioGroup}-body`;
   const previous = makeButton("", "previous"),
     next = makeButton("", "next");
@@ -471,6 +473,7 @@ export function createReviewPanel<E extends ReviewEntry>(
       lastCard = row.key;
       body.scrollTop = 0;
     }
+    options.renderMetadata?.(cardMetadata, row);
     options.renderEntry?.(cardExtra, row, "card");
     const entries = model.rows(),
       index = entries.findIndex((r) => r.key === row.key);
@@ -527,7 +530,14 @@ export function createReviewPanel<E extends ReviewEntry>(
     page.classList.add("ar-source");
     page.title = text("source");
     m.append(type, page, state);
-    content.append(m, q, c, reason, node(doc, "div", "ar-entry-extra"));
+    content.append(
+      m,
+      q,
+      node(doc, "div", "ar-entry-metadata"),
+      c,
+      reason,
+      node(doc, "div", "ar-entry-extra"),
+    );
     item.append(label, readOnly, content);
     check.addEventListener("change", () => {
       if (!model) return;
@@ -617,6 +627,10 @@ export function createReviewPanel<E extends ReviewEntry>(
         item.querySelector(".ar-type")!.textContent =
           options.type?.(row) ?? text(`type-${entry.type}`);
         item.querySelector(".ar-source")!.textContent = sourceText(row);
+        options.renderMetadata?.(
+          item.querySelector<HTMLElement>(".ar-entry-metadata")!,
+          row,
+        );
         options.renderEntry?.(
           item.querySelector<HTMLElement>(".ar-entry-extra")!,
           row,

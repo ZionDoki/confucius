@@ -100,6 +100,7 @@ const server = http.createServer(async (req, res) => {
     requests++;
     const writing = b.messages?.some(
       (m) =>
+        m.role === "user" &&
         typeof m.content === "string" &&
         m.content.includes("RELEASE_WRITE_ONCE"),
     );
@@ -154,7 +155,13 @@ const preservedLiterature = (actual, expected) => {
   assert.ok(actual.summary.revision >= expected.summary.revision);
   const summary = { ...actual.summary, revision: expected.summary.revision };
   if (!("abstracts" in expected.summary)) delete summary.abstracts;
-  assert.deepEqual({ ...actual, summary }, expected);
+  // Ratings are a current catalog projection, not persisted research decisions.
+  const storedItems = (items) =>
+    items.map(({ venueRatings, venueRatingStatus, ...item }) => item);
+  assert.deepEqual(
+    { ...actual, summary, items: storedItems(actual.items) },
+    { ...expected, items: storedItems(expected.items) },
+  );
 };
 const tree = async (dir, prefix = "") => {
   const out = {};

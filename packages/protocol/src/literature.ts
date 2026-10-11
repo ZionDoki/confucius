@@ -34,6 +34,49 @@ export interface LiteratureLocation {
   version: LiteratureVersion;
   openAccess: boolean;
 }
+/** Publication identity, separate from a repository hosting a copy. */
+export interface LiteratureVenue {
+  id?: string;
+  name: string;
+  type?: string;
+  issns: string[];
+  rawName?: string;
+}
+export type VenueRatingSystem = "ccf" | "core" | "jcr" | "cas" | "xr";
+export interface VenueRatingCategory {
+  name: string;
+  rank?: string;
+  scope: "subject" | "major" | "minor";
+  top?: boolean;
+  position?: string;
+}
+export interface VenueRating {
+  system: VenueRatingSystem;
+  /** Catalog year, or the indicator year named in a ShowJCR CSV. */
+  year: number;
+  rank?: string;
+  categories: VenueRatingCategory[];
+  impactFactor?: string;
+  source: {
+    name: string;
+    url: string;
+    snapshotUrl?: string;
+    filename?: string;
+    importedAt?: number;
+  };
+  matchedBy: "name" | "abbreviation" | "issn";
+}
+export interface VenueRatingCatalogSummary {
+  id: string;
+  system: VenueRatingSystem;
+  year: number;
+  entries: number;
+  source: VenueRating["source"];
+  imported: boolean;
+}
+export interface VenueRatingCatalogState {
+  catalogs: VenueRatingCatalogSummary[];
+}
 export type LiteratureAcquisitionStage =
   "existing" | "open_access" | "cache" | "zotero" | "agent" | "browser";
 export interface LiteratureAttempt {
@@ -72,6 +115,11 @@ export interface LiteratureWork {
     checkedAt: number;
   };
   venue?: string;
+  publicationType?: string;
+  venues?: LiteratureVenue[];
+  /** Derived at read time; importing a catalog never changes candidate decisions. */
+  venueRatings?: VenueRating[];
+  venueRatingStatus?: "matched" | "unmatched" | "unavailable";
   citedBy: number;
   openAccess: boolean;
   landingUrl?: string;

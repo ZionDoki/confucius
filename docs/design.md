@@ -151,6 +151,24 @@ Cap width at 420px. Narrow windows retain at least 8px on both sides. Position w
   instead of clipping them.
 - After current materials are accepted, hide Continue. When full text is still missing, show only a secondary Get remaining full text link with shared link-button styling and focus. Hide it when complete or downloading. Candidate changes restore confirmation for the new version.
 
+### Venue ratings
+
+- Cards and list rows use the same rating component, immediately below venue
+  metadata. Show system, grade, catalog year and an actionable source link.
+  Use quiet wrapping badges with shared surface/ink/secondary variables, 12px
+  metadata, 8px gaps and no grade-specific colors or decorative dividers.
+- Keep every subject's quartile in an initially collapsed detail area, along
+  with major/minor category, Top, impact factor, position, import filename and
+  the pinned source snapshot when present. Expanded rating and abstract details
+  retain their own state on metadata refreshes.
+- Put CSV import/removal in Runtime settings and a secondary collapsed review
+  tool. Closed review tools share a wrapping row; an expanded tool uses the full
+  row to retain space for results. Reuse workspace buttons and parent-owned gaps; loading/error feedback
+  uses a polite status area. Cancellation and errors preserve the old catalogs.
+- Unknown ratings use a quiet unmatched label, without equating missing data
+  with an unranked venue. Import refreshes must preserve current card, scroll,
+  filters and candidate selection and must not replay an arrival reminder.
+
 ### Subagent entries and viewer
 
 - Place each subagent entry at its delegation point, showing icon, name, state, and latest activity/tool count. Updates do not move it. Avoid duplicate ordinary tool blocks for delegation; retain error feedback.
