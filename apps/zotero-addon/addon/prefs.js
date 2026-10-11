@@ -24,8 +24,12 @@ pref("alwaysAllowedTools", "[]");
 pref("reasoningEffort", "auto");
 pref("contextWindowTokens", 32768);
 pref("uiFont", "sans");
+pref("uiFontFamily", "");
+pref("uiThemeColors", "{}");
 pref("uiTheme", "auto");
 pref("uiFontSize", 13);
+// Gecko integer prefs cannot hold half pixels; retain the old integer as fallback.
+pref("uiFontSizeExact", "");
 pref("uiLanguage", "");
 pref("uiLineHeight", "standard");
 // External Agent runtimes are hosted directly by the privileged add-on.

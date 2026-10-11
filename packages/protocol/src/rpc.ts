@@ -568,7 +568,65 @@ export function clampMaxToolCalls(value: unknown): number {
   return Math.min(parsed, MAX_MAX_TOOL_CALLS);
 }
 
-export type UiFont = "sans" | "serif" | "mono";
+export type UiFont =
+  | "sans"
+  | "modern"
+  | "cjk-sans"
+  | "serif"
+  | "cjk-serif"
+  | "noto-sans"
+  | "noto-serif"
+  | "mono"
+  | "custom";
+
+export const UI_COLOR_KEYS = [
+  "paper",
+  "canvas",
+  "surface",
+  "ink",
+  "secondary",
+  "accent",
+] as const;
+export type UiColorKey = (typeof UI_COLOR_KEYS)[number];
+export type UiPalette = Record<UiColorKey, string>;
+export type UiThemeColors = Partial<
+  Record<"light" | "dark", Partial<UiPalette>>
+>;
+
+export function isUiThemeColors(value: unknown): value is UiThemeColors {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.entries(value).every(
+    ([mode, colors]) =>
+      (mode === "light" || mode === "dark") &&
+      colors !== null &&
+      typeof colors === "object" &&
+      !Array.isArray(colors) &&
+      Object.entries(colors).every(
+        ([key, color]) =>
+          (UI_COLOR_KEYS as readonly string[]).includes(key) &&
+          typeof color === "string" &&
+          /^#[0-9a-f]{6}$/i.test(color),
+      ),
+  );
+}
+
+export function parseUiThemeColors(value: unknown): UiThemeColors {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    return isUiThemeColors(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/** One family name, never a CSS declaration or a remote font URL. */
+export function isUiFontFamily(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length <= 128 &&
+    !/[\u0000-\u001f\u007f]/.test(value)
+  );
+}
 
 export type UiTheme = "auto" | "light" | "dark";
 
@@ -587,15 +645,19 @@ export function isUiLanguage(value: unknown): value is UiLanguage {
   );
 }
 
-export type UiLineHeight = "compact" | "standard" | "relaxed";
+export type UiLineHeightPreset = "compact" | "standard" | "relaxed";
+/** Named values remain readable for preferences saved by earlier versions. */
+export type UiLineHeight = UiLineHeightPreset | number;
 
-export const UI_LINE_HEIGHTS: readonly UiLineHeight[] = [
+export const UI_LINE_HEIGHTS: readonly UiLineHeightPreset[] = [
   "compact",
   "standard",
   "relaxed",
 ];
 
-export const UI_LINE_HEIGHT_VALUES: Readonly<Record<UiLineHeight, number>> = {
+export const UI_LINE_HEIGHT_VALUES: Readonly<
+  Record<UiLineHeightPreset, number>
+> = {
   compact: 1.45,
   standard: 1.6,
   relaxed: 1.75,
@@ -603,12 +665,26 @@ export const UI_LINE_HEIGHT_VALUES: Readonly<Record<UiLineHeight, number>> = {
 
 export function isUiLineHeight(value: unknown): value is UiLineHeight {
   return (
-    typeof value === "string" &&
-    (UI_LINE_HEIGHTS as readonly string[]).includes(value)
+    (typeof value === "number" &&
+      Number.isFinite(value) &&
+      value >= MIN_UI_LINE_HEIGHT &&
+      value <= MAX_UI_LINE_HEIGHT) ||
+    (typeof value === "string" &&
+      (UI_LINE_HEIGHTS as readonly string[]).includes(value))
   );
 }
 
-export const UI_FONTS: readonly UiFont[] = ["sans", "serif", "mono"];
+export const UI_FONTS: readonly UiFont[] = [
+  "sans",
+  "modern",
+  "cjk-sans",
+  "cjk-serif",
+  "serif",
+  "noto-sans",
+  "noto-serif",
+  "mono",
+  "custom",
+];
 
 export function isUiFont(value: unknown): value is UiFont {
   return (
@@ -620,16 +696,55 @@ export const DEFAULT_UI_FONT: UiFont = "sans";
 export const DEFAULT_UI_FONT_SIZE = 13;
 export const DEFAULT_UI_LINE_HEIGHT: UiLineHeight = "standard";
 export const MIN_UI_FONT_SIZE = 12;
-export const MAX_UI_FONT_SIZE = 18;
+export const MAX_UI_FONT_SIZE = 28;
+export const UI_FONT_SIZE_STEP = 0.5;
+export const MIN_UI_LINE_HEIGHT = 1.2;
+export const MAX_UI_LINE_HEIGHT = 2.4;
+export const UI_LINE_HEIGHT_STEP = 0.05;
 
 export function clampUiFontSize(value: unknown): number {
   const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
+  if (
+    value === undefined ||
+    value === null ||
+    value === "" ||
+    !Number.isFinite(parsed)
+  ) {
     return DEFAULT_UI_FONT_SIZE;
   }
   return Math.min(
     MAX_UI_FONT_SIZE,
-    Math.max(MIN_UI_FONT_SIZE, Math.round(parsed)),
+    Math.max(
+      MIN_UI_FONT_SIZE,
+      Math.round(parsed / UI_FONT_SIZE_STEP) * UI_FONT_SIZE_STEP,
+    ),
+  );
+}
+
+export function clampUiLineHeight(value: unknown): number {
+  if (
+    typeof value === "string" &&
+    (UI_LINE_HEIGHTS as readonly string[]).includes(value)
+  ) {
+    return UI_LINE_HEIGHT_VALUES[value as UiLineHeightPreset];
+  }
+  const parsed = Number(value);
+  if (
+    value === undefined ||
+    value === null ||
+    value === "" ||
+    !Number.isFinite(parsed)
+  ) {
+    return UI_LINE_HEIGHT_VALUES[DEFAULT_UI_LINE_HEIGHT as UiLineHeightPreset];
+  }
+  return Number(
+    Math.min(
+      MAX_UI_LINE_HEIGHT,
+      Math.max(
+        MIN_UI_LINE_HEIGHT,
+        Math.round(parsed / UI_LINE_HEIGHT_STEP) * UI_LINE_HEIGHT_STEP,
+      ),
+    ).toFixed(2),
   );
 }
 
@@ -662,13 +777,17 @@ export interface ModelConfigView {
   maxToolCalls: number;
   /** Workspace UI font family preset. */
   uiFont?: UiFont;
+  /** Installed local family used when uiFont is custom. */
+  uiFontFamily?: string;
+  /** Independently saved light/dark semantic color overrides. */
+  uiThemeColors?: UiThemeColors;
   /** Auto follows Zotero; explicit choices apply only to Confucius. */
   uiTheme?: UiTheme;
-  /** Workspace UI base font size in px (12-18). */
+  /** Workspace UI base font size in px (12-28, half-pixel steps). */
   uiFontSize?: number;
   /** Explicit workspace interface language. */
   uiLanguage?: UiLanguage;
-  /** Reading-text line-height preset. */
+  /** Reading-text line height (1.2-2.4), or a legacy named preset. */
   uiLineHeight?: UiLineHeight;
 }
 
@@ -695,12 +814,14 @@ export interface ConfigSetParams {
   maxToolCalls?: number;
   /** Workspace UI font family preset. */
   uiFont?: UiFont;
+  uiFontFamily?: string;
+  uiThemeColors?: UiThemeColors;
   uiTheme?: UiTheme;
-  /** Workspace UI base font size in px (12-18). */
+  /** Workspace UI base font size in px (12-28, half-pixel steps). */
   uiFontSize?: number;
   /** Explicit workspace interface language. */
   uiLanguage?: UiLanguage;
-  /** Reading-text line-height preset. */
+  /** Reading-text line height (1.2-2.4), or a legacy named preset. */
   uiLineHeight?: UiLineHeight;
 }
 
@@ -767,6 +888,33 @@ export function validateConfigPatch(
   patch: Record<string, unknown>,
 ): ConfigValidation {
   const errors: string[] = [];
+  if (patch.uiFont !== undefined && !isUiFont(patch.uiFont))
+    errors.push("UI font must be a supported preset or custom");
+  if (patch.uiFontFamily !== undefined && !isUiFontFamily(patch.uiFontFamily))
+    errors.push("Font family must be a single name of at most 128 characters");
+  if (
+    patch.uiThemeColors !== undefined &&
+    !isUiThemeColors(patch.uiThemeColors)
+  )
+    errors.push(
+      "Theme colors must contain supported light/dark colors in #RRGGBB format",
+    );
+  if (
+    patch.uiFontSize !== undefined &&
+    (typeof patch.uiFontSize !== "number" ||
+      !Number.isFinite(patch.uiFontSize) ||
+      patch.uiFontSize < MIN_UI_FONT_SIZE ||
+      patch.uiFontSize > MAX_UI_FONT_SIZE)
+  )
+    errors.push(
+      `Font size must be from ${MIN_UI_FONT_SIZE} to ${MAX_UI_FONT_SIZE}`,
+    );
+  if (patch.uiLineHeight !== undefined && !isUiLineHeight(patch.uiLineHeight))
+    errors.push(
+      `Line height must be from ${MIN_UI_LINE_HEIGHT} to ${MAX_UI_LINE_HEIGHT}`,
+    );
+  if (patch.uiLanguage !== undefined && !isUiLanguage(patch.uiLanguage))
+    errors.push("Interface language must be en-US or zh-CN");
   if (patch.uiTheme !== undefined && !isUiTheme(patch.uiTheme)) {
     errors.push("UI theme must be one of auto, light, dark");
   }

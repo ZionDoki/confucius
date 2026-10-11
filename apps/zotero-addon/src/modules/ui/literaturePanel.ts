@@ -927,14 +927,14 @@ function createLiteratureKeySettings(
   const name = provider === "tavily" ? "Tavily" : "OpenAlex";
   const section = node(doc, "section");
   section.className = "confucius-literature-settings";
-  section.append(
-    node(doc, "h3", name),
-    node(
-      doc,
-      "p",
-      text(provider === "tavily" ? "tavily-key-help" : "key-help"),
-    ),
+  const help = node(
+    doc,
+    "p",
+    text(provider === "tavily" ? "tavily-key-help" : "key-help"),
   );
+  help.className = "confucius-settings-help";
+  help.dataset.confuciusL10n = `workspace-literature-${provider === "tavily" ? "tavily-key-help" : "key-help"}`;
+  section.append(node(doc, "h3", name), help);
   const input = node(doc, "input");
   input.type = "password";
   input.autocomplete = "new-password";
@@ -942,29 +942,51 @@ function createLiteratureKeySettings(
   input.setAttribute("aria-label", `${name} API Key`);
   const status = node(doc, "div");
   status.setAttribute("role", "status");
+  const buttons: HTMLButtonElement[] = [];
+  let busy = false;
   const run = async (method: string, params?: Record<string, unknown>) => {
+    if (busy) return;
+    busy = true;
+    section.setAttribute("aria-busy", "true");
+    for (const button of buttons) button.disabled = true;
+    input.disabled = method !== "literature/config";
     try {
       const result = (await rpc(method, { ...params, provider })) as {
         hasKey: boolean;
       };
-      input.value = "";
-      status.textContent = result.hasKey
-        ? text("configured")
-        : text("not-configured");
-      if (method === "literature/test") status.textContent = text("connected");
+      if (!section.isConnected) return;
+      if (method === "literature/configure") input.value = "";
+      const key =
+        method === "literature/test"
+          ? "connected"
+          : result.hasKey
+            ? "configured"
+            : "not-configured";
+      status.dataset.confuciusL10n = `workspace-literature-${key}`;
+      status.textContent = text(key);
     } catch (error) {
+      delete status.dataset.confuciusL10n;
       status.textContent = String(
         error instanceof Error ? error.message : error,
       );
+    } finally {
+      busy = false;
+      section.removeAttribute("aria-busy");
+      input.disabled = false;
+      for (const button of buttons) button.disabled = false;
     }
   };
   section.append(input);
+  const actions = node(doc, "div");
+  actions.className = "confucius-settings-actions";
   for (const [label, method, key] of [
     ["save-key", "literature/configure", false],
     ["clear-key", "literature/configure", true],
     ["test-key", "literature/test", false],
   ] as const) {
     const button = createWorkspaceButton(doc, "", text(label));
+    button.dataset.confuciusL10n = `workspace-literature-${label}`;
+    buttons.push(button);
     button.addEventListener("click", () => {
       void run(
         method,
@@ -973,13 +995,15 @@ function createLiteratureKeySettings(
           : undefined,
       );
     });
-    section.append(button);
+    actions.append(button);
   }
+  section.append(actions);
   const link = node(
     doc,
     "a",
     text(provider === "tavily" ? "get-tavily-key" : "get-key"),
   );
+  link.dataset.confuciusL10n = `workspace-literature-${provider === "tavily" ? "get-tavily-key" : "get-key"}`;
   link.href =
     provider === "tavily"
       ? "https://app.tavily.com/"

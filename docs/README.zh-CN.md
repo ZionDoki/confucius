@@ -10,6 +10,7 @@
 | 我想……                       | 阅读                                           |
 | ---------------------------- | ---------------------------------------------- |
 | 连接或切换模型               | [模型设置](model-selection.zh-CN.md)           |
+| 自定义字体与主题颜色         | [外观设置](appearance.zh-CN.md)                |
 | 解决 Codex / Kimi 检测问题   | [CLI 连接](runtime-discovery.zh-CN.md)         |
 | 找论文、获取 PDF             | [文献检索](literature-research.zh-CN.md)       |
 | 阅读、修改、保存报告或做批注 | [报告与批注](reading-and-annotations.zh-CN.md) |

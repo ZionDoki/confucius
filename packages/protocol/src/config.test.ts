@@ -6,6 +6,11 @@ import {
   DEFAULT_UI_LINE_HEIGHT,
   clampMaxIterations,
   clampMaxToolCalls,
+  clampUiFontSize,
+  clampUiLineHeight,
+  isUiFont,
+  isUiThemeColors,
+  parseUiThemeColors,
   isUiLanguage,
   isUiTheme,
   isUiLineHeight,
@@ -88,6 +93,69 @@ describe("budget clamps", () => {
 });
 
 describe("workspace appearance presets", () => {
+  it("preserves legacy values and supports decimal size and line height ranges", () => {
+    assert.equal(clampUiFontSize(undefined), 13);
+    assert.equal(clampUiFontSize(15.5), 15.5);
+    assert.equal(clampUiFontSize(100), 28);
+    assert.equal(clampUiFontSize(0), 12);
+    assert.equal(clampUiLineHeight("compact"), 1.45);
+    assert.equal(clampUiLineHeight("standard"), 1.6);
+    assert.equal(clampUiLineHeight("relaxed"), 1.75);
+    assert.equal(clampUiLineHeight("1.65"), 1.65);
+    assert.equal(clampUiLineHeight(10), 2.4);
+    assert.equal(clampUiLineHeight(undefined), 1.6);
+    assert.equal(isUiLineHeight(1.9), true);
+    assert.equal(
+      validateConfigPatch({ uiFontSize: 15.5, uiLineHeight: 1.65 }).ok,
+      true,
+    );
+    for (const patch of [
+      { uiFontSize: 28.5 },
+      { uiFontSize: NaN },
+      { uiLineHeight: 1.1 },
+      { uiLineHeight: Infinity },
+    ])
+      assert.equal(validateConfigPatch(patch).ok, false);
+  });
+
+  it("validates local font names and independently configured theme colors", () => {
+    for (const font of [
+      "sans",
+      "serif",
+      "mono",
+      "modern",
+      "cjk-serif",
+      "custom",
+    ])
+      assert.equal(isUiFont(font), true);
+    const colors = { light: { accent: "#123456" }, dark: { paper: "#202024" } };
+    assert.equal(isUiThemeColors(colors), true);
+    assert.deepEqual(parseUiThemeColors(JSON.stringify(colors)), colors);
+    assert.deepEqual(parseUiThemeColors("broken"), {});
+    assert.equal(
+      validateConfigPatch({ uiFont: "custom", uiFontFamily: "思源宋体" }).ok,
+      true,
+    );
+    for (const invalid of [
+      null,
+      [],
+      { blue: {} },
+      { light: { arbitrary: "#123456" } },
+      { dark: { ink: "red; color: pink" } },
+    ]) {
+      assert.equal(isUiThemeColors(invalid), false);
+      assert.equal(validateConfigPatch({ uiThemeColors: invalid }).ok, false);
+    }
+    assert.equal(
+      validateConfigPatch({ uiFontFamily: "font\nfamily" }).ok,
+      false,
+    );
+    assert.equal(
+      validateConfigPatch({ uiFontFamily: "x".repeat(129) }).ok,
+      false,
+    );
+  });
+
   it("supports explicit Chinese and English interface languages", () => {
     assert.equal(isUiLanguage("zh-CN"), true);
     assert.equal(isUiLanguage("en-US"), true);

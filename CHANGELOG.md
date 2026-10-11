@@ -2,6 +2,99 @@
 
 ## Unreleased
 
+## 0.6.1 - 2026-10-11
+
+Confucius 0.6.1 adds customizable appearance and clearer Runtime settings, venue
+ratings, and shared literature/annotation review interactions.
+
+### Added
+
+- Appearance settings offer 12–28 px font sizes in half-pixel steps, 1.2–2.4
+  reading line heights, eight offline font presets and searchable installed
+  fonts. Existing font and line-height preferences retain their values.
+- Customize light and dark theme colors independently, including backgrounds,
+  controls, body/secondary text and accent. Appearance changes and restoring
+  defaults take effect on Save, without a preview; Cancel discards the draft.
+  Open workspaces, embedded/detached readers and selection-question popups
+  update together, while system high contrast retains priority.
+- Workspace settings and Zotero preferences share top tabs and the same
+  Appearance/Runtime editors. Runtime groups native, Codex and Kimi status with
+  automatic/manual path configuration; search keys, venue catalogs and storage
+  information are in collapsed sections.
+- Literature cards and list rows show dated CCF 2026 and CORE / ICORE2026 venue
+  ratings, with official source links and expandable categories. Import local
+  UTF-8 ShowJCR journal CSVs for JCR, CAS through 2025 and Xinrui; retain all
+  available subject partitions, Top flags, impact factors and positions.
+  Catalog changes refresh existing results without editing library fields,
+  tags or candidate choices and survive restart. Journal datasets are not bundled.
+
+### Fixed
+
+- Candidate papers and annotation suggestions share cards, lists, filters and
+  arrival feedback. Fewer than ten entries start in cards; ten or more start in
+  a list. Manual choices survive arrivals and refreshes, while candidate
+  confirmation and fulltext acquisition retain their existing boundaries.
+- Annotation cards fill the remaining review area and scroll long passages
+  inside the card. Available edges show navigation arrows on hover or focus.
+  The first live batch opens without taking keyboard focus; later batches gently
+  remind users without changing their current view. Historical events and write
+  receipts do not replay reminders, and reduced motion remains supported.
+- File-drop hints stay inside the composer or the target paper's PDF area.
+  Cancelled drags and paper drops clear composer feedback; drops elsewhere no
+  longer add chat attachments.
+- Closing a Zotero library window closes its Confucius workspace and retains
+  drafts. Background deadlines, retries and state saving keep working after the
+  owner window closes.
+- Both settings entry points share button/control geometry, spacing and states.
+  Preferences follow the saved Confucius palette even when Zotero uses the other
+  theme. Large fonts and narrow windows retain accessible controls, top tabs and
+  Save actions; selection-question inputs grow without clipping text.
+- Saving locks the submitted draft until completion, preventing duplicate saves
+  and cancellation races. Initial retrieval-status reads preserve typed API keys;
+  key operations and catalog file selection cannot overlap. Repeated opening of
+  Update settings shares one request. Empty manual runtime paths focus an editable
+  field, and keyboard font navigation starts at the correct first/last option.
+
+### Upgrade notes
+
+- This is the stable release and does not require **Include prereleases**.
+  Upgrade from 0.6.0 or a 0.6.1 Beta through Confucius Settings → Update. Explicit
+  channel and automatic-check choices remain unchanged; disabling Betas never
+  triggers a downgrade.
+- No data migration or reconfiguration is required. Existing tasks, drafts,
+  notes, annotations, research records, budgets and local catalogs remain intact.
+  Legacy integer font sizes and named line heights retain their values. Missing
+  installed fonts use system fallbacks. Appearance defaults remain unchanged.
+- A completed hot update reloads open workspaces and retains their selected task,
+  immediate draft, layout and settings tab. Follow Zotero's restart prompt only
+  when installation is staged until restart.
+
+### Validation and known limits
+
+- `npm test` passed 1,376 tests with zero failures, skips or cancellations.
+  Version consistency, skill/catalog synchronization, type checking, full lint
+  and the production build passed.
+- The ordinary candidate passed 24 settings check groups on macOS 26.6.2
+  (ARM64), Zotero 10.0.6. Checks cover both settings entry points, save/cancel/reset
+  semantics, delayed-response races, actual installed fonts, decimal typography,
+  independently saved palettes, English/Chinese, 12–28 px fonts, 280–1,000 px
+  workspace widths, native high contrast, open readers/popups and restart.
+- The same ordinary package passed 8 venue-rating groups, 128 native annotation
+  and candidate-review checks, and 37 literature/attachment groups. Upgrades from
+  unchanged public 0.6.0 and 0.6.1-beta.2 packages passed 21 and 27 checks,
+  retaining original history/working-note hashes, notes, report revisions,
+  research-child results, drafts, budgets, legacy appearance values and explicit
+  channel choices. Eight hot-update checks passed, including an already open
+  Zotero preferences window and a workspace that was closed before updating.
+- Windows/Linux, other Zotero versions, online model responses, live external CLI
+  authentication, interactive OS file dialogs and manual desktop drag gestures
+  were not exercised. Runtime path persistence used external hosting disabled;
+  file-picker selection used fixtures. Venue ratings describe a catalog edition,
+  not individual-paper quality or historical publication-year rank; conflicting
+  identities and unsupported tracks remain unmatched.
+- Exact package, regression and upgrade scope is recorded in the
+  [stable acceptance record](https://github.com/ZionDoki/confucius/blob/v0.6.1/.github/maintainers/acceptance/release-0.6.1.md).
+
 ## 0.6.1-beta.2 - 2026-10-11
 
 This Beta adds dated venue ratings to literature review and local ShowJCR

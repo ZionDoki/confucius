@@ -115,7 +115,7 @@ try {
     banner: { js: "var addon=Zotero.Confucius;" },
   });
   await evaluate(`${bundle.outputFiles[0].text}
-    qa.importSettings=venueSettingsFixture.createVenueRatingSettings(d,(method,params)=>{qa.calls.push({method,params});return host.rpc(method,params);},{pickFile:async()=>qa.nextCsv});
+    qa.importSettings=venueSettingsFixture.createVenueRatingSettings(d,(method,params)=>{qa.calls.push({method,params});return host.rpc(method,params);},{pickFile:()=>qa.holdPicker?new Promise(resolve=>qa.releasePicker=resolve):Promise.resolve(qa.nextCsv)});
     qa.importSettings.node.id='venue-import-fixture';qa.importSettings.node.style.cssText='position:fixed;inset:16px;z-index:99999;overflow:auto;padding:20px;background:var(--confucius-paper);color:var(--confucius-ink);';
     d.querySelector('.confucius-workspace-root').append(qa.importSettings.node);await qa.importSettings.refresh();return true;`);
   await evaluate(
@@ -139,6 +139,21 @@ try {
     );
   }
   await capture("ratings-imported-catalogs");
+  const pickerRace = await evaluate(
+    `qa.holdPicker=true;const calls=qa.calls.length,settings=qa.importSettings.node;settings.querySelector('[data-action=import-ratings]').click();settings.querySelector('[data-action=remove-ratings]').dispatchEvent(new win.MouseEvent('click',{bubbles:true}));await qa.importSettings.refresh();return {calls:qa.calls.length-calls,busy:settings.getAttribute('aria-busy'),blocked:[...settings.querySelectorAll('button')].every(button=>button.disabled)};`,
+  );
+  assert.deepEqual(pickerRace, { calls: 0, busy: "true", blocked: true });
+  await evaluate(
+    `qa.holdPicker=false;qa.releasePicker(undefined);return true;`,
+  );
+  await wait(`return !qa.importSettings.node.hasAttribute('aria-busy');`);
+  assert.equal(
+    (await instance.rpc("literature/ratings/list")).catalogs.length,
+    5,
+  );
+  checks.push(
+    "Pending catalog pickers block duplicate imports, removal and stale refresh; cancellation preserves every catalog",
+  );
   await evaluate(`qa.importSettings.node.hidden=true;return true;`);
   await wait(
     `return d.querySelectorAll('.confucius-literature-review .ar-paper .confucius-venue-rating').length===4;`,

@@ -85,7 +85,8 @@ export const SURFACE_CSS = `
 .confucius-literature-confirmation ul { padding-left:20px; }
 .confucius-literature-confirmation .confucius-literature-controls { justify-content:flex-end; margin-top:16px; }
 .confucius-literature-settings { margin-bottom:24px; }
-.confucius-literature-settings .confucius-button { margin:4px; }
+.confucius-literature-settings > input { width:100%; }
+.confucius-literature-settings a { color:var(--confucius-accent-text); overflow-wrap:anywhere; }
 .confucius-venue-rating-badges { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
 .confucius-venue-rating { display:inline-flex; flex-wrap:wrap; align-items:baseline; gap:4px 8px; max-width:100%; box-sizing:border-box; padding:4px 8px; border-radius:8px; background:var(--confucius-surface); color:var(--confucius-secondary); font-size:12px; overflow-wrap:anywhere; }
 .confucius-venue-rating strong { font-weight:550; color:var(--confucius-ink); }
@@ -192,21 +193,77 @@ export const SURFACE_CSS = `
 .confucius-composer { position: relative; }
 .confucius-dialog { position: absolute; inset: 0; z-index: 1200; display: flex; align-items: center; justify-content: center; padding: 16px; box-sizing: border-box; background: var(--confucius-scrim); backdrop-filter: blur(8px); }
 .confucius-dialog-panel { width: min(720px, 100%); max-height: 100%; min-width: 0; padding: 24px; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; box-sizing: border-box; border: 0; border-radius: 16px; color: var(--confucius-ink); background: var(--confucius-elevated); box-shadow: var(--confucius-shadow); }
-.confucius-settings-shell { display: grid; grid-template-columns: 144px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; width: min(760px, 100%); height: min(680px, 100%); padding: 0; overflow: hidden; }
+.confucius-settings-shell { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; width: min(860px, 100%); height: min(740px, 100%); padding: 0; overflow: hidden; line-height: 1.5; }
+:is(.confucius-settings-shell, #confucius-preferences) button.confucius-button { min-height: 34px; margin: 0; }
+:is(.confucius-settings-shell, #confucius-preferences) :is(button.confucius-button:not([role=tab]), .confucius-color-tabs button) { padding: 6px 8px; }
 .confucius-settings-header { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; padding: 20px 24px 16px; gap: 12px; }
 .confucius-settings-title { margin: 0; font: inherit; font-size: 1.3em; font-weight: 650; letter-spacing: -.02em; }
-.confucius-settings-tabs { display: flex; flex-direction: column; gap: 8px; padding: 8px 8px 20px 16px; overflow-y: auto; min-width: 0; scrollbar-gutter: stable; scroll-padding: 8px; }
-.confucius-settings-tabs [role=tab] { flex-shrink: 0; height: auto; max-height: none; min-height: 40px; margin: 0; padding: 10px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--confucius-muted); font: inherit; text-align: left; cursor: pointer; }
+.confucius-settings-tabs { display: flex; flex-direction: row; gap: 4px; padding: 0 24px 12px; overflow-x: auto; overflow-y: hidden; min-width: 0; scroll-padding: 8px; }
+.confucius-settings-tabs [role=tab] { flex-shrink: 0; height: auto; max-height: none; min-height: 34px; margin: 0; padding: 6px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--confucius-muted); font: inherit; text-align: left; white-space: nowrap; cursor: pointer; }
 .confucius-settings-tabs [role=tab]:hover { background: var(--confucius-surface); }
 .confucius-settings-tabs [aria-selected=true] { background: var(--confucius-surface); color: var(--confucius-ink); font-weight: 600; }
-.confucius-settings-content { overflow-wrap: anywhere; min-height: 0; min-width: 0; overflow-x: hidden; overflow-y: auto; padding: 8px 24px 24px 20px; scrollbar-gutter: stable; scroll-padding-block: 8px; }
+.confucius-settings-content { overflow-wrap: anywhere; min-height: 0; min-width: 0; overflow-x: hidden; overflow-y: auto; padding: 8px 24px 24px; scrollbar-gutter: stable; scroll-padding-block: 8px; }
 .confucius-settings-footer { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 24px 20px; }
 .confucius-settings-feedback { flex: 1 1 180px; min-width: 0; font-size: .9em; color: var(--confucius-danger); }
+.confucius-settings-feedback:empty { display: none; }
+.confucius-settings-footer .confucius-button { height: auto; min-height: 34px; }
 .confucius-settings-feedback[data-state=saved] { color: var(--confucius-success); }
 .confucius-settings-field { margin-bottom: 20px; }
-.confucius-settings-field > label { display: block; color: var(--confucius-muted); margin-bottom: 8px; font-size: .92em; }
+.confucius-settings-field > label { display: block; color: var(--confucius-muted); margin: 0 0 8px; font-size: .92em; }
 .confucius-settings-advanced { margin: 12px 0 20px; }
 .confucius-settings-advanced > summary { cursor: pointer; color: var(--confucius-muted); padding: 8px 0; }
+.confucius-settings-help { display: block; margin: 6px 0 12px; font-size: .92em; line-height: 1.5; color: var(--confucius-secondary); }
+.confucius-settings-help:empty { display: none; }
+.confucius-settings-section { min-width: 0; container-type: inline-size; container-name: confucius-appearance-section; }
+.confucius-settings-section h3, .confucius-runtime-settings h3 { margin: 0 0 16px; font-size: 1.05em; font-weight: 600; }
+.confucius-appearance-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 19em), 1fr)); gap: 28px; margin: 24px 0; }
+.confucius-settings-options, .confucius-settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
+.confucius-settings-options .confucius-button { height: auto; min-height: 34px; white-space: normal; overflow-wrap: anywhere; }
+.confucius-settings-options [aria-checked=true], .confucius-settings-options [aria-selected=true] { background: var(--confucius-selected); color: var(--confucius-ink); font-weight: 600; }
+.confucius-appearance-settings [hidden], .confucius-runtime-settings [hidden], #confucius-preferences [hidden] { display: none !important; }
+.confucius-range-controls { display: grid; grid-template-columns: minmax(40px, 1fr) 5.5em auto; align-items: center; gap: 8px; }
+:is(.confucius-settings-shell, #confucius-preferences) .confucius-range-controls input[type=range] { appearance: auto; width: 100%; height: 36px; min-width: 0; min-height: 36px; max-height: none; margin: 0; padding: 0; border: 0; border-radius: 0; box-sizing: border-box; background: transparent !important; color: var(--confucius-ink); font: inherit; accent-color: var(--confucius-accent); }
+@container confucius-appearance-section (max-width: 14em) {
+  .confucius-range-controls { grid-template-columns: minmax(0, 1fr) auto; }
+  .confucius-range-controls input[type=range] { grid-column: 1 / -1; }
+}
+.confucius-settings-unit { color: var(--confucius-secondary); }
+.confucius-font-picker > summary { display: flex; align-items: center; justify-content: space-between; height: auto; min-height: 36px; padding: 8px 10px; list-style: none; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.confucius-font-picker > summary::after { content: "⌄"; margin-inline-start: 8px; color: var(--confucius-secondary); }
+.confucius-font-picker-body { padding: 8px 0; }
+.confucius-font-picker-body > input { width: 100%; }
+.confucius-font-results { max-height: 220px; overflow-y: auto; overscroll-behavior: contain; margin-top: 8px; padding: 4px; border-radius: 8px; background: var(--confucius-paper); }
+.confucius-font-results .confucius-font-option { display: block; width: 100%; min-height: 34px; height: auto; margin: 0; background: transparent; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.confucius-font-option[aria-selected=true] { background: var(--confucius-selected) !important; }
+.confucius-font-option[data-active=true] { outline: 2px solid var(--confucius-focus); outline-offset: -2px; }
+.confucius-color-fields { display: grid; gap: 12px; margin: 16px 0; }
+.confucius-color-panel { container-type: inline-size; container-name: confucius-colors; }
+.confucius-color-field { display: grid; grid-template-columns: minmax(0, 1fr) 36px minmax(6.5em, 7em); align-items: center; gap: 8px; }
+.confucius-color-field label { margin: 0; color: var(--confucius-secondary); font-size: .92em; }
+:is(.confucius-settings-shell, #confucius-preferences) .confucius-color-field input[type=color] { appearance: auto; width: 36px; height: 36px; min-width: 36px; min-height: 36px; max-height: 36px; margin: 0; padding: 3px; border: 1px solid var(--confucius-line-strong); border-radius: 8px; box-sizing: border-box; background: var(--confucius-surface); color: var(--confucius-ink); font: inherit; }
+.confucius-color-field input[type=color]::-moz-color-swatch { border: 0; border-radius: 4px; }
+.confucius-color-field input[type=text] { width: 100%; font-variant-numeric: tabular-nums; }
+:is(.confucius-settings-shell, #confucius-preferences) .confucius-color-field [aria-invalid=true] { outline: 2px solid var(--confucius-danger); outline-offset: 0; }
+@container confucius-colors (max-width: 22em) {
+  .confucius-color-field { grid-template-columns: 36px minmax(0, 1fr); }
+  .confucius-color-field label { grid-column: 1 / -1; }
+}
+.confucius-runtime-host-row { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 8px; align-items: start; margin: 0; cursor: pointer; }
+.confucius-runtime-card { margin: 20px 0; padding: 16px; border-radius: 8px; background: var(--confucius-paper); min-width: 0; }
+.confucius-runtime-header { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; }
+.confucius-runtime-header h3 { flex: 1; margin: 0; }
+.confucius-runtime-state { display: inline-flex; align-items: center; gap: 6px; font-size: .92em; color: var(--confucius-secondary); }
+.confucius-runtime-state::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.confucius-runtime-state[data-state=ready] { color: var(--confucius-success); }
+.confucius-runtime-state[data-state=error], .confucius-runtime-error { color: var(--confucius-danger); }
+.confucius-runtime-error:empty { display: none; }
+.confucius-runtime-path-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.confucius-runtime-path-row input { flex: 1 1 180px; width: 100%; }
+.confucius-runtime-path { overflow-wrap: anywhere; white-space: pre-wrap; }
+.confucius-runtime-path-mode { display: flex; align-items: center; gap: 8px; max-width: 100%; min-width: 0; margin: 0; color: var(--confucius-secondary); }
+.confucius-runtime-path-mode span { min-width: 0; overflow-wrap: anywhere; }
+.confucius-runtime-settings input:is([type=checkbox], [type=radio]) { appearance: auto; width: 16px; height: 16px; min-width: 16px; min-height: 16px; max-width: 16px; max-height: none; margin: 0; padding: 0; flex-shrink: 0; color: var(--confucius-ink); font: inherit; }
+.confucius-runtime-host-row input { margin-top: max(0px, calc((1.5em - 16px) / 2)); }
 .confucius-model-catalog [hidden] { display: none !important; }
 .confucius-model-catalog > .confucius-settings-field { margin-bottom: 8px; }
 .confucius-model-catalog [role=status] { margin: 8px 0; font-size: .9em; }
@@ -223,24 +280,31 @@ export const SURFACE_CSS = `
 .confucius-endpoint-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin-bottom: 12px; }
 /* Legacy settings controls still carry geometry inline. These surface rules
    deliberately leave their layout and visibility intact. */
-:is(.confucius-settings-shell, .confucius-dialog-panel) :is(input:not([type=checkbox]):not([type=radio]), textarea, select),
-#confucius-preferences :is(input:not([type=checkbox]):not([type=radio]), textarea, select) {
+:is(.confucius-settings-shell, .confucius-dialog-panel, #confucius-preferences) :is(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]), textarea, select) {
   appearance: none; height: auto; max-height: none; min-width: 0; max-width: 100%; min-height: 36px; margin: 0; padding: 8px 10px;
   border: 0 !important; border-radius: 8px; box-sizing: border-box; background: var(--confucius-surface) !important; color: var(--confucius-ink); font: inherit;
 }
 :is(.confucius-settings-shell, .confucius-dialog-panel, #confucius-preferences) :is(input, textarea, select):focus { outline: 2px solid var(--confucius-focus); outline-offset: 0; box-shadow: none; }
-.confucius-settings-shell [role=radio] { border: 0 !important; background: transparent !important; color: var(--confucius-muted) !important; }
-.confucius-settings-shell [role=radio][aria-checked=true] { background: var(--confucius-surface) !important; color: var(--confucius-ink) !important; }
+:is(.confucius-settings-shell, #confucius-preferences) [role=radio] { border: 0 !important; background: transparent !important; color: var(--confucius-muted) !important; }
+:is(.confucius-settings-shell, #confucius-preferences) [role=radio]:hover:not(:disabled),
+:is(.confucius-settings-shell, #confucius-preferences) [role=radio][aria-checked=true] { background: var(--confucius-surface) !important; color: var(--confucius-ink) !important; }
 .confucius-settings-shell .confucius-settings-select { border: 0; background: var(--confucius-surface); }
 .confucius-settings-shell .confucius-button { border: 0 !important; }
-#confucius-preferences { --confucius-control-height: 36px; color: var(--confucius-ink); padding: 8px 16px 32px; font: 13px/1.55 system-ui, sans-serif; }
+@media (forced-colors: active), (prefers-contrast: more) {
+  :is(.confucius-settings-shell, #confucius-preferences) :is([role=tab][aria-selected=true], [role=option][aria-selected=true], [role=radio][aria-checked=true]) { text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 2px; }
+  :is(.confucius-workspace-root, .confucius-menu-surface, .confucius-dialog, #confucius-artifact-window, #confucius-knowledge-overlay, #confucius-preferences) .confucius-button[data-variant=primary]:focus-visible,
+  [data-confucius-input=keyboard] :is(.confucius-workspace-root, .confucius-menu-surface, .confucius-dialog, #confucius-artifact-window, #confucius-knowledge-overlay, #confucius-preferences) .confucius-button[data-variant=primary]:focus { outline-color: var(--confucius-primary-ink); }
+}
+[data-confucius-preferences-scroll] { background: var(--confucius-paper); color: var(--confucius-ink); scroll-padding-top: calc(var(--confucius-font-size, 13px) * 1.5 + 40px); scroll-padding-bottom: calc(var(--confucius-font-size, 13px) * 5 + 32px); }
+#confucius-preferences { --confucius-control-height: 36px; background: var(--confucius-paper); color: var(--confucius-ink); padding: 8px 16px 32px; font-family: var(--confucius-font-family, system-ui); font-size: var(--confucius-font-size, 13px); line-height: 1.5; }
 #confucius-preferences groupbox { appearance: none; margin: 0 0 20px; padding: 16px 0; border: 0; background: transparent; }
 #confucius-preferences h2 { margin: 0 0 8px; font-size: 17px; font-weight: 650; letter-spacing: -.02em; }
-#confucius-preferences p { color: var(--confucius-muted); margin: 4px 0 16px; }
-#confucius-preferences label { margin: 10px 0 4px; }
-#confucius-preferences :is(input:not([type=checkbox]):not([type=radio]), textarea, select) { margin-bottom: 8px; }
-#confucius-preferences button { appearance: none; min-height: 32px; padding: 6px 10px; margin: 0 0 8px; border: 0; border-radius: 8px; background: var(--confucius-surface); color: var(--confucius-ink); font: inherit; cursor: pointer; }
-#confucius-preferences button:hover { background: var(--confucius-hover); }
+#confucius-preferences groupbox > p { color: var(--confucius-muted); margin: 4px 0 16px; }
+#confucius-preferences groupbox > label { margin: 10px 0 4px; }
+#confucius-preferences .confucius-settings-tabs { position: sticky; top: 0; z-index: 3; padding: 8px 0 12px; background: var(--confucius-paper); }
+#confucius-preferences .confucius-settings-tabs [role=tab] { min-height: 34px; margin: 0; }
+#confucius-pref-appearance > .confucius-settings-footer { position: sticky; bottom: 0; z-index: 2; margin: 0; padding: 12px 0; background: var(--confucius-paper); }
+#confucius-preferences groupbox > :is(input:not([type=checkbox]):not([type=radio]), textarea, select) { margin-bottom: 8px; }
 #confucius-preferences :is(button, summary):focus-visible { outline: 2px solid var(--confucius-focus); outline-offset: 2px; }
 :is(.confucius-workspace-root, .confucius-menu-surface, .confucius-dialog, #confucius-artifact-window, #confucius-knowledge-overlay, #confucius-preferences) :is(button, summary, a):focus-visible,
 [data-confucius-input=keyboard] :is(.confucius-workspace-root, .confucius-menu-surface, .confucius-dialog, #confucius-artifact-window, #confucius-knowledge-overlay, #confucius-preferences) :is(button, summary, a):focus {
@@ -253,7 +317,7 @@ export const SURFACE_CSS = `
 .confucius-workspace-root:is([data-confucius-density=compact], [data-confucius-density=narrow]) .confucius-settings-shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; height: 100%; }
 .confucius-workspace-root:is([data-confucius-density=compact], [data-confucius-density=narrow]) .confucius-settings-header { padding: 16px 16px 12px; }
 .confucius-workspace-root:is([data-confucius-density=compact], [data-confucius-density=narrow]) .confucius-settings-tabs { flex-direction: row; padding: 8px 12px 12px; overflow-x: scroll; overflow-y: hidden; scrollbar-gutter: stable; }
-.confucius-workspace-root:is([data-confucius-density=compact], [data-confucius-density=narrow]) .confucius-settings-tabs [role=tab] { padding: 10px 12px; white-space: nowrap; }
+.confucius-workspace-root:is([data-confucius-density=compact], [data-confucius-density=narrow]) .confucius-settings-tabs [role=tab] { padding: 6px 8px; white-space: nowrap; }
 .confucius-workspace-root:is([data-confucius-density=compact], [data-confucius-density=narrow]) .confucius-settings-content { padding: 12px 16px 24px; }
 .confucius-workspace-root:is([data-confucius-density=compact], [data-confucius-density=narrow]) .confucius-settings-footer { padding: 12px 16px; }
 .confucius-workspace-root[data-confucius-compact-panels=true] .confucius-knowledge-overlay { padding: 8px; }

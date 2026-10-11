@@ -1,21 +1,10 @@
 import { exportKnowledgeDocument } from "./knowledgeExport";
 import type { KnowledgeDocument } from "../host/KnowledgeIndex";
 import type { ArtifactRecord, ResearchTaskRecord } from "@confucius/protocol";
-import {
-  DEFAULT_UI_FONT,
-  DEFAULT_UI_FONT_SIZE,
-  DEFAULT_UI_LINE_HEIGHT,
-  UI_LINE_HEIGHT_VALUES,
-  clampUiFontSize,
-  isUiFont,
-  isUiLineHeight,
-} from "@confucius/protocol";
 import { config } from "../../../package.json";
-import { getPref } from "../../utils/prefs";
 import { getString, configuredUiLanguage } from "../../utils/locale";
 import type { WorkspaceHost } from "./WorkspaceView";
 import { bindBtwSelection } from "./btwPopup";
-import { UI_FONT_STACKS } from "./workspaceTypography";
 import { markdownForDisplay } from "@confucius/protocol";
 import { renderReadingSurface } from "./workspaceReading";
 import { citationTarget } from "./readingCitations";
@@ -445,34 +434,20 @@ export function mountArtifactWindow(
     ),
   );
   const appearance = () => {
-    const font = getPref("uiFont"),
-      lineHeight = getPref("uiLineHeight");
-    const size = clampUiFontSize(getPref("uiFontSize") ?? DEFAULT_UI_FONT_SIZE);
-    root.style.fontFamily =
-      UI_FONT_STACKS[isUiFont(font) ? font : DEFAULT_UI_FONT];
-    root.style.fontSize = `${size}px`;
-    root.style.setProperty("--confucius-markdown-font-size", `${size}px`);
-    root.style.setProperty(
-      "--confucius-reading-line-height",
-      String(
-        UI_LINE_HEIGHT_VALUES[
-          isUiLineHeight(lineHeight) ? lineHeight : DEFAULT_UI_LINE_HEIGHT
-        ],
-      ),
-    );
+    root.style.fontFamily = "var(--confucius-font-family)";
+    root.style.fontSize = "var(--confucius-font-size, 13px)";
     doc.documentElement?.setAttribute("lang", configuredUiLanguage());
     render();
   };
-  const observers = ["uiFont", "uiFontSize", "uiLineHeight", "uiLanguage"].map(
-    (key) =>
-      Zotero.Prefs.registerObserver(
-        `${config.prefsPrefix}.${key}`,
-        () =>
-          win.setTimeout(() => {
-            if (!disposed) appearance();
-          }, 0),
-        true,
-      ),
+  const observers = ["uiLanguage"].map((key) =>
+    Zotero.Prefs.registerObserver(
+      `${config.prefsPrefix}.${key}`,
+      () =>
+        win.setTimeout(() => {
+          if (!disposed) appearance();
+        }, 0),
+      true,
+    ),
   );
   appearance();
   body.focus({ preventScroll: true });

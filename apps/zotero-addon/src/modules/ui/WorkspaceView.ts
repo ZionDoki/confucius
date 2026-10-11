@@ -13,17 +13,15 @@ import {
   createModelCatalogLookup,
   createReasoningSettings,
 } from "./modelSettings";
-import {
-  createLiteraturePanel,
-  createOpenAlexSettings,
-} from "./literaturePanel";
+import { createLiteraturePanel } from "./literaturePanel";
 import { reviewArrivals } from "./reviewArrivals";
 import { renderMemoryProposal } from "./memoryProposalCards";
 import { createAnnotationReviewPanel } from "./annotationReviewPanel";
 import { bindBtwSelection } from "./btwPopup";
 import { artifactWindows } from "./artifactWindow";
 import { mountWorkspaceArtifact } from "./artifactWorkspace";
-import { UI_FONT_STACKS } from "./workspaceTypography";
+import { createAppearanceSettings } from "./appearanceSettings";
+import { createRuntimeSettings } from "./runtimeSettings";
 import { getPref, setPref } from "../../utils/prefs";
 import {
   createComposerStatusChip,
@@ -42,10 +40,7 @@ import {
 import { openReportStyleDialog, reportStyleLabel } from "./reportStyleDialog";
 import { TUI_CSS } from "./workspaceTheme";
 import { ensurePaletteStyles } from "./workspaceSurface";
-import {
-  applyDocumentTheme,
-  restoreDocumentTheme,
-} from "./workspaceAppearance";
+import { restoreDocumentTheme } from "./workspaceAppearance";
 import {
   ensureScrollbarStyles,
   markScrollContainer,
@@ -100,18 +95,9 @@ import {
   type RuntimeModelOption,
   DEFAULT_MAX_ITERATIONS,
   DEFAULT_MAX_TOOL_CALLS,
-  DEFAULT_UI_FONT,
-  DEFAULT_UI_FONT_SIZE,
-  DEFAULT_UI_LINE_HEIGHT,
   featuredTemplatesForContext,
-  UI_LINE_HEIGHT_VALUES,
-  clampUiFontSize,
   emptyLockedContext,
   withLockedContextFingerprint,
-  isUiFont,
-  isUiTheme,
-  isUiLanguage,
-  isUiLineHeight,
   renderMarkdownHtml,
   type TimelineBlock,
   type UiFont,
@@ -134,7 +120,6 @@ import {
   replaceLibraryMention,
   type LibraryMentionToken,
 } from "./libraryMention";
-import { pickRuntimeExecutable } from "./runtimeExecutablePicker";
 import {
   openWorkspaceSettingsTab,
   registerWorkspaceSnapshot,
@@ -285,6 +270,8 @@ type ModelConfig = {
   maxIterations?: number;
   maxToolCalls?: number;
   uiFont?: UiFont;
+  uiFontFamily?: string;
+  uiThemeColors?: import("@confucius/protocol").UiThemeColors;
   uiTheme?: UiTheme;
   uiFontSize?: number;
   uiLanguage?: UiLanguage;
@@ -1073,12 +1060,6 @@ function bindWorkspace(
     : workspaceViewState;
   let restoreSettings = restored?.settingsTab;
   let restoreDraft = Boolean(restored);
-  // Appearance is local: use it for the first paint while model config loads.
-  const initialAppearance = {
-    uiFont: getPref("uiFont"),
-    uiFontSize: getPref("uiFontSize"),
-    uiLineHeight: getPref("uiLineHeight"),
-  };
   const state = {
     sessions: [] as SessionRow[],
     sessionId: cachedView?.taskId ?? (null as string | null),
@@ -2508,21 +2489,9 @@ function bindWorkspace(
   }
 
   function applyAppearance(): void {
-    const appearance = state.config ?? initialAppearance;
-    const font = isUiFont(appearance.uiFont)
-      ? appearance.uiFont
-      : DEFAULT_UI_FONT;
-    const size = clampUiFontSize(appearance.uiFontSize ?? DEFAULT_UI_FONT_SIZE);
-    const lineHeight = isUiLineHeight(appearance.uiLineHeight)
-      ? appearance.uiLineHeight
-      : DEFAULT_UI_LINE_HEIGHT;
-    root.style.fontFamily = UI_FONT_STACKS[font];
-    root.style.fontSize = `${size}px`;
-    root.style.setProperty("--confucius-markdown-font-size", `${size}px`);
-    root.style.setProperty(
-      "--confucius-reading-line-height",
-      String(UI_LINE_HEIGHT_VALUES[lineHeight]),
-    );
+    // Shared preference observers update every open surface after Save.
+    root.style.fontFamily = "var(--confucius-font-family)";
+    root.style.fontSize = "var(--confucius-font-size, 13px)";
   }
 
   function renderApprovalCard(
@@ -4577,8 +4546,8 @@ function bindWorkspace(
   function openSettings(): void {
     const existing = doc.getElementById("confucius-settings-overlay");
     if (existing) {
+      if (existing.getAttribute("aria-busy") === "true") return;
       existing.remove();
-      restoreDocumentTheme(doc);
       return;
     }
     const config = state.config;
@@ -4588,19 +4557,17 @@ function bindWorkspace(
       "aria-labelledby": "confucius-settings-title",
     });
     overlay.className = "confucius-dialog";
+    let savingSettings = false;
     const closeSettings = () => {
+      if (savingSettings) return;
       doc.getElementById("confucius-security-profile-menu")?.remove();
       overlay.remove();
-      restoreDocumentTheme(doc);
       if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
     };
     bindDialogNavigation(overlay, closeSettings);
     const panel = el(doc, "div");
     panel.className = "confucius-dialog-panel confucius-settings-shell";
-    panel.style.fontFamily =
-      UI_FONT_STACKS[
-        isUiFont(config?.uiFont) ? config.uiFont : DEFAULT_UI_FONT
-      ];
+    panel.style.fontFamily = "var(--confucius-font-family)";
     const header = el(doc, "header");
     header.className = "confucius-settings-header";
     const title = el(doc, "h2", undefined, { id: "confucius-settings-title" });
@@ -4611,7 +4578,7 @@ function bindWorkspace(
       type: "button",
       title: getString("workspace-settings-cancel"),
       "aria-label": getString("workspace-settings-cancel"),
-    });
+    }) as HTMLButtonElement;
     closeBtn.className = "confucius-icon-button";
     closeBtn.textContent = "×";
     closeBtn.style.fontSize = "24px";
@@ -4925,276 +4892,15 @@ function bindWorkspace(
       target.appendChild(intro);
     };
 
-    runtimeTab.appendChild(createOpenAlexSettings(doc, rpc));
-    sectionIntro(runtimeTab, getString("workspace-runtime-help"));
-    const runtimeHostRow = el(doc, "label", {
-      display: "grid",
-      gridTemplateColumns: "18px minmax(0, 1fr)",
-      gap: "8px",
-      alignItems: "start",
-      marginBottom: "10px",
-      cursor: "pointer",
+    const runtimeSettings = createRuntimeSettings(doc, rpc, (listed) => {
+      state.runtimeHostEnabled = listed.runtimeHostEnabled;
+      state.runtimeHostConnected = listed.runtimeHostConnected;
+      state.runtimes = listed.runtimes;
+      live.pluginRuntimeHost = listed.runtimeHostEnabled;
+      if (state.config)
+        state.config.pluginRuntimeHost = listed.runtimeHostEnabled;
     });
-    const runtimeHostToggle = el(doc, "input", undefined, {
-      id: "confucius-runtime-host-enabled",
-      type: "checkbox",
-    }) as HTMLInputElement;
-    runtimeHostToggle.checked = live.pluginRuntimeHost !== false;
-    const runtimeHostCopy = el(doc, "span");
-    runtimeHostCopy.textContent = getString("workspace-runtime-host-toggle");
-    runtimeHostRow.appendChild(runtimeHostToggle);
-    runtimeHostRow.appendChild(runtimeHostCopy);
-    const runtimeHostLine = el(doc, "div", {
-      marginBottom: "10px",
-      fontWeight: "650",
-    });
-    const runtimeList = el(doc, "div", {
-      marginBottom: "12px",
-      borderTop: "0",
-    });
-    const runtimeActions = el(doc, "div", {
-      display: "flex",
-      flexWrap: "wrap",
-      gap: "8px",
-      marginBottom: "14px",
-    });
-    const runtimeRefresh = button(
-      doc,
-      "confucius-runtime-refresh",
-      getString("workspace-runtime-refresh"),
-    );
-    const runtimeError = el(doc, "div", {
-      minHeight: "18px",
-      color: "var(--confucius-danger)",
-    });
-    const executableInputs = new Map<
-      Exclude<AgentBackendKind, "native">,
-      HTMLInputElement
-    >();
-
-    const configureExecutable = async (
-      backend: Exclude<AgentBackendKind, "native">,
-      input: HTMLInputElement,
-    ): Promise<void> => {
-      runtimeError.textContent = "";
-      await rpc("runtime/configure", {
-        backend,
-        executable: input.value.trim(),
-      });
-      await refreshRuntimes(true);
-      paintRuntimePanel();
-    };
-
-    const executableEditor = (
-      backend: Exclude<AgentBackendKind, "native">,
-    ): HTMLElement => {
-      const wrap = el(doc, "div", {
-        marginBottom: "12px",
-        padding: "10px",
-        border: "0",
-        borderRadius: "8px",
-      });
-      const label = el(doc, "label", {
-        display: "block",
-        color: "var(--confucius-muted)",
-        fontSize: "11px",
-        marginBottom: "5px",
-      });
-      label.textContent = getString(`workspace-runtime-${backend}-label`);
-      const input = el(
-        doc,
-        "input",
-        {
-          width: "100%",
-          height: "32px",
-          padding: "0 8px",
-          boxSizing: "border-box",
-          border: "0",
-          borderRadius: "7px",
-        },
-        {
-          id: `confucius-runtime-${backend}-path`,
-          type: "text",
-          placeholder: getString("workspace-runtime-path-auto"),
-        },
-      ) as HTMLInputElement;
-      const actions = el(doc, "div", {
-        display: "flex",
-        flexWrap: "wrap",
-        gap: "7px",
-        marginTop: "7px",
-      });
-      const browse = button(
-        doc,
-        `confucius-runtime-${backend}-browse`,
-        getString("workspace-runtime-browse"),
-      );
-      const apply = button(
-        doc,
-        `confucius-runtime-${backend}-save`,
-        getString("workspace-runtime-save"),
-      );
-      const automatic = button(
-        doc,
-        `confucius-runtime-${backend}-auto`,
-        getString("workspace-runtime-auto"),
-      );
-      browse.addEventListener("click", () => {
-        if (!win) return;
-        void pickRuntimeExecutable(
-          win,
-          getString(`workspace-runtime-${backend}-label`),
-        )
-          .then(async (path) => {
-            if (!path) return;
-            input.value = path;
-            await configureExecutable(backend, input);
-          })
-          .catch((error) => {
-            runtimeError.textContent =
-              error instanceof Error ? error.message : String(error);
-          });
-      });
-      apply.addEventListener("click", () => {
-        void configureExecutable(backend, input).catch((error) => {
-          runtimeError.textContent =
-            error instanceof Error ? error.message : String(error);
-        });
-      });
-      automatic.addEventListener("click", () => {
-        input.value = "";
-        void configureExecutable(backend, input).catch((error) => {
-          runtimeError.textContent =
-            error instanceof Error ? error.message : String(error);
-        });
-      });
-      actions.appendChild(browse);
-      actions.appendChild(apply);
-      actions.appendChild(automatic);
-      wrap.appendChild(label);
-      wrap.appendChild(input);
-      wrap.appendChild(actions);
-      executableInputs.set(backend, input);
-      return wrap;
-    };
-
-    const paintRuntimePanel = (): void => {
-      runtimeHostToggle.checked = state.runtimeHostEnabled;
-      runtimeHostLine.textContent = state.runtimeHostEnabled
-        ? getString("workspace-runtime-host-enabled")
-        : getString("workspace-runtime-host-disabled");
-      runtimeList.textContent = "";
-      const runtimes: RuntimeStatus[] = [
-        runtimeStatus("native")!,
-        ...(["codex", "kimi"] as const).map(
-          (backend) =>
-            runtimeStatus(backend) ?? {
-              backend,
-              state: "unavailable" as const,
-              message: getString("workspace-runtime-not-detected"),
-              checkedAt: Date.now(),
-            },
-        ),
-      ];
-      for (const runtime of runtimes) {
-        const row = el(doc, "div", {
-          display: "grid",
-          gridTemplateColumns: "12px minmax(80px, .45fr) minmax(0, 1fr)",
-          gap: "7px",
-          alignItems: "start",
-          padding: "9px 2px",
-          borderBottom: "0",
-        });
-        const dot = el(doc, "span", { marginTop: "5px" });
-        dot.className = "confucius-runtime-dot";
-        dot.setAttribute("data-state", runtime.state);
-        const identity = el(doc, "div", { fontWeight: "650" });
-        identity.textContent = `${runtimeLabel(runtime.backend)}${
-          runtime.version ? ` ${runtime.version}` : ""
-        }`;
-        const detail = el(doc, "div", {
-          minWidth: "0px",
-          color:
-            runtime.state === "error"
-              ? "var(--confucius-danger)"
-              : "var(--confucius-muted)",
-          overflowWrap: "anywhere",
-        });
-        detail.textContent = `${getString(
-          `workspace-runtime-state-${runtime.state.replace(/_/g, "-")}`,
-        )}${runtime.message ? ` · ${runtime.message}` : ""}${
-          runtime.executable
-            ? ` · ${getString("workspace-runtime-resolved")}: ${runtime.executable}`
-            : ""
-        }`;
-        row.appendChild(dot);
-        row.appendChild(identity);
-        row.appendChild(detail);
-        runtimeList.appendChild(row);
-        if (runtime.backend === "codex" || runtime.backend === "kimi") {
-          const input = executableInputs.get(runtime.backend);
-          if (input && doc.activeElement !== input) {
-            input.value = runtime.configuredExecutable ?? "";
-          }
-        }
-      }
-    };
-    runtimeHostToggle.addEventListener("change", () => {
-      void (async () => {
-        runtimeHostToggle.disabled = true;
-        runtimeError.textContent = "";
-        const listed = (await rpc("runtime/setPluginHost", {
-          enabled: runtimeHostToggle.checked,
-        })) as RuntimeListResult;
-        state.runtimeHostEnabled = listed.runtimeHostEnabled;
-        state.runtimeHostConnected = listed.runtimeHostConnected;
-        state.runtimes = listed.runtimes;
-        live.pluginRuntimeHost = listed.runtimeHostEnabled;
-        if (state.config) {
-          state.config.pluginRuntimeHost = listed.runtimeHostEnabled;
-        }
-        paintRuntimePanel();
-      })()
-        .catch((error) => {
-          runtimeHostToggle.checked = !runtimeHostToggle.checked;
-          runtimeError.textContent =
-            error instanceof Error ? error.message : String(error);
-        })
-        .finally(() => {
-          runtimeHostToggle.disabled = false;
-        });
-    });
-    runtimeRefresh.addEventListener("click", () => {
-      void (async () => {
-        runtimeRefresh.setAttribute("disabled", "true");
-        runtimeError.textContent = "";
-        await refreshRuntimes(true);
-        paintRuntimePanel();
-        runtimeRefresh.removeAttribute("disabled");
-      })().catch((error) => {
-        runtimeError.textContent =
-          error instanceof Error ? error.message : String(error);
-        runtimeRefresh.removeAttribute("disabled");
-      });
-    });
-    runtimeActions.appendChild(runtimeRefresh);
-    if (config?.runtimeStoragePath) {
-      const storage = el(doc, "div", {
-        fontSize: "12px",
-        overflowWrap: "anywhere",
-        margin: "8px 0",
-      });
-      storage.textContent = `${getString("workspace-runtime-storage")}: ${config.runtimeStoragePath}${config.storageStatus === "unsaved" ? ` · ${getString("workspace-storage-unsaved")}` : ""}`;
-      runtimeTab.appendChild(storage);
-    }
-    runtimeTab.appendChild(runtimeHostRow);
-    runtimeTab.appendChild(runtimeHostLine);
-    runtimeTab.appendChild(runtimeList);
-    runtimeTab.appendChild(runtimeActions);
-    runtimeTab.appendChild(executableEditor("codex"));
-    runtimeTab.appendChild(executableEditor("kimi"));
-    runtimeTab.appendChild(runtimeError);
-    paintRuntimePanel();
+    runtimeTab.appendChild(runtimeSettings.element);
 
     sectionIntro(memoryTab, getString("workspace-memory-consent-help"));
     const memoryModes = el(doc, "div", {
@@ -5524,257 +5230,8 @@ function bindWorkspace(
     securityTab.appendChild(confirmLabel);
     paintSecurity();
 
-    let fontChoice: UiFont = isUiFont(live.uiFont)
-      ? live.uiFont
-      : DEFAULT_UI_FONT;
-    let sizeChoice = clampUiFontSize(live.uiFontSize ?? DEFAULT_UI_FONT_SIZE);
-    let languageChoice: UiLanguage = isUiLanguage(live.uiLanguage)
-      ? live.uiLanguage
-      : "en-US";
-    let lineHeightChoice: UiLineHeight = isUiLineHeight(live.uiLineHeight)
-      ? live.uiLineHeight
-      : DEFAULT_UI_LINE_HEIGHT;
-    let themeChoice: UiTheme = isUiTheme(live.uiTheme) ? live.uiTheme : "auto";
-
-    const appearanceLabel = (text: string): void => {
-      const name = el(doc, "label", {
-        display: "block",
-        fontSize: "11px",
-        color: "var(--confucius-muted)",
-        marginBottom: "8px",
-        marginTop: "16px",
-      });
-      name.textContent = text;
-      appearanceTab.appendChild(name);
-    };
-
-    const segmentedRow = (
-      id: string,
-    ): { row: HTMLElement; buttons: Map<string, HTMLElement> } => {
-      const row = el(
-        doc,
-        "div",
-        { display: "flex", flexWrap: "wrap", gap: "4px" },
-        { id, role: "radiogroup" },
-      );
-      appearanceTab.appendChild(row);
-      return { row, buttons: new Map() };
-    };
-    const paintSegmented = (
-      buttons: Map<string, HTMLElement>,
-      current: string,
-    ): void => {
-      for (const [value, btn] of buttons) {
-        const active = value === current;
-        Object.assign(btn.style, {
-          background: active
-            ? "var(--confucius-primary)"
-            : "var(--confucius-elevated)",
-          color: active
-            ? "var(--confucius-primary-ink)"
-            : "var(--confucius-ink)",
-          border: `1px solid ${active ? "var(--confucius-ink)" : "var(--confucius-line)"}`,
-          fontWeight: active ? "600" : "400",
-        });
-        btn.setAttribute("aria-checked", active ? "true" : "false");
-      }
-    };
-
-    appearanceLabel(getString("workspace-ui-theme"));
-    const themePicker = segmentedRow("confucius-cfg-theme");
-    themePicker.row.setAttribute("aria-label", getString("workspace-ui-theme"));
-    for (const theme of ["auto", "light", "dark"] as UiTheme[]) {
-      const btn = button(doc, "", getString(`workspace-ui-theme-${theme}`));
-      btn.setAttribute("role", "radio");
-      btn.dataset.theme = theme;
-      const choose = () => {
-        themeChoice = theme;
-        paintSegmented(themePicker.buttons, themeChoice);
-        for (const [value, item] of themePicker.buttons)
-          item.tabIndex = value === themeChoice ? 0 : -1;
-        applyDocumentTheme(doc, themeChoice);
-      };
-      btn.addEventListener("click", choose);
-      themePicker.buttons.set(theme, btn);
-      themePicker.row.appendChild(btn);
-    }
-    themePicker.row.addEventListener("keydown", (event) => {
-      const key = event as KeyboardEvent;
-      if (
-        key.isComposing ||
-        !["ArrowLeft", "ArrowRight", "Home", "End"].includes(key.key)
-      )
-        return;
-      const choices = [...themePicker.buttons.values()];
-      const index = choices.indexOf(doc.activeElement as HTMLElement);
-      const next =
-        key.key === "Home"
-          ? 0
-          : key.key === "End"
-            ? choices.length - 1
-            : (index + (key.key === "ArrowLeft" ? -1 : 1) + choices.length) %
-              choices.length;
-      event.preventDefault();
-      choices[next].click();
-      choices[next].focus();
-    });
-    paintSegmented(themePicker.buttons, themeChoice);
-    for (const [value, item] of themePicker.buttons)
-      item.tabIndex = value === themeChoice ? 0 : -1;
-
-    appearanceLabel(getString("workspace-ui-language"));
-    const languagePicker = segmentedRow("confucius-cfg-language");
-    for (const language of ["zh-CN", "en-US"] as UiLanguage[]) {
-      const btn = el(
-        doc,
-        "button",
-        {
-          appearance: "none",
-          padding: "4px 10px",
-          borderRadius: "8px",
-          cursor: "pointer",
-          font: "inherit",
-          minHeight: "28px",
-          lineHeight: "1.2",
-        },
-        { type: "button", role: "radio", "data-language": language },
-      );
-      btn.textContent = getString(
-        language === "zh-CN"
-          ? "workspace-ui-language-zh"
-          : "workspace-ui-language-en",
-      );
-      btn.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        languageChoice = language;
-        paintSegmented(languagePicker.buttons, languageChoice);
-      });
-      languagePicker.buttons.set(language, btn);
-      languagePicker.row.appendChild(btn);
-    }
-
-    appearanceLabel(getString("workspace-font-family"));
-    const fontPicker = segmentedRow("confucius-cfg-font");
-    for (const font of ["sans", "serif", "mono"] as UiFont[]) {
-      const btn = el(
-        doc,
-        "button",
-        {
-          appearance: "none",
-          padding: "4px 10px",
-          borderRadius: "8px",
-          cursor: "pointer",
-          font: "inherit",
-          fontFamily: UI_FONT_STACKS[font],
-          minHeight: "28px",
-          lineHeight: "1.2",
-        },
-        { type: "button", role: "radio", "data-font": font },
-      );
-      btn.textContent = `${getString(`workspace-font-${font}`)} · Aa永`;
-      btn.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (fontChoice === font) {
-          return;
-        }
-        fontChoice = font;
-        paintSegmented(fontPicker.buttons, fontChoice);
-        repaintFontPreview();
-      });
-      fontPicker.buttons.set(font, btn);
-      fontPicker.row.appendChild(btn);
-    }
-
-    appearanceLabel(getString("workspace-font-size"));
-    const sizePicker = segmentedRow("confucius-cfg-font-size");
-    for (const size of [12, 13, 14, 16]) {
-      const btn = el(
-        doc,
-        "button",
-        {
-          appearance: "none",
-          padding: "4px 10px",
-          borderRadius: "8px",
-          cursor: "pointer",
-          font: "inherit",
-          minHeight: "28px",
-          lineHeight: "1.2",
-        },
-        { type: "button", role: "radio", "data-font-size": String(size) },
-      );
-      btn.textContent = `${size}px`;
-      btn.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (sizeChoice === size) {
-          return;
-        }
-        sizeChoice = size;
-        paintSegmented(sizePicker.buttons, String(sizeChoice));
-        repaintFontPreview();
-      });
-      sizePicker.buttons.set(String(size), btn);
-      sizePicker.row.appendChild(btn);
-    }
-
-    appearanceLabel(getString("workspace-line-height"));
-    const lineHeightPicker = segmentedRow("confucius-cfg-line-height");
-    for (const lineHeight of [
-      "compact",
-      "standard",
-      "relaxed",
-    ] as UiLineHeight[]) {
-      const btn = el(
-        doc,
-        "button",
-        {
-          appearance: "none",
-          padding: "4px 10px",
-          borderRadius: "8px",
-          cursor: "pointer",
-          font: "inherit",
-          minHeight: "28px",
-          lineHeight: "1.2",
-        },
-        { type: "button", role: "radio", "data-line-height": lineHeight },
-      );
-      btn.textContent = getString(`workspace-line-height-${lineHeight}`);
-      btn.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        lineHeightChoice = lineHeight;
-        paintSegmented(lineHeightPicker.buttons, lineHeightChoice);
-        repaintFontPreview();
-      });
-      lineHeightPicker.buttons.set(lineHeight, btn);
-      lineHeightPicker.row.appendChild(btn);
-    }
-
-    const fontPreview = el(doc, "div", {
-      border: "0",
-      borderRadius: "8px",
-      background: "var(--confucius-paper)",
-      padding: "12px",
-      marginTop: "12px",
-      lineHeight: "1.6",
-      color: "var(--confucius-ink)",
-    });
-    fontPreview.textContent = getString("workspace-font-preview");
-    appearanceTab.appendChild(fontPreview);
-    const repaintFontPreview = (): void => {
-      fontPreview.style.fontFamily = UI_FONT_STACKS[fontChoice];
-      fontPreview.style.fontSize = `${sizeChoice}px`;
-      fontPreview.style.lineHeight = String(
-        UI_LINE_HEIGHT_VALUES[lineHeightChoice],
-      );
-    };
-    paintSegmented(languagePicker.buttons, languageChoice);
-    paintSegmented(fontPicker.buttons, fontChoice);
-    paintSegmented(sizePicker.buttons, String(sizeChoice));
-    paintSegmented(lineHeightPicker.buttons, lineHeightChoice);
-    repaintFontPreview();
+    const appearanceSettings = createAppearanceSettings(doc, live);
+    appearanceTab.appendChild(appearanceSettings.element);
 
     const updateHeading = el(doc, "div", {
       fontWeight: "700",
@@ -6199,6 +5656,7 @@ function bindWorkspace(
         errorLine.dataset.state = "";
         errorLine.textContent = "";
         try {
+          const appearancePatch = appearanceSettings.getPatch();
           if (
             settingsTask &&
             securityProfile === "workspace" &&
@@ -6206,6 +5664,10 @@ function bindWorkspace(
           ) {
             throw new Error(getString("workspace-security-confirm-error"));
           }
+          savingSettings = true;
+          overlay.setAttribute("aria-busy", "true");
+          settingsContent.inert = tabBar.inert = true;
+          closeBtn.disabled = cancel.disabled = true;
           if (settingsTask && securityProfile === "workspace") {
             const previewMatches = await (capabilityPreviewPending ??
               previewSecurityDirectory());
@@ -6239,11 +5701,7 @@ function bindWorkspace(
               Number(iterationsInput.value) || DEFAULT_MAX_ITERATIONS,
             maxToolCalls:
               Number(toolCallsInput.value) || DEFAULT_MAX_TOOL_CALLS,
-            uiFont: fontChoice,
-            uiTheme: themeChoice,
-            uiFontSize: sizeChoice,
-            uiLanguage: languageChoice,
-            uiLineHeight: lineHeightChoice,
+            ...appearancePatch,
           })) as ModelConfig;
           const languageChanged = live.uiLanguage !== next.uiLanguage;
           applyLive(next);
@@ -6275,6 +5733,7 @@ function bindWorkspace(
           errorLine.dataset.state = "saved";
           errorLine.textContent = getString("workspace-settings-saved");
           if (languageChanged) {
+            savingSettings = false;
             closeSettings();
             applyLocalizedChrome();
             renderLists();
@@ -6283,6 +5742,10 @@ function bindWorkspace(
           errorLine.textContent =
             error instanceof Error ? error.message : String(error);
         } finally {
+          savingSettings = false;
+          overlay.removeAttribute("aria-busy");
+          settingsContent.inert = tabBar.inert = false;
+          closeBtn.disabled = cancel.disabled = false;
           save.disabled = false;
         }
       })();
@@ -6292,13 +5755,10 @@ function bindWorkspace(
       .querySelector<HTMLElement>('[aria-selected="true"]')
       ?.focus({ preventScroll: true });
     void Promise.all([
-      refreshRuntimes(true),
+      runtimeSettings.refresh(true),
       refreshMemoryProposals(),
       runUpdateAction("update/status"),
-    ]).then(() => {
-      if (!overlay.parentElement) return;
-      paintRuntimePanel();
-    });
+    ]);
   }
 
   async function refreshMemories(): Promise<void> {

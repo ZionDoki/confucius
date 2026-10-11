@@ -1,22 +1,24 @@
-import { createOpenAlexSettings } from "../ui/literaturePanel";
-import { UI_FONT_STACKS } from "../ui/workspaceTypography";
 import { ensurePaletteStyles, SURFACE_CSS } from "../ui/workspaceSurface";
 import { getPref, setPref } from "../../utils/prefs";
-import { getString } from "../../utils/locale";
+import {
+  getString,
+  getLocaleMessage,
+  configuredUiLanguage,
+} from "../../utils/locale";
+import { readAppearancePrefs } from "../../utils/appearancePrefs";
+import { createAppearanceSettings } from "../ui/appearanceSettings";
+import { createRuntimeSettings } from "../ui/runtimeSettings";
+import {
+  createWorkspaceButton,
+  bindTabNavigation,
+} from "../ui/workspaceControls";
+import { openWorkspace } from "../ui/workspaceWindow";
 import { config } from "../../../package.json";
 import {
-  clampUiFontSize,
-  isUiFont,
-  isUiTheme,
-  isUiLineHeight,
-  UI_LINE_HEIGHT_VALUES,
   clampMaxIterations,
   clampMaxToolCalls,
   isMemoryConsent,
-  type AgentBackendKind,
-  type RuntimeListResult,
 } from "@confucius/protocol";
-import { pickRuntimeExecutable } from "../ui/runtimeExecutablePicker";
 import { bindPreferenceScrollbars } from "../ui/workspaceScrollbars";
 
 export async function registerPreferencePane(): Promise<void> {
@@ -40,28 +42,6 @@ export async function registerPreferencePane(): Promise<void> {
 
 export function bindPrefsWindow(win: Window): void {
   const doc = win.document;
-  const openAlexTarget = doc.getElementById("confucius-pref-openalex");
-  if (openAlexTarget && !openAlexTarget.childElementCount)
-    openAlexTarget.appendChild(
-      createOpenAlexSettings(doc, async (method, params) => {
-        const host = (
-          Zotero as unknown as {
-            Confucius?: {
-              hooks?: {
-                host?: {
-                  rpc(
-                    method: string,
-                    params: Record<string, unknown>,
-                  ): Promise<unknown>;
-                };
-              };
-            };
-          }
-        ).Confucius?.hooks?.host;
-        if (!host) throw new Error("Confucius host unavailable");
-        return host.rpc(method, params ?? {});
-      }),
-    );
   ensurePaletteStyles(doc);
   bindPreferenceScrollbars(win);
   if (!doc.getElementById("confucius-preferences-style")) {
@@ -73,22 +53,212 @@ export function bindPrefsWindow(win: Window): void {
   const pane = doc.getElementById(
     "confucius-preferences",
   ) as HTMLElement | null;
-  const theme = doc.getElementById(
-    "confucius-pref-uiTheme",
-  ) as HTMLSelectElement | null;
-  theme?.addEventListener("change", () => {
-    if (isUiTheme(theme.value)) setPref("uiTheme", theme.value);
-  });
-  if (pane) {
-    const font = getPref("uiFont");
-    const lineHeight = getPref("uiLineHeight");
-    pane.style.fontFamily = UI_FONT_STACKS[isUiFont(font) ? font : "sans"];
-    pane.style.fontSize = `${clampUiFontSize(getPref("uiFontSize"))}px`;
-    pane.style.lineHeight = String(
-      UI_LINE_HEIGHT_VALUES[
-        isUiLineHeight(lineHeight) ? lineHeight : "standard"
-      ],
+  if (!pane || pane.dataset.confuciusBound === "true") return;
+  pane.dataset.confuciusBound = "true";
+  const rpc = async (method: string, params?: Record<string, unknown>) => {
+    const host = (
+      Zotero as unknown as {
+        Confucius?: {
+          hooks?: {
+            host?: {
+              rpc(
+                method: string,
+                params?: Record<string, unknown>,
+              ): Promise<unknown>;
+            };
+          };
+        };
+      }
+    ).Confucius?.hooks?.host;
+    if (!host) throw new Error("Confucius host unavailable");
+    return host.rpc(method, params ?? {});
+  };
+  const nav = doc.getElementById("confucius-pref-tabs") as HTMLElement;
+  nav.setAttribute("role", "tablist");
+  nav.setAttribute("aria-label", getString("workspace-settings"));
+  bindTabNavigation(nav);
+  const sections = [
+    ...pane.querySelectorAll<HTMLElement>("[data-confucius-pref-tab]"),
+  ];
+  const tabs = new Map<string, HTMLButtonElement>();
+  const select = (tab: string) => {
+    for (const section of sections)
+      section.hidden = section.dataset.confuciusPrefTab !== tab;
+    for (const [value, button] of tabs) {
+      button.setAttribute("aria-selected", String(value === tab));
+      button.tabIndex = value === tab ? 0 : -1;
+    }
+  };
+  for (const tab of [
+    "model",
+    "appearance",
+    "runtime",
+    "memory",
+    "security",
+    "update",
+  ]) {
+    const button = createWorkspaceButton(
+      doc,
+      `confucius-pref-tab-${tab}`,
+      getString(`workspace-settings-tab-${tab}`),
     );
+    button.setAttribute("role", "tab");
+    button.addEventListener("click", () => select(tab));
+    const ids: string[] = [];
+    for (const [index, section] of sections
+      .filter((section) => section.dataset.confuciusPrefTab === tab)
+      .entries()) {
+      section.id = `confucius-pref-panel-${tab}-${index}`;
+      section.setAttribute("role", "tabpanel");
+      section.setAttribute("aria-labelledby", button.id);
+      ids.push(section.id);
+    }
+    button.setAttribute("aria-controls", ids.join(" "));
+    tabs.set(tab, button);
+    nav.append(button);
+  }
+  select("model");
+  const appearanceTarget = doc.getElementById("confucius-pref-appearance")!;
+  const localizePane = () => {
+    for (const [tab, button] of tabs)
+      button.textContent = getString(`workspace-settings-tab-${tab}`);
+    for (const item of pane.querySelectorAll("[data-l10n-id]")) {
+      const id = item.getAttribute("data-l10n-id")!;
+      const value = getLocaleMessage(id);
+      if (value !== id) item.textContent = value;
+    }
+    for (const item of pane.querySelectorAll<HTMLElement>(
+      "[data-confucius-l10n]",
+    ))
+      item.textContent = getString(item.dataset.confuciusL10n!);
+    runtime.localize();
+  };
+  const mountAppearance = () => {
+    appearanceTarget.replaceChildren();
+    const editor = createAppearanceSettings(doc, {
+      ...readAppearancePrefs(),
+      uiLanguage: configuredUiLanguage(),
+    });
+    const actions = doc.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      "footer",
+    );
+    actions.className = "confucius-settings-footer";
+    const save = createWorkspaceButton(
+      doc,
+      "confucius-pref-appearance-save",
+      getString("workspace-settings-save"),
+      "primary",
+    );
+    const cancel = createWorkspaceButton(
+      doc,
+      "confucius-pref-appearance-cancel",
+      getString("workspace-settings-cancel"),
+    );
+    const feedback = doc.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      "p",
+    ) as HTMLElement;
+    feedback.className = "confucius-settings-feedback";
+    feedback.setAttribute("role", "status");
+    actions.append(feedback, cancel, save);
+    appearanceTarget.append(editor.element, actions);
+    let saving = false;
+    cancel.addEventListener("click", () => {
+      if (!saving) mountAppearance();
+    });
+    save.addEventListener("click", () => {
+      if (saving || save.disabled) return;
+      void (async () => {
+        try {
+          const patch = editor.getPatch() as Record<string, unknown>;
+          const language = configuredUiLanguage();
+          saving = true;
+          save.disabled = cancel.disabled = true;
+          editor.element.inert = true;
+          appearanceTarget.setAttribute("aria-busy", "true");
+          await rpc("config/set", patch);
+          if (!editor.element.isConnected || win.closed) return;
+          if (language !== configuredUiLanguage()) {
+            localizePane();
+            mountAppearance();
+          }
+          const currentFeedback = appearanceTarget.querySelector<HTMLElement>(
+            ".confucius-settings-feedback",
+          )!;
+          currentFeedback.dataset.state = "saved";
+          currentFeedback.textContent = getString("workspace-settings-saved");
+        } catch (error) {
+          delete feedback.dataset.state;
+          feedback.textContent =
+            error instanceof Error ? error.message : String(error);
+        } finally {
+          saving = false;
+          save.disabled = cancel.disabled = false;
+          editor.element.inert = false;
+          appearanceTarget.removeAttribute("aria-busy");
+        }
+      })();
+    });
+  };
+  mountAppearance();
+  const runtime = createRuntimeSettings(doc, rpc);
+  doc.getElementById("confucius-pref-runtime")?.append(runtime.element);
+  void runtime.refresh();
+  const updates = doc.getElementById("confucius-pref-updates");
+  if (updates) {
+    const help = doc.createElementNS("http://www.w3.org/1999/xhtml", "p");
+    help.setAttribute("data-confucius-l10n", "workspace-update-help");
+    help.textContent = getString("workspace-update-help");
+    const open = createWorkspaceButton(
+      doc,
+      "confucius-pref-updates-open",
+      getString("workspace-settings-open-updates"),
+    );
+    open.dataset.confuciusL10n = "workspace-settings-open-updates";
+    let openingUpdates = false;
+    open.addEventListener("click", () => {
+      if (openingUpdates) return;
+      openingUpdates = true;
+      open.disabled = true;
+      const workspace = openWorkspace(Zotero.getMainWindow());
+      let attempts = 0;
+      let opening = false;
+      const finish = () => {
+        openingUpdates = false;
+        open.disabled = false;
+      };
+      const show = () => {
+        if (win.closed || !workspace || workspace.closed) {
+          finish();
+          return;
+        }
+        const button = workspace?.document.getElementById(
+          "confucius-settings",
+        ) as HTMLElement | null;
+        if (!button && attempts++ < 50) {
+          win.setTimeout(show, 100);
+          return;
+        }
+        const updateTab = workspace?.document.getElementById(
+          "confucius-cfg-tab-update",
+        ) as HTMLElement | null;
+        if (!updateTab) {
+          if (!opening) {
+            button?.click();
+            opening = true;
+          }
+          if (attempts++ < 50) win.setTimeout(show, 100);
+          else finish();
+          return;
+        }
+        updateTab.click();
+        workspace?.focus();
+        finish();
+      };
+      show();
+    });
+    updates.append(help, open);
   }
   const bind = (
     id: string,
@@ -183,183 +353,4 @@ export function bindPrefsWindow(win: Window): void {
   if (token) {
     token.value = String(getPref("pairingToken") || "");
   }
-  bindRuntimeStatus(win);
-}
-
-function bindRuntimeStatus(win: Window): void {
-  const doc = win.document;
-  const status = doc.getElementById(
-    "confucius-pref-runtime-status",
-  ) as HTMLElement | null;
-  const refresh = doc.getElementById(
-    "confucius-pref-runtime-refresh",
-  ) as HTMLButtonElement | null;
-  const hostToggle = doc.getElementById(
-    "confucius-pref-pluginRuntimeHost",
-  ) as HTMLInputElement | null;
-  const codexPath = doc.getElementById(
-    "confucius-pref-codexExecutable",
-  ) as HTMLInputElement | null;
-  const kimiPath = doc.getElementById(
-    "confucius-pref-kimiExecutable",
-  ) as HTMLInputElement | null;
-  const errorLine = doc.getElementById(
-    "confucius-pref-runtime-error",
-  ) as HTMLElement | null;
-  if (!status || !refresh || !hostToggle || !codexPath || !kimiPath) return;
-
-  hostToggle.checked = getPref("pluginRuntimeHost") !== false;
-  codexPath.value = String(getPref("codexExecutable") || "");
-  kimiPath.value = String(getPref("kimiExecutable") || "");
-
-  const host = (
-    Zotero as unknown as {
-      Confucius?: {
-        hooks?: {
-          host?: {
-            rpc(
-              method: string,
-              params?: Record<string, unknown>,
-            ): Promise<unknown>;
-          };
-        };
-      };
-    }
-  ).Confucius?.hooks?.host;
-
-  const paint = (result: RuntimeListResult): void => {
-    status.textContent = "";
-    const summary = doc.createElementNS(
-      "http://www.w3.org/1999/xhtml",
-      "div",
-    ) as HTMLElement;
-    summary.textContent = result.runtimeHostEnabled
-      ? getString("pref-runtime-host-connected")
-      : getString("pref-runtime-host-offline");
-    summary.style.fontWeight = "600";
-    summary.style.marginBottom = "6px";
-    status.appendChild(summary);
-    hostToggle.checked = result.runtimeHostEnabled;
-    for (const runtime of result.runtimes) {
-      const row = doc.createElementNS(
-        "http://www.w3.org/1999/xhtml",
-        "div",
-      ) as HTMLElement;
-      row.style.padding = "3px 0";
-      row.style.overflowWrap = "anywhere";
-      row.textContent = `${runtime.backend} · ${runtime.state}${
-        runtime.version ? ` · ${runtime.version}` : ""
-      }${runtime.executable ? ` · ${runtime.executable}` : ""}${
-        runtime.message ? ` · ${runtime.message}` : ""
-      }`;
-      status.appendChild(row);
-    }
-  };
-
-  const load = async (force: boolean): Promise<void> => {
-    refresh.disabled = true;
-    if (errorLine) errorLine.textContent = "";
-    try {
-      if (!host) throw new Error("Confucius host is unavailable");
-      const result = (await host.rpc(
-        force ? "runtime/refresh" : "runtime/list",
-        {},
-      )) as RuntimeListResult;
-      paint(result);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (errorLine) errorLine.textContent = message;
-      status.title = message;
-    } finally {
-      refresh.disabled = false;
-    }
-  };
-
-  refresh.addEventListener("click", () => void load(true));
-
-  hostToggle.addEventListener("change", () => {
-    void (async () => {
-      if (!host) throw new Error("Confucius host is unavailable");
-      hostToggle.disabled = true;
-      const result = (await host.rpc("runtime/setPluginHost", {
-        enabled: hostToggle.checked,
-      })) as RuntimeListResult;
-      paint(result);
-    })()
-      .catch((error) => {
-        hostToggle.checked = !hostToggle.checked;
-        if (errorLine) {
-          errorLine.textContent =
-            error instanceof Error ? error.message : String(error);
-        }
-      })
-      .finally(() => {
-        hostToggle.disabled = false;
-      });
-  });
-
-  const configure = async (
-    backend: Exclude<AgentBackendKind, "native">,
-    input: HTMLInputElement,
-  ): Promise<void> => {
-    if (!host) throw new Error("Confucius host is unavailable");
-    if (errorLine) errorLine.textContent = "";
-    await host.rpc("runtime/configure", {
-      backend,
-      executable: input.value.trim(),
-    });
-    await load(true);
-  };
-
-  const bindExecutableControls = (
-    backend: Exclude<AgentBackendKind, "native">,
-    input: HTMLInputElement,
-  ): void => {
-    const save = doc.getElementById(
-      `confucius-pref-runtime-${backend}-save`,
-    ) as HTMLButtonElement | null;
-    const browse = doc.getElementById(
-      `confucius-pref-runtime-${backend}-browse`,
-    ) as HTMLButtonElement | null;
-    const auto = doc.getElementById(
-      `confucius-pref-runtime-${backend}-auto`,
-    ) as HTMLButtonElement | null;
-    save?.addEventListener("click", () => {
-      void configure(backend, input).catch((error) => {
-        if (errorLine) {
-          errorLine.textContent =
-            error instanceof Error ? error.message : String(error);
-        }
-      });
-    });
-    browse?.addEventListener("click", () => {
-      void pickRuntimeExecutable(win, getString(`pref-runtime-${backend}-path`))
-        .then(async (path) => {
-          if (!path) return;
-          input.value = path;
-          await configure(backend, input);
-        })
-        .catch((error) => {
-          if (errorLine) {
-            errorLine.textContent =
-              error instanceof Error ? error.message : String(error);
-          }
-        });
-    });
-    auto?.addEventListener("click", () => {
-      input.value = "";
-      void configure(backend, input).catch((error) => {
-        if (errorLine) {
-          errorLine.textContent =
-            error instanceof Error ? error.message : String(error);
-        }
-      });
-    });
-  };
-
-  bindExecutableControls("codex", codexPath);
-  bindExecutableControls("kimi", kimiPath);
-  // Login can change while Zotero stays open. Probe the actual runtime
-  // session boundary whenever this pane opens instead of showing stale state.
-  void load(true);
 }

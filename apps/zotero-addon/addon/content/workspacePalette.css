@@ -188,9 +188,9 @@
     --confucius-success: CanvasText;
     --confucius-success-surface: Canvas;
     --confucius-warning-surface: Canvas;
-    --confucius-primary: ButtonText;
-    --confucius-primary-ink: ButtonFace;
-    --confucius-primary-hover: ButtonText;
+    --confucius-primary: Highlight;
+    --confucius-primary-ink: HighlightText;
+    --confucius-primary-hover: Highlight;
     --confucius-focus: Highlight;
     --confucius-selection: Highlight;
     --confucius-selection-ink: HighlightText;

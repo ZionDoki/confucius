@@ -161,8 +161,10 @@ export function createVenueRatingSettings(
 ) {
   const section = node(doc, "section");
   section.className = "confucius-venue-rating-settings";
-  if (!options.compact) section.append(node(doc, "h3", text("title")));
-  section.append(node(doc, "p", text("help")));
+  const title = node(doc, "h3", text("title"));
+  const help = node(doc, "p", text("help"));
+  if (!options.compact) section.append(title);
+  section.append(help);
   const controls = node(doc, "div");
   controls.className = "confucius-literature-controls";
   const importButton = createWorkspaceButton(doc, "", text("import"));
@@ -173,57 +175,69 @@ export function createVenueRatingSettings(
   status.setAttribute("role", "status");
   status.className = "confucius-literature-meta";
   let busy = false;
+  let current: VenueRatingCatalogState | undefined;
+  let statusKey: "loading" | "saved" | "" = "";
+  const setBusy = (value: boolean) => {
+    busy = value;
+    if (value) section.setAttribute("aria-busy", "true");
+    else section.removeAttribute("aria-busy");
+    for (const button of section.querySelectorAll("button"))
+      button.disabled = value;
+  };
+  const paint = () => {
+    if (!current) return;
+    catalogs.replaceChildren();
+    for (const catalog of current.catalogs) {
+      const row = node(doc, "div");
+      row.className = "confucius-venue-rating-catalog";
+      row.dataset.catalogId = catalog.id;
+      row.append(
+        node(
+          doc,
+          "span",
+          `${systemName(catalog.system)} · ${catalog.year} · ${catalog.entries} ${text("entries")} · ${catalog.source.filename ?? catalog.source.name}`,
+        ),
+      );
+      if (catalog.imported) {
+        const remove = createWorkspaceButton(doc, "", text("remove"));
+        remove.dataset.action = "remove-ratings";
+        remove.title = `${text("remove")} · ${systemName(catalog.system)} ${catalog.year}`;
+        remove.disabled = busy;
+        remove.addEventListener(
+          "click",
+          () => void run("literature/ratings/remove", { id: catalog.id }),
+        );
+        row.append(remove);
+      }
+      catalogs.append(row);
+    }
+  };
   const run = async (method: string, params?: Record<string, unknown>) => {
     if (busy) return;
-    busy = true;
-    section.setAttribute("aria-busy", "true");
-    for (const button of section.querySelectorAll("button"))
-      button.disabled = true;
-    status.textContent = text("loading");
+    setBusy(true);
+    status.textContent = text((statusKey = "loading"));
     try {
-      const value = (await rpc(method, params)) as VenueRatingCatalogState;
-      catalogs.replaceChildren();
-      for (const catalog of value.catalogs) {
-        const row = node(doc, "div");
-        row.className = "confucius-venue-rating-catalog";
-        row.dataset.catalogId = catalog.id;
-        row.append(
-          node(
-            doc,
-            "span",
-            `${systemName(catalog.system)} · ${catalog.year} · ${catalog.entries} ${text("entries")} · ${catalog.source.filename ?? catalog.source.name}`,
-          ),
-        );
-        if (catalog.imported) {
-          const remove = createWorkspaceButton(doc, "", text("remove"));
-          remove.dataset.action = "remove-ratings";
-          remove.title = `${text("remove")} · ${systemName(catalog.system)} ${catalog.year}`;
-          remove.addEventListener(
-            "click",
-            () => void run("literature/ratings/remove", { id: catalog.id }),
-          );
-          row.append(remove);
-        }
-        catalogs.append(row);
-      }
-      status.textContent =
-        method === "literature/ratings/list" ? "" : text("saved");
+      const result = (await rpc(method, params)) as VenueRatingCatalogState;
+      if (!section.isConnected) return;
+      current = result;
+      paint();
+      statusKey = method === "literature/ratings/list" ? "" : "saved";
+      status.textContent = statusKey ? text(statusKey) : "";
       if (method !== "literature/ratings/list") await options.changed?.();
     } catch (error) {
+      statusKey = "";
       status.textContent = String(
         error instanceof Error ? error.message : error,
       );
     } finally {
-      busy = false;
-      section.removeAttribute("aria-busy");
-      for (const button of section.querySelectorAll("button"))
-        button.disabled = false;
+      setBusy(false);
     }
   };
   importButton.addEventListener("click", async () => {
     if (busy) return;
     // Keep picking separate from importing so cancellation never changes a catalog.
-    importButton.disabled = true;
+    setBusy(true);
+    let picking = true;
     try {
       const path = await (options.pickFile
         ? options.pickFile()
@@ -234,16 +248,26 @@ export function createVenueRatingSettings(
             "",
             doc.defaultView!,
           ).open());
+      if (!section.isConnected) return;
+      picking = false;
+      setBusy(false);
       if (path) await run("literature/ratings/import", { path });
     } catch (error) {
       status.textContent = String(
         error instanceof Error ? error.message : error,
       );
     } finally {
-      importButton.disabled = busy;
+      if (picking) setBusy(false);
     }
   });
   controls.append(importButton);
   section.append(controls, catalogs, status);
+  section.addEventListener("confucius-localize", () => {
+    title.textContent = text("title");
+    help.textContent = text("help");
+    importButton.textContent = text("import");
+    paint();
+    if (statusKey) status.textContent = text(statusKey);
+  });
   return { node: section, refresh: () => run("literature/ratings/list") };
 }

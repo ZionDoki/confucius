@@ -197,6 +197,10 @@ try {
     maxIterations: 12,
     maxToolCalls: 8,
     memoryConsent: "off",
+    uiFont: "serif",
+    uiFontSize: 16,
+    uiLineHeight: "compact",
+    uiTheme: "dark",
   });
   target = await evalHost(
     `const item=new Zotero.Item('journalArticle');item.libraryID=Zotero.Libraries.userLibraryID;item.setField('title','Release upgrade fixture');await item.saveTx();const pdf=await Zotero.Attachments.importFromFile({file:${JSON.stringify(join(root, "scripts/fixtures/confucius-tool-e2e-fixture.pdf"))},parentItemID:item.id});const mark=await Zotero.Annotations.saveFromJSON(pdf,{key:Zotero.DataObjectUtilities.generateKey(),type:'highlight',color:'#ffd400',text:'Original annotation',comment:'Preserve original annotation',pageLabel:'1',sortIndex:'00000|000000|00000',position:{pageIndex:0,rects:[[10,10,40,30]]}});return {libraryID:item.libraryID,key:item.key,pdfKey:pdf.key,markKey:mark.key};`,
@@ -388,6 +392,15 @@ try {
   check(
     "Candidate restarts as a normal target-version installation",
     z.environment.version === version && !z.environment.temporary,
+  );
+  const appearance = await z.rpc("config/get");
+  check(
+    "Upgrade preserves the legacy font, integer size, named line height and theme",
+    appearance.uiFont === "serif" &&
+      appearance.uiFontSize === 16 &&
+      appearance.uiLineHeight ===
+        ("uiFontFamily" in appearance ? 1.45 : "compact") &&
+      appearance.uiTheme === "dark",
   );
 
   if (literatureSeed) {

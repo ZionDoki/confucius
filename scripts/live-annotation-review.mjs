@@ -6,7 +6,10 @@ import { annotationReviewPanelRegressions } from "./lib/annotation-review-panel.
 import { literatureReviewPanelRegressions } from "./lib/literature-review-panel.mjs";
 import { resolveZoteroExecutable } from "../apps/zotero-addon/src/development/zoteroExecutable.ts";
 const root = resolve(import.meta.dirname, ".."),
-  output = join(root, "output/annotation-review-minimize-acceptance");
+  output = resolve(
+    process.env.CONFUCIUS_ANNOTATION_OUTPUT ??
+      join(root, "output/annotation-review-minimize-acceptance"),
+  );
 await mkdir(join(output, "apps/zotero-addon/.scaffold"), { recursive: true });
 const instance = await IsolatedZotero.create({
   root: output,

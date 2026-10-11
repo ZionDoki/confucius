@@ -33,8 +33,11 @@ declare namespace _ZoteroTypes {
       "reasoningEffort": string;
       "contextWindowTokens": number;
       "uiFont": string;
+      "uiFontFamily": string;
+      "uiThemeColors": string;
       "uiTheme": string;
       "uiFontSize": number;
+      "uiFontSizeExact": string;
       "uiLanguage": string;
       "uiLineHeight": string;
       "pluginRuntimeHost": boolean;

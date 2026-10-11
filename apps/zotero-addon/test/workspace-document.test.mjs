@@ -88,11 +88,11 @@ test("toolbar icon uses toggleWorkspace so a second click can close the sidebar"
 });
 
 test("workspace layout can switch between window and sidebar", () => {
+  const view = workspaceSource();
   const source = readFileSync(
     join(root, "src/modules/ui/workspaceWindow.ts"),
     "utf8",
   );
-  const view = workspaceSource();
   const prefs = readFileSync(join(root, "addon/prefs.js"), "utf8");
   assert.equal(prefs.includes('pref("workspaceLayout", "sidebar")'), true);
   assert.equal(source.includes('SIDEBAR_ID = "confucius-sidebar"'), true);
@@ -160,7 +160,6 @@ test("external runtimes are hosted in the add-on with auto and manual paths", ()
     join(root, "src/modules/host/RuntimeDiscovery.ts"),
     "utf8",
   );
-  const view = workspaceSource();
   const prefs = readFileSync(join(root, "addon/prefs.js"), "utf8");
   const prefsPane = readFileSync(
     join(root, "addon/content/preferences.xhtml"),
@@ -173,10 +172,14 @@ test("external runtimes are hosted in the add-on with auto and manual paths", ()
   assert.equal(prefs.includes('pref("pluginRuntimeHost", true)'), true);
   assert.equal(prefs.includes('pref("codexExecutable", "")'), true);
   assert.equal(prefs.includes('pref("kimiExecutable", "")'), true);
-  assert.equal(prefsPane.includes("confucius-pref-pluginRuntimeHost"), true);
-  assert.equal(prefsPane.includes("confucius-pref-codexExecutable"), true);
-  assert.equal(prefsPane.includes("confucius-pref-kimiExecutable"), true);
-  assert.equal(view.includes("pickRuntimeExecutable"), true);
+  assert.equal(prefsPane.includes("confucius-pref-runtime"), true);
+  const editor = readFileSync(
+    join(root, "src/modules/ui/runtimeSettings.ts"),
+    "utf8",
+  );
+  assert(editor.includes("confucius-runtime-host-enabled"));
+  assert(editor.includes("confucius-runtime-${backend}-path"));
+  assert.equal(editor.includes("pickRuntimeExecutable"), true);
   assert.equal(
     runtime.includes('PathUtils.join(localAppData, "OpenAI", "Codex", "bin")'),
     true,
@@ -340,9 +343,7 @@ test("conversation Markdown follows the configured UI font size", () => {
     true,
   );
   assert.equal(
-    view.includes(
-      'root.style.setProperty("--confucius-markdown-font-size", `${size}px`)',
-    ),
+    view.includes('root.style.fontSize = "var(--confucius-font-size, 13px)"'),
     true,
   );
   assert.equal(view.includes("font-size: 1em;"), true);
@@ -366,7 +367,7 @@ test("settings security profile uses a styled custom listbox", () => {
   const view = workspaceSource();
   const security = view.slice(
     view.indexOf("const settingsTask = currentTask()"),
-    view.indexOf("let fontChoice"),
+    view.indexOf("const appearanceSettings"),
   );
   assert.equal(/,\s*"select"/.test(security), false);
   assert.equal(security.includes('id: "confucius-security-profile"'), true);
@@ -410,14 +411,19 @@ test("settings are tabbed with font appearance controls", () => {
   const prefs = readFileSync(join(root, "addon/prefs.js"), "utf8");
   assert.equal(view.includes('"confucius-cfg-tab-model"'), true);
   assert.equal(view.includes('"confucius-cfg-tab-appearance"'), true);
-  assert.equal(view.includes('"confucius-cfg-font"'), true);
-  assert.equal(view.includes('"confucius-cfg-font-size"'), true);
-  assert.equal(view.includes('"confucius-cfg-language"'), true);
-  assert.equal(view.includes('"confucius-cfg-line-height"'), true);
-  assert.equal(view.includes("uiFont: fontChoice"), true);
-  assert.equal(view.includes("uiFontSize: sizeChoice"), true);
-  assert.equal(view.includes("uiLanguage: languageChoice"), true);
-  assert.equal(view.includes("uiLineHeight: lineHeightChoice"), true);
+  const appearance = readFileSync(
+    join(root, "src/modules/ui/appearanceSettings.ts"),
+    "utf8",
+  );
+  for (const id of [
+    "confucius-cfg-font",
+    "confucius-cfg-font-size",
+    "confucius-cfg-language",
+    "confucius-cfg-line-height",
+  ])
+    assert(appearance.includes(id));
+  assert.equal(view.includes("appearanceSettings.getPatch()"), true);
+  assert.equal(view.includes("...appearancePatch"), true);
   assert.equal(host.includes('setPref("uiFont"'), true);
   assert.equal(host.includes('setPref("uiFontSize"'), true);
   assert.equal(host.includes('setPref("uiLanguage"'), true);
@@ -426,7 +432,10 @@ test("settings are tabbed with font appearance controls", () => {
   assert.equal(prefs.includes('pref("uiFontSize", 13)'), true);
   assert.equal(prefs.includes('pref("uiLanguage", "")'), true);
   assert.equal(prefs.includes('pref("uiLineHeight", "standard")'), true);
-  assert.equal(view.includes('"--confucius-reading-line-height"'), true);
+  assert.equal(
+    appearance.includes("uiLineHeight: Number(line.number.value)"),
+    true,
+  );
   assert.equal(view.includes("confucius-reasoning-toggle"), true);
   assert.equal(view.includes("mask-image"), true);
 });

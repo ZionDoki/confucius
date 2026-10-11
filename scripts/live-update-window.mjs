@@ -185,6 +185,15 @@ try {
     `d.getElementById('confucius-prompt').value='最后输入，尚未保存的草稿 😀';d.getElementById('confucius-toggle-sessions').click();return true;`,
   );
   await settings();
+  await evaluate(
+    `Zotero.Utilities.Internal.openPreferences('confucius-prefpane');return true;`,
+  );
+  await waitFor(
+    `const pw=[...Services.wm.getEnumerator('zotero:pref')][0];return !!pw?.document.getElementById('confucius-preferences');`,
+  );
+  await evaluate(
+    `Zotero.__updatePrefs=[...Services.wm.getEnumerator('zotero:pref')][0];return true;`,
+  );
   result.first = await install();
   await verifyRestored(task.id, "最后输入，尚未保存的草稿 😀");
   check(
@@ -198,6 +207,24 @@ try {
   );
   check(
     "the collapsed conversation list remains collapsed after automatic reopening",
+  );
+  await evaluate(
+    `const pw=Zotero.__updatePrefs;if(pw.closed)throw new Error('Preferences closed during update');await pw.Zotero_Preferences.navigateToPane('confucius-prefpane');return true;`,
+  );
+  await waitFor(
+    `return !!Zotero.__updatePrefs.document.getElementById('confucius-pref-tab-appearance');`,
+  );
+  result.preferences = await evaluate(
+    `const pw=Zotero.__updatePrefs,pd=pw.document;pd.getElementById('confucius-pref-tab-appearance').click();const save=pd.getElementById('confucius-pref-appearance-save'),s=pw.getComputedStyle(save);return {tabs:pd.querySelectorAll('#confucius-pref-tabs > button').length,margin:s.margin,minHeight:s.minHeight,weight:s.fontWeight,palette:pd.getElementById('confucius-palette-css').getAttribute('href')};`,
+  );
+  assert.equal(result.preferences.tabs, 6);
+  assert.equal(result.preferences.margin, "0px");
+  assert.equal(result.preferences.minHeight, "34px");
+  assert.equal(result.preferences.weight, "550");
+  assert(result.preferences.palette.endsWith(`?v=${version}`));
+  await evaluate(`Zotero.__updatePrefs.close();return true;`);
+  check(
+    "an already open Zotero preferences window loads the new tabs, editor, shared button styles and palette after hot upgrade",
   );
   // Reinstall only in this isolated profile to exercise the fixed updater itself.
   await evaluate(

@@ -41,6 +41,7 @@ export default defineConfig({
           __env__: `"${process.env.NODE_ENV ?? "production"}"`,
         },
         bundle: true,
+        loader: { ".css": "text" },
         target: "firefox115",
         outfile: `.scaffold/build/addon/content/scripts/${pkg.config.addonRef}.js`,
       },

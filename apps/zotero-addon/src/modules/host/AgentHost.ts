@@ -189,8 +189,9 @@ import {
   clampMaxIterations,
   clampMaxToolCalls,
   clampUiFontSize,
-  DEFAULT_UI_FONT,
-  DEFAULT_UI_LINE_HEIGHT,
+  clampUiLineHeight,
+  isUiFontFamily,
+  isUiThemeColors,
   endpointIsConfigured,
   isReasoningEffort,
   isMemoryConsent,
@@ -217,6 +218,7 @@ import {
   type ModelEndpoint,
 } from "@confucius/protocol";
 import type { MemoryOp } from "@confucius/memory";
+import { readAppearancePrefs } from "../../utils/appearancePrefs";
 import {
   KnowledgeBaseService,
   isKnowledgeEntryType,
@@ -2708,6 +2710,14 @@ export class AgentHost {
     if (!patched.ok) {
       throw new Error(patched.errors.join("; "));
     }
+    const appearance = readAppearancePrefs();
+    if (
+      (params.uiFont !== undefined || params.uiFontFamily !== undefined) &&
+      (params.uiFont ?? appearance.uiFont) === "custom" &&
+      !String(params.uiFontFamily ?? appearance.uiFontFamily).trim()
+    ) {
+      throw new Error("Choose a local font family before saving");
+    }
     this.writeEndpointStore(patched.store);
     if (typeof params.streamResponses === "boolean") {
       setPref("streamResponses", params.streamResponses);
@@ -2740,18 +2750,24 @@ export class AgentHost {
     if (isUiFont(params.uiFont)) {
       setPref("uiFont", params.uiFont);
     }
+    if (isUiFontFamily(params.uiFontFamily))
+      setPref("uiFontFamily", params.uiFontFamily.trim());
+    if (isUiThemeColors(params.uiThemeColors))
+      setPref("uiThemeColors", JSON.stringify(params.uiThemeColors));
     if (isUiTheme(params.uiTheme)) {
       setPref("uiTheme", params.uiTheme);
     }
     if (params.uiFontSize !== undefined) {
-      setPref("uiFontSize", clampUiFontSize(params.uiFontSize));
+      const size = clampUiFontSize(params.uiFontSize);
+      setPref("uiFontSize", Math.round(size));
+      setPref("uiFontSizeExact", String(size));
     }
     if (isUiLanguage(params.uiLanguage)) {
       setPref("uiLanguage", params.uiLanguage);
       initLocale(params.uiLanguage);
     }
     if (isUiLineHeight(params.uiLineHeight)) {
-      setPref("uiLineHeight", params.uiLineHeight);
+      setPref("uiLineHeight", String(clampUiLineHeight(params.uiLineHeight)));
     }
     return this.viewFromStore(patched.store);
   }
@@ -2822,17 +2838,8 @@ export class AgentHost {
       activeEndpointId: store.activeEndpointId,
       maxIterations: this.maxIterations(),
       maxToolCalls: this.maxToolCalls(),
-      uiFont: isUiFont(getPref("uiFont"))
-        ? (getPref("uiFont") as typeof DEFAULT_UI_FONT)
-        : DEFAULT_UI_FONT,
-      uiFontSize: clampUiFontSize(getPref("uiFontSize")),
-      uiTheme: isUiTheme(getPref("uiTheme"))
-        ? (getPref("uiTheme") as "auto" | "light" | "dark")
-        : "auto",
+      ...readAppearancePrefs(),
       uiLanguage: configuredUiLanguage(),
-      uiLineHeight: isUiLineHeight(getPref("uiLineHeight"))
-        ? (getPref("uiLineHeight") as typeof DEFAULT_UI_LINE_HEIGHT)
-        : DEFAULT_UI_LINE_HEIGHT,
     };
   }
 

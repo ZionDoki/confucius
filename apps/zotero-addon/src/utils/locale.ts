@@ -38,7 +38,11 @@ export function initLocale(requested?: unknown): UiLanguage {
 }
 
 export function getString(id: LocaleKey): string {
-  const fluentId = `${config.addonRef}-${id}`;
+  return getLocaleMessage(`${config.addonRef}-${id}`);
+}
+
+/** Native preferences use the full IDs declared in preferences.ftl. */
+export function getLocaleMessage(fluentId: string): string {
   const locale = addon.data.locale?.current as
     | {
         formatMessagesSync: (

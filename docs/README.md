@@ -11,6 +11,7 @@ These pages describe the current source; an installed release may differ.
 | I want to…                                | Read                                                  |
 | ----------------------------------------- | ----------------------------------------------------- |
 | Connect or change a model                 | [Model setup](model-selection.md)                     |
+| Customize fonts and theme colors          | [Appearance](appearance.md)                           |
 | Fix Codex or Kimi detection               | [CLI connections](runtime-discovery.md)               |
 | Find papers and obtain PDFs               | [Literature research](literature-research.md)         |
 | Read, revise, save or annotate            | [Reports and annotations](reading-and-annotations.md) |

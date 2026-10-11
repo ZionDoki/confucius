@@ -1,6 +1,9 @@
 import { isUiTheme, type UiTheme } from "@confucius/protocol";
 import { config } from "../../../package.json";
 import { getPref } from "../../utils/prefs";
+import { readAppearancePrefs } from "../../utils/appearancePrefs";
+import { resolveUiFont } from "./workspaceTypography";
+import { APPEARANCE_SCOPE, customPaletteCss } from "./appearanceModel";
 
 const bindings = new Map<Document, () => void>();
 
@@ -18,20 +21,43 @@ export function bindAppearance(doc: Document): void {
   if (bindings.has(doc)) return;
   const sync = () => {
     restoreDocumentTheme(doc);
-    const select = doc.getElementById(
-      "confucius-pref-uiTheme",
-    ) as HTMLSelectElement | null;
-    if (select)
-      select.value =
-        doc.documentElement?.getAttribute("data-confucius-theme") ?? "auto";
+    const appearance = readAppearancePrefs();
+    let style = doc.getElementById("confucius-appearance-css");
+    if (!style) {
+      style = doc.createElementNS("http://www.w3.org/1999/xhtml", "style");
+      style.id = "confucius-appearance-css";
+      (doc.head ?? doc.documentElement)?.appendChild(style);
+    }
+    style.textContent = `${APPEARANCE_SCOPE} {
+      --confucius-font-family: ${resolveUiFont(appearance.uiFont, appearance.uiFontFamily)};
+      --confucius-font-size: ${appearance.uiFontSize}px;
+      --confucius-markdown-font-size: ${appearance.uiFontSize}px;
+      --confucius-reading-line-height: ${appearance.uiLineHeight};
+    }\n${customPaletteCss(appearance.uiThemeColors)}`;
   };
-  const observer = Zotero.Prefs.registerObserver(
-    `${config.prefsPrefix}.uiTheme`,
-    sync,
-    true,
+  let pending: number | undefined;
+  const observers = [
+    "uiTheme",
+    "uiThemeColors",
+    "uiFont",
+    "uiFontFamily",
+    "uiFontSize",
+    "uiFontSizeExact",
+    "uiLineHeight",
+  ].map((key) =>
+    Zotero.Prefs.registerObserver(
+      `${config.prefsPrefix}.${key}`,
+      () => {
+        doc.defaultView?.clearTimeout(pending);
+        pending = doc.defaultView?.setTimeout(sync, 0);
+      },
+      true,
+    ),
   );
   const cleanup = () => {
-    Zotero.Prefs.unregisterObserver(observer);
+    for (const observer of observers) Zotero.Prefs.unregisterObserver(observer);
+    doc.defaultView?.clearTimeout(pending);
+    doc.getElementById("confucius-appearance-css")?.remove();
     doc.defaultView?.removeEventListener("unload", cleanup);
     doc.documentElement?.removeAttribute("data-confucius-theme");
     bindings.delete(doc);

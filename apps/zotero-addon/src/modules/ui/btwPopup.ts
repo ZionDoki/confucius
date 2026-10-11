@@ -1,17 +1,11 @@
 import {
   btwSourceKey,
-  clampUiFontSize,
-  DEFAULT_UI_LINE_HEIGHT,
-  isUiLineHeight,
-  UI_LINE_HEIGHT_VALUES,
   type BtwSelection,
   type BtwSource,
   type BtwView,
 } from "@confucius/protocol";
 import { ensurePaletteStyles } from "./workspaceSurface";
 import { configuredUiLanguage } from "../../utils/locale";
-import { getPref } from "../../utils/prefs";
-import { UI_FONT_STACKS } from "./workspaceTypography";
 
 const NS = "http://www.w3.org/1999/xhtml";
 export interface BtwHost {
@@ -43,7 +37,7 @@ const active = new Map<Document, BtwPopup>();
 export const BTW_CSS = `
 .confucius-btw { position: fixed; z-index: 15000; box-sizing: border-box; display: flex; flex-direction: column; gap: 0; padding: 0; max-height: none; color: var(--confucius-ink); background: var(--confucius-elevated); border-radius: 8px; box-shadow: var(--confucius-shadow); overflow: hidden; text-align: start; }
 .confucius-btw * { box-sizing: border-box; }
-.confucius-btw-input { appearance: none; flex: 0 0 34px; display: block; width: 100%; min-width: 0; height: 34px; margin: 0; padding: 6px 10px; border: 1px solid var(--confucius-line); border-radius: 8px; background: var(--confucius-surface); color: var(--confucius-ink); font: inherit; line-height: 20px; }
+.confucius-btw-input { appearance: none; flex: 0 0 auto; display: block; width: 100%; min-width: 0; min-height: 34px; height: auto; max-height: none; margin: 0; padding: 6px 10px; border: 1px solid var(--confucius-line); border-radius: 8px; background: var(--confucius-surface); color: var(--confucius-ink); font: inherit; line-height: 1.4; }
 .confucius-btw-input::placeholder { color: var(--confucius-muted); opacity: 1; }
 .confucius-btw[data-expanded=true] .confucius-btw-input { width: calc(100% - 16px); margin: 0 8px 8px; border-radius: 6px; }
 .confucius-btw-input:focus-visible { outline: 2px solid var(--confucius-focus); outline-offset: -2px; }
@@ -88,16 +82,9 @@ export function showBtwPopup(options: PopupOptions): BtwPopup {
   const popup = el("section", "confucius-btw confucius-menu-surface");
   popup.setAttribute("role", "dialog");
   popup.setAttribute("aria-label", "Btw");
-  const font = String(getPref("uiFont"));
-  popup.style.fontFamily =
-    UI_FONT_STACKS[font as keyof typeof UI_FONT_STACKS] ?? UI_FONT_STACKS.sans;
-  popup.style.fontSize = `${clampUiFontSize(getPref("uiFontSize"))}px`;
-  const lineHeight = getPref("uiLineHeight");
-  popup.style.lineHeight = String(
-    UI_LINE_HEIGHT_VALUES[
-      isUiLineHeight(lineHeight) ? lineHeight : DEFAULT_UI_LINE_HEIGHT
-    ],
-  );
+  popup.style.fontFamily = "var(--confucius-font-family)";
+  popup.style.fontSize = "var(--confucius-font-size, 13px)";
+  popup.style.lineHeight = "var(--confucius-reading-line-height, 1.6)";
   const answer = el("div", "confucius-btw-answer");
   const status = el("div", "confucius-btw-status");
   status.setAttribute("role", "status");
@@ -387,6 +374,7 @@ export function showBtwPopup(options: PopupOptions): BtwPopup {
       closed = true;
       if (pollTimer !== undefined) win.clearTimeout(pollTimer);
       if (draftTimer !== undefined) win.clearTimeout(draftTimer);
+      sizeObserver.disconnect();
       for (const target of outsideDocuments) {
         target.removeEventListener("pointerdown", outside, true);
         target.removeEventListener("keydown", escape, true);
@@ -402,6 +390,8 @@ export function showBtwPopup(options: PopupOptions): BtwPopup {
       options.closed?.();
     },
   };
+  const sizeObserver = new win.ResizeObserver(position);
+  sizeObserver.observe(popup);
   active.set(doc, controller);
   watchOutside(doc);
   win.addEventListener("resize", position);

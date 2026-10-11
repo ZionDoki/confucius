@@ -11,6 +11,7 @@ This is the shared source for colors, spacing, and buttons, linked from the [use
 Use semantic variables from [workspacePalette.css](../apps/zotero-addon/addon/content/workspacePalette.css). Do not hardcode hex/RGB colors or create a separate dark palette. Colors follow Confucius appearance settings and support system dark mode and high contrast.
 
 The shared palette handles both `forced-colors` and `prefers-contrast: more`. Zotero chrome uses the latter to select system colors. Overlays keep structural boundaries; waiting indicators disable decorative animation.
+Primary actions use the paired system `Highlight` / `HighlightText` colors in contrast mode, with a contrasting keyboard focus ring.
 
 | Purpose                        | Variables                                                        | Use                                                         |
 | ------------------------------ | ---------------------------------------------------------------- | ----------------------------------------------------------- |
@@ -107,7 +108,7 @@ Width means the available workspace or reader-window width.
 
 ## Selection questions
 
-PDFs, reports, and conversations share one popover. Show a 34px single-line question input near the selection using shared `surface`, `ink`, `line`, and focus variables. Do not add a toolbar or extra buttons.
+PDFs, reports, and conversations share one popover. Show a single-line question input near the selection using shared `surface`, `ink`, `line`, and focus variables. Its minimum height is 34px; it grows with larger fonts and keeps the popover within the reading bounds. Do not add a toolbar or extra buttons.
 
 The answer opens above the input, using the reading font, size, line height, and shared overlay background and shadow. Long answers scroll inside. Use 12px body padding, 20px between follow-ups, and 8px around the expanded input. Questions use secondary color and slightly smaller text. Code and tables scroll horizontally in their own regions; no decorative dividers.
 
@@ -207,6 +208,17 @@ Cap width at 420px. Narrow windows retain at least 8px on both sides. Position w
 - Use side-by-side list and reader normally; stack below 620px, with independent scrolling. Follow shared toolbar padding, buttons, palette, and reading rules, without decorative body dividers.
 - Notes offer Open in Zotero and Export file. Research memories offer Correct memory and Forget. Preserve focus and drafts during correction; background refresh must not overwrite an edit. Search supports IME composition.
 - Reading outputs default to Zotero notes; omit a destination menu with only one option. Export uses shared buttons in the same group without global format or storage-channel settings.
+
+## Settings
+
+- Use horizontally scrolling top tabs at every width. Workspace settings keep header, tabs and footer fixed while the content scrolls. Zotero preferences keep tabs and Appearance actions visible as the pane scrolls. Appearance columns stack with narrow widths or large fonts.
+- Appearance controls edit a draft without a preview. Save applies the complete appearance; cancelling discards the draft. Reset defaults also requires Save.
+  During a save, temporarily prevent further edits, cancellation and duplicate submissions; restore interaction after success or failure.
+- Use paired slider/number inputs for 12–28 px font sizes (0.5 px steps) and 1.2–2.4 reading line heights (0.05 steps). Font selection offers searchable presets and actual installed families with system fallbacks.
+- Edit light/dark palettes independently of the active theme. Custom colors use the existing paper, canvas, surface, ink, secondary and accent tokens; derive hover, focus and selected states from them. Default colors come from the shared palette stylesheet. System contrast overrides customization.
+- Reuse the Appearance and Runtime editors in workspace settings and Zotero preferences. Group Runtime connections by backend with state and next action; keep paths in connection details and retrieval/storage tools collapsed. Connection actions clearly apply immediately.
+- Both settings entry points use the same button states, 34px minimum text-button height, zero button margins and parent-owned 8px gaps. Native sliders, color swatches and check controls keep their interaction without inheriting text-input geometry. Slider/number rows stack when space is tight.
+- Confucius preferences content follows the saved palette even when Zotero uses the other theme. Scope its background and control styles to the active Confucius pane; other preference panes retain Zotero's appearance.
 
 ## Review checklist
 
