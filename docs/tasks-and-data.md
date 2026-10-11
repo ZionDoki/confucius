@@ -10,10 +10,20 @@ A new task starts without a paper. Add sources with `@`, a Zotero item entry,
 file drop or confirmed literature candidates. Switching PDF tabs does not attach
 the current PDF.
 
+From 0.6.1-beta.1, drop PDF, Markdown or TXT attachments inside
+the composer's dashed box. Dragging over the surrounding workspace shows this
+hint; dropping elsewhere does not add an attachment. For a research paper's
+missing PDF, use that paper's own dashed target in the literature review.
+
 The sidebar offers **By time** and **By article**. Article groups reflect where
 a conversation was created; later source additions do not duplicate it under
 every paper. Research started from a blank conversation appears under literature
 research.
+
+A detached Confucius workspace closes with the Zotero library window that opened
+it. Tasks and input drafts are saved; closing a workspace does not stop running
+tasks. Reopen Zotero's library window and use the Confucius toolbar button to
+return to your work.
 
 ## Continue an interrupted task
 

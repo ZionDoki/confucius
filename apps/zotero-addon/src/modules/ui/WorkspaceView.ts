@@ -17,6 +17,7 @@ import {
   createLiteraturePanel,
   createOpenAlexSettings,
 } from "./literaturePanel";
+import { reviewArrivals } from "./reviewArrivals";
 import { renderMemoryProposal } from "./memoryProposalCards";
 import { createAnnotationReviewPanel } from "./annotationReviewPanel";
 import { bindBtwSelection } from "./btwPopup";
@@ -1121,6 +1122,7 @@ function bindWorkspace(
   let artifactOpenGeneration = 0;
   let loadedComposerTaskId: string | null = null;
   let taskLoadGeneration = 0;
+  const reviewWindowOpenedAt = Date.now();
   let pendingTaskId: string | null = null;
   let sessionListGeneration = 0;
   let pendingPermissionUpdate: Promise<void> = Promise.resolve();
@@ -1613,6 +1615,8 @@ function bindWorkspace(
   const literaturePanel = createLiteraturePanel(doc, {
     rpc,
     viewport: timelinePane,
+    anchor: composerDock,
+    opened: () => annotationReview.close(),
     visibilityChanged: () => {
       if (literaturePanel.floating) annotationReview.close();
       syncLatest();
@@ -1663,7 +1667,7 @@ function bindWorkspace(
 
   root.appendChild(topbar);
   root.appendChild(columns);
-  root.appendChild(dropHint);
+  composerCard.appendChild(dropHint);
 
   let sessionsLabel = getString("workspace-toggle-sessions");
   let sendLabel = getString("workspace-send");
@@ -1875,10 +1879,14 @@ function bindWorkspace(
     }
     resizeObserver?.disconnect();
     win?.removeEventListener("resize", onWindowResize);
-    root.removeEventListener("dragenter", onAttachmentDragEnter);
-    root.removeEventListener("dragover", onAttachmentDragOver);
-    root.removeEventListener("dragleave", onAttachmentDragLeave);
+    root.removeEventListener("dragenter", onAttachmentDragEnter, true);
+    root.removeEventListener("dragover", onAttachmentDragOver, true);
+    root.removeEventListener("dragleave", onAttachmentDragLeave, true);
     root.removeEventListener("drop", onAttachmentDrop);
+    doc.removeEventListener("drop", resetAttachmentDrop, true);
+    doc.removeEventListener("dragend", resetAttachmentDrop, true);
+    doc.removeEventListener("keydown", onAttachmentDragKey, true);
+    win?.removeEventListener("blur", resetAttachmentDrop);
     resetAttachmentDrop();
     if (mentionSearchTimer && win) win.clearTimeout(mentionSearchTimer);
     clearPendingAttachments();
@@ -2071,7 +2079,10 @@ function bindWorkspace(
 
   function showAttachmentDrop(active: boolean): void {
     const visible = active && canAcceptFileDrop();
-    root.setAttribute("data-file-drop-active", visible ? "true" : "false");
+    composerCard.setAttribute(
+      "data-file-drop-active",
+      visible ? "true" : "false",
+    );
     dropHint.setAttribute("aria-hidden", visible ? "false" : "true");
   }
 
@@ -4506,6 +4517,14 @@ function bindWorkspace(
         return;
       }
       const incoming = bundle.events || [];
+      const { batchIds: reviewBatchIds, workIds: candidateIds } =
+        reviewArrivals(
+          incoming,
+          new Set(state.events.map(eventKey)),
+          reviewWindowOpenedAt,
+          eventKey,
+          Math.max(0, ...state.events.map((event) => event.sequence ?? 0)),
+        );
       state.events = mergeEvents(state.events, incoming);
       if (incoming.length && state.lastEventId === requestedCursor) {
         state.lastEventId = incoming[incoming.length - 1].id;
@@ -4514,6 +4533,10 @@ function bindWorkspace(
         state.running = isRunningFromEvents(state.events);
       }
       collectApprovals();
+      if (incoming.some((event) => event.type === "annotation_review_changed"))
+        await annotationReview.refresh(reviewBatchIds);
+      if (incoming.some((event) => event.type === "literature_updated"))
+        await literaturePanel.refresh(candidateIds);
       if (incoming.some((event) => event.type === "artifact_upserted")) {
         await refreshArtifacts(promptSessionId);
       }
@@ -7785,6 +7808,14 @@ function bindWorkspace(
           return;
         }
         const incoming = bundle.events || [];
+        const { batchIds: reviewBatchIds, workIds: candidateIds } =
+          reviewArrivals(
+            incoming,
+            new Set(state.events.map(eventKey)),
+            reviewWindowOpenedAt,
+            eventKey,
+            Math.max(0, ...state.events.map((event) => event.sequence ?? 0)),
+          );
         const cursorMoved = state.lastEventId !== requestedCursor;
         state.events = mergeEvents(
           state.events,
@@ -7800,7 +7831,9 @@ function bindWorkspace(
         if (
           incoming.some((event) => event.type === "annotation_review_changed")
         )
-          await annotationReview.refresh();
+          await annotationReview.refresh(reviewBatchIds);
+        if (incoming.some((event) => event.type === "literature_updated"))
+          await literaturePanel.refresh(candidateIds);
         if (incoming.some((event) => event.type === "memory_updated")) {
           await refreshMemories();
           renderKnowledgeWindow();
@@ -7923,56 +7956,80 @@ function bindWorkspace(
   });
   function onAttachmentDragEnter(event: Event): void {
     const drag = event as DragEvent;
-    if (!hasDroppedFiles(drag.dataTransfer) || !canAcceptFileDrop()) {
-      showAttachmentDrop(false);
+    if (!canShowAttachmentDrop(drag)) {
+      resetAttachmentDrop();
       return;
     }
     event.preventDefault();
-    event.stopPropagation();
     attachmentDragDepth += 1;
     showAttachmentDrop(true);
   }
   function onAttachmentDragOver(event: Event): void {
     const drag = event as DragEvent;
-    if (!hasDroppedFiles(drag.dataTransfer) || !canAcceptFileDrop()) {
+    if (!canShowAttachmentDrop(drag)) {
       resetAttachmentDrop();
       return;
     }
     event.preventDefault();
-    event.stopPropagation();
-    if (drag.dataTransfer) drag.dataTransfer.dropEffect = "copy";
+    if (drag.dataTransfer)
+      drag.dataTransfer.dropEffect = composerCard.contains(event.target as Node)
+        ? "copy"
+        : "none";
     showAttachmentDrop(true);
   }
   function onAttachmentDragLeave(event: Event): void {
     const drag = event as DragEvent;
     if (
       !hasDroppedFiles(drag.dataTransfer) &&
-      root.getAttribute("data-file-drop-active") !== "true"
+      composerCard.getAttribute("data-file-drop-active") !== "true"
     ) {
       return;
     }
     event.preventDefault();
     attachmentDragDepth = Math.max(0, attachmentDragDepth - 1);
-    if (attachmentDragDepth === 0) showAttachmentDrop(false);
+    const bounds = root.getBoundingClientRect();
+    const outside = drag.relatedTarget
+      ? !root.contains(drag.relatedTarget as Node)
+      : event.target === root ||
+        drag.clientX < bounds.left ||
+        drag.clientX >= bounds.right ||
+        drag.clientY < bounds.top ||
+        drag.clientY >= bounds.bottom;
+    if (outside || attachmentDragDepth === 0) resetAttachmentDrop();
   }
   function onAttachmentDrop(event: Event): void {
     const drag = event as DragEvent;
     if (!hasDroppedFiles(drag.dataTransfer)) return;
-    if (!canAcceptFileDrop()) {
-      resetAttachmentDrop();
+    event.preventDefault();
+    resetAttachmentDrop();
+    if (!composerCard.contains(event.target as Node) || !canAcceptFileDrop()) {
       return;
     }
-    event.preventDefault();
     event.stopPropagation();
-    resetAttachmentDrop();
     closeMentionMenu();
     closeSlashMenu();
     void prepareDroppedFiles(droppedFilePaths(drag.dataTransfer));
   }
-  root.addEventListener("dragenter", onAttachmentDragEnter);
-  root.addEventListener("dragover", onAttachmentDragOver);
-  root.addEventListener("dragleave", onAttachmentDragLeave);
+  function canShowAttachmentDrop(event: DragEvent): boolean {
+    const target = event.target as Element | null;
+    return (
+      hasDroppedFiles(event.dataTransfer) &&
+      !target?.closest?.(".confucius-review .ar-popup, .confucius-dialog") &&
+      canAcceptFileDrop()
+    );
+  }
+  function onAttachmentDragKey(event: Event): void {
+    if ((event as KeyboardEvent).key === "Escape") resetAttachmentDrop();
+  }
+  // Capture keeps nested paper targets from leaving composer feedback behind.
+  root.addEventListener("dragenter", onAttachmentDragEnter, true);
+  root.addEventListener("dragover", onAttachmentDragOver, true);
+  root.addEventListener("dragleave", onAttachmentDragLeave, true);
   root.addEventListener("drop", onAttachmentDrop);
+  doc.addEventListener("drop", resetAttachmentDrop, true);
+  doc.addEventListener("dragend", resetAttachmentDrop, true);
+  doc.addEventListener("keydown", onAttachmentDragKey, true);
+  win?.addEventListener("blur", resetAttachmentDrop);
   composer.addEventListener("submit", (event) => {
     event.preventDefault();
     if (mentionState.open) {

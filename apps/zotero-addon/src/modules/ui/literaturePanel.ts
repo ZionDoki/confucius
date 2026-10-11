@@ -5,7 +5,9 @@ import type {
   LiteratureWork,
 } from "@confucius/protocol";
 import { createWorkspaceButton } from "./workspaceControls";
-import { droppedFilePaths } from "./fileDrop";
+import { droppedFilePaths, hasDroppedFiles } from "./fileDrop";
+import { createReviewPanel } from "./reviewPanel";
+import type { ReviewEntry, ReviewPool, ReviewRow } from "./reviewModel";
 import { getString } from "../../utils/locale";
 
 type Rpc = (
@@ -51,130 +53,58 @@ export function researchIcon(doc: Document, kind: "search" | "agent") {
   return svg;
 }
 
-/** One task-wide pool and editor, anchored above the composer. */
+interface CandidateEntry extends ReviewEntry {
+  work: LiteratureWork;
+}
+
+/** Domain actions plug into the same cards, list, selection and arrival UI as annotations. */
 export function createLiteraturePanel(
   doc: Document,
   options: {
     rpc: Rpc;
     viewport: HTMLElement;
+    anchor: HTMLElement;
+    opened: () => void;
     changed: () => void;
     visibilityChanged: () => void;
   },
 ) {
-  const win = doc.defaultView;
-  const dock = node(doc, "div");
-  dock.className = "confucius-literature-dock";
-  dock.hidden = true;
-  const popup = node(doc, "section");
-  popup.id = "confucius-literature-popup";
-  popup.className = "confucius-literature confucius-literature-popup";
-  popup.setAttribute("role", "dialog");
-  popup.setAttribute("aria-label", text("title"));
-  popup.hidden = true;
-  const capsule = createWorkspaceButton(
-    doc,
-    "confucius-literature-capsule",
-    "",
-  );
-  capsule.classList.add("confucius-literature-capsule");
-  capsule.setAttribute("aria-haspopup", "dialog");
-  capsule.setAttribute("aria-controls", popup.id);
-  capsule.setAttribute("aria-expanded", "false");
-  const capsuleLabel = node(doc, "span", text("capsule")),
-    capsuleCount = node(doc, "span"),
-    capsuleCopy = node(doc, "span");
-  capsuleCopy.className = "confucius-literature-capsule-copy";
-  capsuleCount.className = "confucius-literature-capsule-count";
-  capsuleCopy.append(capsuleLabel, capsuleCount);
-  const caret = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
-  caret.classList.add("confucius-literature-caret");
-  caret.setAttribute("viewBox", "0 0 20 20");
-  caret.setAttribute("aria-hidden", "true");
-  caret.setAttribute("focusable", "false");
-  const chevron = doc.createElementNS("http://www.w3.org/2000/svg", "path");
-  chevron.setAttribute("d", "m5 12 5-5 5 5");
-  chevron.setAttribute("fill", "none");
-  chevron.setAttribute("stroke", "currentColor");
-  chevron.setAttribute("stroke-width", "1.6");
-  chevron.setAttribute("stroke-linecap", "round");
-  chevron.setAttribute("stroke-linejoin", "round");
-  caret.append(chevron);
-  capsule.append(researchIcon(doc, "search"), capsuleCopy, caret);
-  dock.append(popup, capsule);
-
-  const editor = node(doc, "div");
-  editor.className = "confucius-literature-editor";
-  const header = node(doc, "div");
-  header.className = "confucius-literature-header";
-  const heading = node(doc, "div"),
-    title = node(doc, "h3"),
-    metadata = node(doc, "div");
-  metadata.className = "confucius-literature-meta";
-  heading.append(title, metadata);
-  const close = createWorkspaceButton(doc, "", text("collapse"));
-  close.classList.add("confucius-literature-quiet");
-  header.append(researchIcon(doc, "search"), heading, close);
-  const tabs = node(doc, "div");
-  tabs.className = "confucius-literature-tabs";
-  tabs.setAttribute("role", "tablist");
-  tabs.setAttribute("aria-label", text("title"));
-  const candidateTab = createWorkspaceButton(doc, "", ""),
-    poolTab = createWorkspaceButton(doc, "", "");
-  candidateTab.id = "confucius-literature-candidates-tab";
-  poolTab.id = "confucius-literature-pool-tab";
-  const scroll = node(doc, "div");
-  scroll.className = "confucius-literature-scroll";
-  scroll.id = "confucius-literature-results";
-  scroll.setAttribute("role", "tabpanel");
-  for (const tab of [candidateTab, poolTab]) {
-    tab.setAttribute("role", "tab");
-    tab.setAttribute("aria-controls", scroll.id);
-  }
-  tabs.append(candidateTab, poolTab);
-  const filter = node(doc, "input");
-  filter.type = "search";
-  filter.className = "confucius-literature-filter";
-  filter.placeholder = text("filter");
-  filter.setAttribute("aria-label", text("filter"));
-  const count = node(doc, "div"),
-    error = node(doc, "div");
-  count.className = "confucius-literature-meta confucius-literature-count";
-  error.className = "confucius-literature-error";
-  error.setAttribute("role", "alert");
-  const rows = node(doc, "div"),
-    paging = node(doc, "div");
-  paging.className =
-    "confucius-literature-controls confucius-literature-paging";
-  const controls = node(doc, "div");
-  controls.className = "confucius-literature-tools";
-  const localFilter = node(doc, "details");
-  localFilter.className = "confucius-literature-local-filter";
-  localFilter.append(node(doc, "summary", text("filter")), filter);
-  // Direct search is contextual, available only after the Agent has searched.
+  let taskId: string | undefined, summary: LiteratureSummary | undefined;
+  let snapshot: LiteraturePage | undefined, activeQuery: Query | undefined;
+  let epoch = 0,
+    confirmationGeneration = 0;
+  let busy = false,
+    continuing = false,
+    disposed = false;
+  let proposal: LiteratureConfirmation | undefined;
+  const abstractRequests = new Set<string>();
+  const extraViews = new WeakMap<HTMLElement, string>();
+  const tools = node(doc, "div");
+  tools.className = "ar-tools";
   const refine = node(doc, "details");
   refine.className = "confucius-literature-refine";
   refine.append(node(doc, "summary", text("refine")));
   const form = node(doc, "div");
   form.className = "confucius-literature-controls";
-  const query = node(doc, "input");
+  const query = node(doc, "input"),
+    from = node(doc, "input"),
+    to = node(doc, "input");
   query.placeholder = text("query");
   query.setAttribute("aria-label", text("query"));
-  const from = node(doc, "input"),
-    to = node(doc, "input");
-  for (const [input, label] of [
-    [from, text("from")],
-    [to, text("to")],
+  for (const [input, key] of [
+    [from, "from"],
+    [to, "to"],
   ] as const) {
     input.type = "number";
     input.min = "1000";
     input.max = "9999";
-    input.placeholder = label;
-    input.setAttribute("aria-label", label);
+    input.placeholder = text(key);
+    input.setAttribute("aria-label", text(key));
     input.className = "confucius-literature-year";
   }
-  const oa = node(doc, "input");
+  const oa = node(doc, "input"),
+    oaLabel = node(doc, "label");
   oa.type = "checkbox";
-  const oaLabel = node(doc, "label");
   oaLabel.append(oa, text("oa"));
   const sort = node(doc, "select");
   sort.setAttribute("aria-label", text("sort"));
@@ -188,76 +118,40 @@ export function createLiteraturePanel(
   const history = node(doc, "div");
   history.className = "confucius-literature-history";
   refine.append(form, history);
-  controls.append(localFilter, refine);
+  tools.append(refine);
   const confirmation = node(doc, "section");
   confirmation.className = "confucius-literature-confirmation";
-  confirmation.hidden = true;
   const footer = node(doc, "div");
-  footer.className = "confucius-literature-footer";
-  const footerStatus = node(doc, "span");
-  footerStatus.className = "confucius-literature-meta";
+  footer.className = "ar-domain-footer";
   const footerCopy = node(doc, "div"),
+    footerStatus = node(doc, "span"),
     continueHelp = node(doc, "p");
-  continueHelp.className = "confucius-literature-meta";
+  footerStatus.className = "confucius-literature-meta";
+  continueHelp.className = "confucius-literature-meta ar-domain-help";
   continueHelp.id = "confucius-literature-continue-help";
   const proceed = createWorkspaceButton(
-    doc,
-    "confucius-literature-continue",
-    "",
-  );
+      doc,
+      "confucius-literature-continue",
+      "",
+    ),
+    review = createWorkspaceButton(
+      doc,
+      "confucius-literature-review",
+      text("review"),
+      "primary",
+    ),
+    cancel = createWorkspaceButton(doc, "", text("cancel-downloads"));
   proceed.setAttribute("aria-describedby", continueHelp.id);
-  const review = createWorkspaceButton(
-    doc,
-    "confucius-literature-review",
-    text("review"),
-    "primary",
-  );
-  const cancel = createWorkspaceButton(doc, "", text("cancel-downloads"));
   const actions = node(doc, "div");
   actions.className = "confucius-literature-controls";
   actions.append(cancel, proceed, review);
   footerCopy.append(footerStatus, continueHelp);
   footer.append(footerCopy, actions);
-  scroll.append(controls, count, rows, paging, confirmation);
-  editor.append(header, tabs, error, scroll, footer);
-  popup.append(editor);
-
-  let taskId: string | undefined,
-    summary: LiteratureSummary | undefined,
-    activeQuery: Query | undefined;
-  let floating = false,
-    disposed = false;
-  let epoch = 0,
-    confirmationGeneration = 0,
-    request = 0,
-    revision = -1,
-    busy = false,
-    continuing = false,
-    offset = 0;
-  let selection: "auto" | "candidates" | "pool" = "auto";
-  let proposal: LiteratureConfirmation | undefined;
-  let savedScrollTop = 0;
-  let refreshTimer: number | undefined, frame: number | undefined;
-  const abstractRequests = new Set<string>();
   const continuationMode = () =>
     summary?.hasCandidateChanges || summary?.awaitingConfirmation
       ? ("abstracts" as const)
       : ("current" as const);
-  const selected = () =>
-    selection === "candidates" ||
-    (selection === "auto" && (summary?.candidates ?? 0) > 0);
-  function activate(q: Query) {
-    if (activeQuery?.id === q.id) return;
-    activeQuery = q;
-    query.value = q.query;
-    from.value = q.fromYear ? String(q.fromYear) : "";
-    to.value = q.toYear ? String(q.toYear) : "";
-    oa.checked = q.openAccess ?? false;
-  }
-  const message = (e: unknown) => {
-    error.textContent = String(e instanceof Error ? e.message : e);
-  };
-  const status = () =>
+  const statusText = () =>
     summary?.acquiring
       ? `${text("downloading")} ${summary.acquiring}`
       : summary?.hasCandidateChanges || summary?.awaitingConfirmation
@@ -269,34 +163,180 @@ export function createLiteraturePanel(
             : summary?.available
               ? `${text("fulltext")} ${summary.available}`
               : text("found");
-  function labels() {
-    capsuleCount.textContent = `${summary?.candidates ?? 0} / ${summary?.pool ?? 0}`;
-    const description = `${text("candidates")} ${summary?.candidates ?? 0} · ${text("retrieved")} ${summary?.pool ?? 0}`;
-    capsule.title = `${description} · ${status()}`;
-    capsule.setAttribute("aria-label", description);
-    title.textContent = text("task-title");
-    metadata.textContent = description;
-    const activeStatus =
-      summary &&
-      (summary.acquiring ||
-        summary.hasCandidateChanges ||
-        summary.awaitingConfirmation ||
-        summary.continuation ||
-        summary.pendingFulltext);
-    footerStatus.textContent = `${activeStatus ? `${status()} · ` : ""}${text("fulltext-count")} ${Math.max(0, (summary?.candidates ?? 0) - (summary?.pendingFulltext ?? 0))} / ${summary?.candidates ?? 0} · ${text("abstracts")} ${summary?.abstracts ?? 0} / ${summary?.candidates ?? 0}`;
-    candidateTab.textContent = `${text("candidates")} ${summary?.candidates ?? 0}`;
-    poolTab.textContent = `${text("pool")} ${summary?.pool ?? 0}`;
-    for (const tab of [candidateTab, poolTab]) {
-      const on = (tab === candidateTab) === selected();
-      tab.setAttribute("aria-selected", String(on));
-      tab.tabIndex = on ? 0 : -1;
+  const description = () =>
+    `${text("candidates")} ${summary?.candidates ?? 0} · ${text("pool")} ${summary?.pool ?? 0}`;
+  const reviewText = (key: string) => {
+    const overrides: Record<string, string> = {
+      title: "task-title",
+      capsule: "capsule",
+      search: "filter",
+      empty: "empty-results",
+      "all-batches": "all-searches",
+      batch: "search-batch",
+      batches: "searches",
+      pending: "not-evaluated",
+      accepted: "candidates",
+      rejected: "excluded",
+      all: "pool",
+      accept: "include",
+      reject: "exclude",
+      restore: "include",
+      restored: "candidates",
+      writing: "saving-choice",
+      "saving-minimized": "saving-choice",
+      "to-review": "not-evaluated",
+      source: "open-source",
+    };
+    return overrides[key]
+      ? text(overrides[key])
+      : getString(`workspace-annotations-${key}`);
+  };
+  function normalize(value: LiteraturePage): ReviewPool<CandidateEntry> {
+    const batches = value.queries
+      .slice()
+      .reverse()
+      .map((q) => ({
+        id: q.id,
+        title: q.query,
+        createdAt: q.createdAt,
+        entries: [] as CandidateEntry[],
+      }));
+    const byId = new Map(batches.map((b) => [b.id, b]));
+    for (const work of value.items) {
+      const id = work.queryIds[0] ?? "pool";
+      let batch = byId.get(id);
+      if (!batch) {
+        batch = { id, title: text("pool"), createdAt: 0, entries: [] };
+        batches.push(batch);
+        byId.set(id, batch);
+      }
+      batch.entries.push({
+        id: work.id,
+        quote: work.title,
+        comment: work.decision.reason ?? text("not-evaluated"),
+        status: work.decision.selected
+          ? "accepted"
+          : work.decision.evaluated
+            ? "rejected"
+            : "pending",
+        searchText: [
+          work.abstract,
+          ...work.authors,
+          work.venue,
+          work.year,
+        ].join(" "),
+        work,
+      });
     }
-    scroll.setAttribute(
-      "aria-labelledby",
-      selected() ? candidateTab.id : poolTab.id,
-    );
-    count.textContent = `${text("evaluated")} ${summary?.evaluated ?? 0} · ${text("fulltext")} ${summary?.available ?? 0} · ${text("read")} ${summary?.read ?? 0}`;
+    return {
+      taskId: value.summary.id,
+      revision: value.summary.revision,
+      batches,
+    };
+  }
+  async function load(id: string): Promise<ReviewPool<CandidateEntry>> {
+    const era = epoch;
+    const value = (await options.rpc("literature/review/list", {
+      taskId: id,
+    })) as LiteraturePage;
+    if (disposed || epoch !== era || taskId !== id) return normalize(value);
+    if (snapshot && value.summary.revision < snapshot.summary.revision)
+      return normalize(snapshot);
+    snapshot = value;
+    if (!summary || value.summary.revision >= summary.revision)
+      summary = value.summary;
+    if (
+      summary?.latestQuery &&
+      activeQuery?.id !== summary.latestQuery.id &&
+      !refine.open
+    ) {
+      activeQuery = summary.latestQuery;
+      query.value = activeQuery.query;
+      from.value = activeQuery.fromYear ? String(activeQuery.fromYear) : "";
+      to.value = activeQuery.toYear ? String(activeQuery.toYear) : "";
+      oa.checked = activeQuery.openAccess ?? false;
+    }
+    renderQueries(value);
+    return normalize(value);
+  }
+  const panel = createReviewPanel<CandidateEntry>(doc, {
+    kind: "literature",
+    viewport: options.viewport,
+    anchor: options.anchor,
+    opened: options.opened,
+    visibilityChanged: options.visibilityChanged,
+    load,
+    text: reviewText,
+    tools,
+    footer,
+    model: { defaultStatus: "all", completion: false, selectable: () => true },
+    allowed: (action, row) =>
+      action === "accept"
+        ? row.entry.status === "pending"
+        : action === "reject"
+          ? row.entry.status !== "rejected"
+          : row.entry.status === "rejected",
+    restoredStatus: "accepted",
+    busy: () => busy || continuing,
+    visible: () => !!summary && !!(summary.pool || summary.latestQuery),
+    capsuleCount: () => `${summary?.candidates ?? 0} / ${summary?.pool ?? 0}`,
+    summary: description,
+    batch: (batch) => batch.title,
+    source: () => text("open-source"),
+    type: (row) =>
+      [row.entry.work.year, row.entry.work.authors.slice(0, 2).join(", ")]
+        .filter(Boolean)
+        .join(" · "),
+    renderEntry,
+    rendered: (state) => labels(state.busy),
+    locate: async (row) => {
+      const work = row.entry.work;
+      if (work.acquisition.item)
+        return options.rpc("reader/open", {
+          libraryID: work.acquisition.item.libraryID,
+          key: work.acquisition.attachmentKey ?? work.acquisition.item.key,
+          selectItem: !work.acquisition.attachmentKey,
+        });
+      const url =
+        work.landingUrl ??
+        (work.doi ? `https://doi.org/${work.doi}` : undefined);
+      if (url) Zotero.launchURL(url);
+      return undefined;
+    },
+    decide: async (id, action, rows) => {
+      const revision = snapshot?.summary.candidateRevision;
+      if (revision === undefined) throw new Error(text("stale"));
+      const era = epoch;
+      await options.rpc("literature/updateCandidates", {
+        taskId: id,
+        candidateRevision: revision,
+        changes: rows.map((row) => ({
+          id: row.entry.id,
+          selected: action !== "reject",
+          reason: text("user-choice"),
+        })),
+      });
+      const value = await load(id);
+      if (epoch === era && !disposed) options.changed();
+      return value;
+    },
+  });
+  panel.node.querySelector<HTMLElement>(".ar-capsule")!.id =
+    "confucius-literature-capsule";
+  const popup = panel.node.querySelector<HTMLElement>(".ar-popup")!;
+  popup.id = "confucius-literature-popup";
+  panel.node
+    .querySelector(".ar-capsule")!
+    .setAttribute("aria-controls", popup.id);
+  const collapse = popup.querySelector<HTMLButtonElement>(
+    ".ar-header > button",
+  )!;
+  function message(e: unknown) {
+    panel.setError(String(e instanceof Error ? e.message : e));
+  }
+  function labels(locked = busy || continuing) {
     cancel.hidden = !summary?.acquiring;
+    footerStatus.textContent = `${statusText()} · ${text("fulltext-count")} ${Math.max(0, (summary?.candidates ?? 0) - (summary?.pendingFulltext ?? 0))} / ${summary?.candidates ?? 0} · ${text("abstracts")} ${summary?.abstracts ?? 0} / ${summary?.candidates ?? 0}`;
     proceed.hidden =
       !!summary?.continuation ||
       !(
@@ -312,20 +352,21 @@ export function createLiteraturePanel(
     );
     proceed.dataset.variant =
       continuationMode() === "current" ? "primary" : "quiet";
-    // Continuing must remain reachable during searches, retries and PDF imports.
+    // Continue must stay usable during retrieval, retries and PDF imports.
     proceed.disabled =
       continuing ||
       (!!proposal && proposal.candidateRevision !== summary?.candidateRevision);
-    proceed.title = continuing
-      ? text("continuing")
-      : proceed.disabled
-        ? text("stale")
-        : "";
-    continueHelp.textContent = text(
+    const help = text(
       continuationMode() === "abstracts"
         ? "continue-abstracts-help"
         : "continue-current-help",
     );
+    proceed.title = continuing
+      ? text("continuing")
+      : proceed.disabled
+        ? text("stale")
+        : help;
+    continueHelp.textContent = help;
     continueHelp.hidden = proceed.hidden;
     review.hidden =
       !!proposal ||
@@ -342,131 +383,44 @@ export function createLiteraturePanel(
       !summary.awaitingConfirmation;
     review.textContent = text(accepted ? "acquire-later" : "review");
     review.dataset.variant = accepted ? "link" : "primary";
-    review.disabled = busy || continuing;
-    search.disabled = busy;
-    if (proposal) {
-      const apply =
-        confirmation.querySelector<HTMLButtonElement>("[data-confirm]");
-      if (apply)
-        apply.disabled =
-          busy ||
-          continuing ||
-          proposal.candidateRevision !== summary?.candidateRevision;
-      const warning = confirmation.querySelector<HTMLElement>("[data-stale]");
-      if (warning)
-        warning.hidden =
-          proposal.candidateRevision === summary?.candidateRevision;
-    }
-  }
-  function measure() {
-    frame = undefined;
-    if (disposed) return;
-    const viewport = options.viewport.getBoundingClientRect();
-    dock.hidden =
-      !taskId ||
-      !summary ||
-      !(summary.pool || summary.latestQuery || activeQuery);
-    if (dock.hidden && floating) hidePopup(false);
-    options.visibilityChanged();
-    // The popup stays inside the workbench, even in a short Zotero sidebar.
-    const bottom = capsule.getBoundingClientRect().top;
-    popup.style.maxHeight = `${Math.max(100, bottom - Math.max(8, viewport.top) - 8)}px`;
-  }
-  function scheduleMeasure() {
-    if (frame === undefined) frame = win?.requestAnimationFrame(measure);
-  }
-  function hidePopup(focus: boolean) {
-    if (!floating) return;
-    savedScrollTop = scroll.scrollTop;
-    floating = false;
-    popup.hidden = true;
-    capsule.setAttribute("aria-expanded", "false");
-    if (focus && !dock.hidden) capsule.focus({ preventScroll: true });
-    labels();
-  }
-  function showPopup() {
-    if (floating) {
-      hidePopup(true);
-      return;
-    }
-    popup.hidden = false;
-    floating = true;
-    capsule.setAttribute("aria-expanded", "true");
-    labels();
-    measure();
-    scroll.scrollTop = savedScrollTop;
-    close.focus({ preventScroll: true });
-    void refresh().catch(message);
-  }
-  async function refresh() {
-    const id = taskId,
-      stamp = ++request,
-      era = epoch;
-    if (!id || disposed) return;
-    const wasSelected = selected();
-    const params = {
-      taskId: id,
-      offset,
-      filter: filter.value,
-      selected: wasSelected ? true : undefined,
-    };
-    const result = await (
-      options.rpc("literature/list", params) as Promise<LiteraturePage>
-    ).catch((e: unknown) => {
-      if (taskId !== id || epoch !== era || stamp !== request || disposed)
-        return undefined;
-      throw e;
-    });
-    if (!result) return;
-    if (taskId !== id || epoch !== era || stamp !== request || disposed) return;
-    if (summary && result.summary.revision < summary.revision) {
-      queueRefresh();
-      return;
-    }
-    summary = result.summary;
-    if (wasSelected !== selected() || (offset > 0 && offset >= result.total)) {
-      offset =
-        wasSelected !== selected()
-          ? 0
-          : Math.max(0, Math.floor((result.total - 1) / 20) * 20);
-      await refresh();
-      return;
-    }
-    revision = summary.revision;
-    if (!activeQuery && result.queries[0]) activate(result.queries[0]);
-    labels();
-    renderRows(result);
-    scheduleMeasure();
-  }
-  function queueRefresh() {
-    if (disposed || !floating || refreshTimer !== undefined) return;
-    refreshTimer = win?.setTimeout(() => {
-      refreshTimer = undefined;
-      if (!busy && floating) void refresh().catch(message);
-    }, 100);
+    review.disabled = cancel.disabled = search.disabled = locked;
+    const apply =
+      confirmation.querySelector<HTMLButtonElement>("[data-confirm]");
+    if (apply)
+      apply.disabled =
+        locked || proposal?.candidateRevision !== summary?.candidateRevision;
+    const warning = confirmation.querySelector<HTMLElement>("[data-stale]");
+    if (warning)
+      warning.hidden =
+        proposal?.candidateRevision === summary?.candidateRevision;
   }
   async function act(work: () => Promise<unknown>) {
     if (busy || continuing || !taskId || disposed) return;
     const era = epoch;
     busy = true;
-    error.textContent = "";
-    labels();
+    panel.setError("");
+    panel.render();
     try {
       await work();
       if (epoch !== era || disposed) return;
-      await refresh();
+      await panel.refresh();
       if (epoch === era && !disposed) options.changed();
     } catch (e) {
-      if (epoch !== era || disposed) return;
-      message(e);
-      await refresh().catch(() => undefined);
+      if (epoch === era && !disposed) {
+        message(e);
+        await panel.refresh();
+      }
     } finally {
       if (epoch === era && !disposed) {
         busy = false;
-        labels();
-        if (revision !== summary?.revision) queueRefresh();
+        panel.render();
       }
     }
+  }
+  function endConfirmation() {
+    proposal = undefined;
+    confirmationGeneration++;
+    panel.setContent();
   }
   async function continueResearch() {
     if (!taskId || !summary || continuing || proceed.disabled) return;
@@ -477,8 +431,8 @@ export function createLiteraturePanel(
       proposal?.candidateRevision ?? summary.candidateRevision;
     confirmationGeneration++;
     continuing = true;
-    error.textContent = "";
-    labels();
+    panel.setError("");
+    panel.render();
     try {
       await options.rpc("literature/continue", {
         taskId: id,
@@ -487,43 +441,32 @@ export function createLiteraturePanel(
       });
       if (epoch !== era || disposed) return;
       endConfirmation();
-      await refresh();
+      await panel.refresh();
       if (epoch !== era || disposed) return;
-      // The user may close/switch the viewer while the list refresh is pending.
-      if (floating && doc.activeElement === focused && popup.contains(focused))
-        close.focus({ preventScroll: true });
+      if (
+        panel.floating &&
+        doc.activeElement === focused &&
+        popup.contains(focused)
+      )
+        collapse.focus({ preventScroll: true });
       options.changed();
     } catch (e) {
       if (epoch === era && !disposed) {
         message(e);
-        await refresh().catch(() => undefined);
+        await panel.refresh();
       }
     } finally {
       if (epoch === era && !disposed) {
         continuing = false;
-        labels();
+        panel.render();
       }
     }
   }
-  function endConfirmation() {
-    confirmationGeneration++;
-    proposal = undefined;
-    confirmation.hidden = true;
-    confirmation.replaceChildren();
-    rows.hidden =
-      paging.hidden =
-      controls.hidden =
-      count.hidden =
-      tabs.hidden =
-        false;
-    savedScrollTop = scroll.scrollTop = 0;
-    labels();
-  }
   async function showConfirmation() {
+    if (busy || continuing || !taskId) return;
     const id = taskId,
       era = epoch,
       generation = ++confirmationGeneration;
-    if (!id) return;
     await act(async () => {
       const value = (await options.rpc("literature/preview", {
         taskId: id,
@@ -555,14 +498,14 @@ export function createLiteraturePanel(
         ),
         node(doc, "p", text("confirm-help")),
       );
-      for (const [label, ids] of [
-        [text("added"), value.added],
-        [text("removed"), value.removed],
-        [text("acquire"), value.acquire],
+      for (const [key, ids] of [
+        ["added", value.added],
+        ["removed", value.removed],
+        ["acquire", value.acquire],
       ] as const) {
         if (!ids.length) continue;
         const list = node(doc, "ul");
-        list.setAttribute("aria-label", label);
+        list.setAttribute("aria-label", text(key));
         for (const workId of ids)
           list.append(
             node(
@@ -572,8 +515,11 @@ export function createLiteraturePanel(
             ),
           );
         const group = node(doc, "details");
-        group.open = label === text("added");
-        group.append(node(doc, "summary", `${label} · ${ids.length}`), list);
+        group.open = key === "added";
+        group.append(
+          node(doc, "summary", `${text(key)} · ${ids.length}`),
+          list,
+        );
         confirmation.append(group);
       }
       const warning = node(doc, "p", text("stale"));
@@ -582,273 +528,36 @@ export function createLiteraturePanel(
       const apply = createWorkspaceButton(doc, "", text("confirm"), "primary"),
         back = createWorkspaceButton(doc, "", text("dismiss"));
       apply.dataset.confirm = "true";
-      apply.addEventListener(
-        "click",
-        () =>
-          void act(async () => {
-            await options.rpc("literature/confirm", {
-              taskId: id,
-              candidateRevision: value.candidateRevision,
-            });
-            if (epoch === era && generation === confirmationGeneration)
-              endConfirmation();
-          }),
-      );
+      apply.addEventListener("click", () => {
+        if (epoch !== era || disposed || generation !== confirmationGeneration)
+          return;
+        void act(async () => {
+          await options.rpc("literature/confirm", {
+            taskId: id,
+            candidateRevision: value.candidateRevision,
+          });
+          if (epoch === era && generation === confirmationGeneration)
+            endConfirmation();
+        });
+      });
       back.addEventListener("click", endConfirmation);
-      const actions = node(doc, "div");
-      actions.className = "confucius-literature-controls";
-      actions.append(back, apply);
-      confirmation.append(warning, actions);
-      confirmation.hidden = false;
-      rows.hidden =
-        paging.hidden =
-        controls.hidden =
-        count.hidden =
-        tabs.hidden =
-          true;
-      scroll.scrollTop = 0;
+      const controls = node(doc, "div");
+      controls.className = "confucius-literature-controls";
+      controls.append(back, apply);
+      confirmation.append(warning, controls);
+      panel.setContent(confirmation);
       apply.focus({ preventScroll: true });
     });
   }
-  function renderRows(result: LiteraturePage) {
-    const id = taskId!,
-      era = epoch;
-    const opened = new Set(
-      (
-        Array.from(
-          rows.querySelectorAll("details[open]"),
-        ) as HTMLDetailsElement[]
-      ).map((e) => (e.closest("[data-work-id]") as HTMLElement).dataset.workId),
-    );
-    const focused = doc.activeElement as HTMLElement | null;
-    const focusedWork = rows.contains(focused)
-      ? (focused?.closest("[data-work-id]") as HTMLElement | null)?.dataset
-          .workId
-      : undefined;
-    const focusedAction = focused?.dataset.action;
-    const y = floating ? scroll.scrollTop : savedScrollTop;
-    rows.replaceChildren();
-    paging.replaceChildren();
+  function renderQueries(value: LiteraturePage) {
+    // Preserve the query editor and its draft while only replacing saved query metadata.
+    const signature = JSON.stringify(value.queries);
+    if (history.dataset.signature === signature) return;
+    history.dataset.signature = signature;
     history.replaceChildren();
-    if (!result.items.length)
-      rows.append(
-        node(
-          doc,
-          "p",
-          selected() ? text("empty-candidates") : text("empty-results"),
-        ),
-      );
-    for (const work of result.items) {
-      const row = node(doc, "article");
-      row.className = "confucius-literature-row";
-      row.dataset.workId = work.id;
-      const check = node(doc, "input");
-      check.type = "checkbox";
-      check.checked = work.decision.selected;
-      check.dataset.action = "select";
-      const label = node(doc, "label"),
-        labelText = node(doc, "span", work.title);
-      label.append(check, labelText);
-      check.addEventListener("change", () => {
-        if (busy || continuing) {
-          check.checked = work.decision.selected;
-          return;
-        }
-        const selected = check.checked;
-        void act(() =>
-          options.rpc("literature/updateCandidates", {
-            taskId: id,
-            candidateRevision: result.summary.candidateRevision,
-            changes: [{ id: work.id, selected, reason: text("user-choice") }],
-          }),
-        );
-      });
-      const info = node(
-        doc,
-        "div",
-        [
-          work.year,
-          work.authors.slice(0, 2).join(", "),
-          work.venue,
-          `${text("citations")} ${work.citedBy}`,
-        ]
-          .filter(Boolean)
-          .join(" · "),
-      );
-      info.className = "confucius-literature-meta";
-      const reason = node(
-        doc,
-        "p",
-        work.decision.reason ?? text("not-evaluated"),
-      );
-      reason.className = "confucius-literature-reason";
-      const details = node(doc, "details");
-      details.open = opened.has(work.id);
-      details.append(
-        node(doc, "summary", text("abstract")),
-        node(
-          doc,
-          "p",
-          work.abstract ??
-            text(
-              work.abstractLookup?.status === "unavailable"
-                ? "abstract-unavailable"
-                : work.abstractLookup?.status === "missing"
-                  ? "abstract-missing"
-                  : "no-abstract",
-            ),
-        ),
-      );
-      if (work.abstract && work.abstractLookup?.source) {
-        const source = node(
-          doc,
-          "div",
-          `${text("abstract-source")} · ${work.abstractLookup.source}`,
-        );
-        source.className = "confucius-literature-meta";
-        source.addEventListener("click", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          Zotero.launchURL(work.acquisition.sourceUrl!);
-        });
-        details.append(source);
-      }
-      if (!work.abstract) {
-        const fetching = abstractRequests.has(work.id);
-        const lookup = createWorkspaceButton(
-          doc,
-          "",
-          text(fetching ? "abstract-loading" : "abstract-fetch"),
-        );
-        lookup.dataset.action = "abstract";
-        lookup.disabled =
-          fetching ||
-          !!(
-            work.abstractLookup &&
-            Date.now() - work.abstractLookup.checkedAt < 300_000
-          );
-        lookup.title = fetching
-          ? text("abstract-loading")
-          : lookup.disabled
-            ? text("abstract-cooldown")
-            : "";
-        lookup.addEventListener("click", async () => {
-          abstractRequests.add(work.id);
-          lookup.disabled = true;
-          lookup.textContent = text("abstract-loading");
-          try {
-            await options.rpc("literature/abstract", {
-              taskId: id,
-              id: work.id,
-            });
-          } catch (e) {
-            if (epoch === era && !disposed) message(e);
-          } finally {
-            if (epoch === era && !disposed) {
-              abstractRequests.delete(work.id);
-              await refresh().catch(message);
-            }
-          }
-        });
-        details.append(lookup);
-      }
-      const status = node(
-        doc,
-        "div",
-        `${work.acquisition.status === "available" && work.acquisition.version ? text(`version-${work.acquisition.version}`) : text(work.acquisition.status)}${work.acquisition.error ? ` · ${text(`error-${work.acquisition.error}`)}` : ""}`,
-      );
-      status.className = "confucius-literature-meta";
-      row.append(label, info, reason, details);
-      if (work.acquisition.status !== "missing") row.append(status);
-      if (work.acquisition.sourceUrl) {
-        const source = node(doc, "a", text("fulltext-source"));
-        source.href = work.acquisition.sourceUrl;
-        source.title = work.acquisition.sourceUrl;
-        source.className = "confucius-literature-meta";
-        row.append(source);
-      }
-      if (work.acquisition.message)
-        row.append(node(doc, "p", work.acquisition.message));
-      if (
-        work.acquisition.status === "failed" ||
-        (work.acquisition.item && work.acquisition.status !== "available")
-      ) {
-        const actions = node(doc, "div");
-        actions.className = "confucius-literature-controls";
-        const retry = createWorkspaceButton(doc, "", text("retry"));
-        retry.dataset.action = "retry";
-        retry.disabled = ["downloading", "queued"].includes(
-          work.acquisition.status,
-        );
-        retry.addEventListener(
-          "click",
-          () =>
-            void act(() =>
-              options.rpc("literature/retry", { taskId: id, id: work.id }),
-            ),
-        );
-        if (work.acquisition.item) {
-          const browser = createWorkspaceButton(doc, "", text("browser"));
-          browser.dataset.action = "browser";
-          browser.disabled = !work.landingUrl;
-          browser.addEventListener(
-            "click",
-            () =>
-              void act(() =>
-                options.rpc("literature/browser", { taskId: id, id: work.id }),
-              ),
-          );
-          actions.append(browser);
-          const drop = node(doc, "div", text("drop"));
-          drop.className = "confucius-literature-drop";
-          drop.setAttribute("aria-label", `${text("drop")}: ${work.title}`);
-          drop.addEventListener("dragover", (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            drop.dataset.over = "true";
-          });
-          drop.addEventListener("dragleave", () => delete drop.dataset.over);
-          drop.addEventListener("drop", (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            delete drop.dataset.over;
-            const paths = droppedFilePaths((e as DragEvent).dataTransfer);
-            if (paths.length !== 1) {
-              error.textContent = text("drop-one");
-              return;
-            }
-            if (epoch === era)
-              void act(() =>
-                options.rpc("literature/attach", {
-                  taskId: id,
-                  id: work.id,
-                  path: paths[0],
-                }),
-              );
-          });
-          row.append(actions, drop);
-        } else row.append(actions);
-        actions.append(retry);
-      }
-      rows.append(row);
-    }
-    if (offset > 0) {
-      const previous = createWorkspaceButton(doc, "", text("previous"));
-      previous.addEventListener("click", () => {
-        offset = Math.max(0, offset - 20);
-        void act(refresh);
-      });
-      paging.append(previous);
-    }
-    if (result.nextOffset !== null) {
-      const next = createWorkspaceButton(doc, "", text("next"));
-      next.addEventListener("click", () => {
-        offset = result.nextOffset!;
-        void act(refresh);
-      });
-      paging.append(next);
-    }
-    for (const saved of result.queries) {
+    const id = taskId,
+      era = epoch;
+    for (const saved of value.queries) {
       const line = node(doc, "div");
       line.className = "confucius-literature-query";
       line.append(
@@ -856,67 +565,209 @@ export function createLiteraturePanel(
       );
       if (saved.cursor) {
         const more = createWorkspaceButton(doc, "", text("more"));
-        more.addEventListener(
-          "click",
-          () =>
+        more.addEventListener("click", () => {
+          if (epoch === era)
             void act(() =>
               options.rpc("literature/search", {
                 taskId: id,
                 query: saved.query,
                 queryId: saved.id,
               }),
-            ),
-        );
+            );
+        });
         line.append(more);
       }
       history.append(line);
     }
-    if (focusedWork && focusedAction) {
-      const row = Array.from(rows.children).find(
-        (n) => (n as HTMLElement).dataset.workId === focusedWork,
-      );
-      const target =
-        row?.querySelector<HTMLElement>(`[data-action="${focusedAction}"]`) ??
-        rows.querySelector<HTMLElement>("input[type=checkbox]") ??
-        candidateTab;
-      target.focus({ preventScroll: true });
-    }
-    savedScrollTop = y;
-    scroll.scrollTop = y;
   }
-  for (const tab of [candidateTab, poolTab]) {
-    tab.addEventListener("click", () => {
-      selection = tab === candidateTab ? "candidates" : "pool";
-      offset = 0;
-      endConfirmation();
-      labels();
-      void refresh().catch(message);
-    });
-    tab.addEventListener("keydown", (event) => {
-      const e = event as KeyboardEvent;
-      if (
-        !["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key) ||
-        e.isComposing
-      )
-        return;
-      e.preventDefault();
-      const next =
-        e.key === "Home"
-          ? candidateTab
-          : e.key === "End"
-            ? poolTab
-            : tab === candidateTab
-              ? poolTab
-              : candidateTab;
-      next.click();
-      next.focus({ preventScroll: true });
-    });
+  function renderEntry(
+    target: HTMLElement,
+    row: ReviewRow<CandidateEntry>,
+    view: "card" | "list",
+  ) {
+    const work = row.entry.work,
+      id = taskId,
+      era = epoch;
+    const signature = JSON.stringify([work, abstractRequests.has(work.id)]);
+    // Stable content retains focus, expanded abstracts, and internal scroll on receipts.
+    if (extraViews.get(target) === signature) return;
+    extraViews.set(target, signature);
+    const same = target.dataset.workId === work.id;
+    const opened = target.querySelector("details")?.open;
+    const focused = target.contains(doc.activeElement)
+      ? (doc.activeElement as HTMLElement).dataset.action
+      : undefined;
+    target.dataset.workId = work.id;
+    target.replaceChildren();
+    const current = () => epoch === era && !disposed && taskId === id;
+    const info = node(
+      doc,
+      "p",
+      [work.venue, `${text("citations")} ${work.citedBy}`]
+        .filter(Boolean)
+        .join(" · "),
+    );
+    info.className = "confucius-literature-meta";
+    target.append(info);
+    const details = node(doc, "details");
+    details.open = same ? !!opened : view === "card";
+    details.append(
+      node(doc, "summary", text("abstract")),
+      node(
+        doc,
+        "p",
+        work.abstract ??
+          text(
+            work.abstractLookup?.status === "unavailable"
+              ? "abstract-unavailable"
+              : work.abstractLookup?.status === "missing"
+                ? "abstract-missing"
+                : "no-abstract",
+          ),
+      ),
+    );
+    if (work.abstract && work.abstractLookup?.source)
+      details.append(
+        node(
+          doc,
+          "p",
+          `${text("abstract-source")} · ${work.abstractLookup.source}`,
+        ),
+      );
+    if (!work.abstract) {
+      const fetching = abstractRequests.has(work.id),
+        lookup = createWorkspaceButton(
+          doc,
+          "",
+          text(fetching ? "abstract-loading" : "abstract-fetch"),
+        );
+      lookup.dataset.action = "abstract";
+      lookup.disabled =
+        fetching ||
+        !!(
+          work.abstractLookup &&
+          Date.now() - work.abstractLookup.checkedAt < 300_000
+        );
+      lookup.title = fetching
+        ? text("abstract-loading")
+        : lookup.disabled
+          ? text("abstract-cooldown")
+          : "";
+      lookup.addEventListener("click", async () => {
+        if (!current() || lookup.disabled) return;
+        abstractRequests.add(work.id);
+        lookup.disabled = true;
+        lookup.textContent = text("abstract-loading");
+        try {
+          await options.rpc("literature/abstract", { taskId: id, id: work.id });
+        } catch (e) {
+          if (current()) message(e);
+        } finally {
+          if (current()) {
+            abstractRequests.delete(work.id);
+            await panel.refresh();
+          }
+        }
+      });
+      details.append(lookup);
+    }
+    target.append(details);
+    if (work.acquisition.status !== "missing") {
+      const state = node(
+        doc,
+        "p",
+        `${work.acquisition.status === "available" && work.acquisition.version ? text(`version-${work.acquisition.version}`) : text(work.acquisition.status)}${work.acquisition.error ? ` · ${text(`error-${work.acquisition.error}`)}` : ""}`,
+      );
+      state.className = "confucius-literature-meta";
+      target.append(state);
+    }
+    if (work.acquisition.sourceUrl) {
+      const source = node(doc, "a", text("fulltext-source"));
+      source.href = work.acquisition.sourceUrl;
+      source.title = work.acquisition.sourceUrl;
+      source.addEventListener("click", (e) => {
+        e.preventDefault();
+        Zotero.launchURL(source.href);
+      });
+      target.append(source);
+    }
+    if (work.acquisition.message)
+      target.append(node(doc, "p", work.acquisition.message));
+    if (
+      work.acquisition.status === "failed" ||
+      (work.acquisition.item && work.acquisition.status !== "available")
+    ) {
+      const controls = node(doc, "div");
+      controls.className = "confucius-literature-controls";
+      const retry = createWorkspaceButton(doc, "", text("retry"));
+      retry.dataset.action = "retry";
+      retry.disabled = ["downloading", "queued"].includes(
+        work.acquisition.status,
+      );
+      retry.addEventListener("click", () => {
+        if (current())
+          void act(() =>
+            options.rpc("literature/retry", { taskId: id, id: work.id }),
+          );
+      });
+      if (work.acquisition.item) {
+        const browser = createWorkspaceButton(doc, "", text("browser"));
+        browser.dataset.action = "browser";
+        browser.disabled = !work.landingUrl;
+        browser.addEventListener("click", () => {
+          if (current())
+            void act(() =>
+              options.rpc("literature/browser", { taskId: id, id: work.id }),
+            );
+        });
+        controls.append(browser);
+        const drop = node(doc, "div", text("drop"));
+        drop.className = "confucius-literature-drop";
+        drop.setAttribute("aria-label", `${text("drop")}: ${work.title}`);
+        const over = (e: Event) => {
+          const transfer = (e as DragEvent).dataTransfer;
+          if (!hasDroppedFiles(transfer)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          if (transfer) transfer.dropEffect = "copy";
+          drop.dataset.over = "true";
+        };
+        drop.addEventListener("dragenter", over);
+        drop.addEventListener("dragover", over);
+        drop.addEventListener("dragleave", () => delete drop.dataset.over);
+        drop.addEventListener("drop", (e) => {
+          if (!hasDroppedFiles((e as DragEvent).dataTransfer)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          delete drop.dataset.over;
+          if (!current()) return;
+          const paths = droppedFilePaths((e as DragEvent).dataTransfer);
+          if (paths.length !== 1) {
+            panel.setError(text("drop-one"));
+            return;
+          }
+          void act(() =>
+            options.rpc("literature/attach", {
+              taskId: id,
+              id: work.id,
+              path: paths[0],
+            }),
+          );
+        });
+        target.append(drop);
+      }
+      controls.append(retry);
+      target.append(controls);
+    }
+    if (same && focused)
+      target
+        .querySelector<HTMLElement>(`[data-action="${focused}"]`)
+        ?.focus({ preventScroll: true });
   }
   search.addEventListener("click", () => {
     if (!query.value.trim() || !from.checkValidity() || !to.checkValidity())
       return;
     const id = taskId;
-    offset = 0;
     void act(() =>
       options.rpc("literature/search", {
         taskId: id,
@@ -930,15 +781,11 @@ export function createLiteraturePanel(
   });
   form.addEventListener("keydown", (event) => {
     const e = event as KeyboardEvent;
-    if (e.key === "Enter" && !e.isComposing) {
+    if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) {
       e.preventDefault();
       e.stopPropagation();
       search.click();
     }
-  });
-  filter.addEventListener("input", () => {
-    offset = 0;
-    void refresh().catch(message);
   });
   cancel.addEventListener(
     "click",
@@ -946,83 +793,55 @@ export function createLiteraturePanel(
   );
   review.addEventListener("click", () => void showConfirmation());
   proceed.addEventListener("click", () => void continueResearch());
-  capsule.addEventListener("click", showPopup);
-  close.addEventListener("click", () => hidePopup(true));
-  const outside = (e: Event) => {
-    if (floating && !dock.contains(e.target as Node)) hidePopup(false);
-  };
-  const key = (e: KeyboardEvent) => {
-    if (e.key !== "Escape" || e.isComposing) return;
-    if (floating) {
-      e.preventDefault();
-      e.stopPropagation();
-      hidePopup(true);
-    }
-  };
-  doc.addEventListener("pointerdown", outside, true);
-  doc.addEventListener("keydown", key, true);
-  win?.addEventListener("resize", scheduleMeasure);
-  const observer = win?.ResizeObserver
-    ? new win.ResizeObserver(scheduleMeasure)
-    : undefined;
-  observer?.observe(options.viewport);
-  observer?.observe(dock);
   return {
-    node: dock,
+    node: panel.node,
     get visible() {
-      return !dock.hidden;
+      return panel.visible;
     },
     get floating() {
-      return floating;
+      return panel.floating;
     },
-    close: () => hidePopup(false),
+    close: panel.close,
+    refresh: (entryIds: readonly string[] = []) => panel.refresh([], entryIds),
     update(id: string | undefined, value?: LiteratureSummary) {
-      if (id !== taskId) {
+      const changedTask = taskId !== id;
+      if (changedTask) {
         epoch++;
-        request++;
-        busy = false;
-        continuing = false;
-        abstractRequests.clear();
-        hidePopup(false);
+        confirmationGeneration++;
         taskId = id;
         summary = undefined;
+        snapshot = undefined;
         activeQuery = undefined;
-        revision = -1;
-        savedScrollTop = 0;
-        offset = 0;
-        selection = "auto";
-        filter.value = query.value = from.value = to.value = "";
+        proposal = undefined;
+        busy = continuing = false;
+        abstractRequests.clear();
+        query.value = from.value = to.value = "";
         oa.checked = false;
         sort.value = "relevance";
         refine.open = false;
-        localFilter.open = false;
-        endConfirmation();
-        rows.replaceChildren();
-        paging.replaceChildren();
         history.replaceChildren();
-        error.textContent = "";
-        dock.hidden = true;
+        delete history.dataset.signature;
+        confirmation.replaceChildren();
       }
       if (value && (!summary || value.revision >= summary.revision))
         summary = {
           ...value,
           latestQuery: value.latestQuery ?? summary?.latestQuery,
         };
-      if (summary?.latestQuery && !floating) activate(summary.latestQuery);
-      if (summary && revision !== summary.revision && !busy) queueRefresh();
-      labels();
-      scheduleMeasure();
+      panel.update(id);
+      if (
+        !changedTask &&
+        summary &&
+        summary.revision !== snapshot?.summary.revision
+      )
+        void panel.refresh();
+      panel.render();
     },
     destroy() {
       disposed = true;
       epoch++;
-      request++;
-      observer?.disconnect();
-      if (frame !== undefined) win?.cancelAnimationFrame(frame);
-      win?.clearTimeout(refreshTimer);
-      doc.removeEventListener("pointerdown", outside, true);
-      doc.removeEventListener("keydown", key, true);
-      win?.removeEventListener("resize", scheduleMeasure);
+      confirmationGeneration++;
+      panel.destroy();
     },
   };
 }

@@ -54,8 +54,13 @@ or ID is needed. **Export file** creates an independent HTML copy. See
 
 Ask for highlights or comments, optionally specifying pages and quantity.
 
-1. Open the **Annotations** capsule above the composer.
-2. Review the quoted text, comment and page in cards or the list.
+The automatic opening, arrival reminder and initial view defaults below apply
+from 0.6.1-beta.1.
+
+1. The first Agent batch opens review automatically. Use the **Annotations**
+   capsule above the composer to reopen it.
+2. Review the quoted text, comment and page in cards or the list. Fewer than ten
+   entries default to cards; ten or more default to a list. You can switch views.
 3. **Accept** writes the annotation to Zotero. **Reject** leaves it unwritten and
    can be undone. Search and filters help with batch review.
 4. Use the page link to check the source.
@@ -64,8 +69,10 @@ General tool approval does not automatically accept Agent annotation suggestions
 Only a confirmed write receipt is shown as saved. If a result is uncertain, use
 **Verify write status**; do not assume it failed and repeat the write.
 
-The viewer preserves selection and position when minimized. New suggestions
-update the count without forcing it open. Saved outcomes survive a restart.
+The viewer preserves selection and position when minimized. Later suggestions
+briefly animate the capsule and update the count without forcing it open.
+Reduced motion uses the new count instead of animation. Loading history stays
+minimized; saved outcomes survive a restart.
 
 ## Batches and existing annotations
 

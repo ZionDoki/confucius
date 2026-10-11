@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
+import { OpenAICompatibleAdapter } from "@confucius/harness";
 import {
+  cancelHostTimeout,
   createAbortController,
   hostFetch,
   hostFetchCanStream,
   installWebPlatform,
+  scheduleHostTimeout,
 } from "./webPlatform";
 
 class FakeXHR {
@@ -93,6 +96,84 @@ function fixture(t: TestContext) {
   replaceGlobal(t, "XMLHttpRequest", FakeXHR);
   return () => FakeXHR.instances.at(-1)!;
 }
+
+test("host timers use Gecko's independent realm and cancel after the main window closes", async (t) => {
+  const timers = new Map<number, ReturnType<typeof setTimeout>>();
+  const nativeSchedule = setTimeout;
+  const nativeCancel = clearTimeout;
+  let id = 0;
+  const module = {
+    setTimeout(callback: () => void, delay: number) {
+      const handle = ++id;
+      timers.set(
+        handle,
+        nativeSchedule(() => {
+          timers.delete(handle);
+          callback();
+        }, delay),
+      );
+      return handle;
+    },
+    clearTimeout(handle: number) {
+      nativeCancel(timers.get(handle));
+      timers.delete(handle);
+    },
+  };
+  replaceGlobal(t, "ChromeUtils", {
+    importESModule(path: string) {
+      assert.equal(path, "resource://gre/modules/Timer.sys.mjs");
+      return module;
+    },
+  });
+  replaceGlobal(t, "Zotero", {
+    getMainWindow() {
+      assert.fail("Host timers must not borrow a window");
+    },
+  });
+  t.after(() => {
+    for (const handle of timers.values()) nativeCancel(handle);
+  });
+  let fired = false;
+  const cancelled = scheduleHostTimeout(() => (fired = true), 0);
+  Reflect.set(globalThis, "Zotero", { getMainWindow: () => null });
+  cancelHostTimeout(cancelled);
+  await new Promise<void>((resolve) => scheduleHostTimeout(resolve, 5));
+  assert.equal(fired, false);
+  assert.equal(timers.size, 0);
+
+  let signal: AbortSignal | undefined;
+  const model = new OpenAICompatibleAdapter({
+    baseUrl: "http://localhost/model",
+    apiKey: "fixture-only",
+    model: "fixture",
+    timeouts: { firstByteMs: 5, idleMs: 5, absoluteMs: 1000 },
+    fetchImpl: async (_input, init) => {
+      signal = init?.signal ?? undefined;
+      return new Promise<never>(() => {});
+    },
+    scheduleTimeout: scheduleHostTimeout,
+    cancelTimeout: cancelHostTimeout,
+  });
+  await assert.rejects(
+    model.complete({
+      messages: [{ role: "user", content: "hi" }],
+      maxAttempts: 1,
+    }),
+    /Model first byte deadline exceeded/,
+  );
+  assert.equal(signal?.aborted, true);
+  assert.equal(timers.size, 0);
+});
+
+test("host timers also run and cancel in the Node test environment", async (t) => {
+  replaceGlobal(t, "ChromeUtils", undefined);
+  replaceGlobal(t, "Zotero", { getMainWindow: () => null });
+  let fired = false;
+  const handle = scheduleHostTimeout(() => (fired = true), 0);
+  cancelHostTimeout(handle);
+  await new Promise<void>((resolve) => scheduleHostTimeout(resolve, 5));
+  assert.equal(fired, false);
+});
 interface ByteReader {
   read(): Promise<{ done: boolean; value?: Uint8Array }>;
   cancel(): Promise<void>;

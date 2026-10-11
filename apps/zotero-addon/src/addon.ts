@@ -14,6 +14,7 @@ class Addon {
       current: unknown;
     };
     workspaceWindow?: Window;
+    workspaceOwnerWindow?: Window;
   };
   public hooks: typeof hooks;
 

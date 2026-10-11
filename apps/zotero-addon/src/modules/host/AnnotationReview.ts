@@ -96,7 +96,7 @@ export class AnnotationReviewService {
       ) => Promise<ToolResult>;
       operation: (id: string) => Promise<OperationRecord | null | undefined>;
       reconcile: (taskId: string, ids: string[]) => Promise<unknown>;
-      changed: (taskId: string, revision: number) => void;
+      changed: (taskId: string, revision: number, batchId?: string) => void;
     },
   ) {}
   private key(taskId: string) {
@@ -108,10 +108,10 @@ export class AnnotationReviewService {
       empty(taskId)
     );
   }
-  private async save(record: ReviewRecord) {
+  private async save(record: ReviewRecord, batchId?: string) {
     record.revision++;
     await this.options.storage.write(this.key(record.taskId), record);
-    this.options.changed(record.taskId, record.revision);
+    this.options.changed(record.taskId, record.revision, batchId);
   }
   async remove(taskId: string) {
     await this.locks.run([taskId], async () => {
@@ -219,7 +219,7 @@ export class AnnotationReviewService {
         proposalId: String(intent.args.proposalId ?? ""),
         batchIds: [...batchIds],
       };
-      await this.save(record);
+      await this.save(record, batch.entries.length ? batch.id : undefined);
       return this.submissionResult(record, operationId);
     });
   }

@@ -103,7 +103,11 @@ interface Options {
     items: LockedItemContext[],
     removed: LockedItemContext[],
   ): Promise<void>;
-  changed(taskId: string, summary: LiteratureSummary): Promise<void>;
+  changed(
+    taskId: string,
+    summary: LiteratureSummary,
+    arrivals?: string[],
+  ): Promise<void>;
   exists(taskId: string): boolean;
 }
 /** All UI and model mutations share this versioned domain. Large pools never enter the task index. */
@@ -159,18 +163,23 @@ export class LiteratureService {
       }
     );
   }
-  private async save(pool: LiteraturePool) {
+  private async save(pool: LiteraturePool, arrivals?: string[]) {
     this.assert(pool.taskId);
     pool.revision++;
     pool.updatedAt = Date.now();
     await this.storage.write(`${pool.taskId}_r${pool.revision}`, pool);
     await this.storage.write(pool.taskId, pool);
-    await this.options.changed(pool.taskId, literatureSummary(pool));
+    await this.options.changed(
+      pool.taskId,
+      literatureSummary(pool),
+      arrivals?.length ? arrivals : undefined,
+    );
     for (const wake of this.listeners.get(pool.taskId) ?? []) wake();
   }
   private mutate<T>(
     taskId: string,
     work: (pool: LiteraturePool) => Promise<T> | T,
+    arrivals?: string[],
   ) {
     return this.locks.run([taskId], async () => {
       const pool = await this.load(taskId);
@@ -179,7 +188,7 @@ export class LiteratureService {
       if (pool.candidateRevision !== candidateRevision) {
         this.invalidateExplorations(taskId);
       }
-      await this.save(pool);
+      await this.save(pool, arrivals);
       return result;
     });
   }
@@ -229,6 +238,17 @@ export class LiteratureService {
     if (!work) throw new Error("Paper is not in this task's pool");
     return work;
   }
+  /** One consistent snapshot for the shared review UI; long lists mount in chunks. */
+  async review(taskId: string): Promise<LiteraturePage> {
+    const pool = await this.load(taskId);
+    return {
+      summary: literatureSummary(pool),
+      queries: [...pool.queries].reverse(),
+      items: clone(pool.works),
+      total: pool.works.length,
+      nextOffset: null,
+    };
+  }
   async getWithAbstract(taskId: string, id: string, signal?: AbortSignal) {
     // A metadata lookup must never hold the pool lock and block a user's Continue.
     return this.abstractLocks.run([`${taskId}:${id}`], async () => {
@@ -272,92 +292,101 @@ export class LiteratureService {
       );
       this.assert(taskId);
       if (signal?.aborted) throw new LiteratureError("cancelled", "Cancelled");
-      await this.mutate(taskId, (pool) => {
-        // Merge into the current pool: selections and acquisitions may have changed
-        // while the network request was in flight.
-        const existing = pool.queries.find((q) => q.id === id);
-        for (const incoming of result.works) {
-          const same = pool.works.filter(
-            (w) =>
-              w.openAlexIds.some((i) => incoming.openAlexIds.includes(i)) ||
-              (incoming.doi && w.doi === incoming.doi),
-          );
-          const found = same.sort(
-            (a, b) =>
-              Number(b.decision.actor === "user") -
-                Number(a.decision.actor === "user") ||
-              b.decision.revision - a.decision.revision,
-          )[0];
-          if (found) {
-            for (const duplicate of same.filter((w) => w !== found)) {
-              found.queryIds.push(...duplicate.queryIds);
-              found.openAlexIds.push(...duplicate.openAlexIds);
-              found.pdfUrls.push(...duplicate.pdfUrls);
-              found.locations = [
-                ...(found.locations ?? []),
-                ...(duplicate.locations ?? []),
-              ];
-              found.cachedPdfUrl ??= duplicate.cachedPdfUrl;
-              found.reads = [
-                ...(found.reads ?? []),
-                ...(duplicate.reads ?? []),
-              ];
-              if (
-                !found.acquisition.item ||
-                duplicate.acquisition.status === "available"
-              )
-                found.acquisition = duplicate.acquisition;
-              pool.confirmedIds = [
-                ...new Set(
-                  pool.confirmedIds.map((id) =>
-                    id === duplicate.id ? found.id : id,
+      const arrivals: string[] = [];
+      await this.mutate(
+        taskId,
+        (pool) => {
+          // Merge into the current pool: selections and acquisitions may have changed
+          // while the network request was in flight.
+          const existing = pool.queries.find((q) => q.id === id);
+          for (const incoming of result.works) {
+            const same = pool.works.filter(
+              (w) =>
+                w.openAlexIds.some((i) => incoming.openAlexIds.includes(i)) ||
+                (incoming.doi && w.doi === incoming.doi),
+            );
+            const found = same.sort(
+              (a, b) =>
+                Number(b.decision.actor === "user") -
+                  Number(a.decision.actor === "user") ||
+                b.decision.revision - a.decision.revision,
+            )[0];
+            if (found) {
+              for (const duplicate of same.filter((w) => w !== found)) {
+                found.queryIds.push(...duplicate.queryIds);
+                found.openAlexIds.push(...duplicate.openAlexIds);
+                found.pdfUrls.push(...duplicate.pdfUrls);
+                found.locations = [
+                  ...(found.locations ?? []),
+                  ...(duplicate.locations ?? []),
+                ];
+                found.cachedPdfUrl ??= duplicate.cachedPdfUrl;
+                found.reads = [
+                  ...(found.reads ?? []),
+                  ...(duplicate.reads ?? []),
+                ];
+                if (
+                  !found.acquisition.item ||
+                  duplicate.acquisition.status === "available"
+                )
+                  found.acquisition = duplicate.acquisition;
+                pool.confirmedIds = [
+                  ...new Set(
+                    pool.confirmedIds.map((id) =>
+                      id === duplicate.id ? found.id : id,
+                    ),
                   ),
-                ),
+                ];
+                if (pool.waitingFulltext)
+                  pool.waitingFulltext.ids = pool.waitingFulltext.ids.map(
+                    (id) => (id === duplicate.id ? found.id : id),
+                  );
+                pool.works = pool.works.filter((w) => w !== duplicate);
+                pool.candidateRevision++;
+              }
+              found.doi = incoming.doi ?? found.doi;
+              found.queryIds = [...new Set([...found.queryIds, id])];
+              found.openAlexIds = [
+                ...new Set([...found.openAlexIds, ...incoming.openAlexIds]),
               ];
-              if (pool.waitingFulltext)
-                pool.waitingFulltext.ids = pool.waitingFulltext.ids.map((id) =>
-                  id === duplicate.id ? found.id : id,
-                );
-              pool.works = pool.works.filter((w) => w !== duplicate);
-              pool.candidateRevision++;
+              found.pdfUrls = [
+                ...new Set([...found.pdfUrls, ...incoming.pdfUrls]),
+              ];
+              found.cachedPdfUrl ??= incoming.cachedPdfUrl;
+              found.locations = [
+                ...new Map(
+                  [
+                    ...(found.locations ?? []),
+                    ...(incoming.locations ?? []),
+                  ].map((location) => [JSON.stringify(location), location]),
+                ).values(),
+              ];
+              found.abstract ??= incoming.abstract;
+              // Identity joins never replace a user decision or durable acquisition.
+            } else {
+              pool.works.push(incoming);
+              arrivals.push(incoming.id);
             }
-            found.doi = incoming.doi ?? found.doi;
-            found.queryIds = [...new Set([...found.queryIds, id])];
-            found.openAlexIds = [
-              ...new Set([...found.openAlexIds, ...incoming.openAlexIds]),
-            ];
-            found.pdfUrls = [
-              ...new Set([...found.pdfUrls, ...incoming.pdfUrls]),
-            ];
-            found.cachedPdfUrl ??= incoming.cachedPdfUrl;
-            found.locations = [
-              ...new Map(
-                [...(found.locations ?? []), ...(incoming.locations ?? [])].map(
-                  (location) => [JSON.stringify(location), location],
-                ),
-              ).values(),
-            ];
-            found.abstract ??= incoming.abstract;
-            // Identity joins never replace a user decision or durable acquisition.
-          } else pool.works.push(incoming);
-        }
-        if (existing)
-          Object.assign(existing, {
-            total: result.total,
-            cursor: result.cursor,
-            pages: existing.pages + 1,
-          });
-        else
-          pool.queries.push({
-            ...input,
-            queryId: undefined,
-            id,
-            createdAt: Date.now(),
-            total: result.total,
-            cursor: result.cursor,
-            pages: 1,
-          });
-      });
+          }
+          if (existing)
+            Object.assign(existing, {
+              total: result.total,
+              cursor: result.cursor,
+              pages: existing.pages + 1,
+            });
+          else
+            pool.queries.push({
+              ...input,
+              queryId: undefined,
+              id,
+              createdAt: Date.now(),
+              total: result.total,
+              cursor: result.cursor,
+              pages: 1,
+            });
+        },
+        arrivals,
+      );
     });
     return this.list(taskId);
   }

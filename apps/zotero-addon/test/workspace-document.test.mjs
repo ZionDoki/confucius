@@ -227,7 +227,7 @@ test("composer has plus menu, slash commands, context ring, single send/stop", (
   assert.equal(view.includes('root.addEventListener("drop"'), true);
   assert.equal(view.includes('composer.addEventListener("drop"'), false);
   assert.equal(view.includes("function canAcceptFileDrop"), true);
-  assert.equal(view.includes("root.appendChild(dropHint)"), true);
+  assert.equal(view.includes("composerCard.appendChild(dropHint)"), true);
   assert.equal(view.includes('data-file-drop-active="true"'), true);
   assert.equal(view.includes("droppedFilePaths"), true);
   assert.equal(view.includes('kind: "skill"'), true);

@@ -11,7 +11,8 @@ Recommend the most relevant ones and explain your choices.”
 
 1. Ask in a new conversation; no attached paper is required.
 2. Open the **Literature** capsule above the composer.
-3. Read the abstracts and selection reasons; check or uncheck candidates.
+3. Read abstracts and reasons. Use Include/Exclude on a card, or select list rows
+   and apply the same decisions in bulk.
 4. Choose **Review selection → Confirm and acquire fulltext** to save the
    selected papers to your personal Zotero library and attempt PDF downloads.
 
@@ -20,6 +21,13 @@ requires a new confirmation. Removing a confirmed candidate unbinds the source;
 it does not delete the Zotero item or PDF.
 
 ## Understand the counts
+
+Since 0.6.1-beta.1, candidates and annotations share the same cards
+and list. Pools below ten papers
+start as cards; ten or more start as a list. You can switch views, and later
+searches preserve your choice. The first live result opens review; later results
+briefly float the capsule. Local search and the status menu show unreviewed,
+included, excluded or all papers.
 
 “9 / 100” means **9 selected candidates out of 100 fetched, deduplicated papers**.
 It is not the search service's total hit count.
@@ -72,7 +80,7 @@ For a paper that still fails:
 
 1. Choose **Get from browser**.
 2. Download it using your own access.
-3. Drop the PDF onto **that paper's drop target** in the literature list.
+3. Drop the PDF onto **that paper's drop target** in the card or list.
 
 The original file stays in place; a verified copy is attached to Zotero.
 The limit is **100 MiB per PDF**. Scans or unusual front matter may require manual

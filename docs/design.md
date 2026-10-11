@@ -48,6 +48,16 @@ Width means the available workspace or reader-window width.
 - The compact app action area retains four columns. Reader actions may wrap while keeping the same padding and gaps. Do not shrink text to 10px to force one row.
 - Long titles may truncate. Keep button labels readable and allow wrapping with increased height. Reading content is centered, at most 680px wide; compact readers keep 10px side margins.
 
+## Window lifecycle
+
+- A detached Confucius workspace belongs to the Zotero library window that opened
+  it. Closing that library closes its workspace and disposes the view, including
+  draft saving, polling, listeners and overlays. Closing a different library
+  window does not close this workspace.
+- Closing a workspace does not cancel host tasks. Host request deadlines, retries
+  and state saving use timers independent of UI windows. Reopening a library and
+  its workspace restores saved tasks and drafts.
+
 ## Buttons and interaction
 
 - Text buttons use `createWorkspaceButton` / `.confucius-button`: 8px radius, `surface` background, `ink` text, weight 550, and `hover` background on hover.
@@ -56,6 +66,19 @@ Width means the available workspace or reader-window width.
 - Disabled text buttons use the shared `opacity: .48`, default cursor, and no hover feedback. Their `title` explains the actual reason, such as a running task, pending confirmation, or empty content.
 - Icon buttons have both `title` and `aria-label`. Keep visible keyboard focus and keyboard menu navigation.
 - Do not override shared radii, font weights, or state colors in readers. Before adding controls, check [workspaceSurface.ts](../apps/zotero-addon/src/modules/ui/workspaceSurface.ts) and [workspaceTheme.ts](../apps/zotero-addon/src/modules/ui/workspaceTheme.ts).
+
+## File drop
+
+- Show the chat attachment hint inside the composer card, using an opaque shared
+  background and a structural dashed border. Surrounding workspace drags may
+  reveal the hint; only a drop inside the composer card adds an attachment.
+- Literature PDF drops belong to the specific paper's dashed target. Hovering
+  within a review overlay keeps composer feedback hidden and highlights that
+  paper's target. Feedback is local and pointer-transparent; the workspace
+  remains readable and usable.
+- Clear composer feedback on every drop, including drops handled by nested
+  targets, and on drag cancellation, Escape, window exit or loss of focus.
+  Dispose the drag listeners with the workspace.
 
 ## Model catalog picker
 
@@ -102,13 +125,30 @@ Cap width at 420px. Narrow windows retain at least 8px on both sides. Position w
 
 ### Literature overlay
 
+- Literature candidates and annotations use one review component and view model,
+  with domain adapters for decisions, source opening and acquisition controls.
+  The first nonempty pool defaults to cards below ten entries and a list at ten
+  or more. Preserve manual presentation choices on filtering, refreshing,
+  arrivals and task revisits. Both domains share card height, edge navigation,
+  first-live opening, later 6px/1.12× reminders and reduced-motion behavior below.
 - Open an opaque overlay above the row, aligned to the composer's left edge, at most 680px wide. Compact windows keep composer margins. Height follows available timeline space. Use `elevated`, 14px radius, shared shadow, fixed header/footer, and a scrolling list; the composer stays usable.
 - Use 14px titles, 13px content, 12px metadata, and 16px vertical/20px horizontal padding, reduced to 12px in compact layouts. Reuse shared buttons.
 - Preserve candidate selection, filters, abstracts, and list scroll across closing/reopening. Opening pauses main-timeline auto-follow without moving the conversation. Outside clicks/Escape close without stopping work or stealing outside focus. Back to latest closes the overlay and scrolls to the conversation end.
 - Query controls and local filters are secondary entries. Organize paper rows with whitespace; align checkboxes with the title's first line.
-- Candidate/result tabs support arrows and visible focus. Confirmation shows additions, removals, and acquisition scope in place. Confirm and acquire fulltext authorizes the whole batch; changed versions require a fresh review. Full-text status is independent of selection. The PDF drop zone uses a structural dashed border and highlights its target.
+- The shared status menu filters unreviewed, included, excluded or all papers.
+  Include/Exclude act on the card or selected list rows; checking rows is a
+  snapshot for bulk decisions. Confirmation shows additions, removals and
+  acquisition scope in the shared content area. Confirm and acquire fulltext
+  authorizes the versioned batch; changed versions require review again.
+  Full-text state is independent of candidate choices. PDF drop targets use
+  structural dashed borders and highlight the specific target.
 - The footer offers Continue with abstracts before confirmation and Continue with current results afterward. Show full-text and abstract coverage against candidate count, plus library-import and background-download behavior. Search, abstract lookup, or a single PDF import must not disable Continue. Stale confirmation previews require review.
 - Keep concise coverage labels, fixed header/footer, and list scrolling. Allow labels and right-aligned button groups to wrap in narrow windows.
+- Reserve at least 48px for a scrollable list. Narrow candidate footers prioritize
+  action buttons; fulltext/abstract coverage stays reachable in the footer.
+  Below 340px, detailed Continue help remains in its tooltip and accessible
+  description. If controls exceed a short overlay, scroll inside the overlay
+  instead of clipping them.
 - After current materials are accepted, hide Continue. When full text is still missing, show only a secondary Get remaining full text link with shared link-button styling and focus. Hide it when complete or downloading. Candidate changes restore confirmation for the new version.
 
 ### Subagent entries and viewer
@@ -128,12 +168,16 @@ Cap width at 420px. Narrow windows retain at least 8px on both sides. Position w
 
 ## Annotation review
 
+- Reuse the same component as literature candidates. Initially use cards for
+  fewer than ten entries and a list from ten; completion/history behavior below
+  still applies. Domain adapters retain annotation receipts and ownership checks.
 - Each submission creates an independent review batch. Each task has one annotation capsule in the shared composer row. Reuse literature capsule styling, 34px minimum height, 12px text, and 24px radius. Show pending/writing/needs-attention counts, then a handled total.
-- Start minimized. Two icon buttons switch between cards and list. Cards use `elevated`, 14px radius, and two stacked paper layers; no glass edges, translucent backgrounds, or blur. Use actual annotation color only for the source quote bar.
-- Cards support horizontal dragging, wheel navigation, and a native range slider with arrow-key support. Long source text scrolls inside without hijacking text scrolling. Accept/Reject use shared 34px controls and fixed icon slots; touch targets are at least 44px.
+- The first live Agent batch in a task opens the review automatically without taking keyboard focus or interrupting composition. Loading history starts minimized. Two icon buttons switch between cards and list. Cards use `elevated`, 14px radius, and two stacked paper layers; no glass edges, translucent backgrounds, or blur. Use actual annotation color only for the source quote bar.
+- Cards fill the remaining overlay height below its header and batch selector and above its footer. Keep card metadata and decision controls fixed; long source text scrolls inside without hijacking text scrolling.
+- Cards support edge clicks, horizontal dragging, wheel navigation, and a native range slider with arrow-key support. Hovering or focusing a card reveals narrow left/right gradients and direction arrows in reserved edge gutters, without masking its text or controls. Show only available directions; keyboard focus stays usable at the first/last card. Use shared colors, 34px edge targets (44px on touch), persistent cues without hover or in high contrast, and no decorative motion with reduced motion. Accept/Reject use shared 34px controls and fixed icon slots.
 - Cards/list share the literature overlay's 680px maximum width, opaque background, 14px radius, and shadow. Opening, switching, and minimizing must not change capsule-row or composer height. Fix header/footer, scroll the body, and group batches with whitespace.
 - Use one search field and one batch/status menu. Show bulk actions only after selection. Virtualize long lists.
-- New batches preserve minimized/expanded state, current card, search, selection, and scroll. Update counts and offer View new without forcing open. Bulk selection is a snapshot; later arrivals do not join automatically. Keep per-batch view state.
+- Later live batches preserve minimized/expanded state, current card, search, selection, and scroll. Float the whole capsule up 6px and enlarge it to 1.12× once, using the shared overlay shadow to suggest elevation, then smoothly return it to rest. Anchor the scale at its left center and preserve layout dimensions; its pointer target follows the visible capsule. Replay gently for another arrival. Reduced motion and high contrast use the static new count and polite announcement instead. Update counts and offer View new without forcing open. History, repeated events, duplicate submissions, and write receipts do not replay the notification. Bulk selection is a snapshot; later arrivals do not join automatically. Keep per-batch view state.
 - Mark Written only after a real write receipt. Rejection is reversible. Distinguish failed writes from outcomes needing verification. Unlocatable proposals may still be rejected; restoring them retains the unwritable state and reason. Do not retry uncertain writes automatically. Page buttons open the source; written items can open native annotations.
 - Show Current proposals handled only when every arrived proposal is written or rejected. This describes review progress, not agent completion. An empty filter, active write, failure, uncertain outcome, or unlocatable proposal is not completion. Keep receipts and Done and minimize; reopening shows the review history.
 - Always keep the `—` minimize control, including during writes. Clicking the capsule, outside, or Escape also minimizes; close menus first. Preserve background writes and view state. Receipts update results without reopening.

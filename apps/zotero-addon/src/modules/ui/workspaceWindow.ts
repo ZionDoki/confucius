@@ -29,6 +29,7 @@ const MAX_SIDEBAR_WIDTH = 720;
 const WORKSPACE_URL = `chrome://${config.addonRef}/content/workspace.xhtml`;
 
 const sidebarCleanups = new WeakMap<HTMLElement, () => void>();
+let workspaceOwnerCleanup: (() => void) | undefined;
 
 function getHost(): WorkspaceHost | null {
   const plugin = Zotero as typeof Zotero & {
@@ -77,15 +78,16 @@ export function bootWorkspace(
   mountRoot.setAttribute("data-confucius-layout", layout);
 }
 
-export function openWorkspace(): Window | undefined {
+export function openWorkspace(win?: Window): Window | undefined {
   return getWorkspaceLayout() === "sidebar"
-    ? openWorkspaceSidebar()
-    : openWorkspaceWindow();
+    ? openWorkspaceSidebar(win)
+    : openWorkspaceWindow(undefined, win);
 }
 
 /** Toolbar icon: open the workspace, or collapse the sidebar if it is already shown. */
 export function toggleWorkspace(win?: Window): Window | undefined {
   const main = win ?? Zotero.getMainWindow();
+  if (!isWindowAlive(main)) return undefined;
   const sidebarVisible = isWorkspaceSidebarVisible(main.document);
   const action = workspaceIconAction({
     layout: getWorkspaceLayout(),
@@ -100,7 +102,7 @@ export function toggleWorkspace(win?: Window): Window | undefined {
     closeWorkspaceSidebar(main);
     return undefined;
   }
-  return openWorkspace();
+  return openWorkspace(main);
 }
 
 function mainWindows(): Window[] {
@@ -154,7 +156,18 @@ export function restoreWorkspaceAfterReload(saved: WorkspaceReload): void {
   else openWorkspaceWindow(saved);
 }
 
+function clearWorkspaceOwner(): void {
+  try {
+    workspaceOwnerCleanup?.();
+  } catch {
+    // The owning window may already be a dead wrapper when its hook runs.
+  }
+  workspaceOwnerCleanup = undefined;
+  addon.data.workspaceOwnerWindow = undefined;
+}
+
 function closeWorkspaceDialog(source?: Window): void {
+  clearWorkspaceOwner();
   const mainWindowSet = new Set(mainWindows());
   const candidates = new Set<Window>();
   if (source) {
@@ -179,6 +192,12 @@ function closeWorkspaceDialog(source?: Window): void {
     candidate.close();
   }
   addon.data.workspaceWindow = undefined;
+}
+
+/** A detached workspace belongs to the library window that opened it. */
+export function closeWorkspaceForMainWindow(win: Window): void {
+  closeWorkspaceSidebar(win);
+  if (addon.data.workspaceOwnerWindow === win) closeWorkspaceDialog();
 }
 
 function closeOtherWorkspaceSidebars(active?: Window): void {
@@ -207,7 +226,12 @@ export function setWorkspaceLayout(
 
 export function openWorkspaceWindow(
   restore?: WorkspaceReload,
+  owner?: Window,
 ): Window | undefined {
+  const mainWindow = (owner ?? Zotero.getMainWindow()) as Window & {
+    openDialog: (url: string, name: string, features: string) => Window | null;
+  };
+  if (!isWindowAlive(mainWindow)) return undefined;
   closeOtherWorkspaceSidebars();
   if (isWindowAlive(addon.data.workspaceWindow)) {
     addon.data.workspaceWindow?.focus();
@@ -222,9 +246,7 @@ export function openWorkspaceWindow(
 
   const width = restore?.width || getPref("workspaceWidth") || 1100;
   const height = restore?.height || getPref("workspaceHeight") || 760;
-  const mainWindow = Zotero.getMainWindow() as Window & {
-    openDialog: (url: string, name: string, features: string) => Window | null;
-  };
+  clearWorkspaceOwner();
   const win = mainWindow.openDialog(
     WORKSPACE_URL,
     `${config.addonRef}-workspace`,
@@ -234,6 +256,15 @@ export function openWorkspaceWindow(
     ztoolkit.log("[Confucius] failed to open workspace window");
     return undefined;
   }
+
+  const ownerDocument = mainWindow.document;
+  const onOwnerUnload = (event: Event) => {
+    if (event.target === ownerDocument) closeWorkspaceForMainWindow(mainWindow);
+  };
+  mainWindow.addEventListener("unload", onOwnerUnload);
+  workspaceOwnerCleanup = () =>
+    mainWindow.removeEventListener("unload", onOwnerUnload);
+  addon.data.workspaceOwnerWindow = mainWindow;
 
   const start = () => {
     if (!isWindowAlive(win) || win.location.href !== WORKSPACE_URL) return;
@@ -258,6 +289,7 @@ export function openWorkspaceWindow(
       win.document.getElementById(ROOT_ID) as HTMLElement | null,
     );
     if (addon.data.workspaceWindow === win) {
+      clearWorkspaceOwner();
       addon.data.workspaceWindow = undefined;
     }
   });
@@ -396,6 +428,7 @@ export function openWorkspaceSidebar(
     ztoolkit.log("[Confucius] no host for sidebar; opening a window");
     return openWorkspaceWindow(
       restore ? { layout: "window", view: restore } : undefined,
+      main,
     );
   }
 

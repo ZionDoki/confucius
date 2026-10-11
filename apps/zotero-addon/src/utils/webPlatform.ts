@@ -5,6 +5,29 @@
  */
 import { isWindowAlive } from "./window";
 
+/** Host deadlines must survive closing or replacing Zotero's library window. */
+export function scheduleHostTimeout(
+  callback: () => void,
+  delayMs: number,
+): unknown {
+  if (typeof ChromeUtils !== "undefined") {
+    return ChromeUtils.importESModule(
+      "resource://gre/modules/Timer.sys.mjs",
+    ).setTimeout(callback, delayMs);
+  }
+  return globalThis.setTimeout(callback, delayMs);
+}
+
+export function cancelHostTimeout(handle: unknown): void {
+  if (typeof ChromeUtils !== "undefined") {
+    ChromeUtils.importESModule(
+      "resource://gre/modules/Timer.sys.mjs",
+    ).clearTimeout(handle as number);
+  } else {
+    globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>);
+  }
+}
+
 type AbortListener = (event: Event) => void;
 
 class SandboxAbortSignal {

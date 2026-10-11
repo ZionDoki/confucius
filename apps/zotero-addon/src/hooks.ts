@@ -15,7 +15,7 @@ import {
 } from "./modules/ui/readerContextMenu";
 import { registerItemMenu, unregisterItemMenu } from "./modules/ui/itemMenu";
 import {
-  closeWorkspaceSidebar,
+  closeWorkspaceForMainWindow,
   closeWorkspaceWindow,
   consumeWorkspaceReload,
   rememberWorkspaceForReload,
@@ -100,7 +100,7 @@ async function onMainWindowLoad(win: Window): Promise<void> {
 async function onMainWindowUnload(win: Window): Promise<void> {
   cleanup(() => unregisterToolbarButton(win), "toolbar");
   cleanup(() => unregisterItemMenu(win), "item menu");
-  cleanup(() => closeWorkspaceSidebar(win), "sidebar");
+  cleanup(() => closeWorkspaceForMainWindow(win), "workspace");
 }
 
 async function onShutdown(isUpdate = false): Promise<void> {

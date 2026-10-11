@@ -29,6 +29,15 @@ revision and wakes host waits. It does not cancel already authorized background
 downloads, but prevents new supplemental exploration. Candidate changes require
 a new decision. No repeated model polling is needed.
 
+The candidate and annotation adapters share `reviewPanel.ts`, `reviewModel.ts`
+and `reviewStyles.ts`. `literature/review/list` supplies one coherent metadata
+snapshot, separate from paged model-facing `literature/list`. List rows mount in
+chunks; fewer than ten entries start as cards and ten or more as a list. Choices
+use the existing candidate revision and confirmation APIs. Search events include
+new work IDs only; identity duplicates, metadata refreshes and acquisition
+receipts do not replay arrival cues. Appending a page within the same query still
+notifies without changing the current view, filter, position or bulk selection.
+
 ## Abstracts and full text
 
 Abstract lookup tries exact local metadata, OpenAlex and Crossref within bounded

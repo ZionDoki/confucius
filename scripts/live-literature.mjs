@@ -1,4 +1,4 @@
-/** Isolated Zotero acceptance; deterministic OpenAlex/model fixtures, real library/PDF operations. */
+/** Isolated Zotero acceptance; deterministic OpenAlex/model/download fixtures, real library/PDF parsing and imports. */
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { readFile, writeFile, appendFile, mkdir } from "node:fs/promises";
@@ -66,12 +66,20 @@ try {
     },
   });
   await evaluate(`Zotero.__literatureQA={requests:[],pending:[],errors:[],opened:[]};const q=Zotero.__literatureQA;
-    const existing=new Zotero.Item('journalArticle');existing.setField('title','Existing paper');existing.setField('DOI','10.1234/confucius-qa-0');await existing.saveTx();q.existing=existing.key;
+    const existing=new Zotero.Item('journalArticle');existing.setField('title','Existing paper');existing.setField('extra','OpenAlex: W900000');await existing.saveTx();q.existing=existing.key;
     await Zotero.getActiveZoteroPane().selectItem(existing.id);
     const task=await host.rpc('task/new',{title:'文献研究验收'});q.taskId=task.id;
     if(task.lockedContext.items.length)throw new Error('Blank task captured library selection');
     q.transport=host.openAlex.transport;
-    host.openAlex.transport=async()=>({status:200,data:{results:Array.from({length:100},(_,i)=>({id:'https://openalex.org/W'+(900000+i),doi:i===1?null:'https://doi.org/10.1234/confucius-qa-'+i,title:'Research paper '+i,publication_year:2024,authorships:[{author:{display_name:'Test Author'}}],abstract_inverted_index:{Useful:[0],research:[1],abstract:[2]},cited_by_count:i,open_access:{is_oa:true},best_oa_location:{is_oa:true,pdf_url:${JSON.stringify(url)}+(i===0?'/paper.pdf':'/signin'),landing_page_url:${JSON.stringify(url)}+'/paper/'+i},has_content:{pdf:false}})),meta:{count:2500,next_cursor:'next'}}});
+    host.openAlex.transport=async()=>({status:200,data:{results:Array.from({length:100},(_,i)=>({id:'https://openalex.org/W'+(900000+i),doi:i<2?null:'https://doi.org/10.1234/confucius-qa-'+i,title:i<2?'Confucius Tool Verification Paper':'Research paper '+i,publication_year:2024,authorships:[{author:{display_name:i<2?'Confucius':'Test Author'}}],abstract_inverted_index:{Useful:[0],research:[1],abstract:[2]},cited_by_count:i,open_access:{is_oa:true},best_oa_location:{is_oa:true,pdf_url:${JSON.stringify(url)}+(i===0?'/paper.pdf':'/signin'),landing_page_url:${JSON.stringify(url)}+'/paper/'+i},has_content:{pdf:false}})),meta:{count:2500,next_cursor:'next'}}});
+    // The native downloader correctly refuses loopback URLs. Supply fixture bytes
+    // only at this isolated transport boundary; the real verifier and importer run.
+    q.nativeAcquire=host.literatureAcquirer.acquire;
+    host.literatureAcquirer.acquire=async function(work,signal,onStage){
+      await onStage?.('open_access');
+      const bytes=work.id==='W900000'?await IOUtils.read(${JSON.stringify(join(root, "scripts/fixtures/confucius-tool-e2e-fixture.pdf"))}):new TextEncoder().encode('<html>Not a PDF</html>');
+      return this.importBytes(work,bytes,signal,{stage:'open_access',version:'unknown',sourceUrl:work.pdfUrls[0]});
+    };
     Zotero.launchURL=target=>q.opened.push(target);
     const main=Zotero.getMainWindow();main.document.getElementById('confucius-toolbar-button').dispatchEvent(new main.Event('command'));return true;`);
   await wait(`return !!d?.querySelector('#confucius-prompt');`);
@@ -95,7 +103,7 @@ try {
   );
   assert.equal(
     await evaluate(
-      `return d.querySelectorAll('.confucius-literature-card').length===0 && d.querySelector('.confucius-literature-dock').hidden;`,
+      `return d.querySelectorAll('.confucius-literature-card').length===0 && d.querySelector('.confucius-literature-review').hidden;`,
     ),
     true,
   );
@@ -109,8 +117,22 @@ try {
       options.onTextDelta?.(answer);return {end:'stop',text:answer};}});
     const prompt=d.getElementById('confucius-prompt');prompt.value='帮我找近几年图神经网络用于分子性质预测的论文，先推荐相关候选。';prompt.dispatchEvent(new win.Event('input',{bubbles:true}));d.getElementById('confucius-send').click();return true;`);
   await wait(
-    `return !host.sessions.get(qa.taskId).activeTurnId && host.sessions.get(qa.taskId).record.literature?.candidates===9 && !d.querySelector('.confucius-literature-dock').hidden;`,
+    `return !host.sessions.get(qa.taskId).activeTurnId && host.sessions.get(qa.taskId).record.literature?.candidates===9 && !d.querySelector('.confucius-literature-review').hidden;`,
   );
+  await wait(`return !d.getElementById('confucius-literature-popup').hidden;`);
+  assert.equal(
+    await evaluate(
+      `return d.querySelector('.confucius-literature-review').dataset.view==='list';`,
+    ),
+    true,
+  );
+  await evaluate(
+    `d.getElementById('confucius-literature-capsule').click();return true;`,
+  );
+  checks.push({
+    firstLiveCandidatesAutoOpen: true,
+    defaultLargePoolList: true,
+  });
   const dockGeometry = () =>
     evaluate(`
     const capsule=d.getElementById('confucius-literature-capsule'),latest=d.getElementById('confucius-latest'),composer=d.querySelector('.confucius-composer-card');
@@ -140,7 +162,7 @@ try {
     `win.windowUtils.sendMouseEvent('mouseup',qa.pointer.x,qa.pointer.y,0,1,0);return true;`,
   );
   await wait(
-    `return !d.getElementById('confucius-literature-popup').hidden && d.querySelectorAll('.confucius-literature-row').length===9;`,
+    `return !d.getElementById('confucius-literature-popup').hidden && d.querySelectorAll('.confucius-literature-review .ar-list-row:not([hidden])').length===80;`,
   );
   assert.equal(
     await evaluate(
@@ -177,30 +199,30 @@ try {
     `await host.rpc('literature/updateCandidates',{taskId:qa.taskId,candidateRevision:host.sessions.get(qa.taskId).record.literature.candidateRevision,changes:Array.from({length:7},(_,i)=>({id:'W'+(900002+i),selected:false}))});return true;`,
   );
   await wait(
-    `return d.querySelectorAll('.confucius-literature-row').length===2 && d.getElementById('confucius-literature-capsule').textContent.includes('2 / 100');`,
+    `return d.querySelectorAll('.confucius-literature-review .ar-list-row:not([hidden])').length===80 && d.getElementById('confucius-literature-capsule').textContent.includes('2 / 100');`,
   );
   await evaluate(
-    `d.getElementById('confucius-literature-candidates-tab').dispatchEvent(new win.KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));return true;`,
+    `d.querySelector('.confucius-literature-review .ar-search-row button').click();d.querySelector('.confucius-literature-review .ar-status-choices input[value=all]').click();d.querySelector('.confucius-literature-review').dispatchEvent(new win.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));d.querySelector('.confucius-literature-review .ar-search').focus();return true;`,
   );
   await wait(
-    `return d.querySelectorAll('.confucius-literature-row').length===20;`,
+    `return d.querySelectorAll('.confucius-literature-review .ar-list-row:not([hidden])').length===80;`,
   );
   for (const selected of [false, true]) {
     await evaluate(
-      `const c=d.querySelector('[data-work-id="W900001"] input[type=checkbox]');c.checked=${selected};c.dispatchEvent(new win.Event('change',{bubbles:true}));return true;`,
+      `const c=d.querySelector('.confucius-literature-review .ar-list-row[data-entry-id="W900001"] input[type=checkbox]');c.checked=true;c.dispatchEvent(new win.Event('change',{bubbles:true}));const actions=d.querySelector('.confucius-literature-review .ar-popup-footer > .ar-actions');actions.querySelector('button:${selected ? "last" : "first"}-child').click();return true;`,
     );
     await wait(
-      `return host.sessions.get(qa.taskId).record.literature.candidates===${selected ? 2 : 1} && d.getElementById('confucius-literature-capsule').textContent.includes('${selected ? 2 : 1} / 100') && !d.querySelector('.confucius-literature-footer [data-variant=primary]').disabled;`,
+      `return host.sessions.get(qa.taskId).record.literature.candidates===${selected ? 2 : 1} && d.getElementById('confucius-literature-capsule').textContent.includes('${selected ? 2 : 1} / 100') && !d.querySelector('.confucius-literature-review .ar-domain-footer [data-variant=primary]').disabled;`,
     );
   }
   await evaluate(
-    `d.querySelector('.confucius-literature-local-filter').open=true;const input=d.querySelector('.confucius-literature-filter');input.value='Research paper 1';input.dispatchEvent(new win.Event('input',{bubbles:true}));return true;`,
+    `const input=d.querySelector('.confucius-literature-review .ar-search');input.value='Research paper 2';input.dispatchEvent(new win.Event('input',{bubbles:true}));return true;`,
   );
   await wait(
-    `return d.querySelectorAll('.confucius-literature-row').length===11;`,
+    `return d.querySelectorAll('.confucius-literature-review .ar-list-row:not([hidden])').length===11;`,
   );
   await evaluate(
-    `d.dispatchEvent(new win.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));return true;`,
+    `(d.getElementById('confucius-subagent-popup')?d:d.querySelector('.confucius-literature-review')).dispatchEvent(new win.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));return true;`,
   );
   assert.equal(
     await evaluate(
@@ -213,18 +235,18 @@ try {
   );
   assert.equal(
     await evaluate(
-      `return d.querySelector('.confucius-literature-filter').value;`,
+      `return d.querySelector('.confucius-literature-review .ar-search').value;`,
     ),
-    "Research paper 1",
+    "Research paper 2",
   );
   await evaluate(
-    `const input=d.querySelector('.confucius-literature-filter');input.value='';input.dispatchEvent(new win.Event('input',{bubbles:true}));return true;`,
+    `const input=d.querySelector('.confucius-literature-review .ar-search');input.value='';input.dispatchEvent(new win.Event('input',{bubbles:true}));return true;`,
   );
   await wait(
-    `return d.querySelectorAll('.confucius-literature-row').length===20;`,
+    `return d.querySelectorAll('.confucius-literature-review .ar-list-row:not([hidden])').length===80;`,
   );
   await evaluate(
-    `const scroll=d.querySelector('.confucius-literature-scroll');d.querySelector('.confucius-literature-row details').open=true;scroll.scrollTop=64;qa.innerScroll=scroll.scrollTop;d.dispatchEvent(new win.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));return true;`,
+    `const scroll=d.querySelector('.confucius-literature-review .ar-list');d.querySelector('.confucius-literature-review .ar-list-row:not([hidden]) details').open=true;scroll.scrollTop=64;qa.innerScroll=scroll.scrollTop;(d.getElementById('confucius-subagent-popup')?d:d.querySelector('.confucius-literature-review')).dispatchEvent(new win.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));return true;`,
   );
   const expandedBefore = await evaluate(
     `const t=d.querySelector('.confucius-timeline-pane');return {top:t.scrollTop,height:t.scrollHeight};`,
@@ -240,7 +262,7 @@ try {
     expandedBefore,
   );
   await wait(
-    `return d.querySelector('.confucius-literature-row details').open && d.querySelector('.confucius-literature-scroll').scrollTop===qa.innerScroll;`,
+    `return d.querySelector('.confucius-literature-review .ar-list-row:not([hidden]) details').open && d.querySelector('.confucius-literature-review .ar-list').scrollTop===qa.innerScroll;`,
   );
   await evaluate(
     `const prompt=d.getElementById('confucius-prompt');prompt.dispatchEvent(new win.Event('pointerdown',{bubbles:true}));prompt.focus();return true;`,
@@ -265,7 +287,7 @@ try {
   );
   assert.equal(
     await evaluate(
-      `return !d.querySelector('.confucius-literature-dock').hidden;`,
+      `return !d.querySelector('.confucius-literature-review').hidden;`,
     ),
     true,
   );
@@ -280,7 +302,7 @@ try {
       latestAndCapsuleAligned: true,
       pointerPressDoesNotMoveControls: true,
       popupPreservesConversationScroll: true,
-      keyboardTabs: true,
+      sharedStatusFilter: true,
       escapeCloses: true,
       filterSurvivesReopen: true,
       latestClosesPopupAndScrolls: true,
@@ -294,7 +316,7 @@ try {
     `d.getElementById('confucius-literature-capsule').click();d.getElementById('confucius-new-session').click();return true;`,
   );
   await wait(
-    `return d.querySelector('.confucius-literature-dock').hidden && d.querySelector('.confucius-composer-dock').hidden;`,
+    `return d.querySelector('.confucius-literature-review').hidden && d.querySelector('.confucius-composer-dock').hidden;`,
   );
   await evaluate(`const empty=await host.rpc('task/new',{title:'零结果检索'});qa.emptyId=empty.id;const transport=host.openAlex.transport;
     host.openAlex.transport=async()=>({status:200,data:{results:[],meta:{count:0}}});
@@ -306,17 +328,17 @@ try {
     `d.querySelector('[data-task-id="'+qa.emptyId+'"] .confucius-task-open').click();return true;`,
   );
   await wait(
-    `return !d.querySelector('.confucius-literature-dock').hidden && d.getElementById('confucius-literature-capsule').textContent.includes('0 / 0');`,
+    `return !d.querySelector('.confucius-literature-review').hidden && d.getElementById('confucius-literature-capsule').textContent.includes('0 / 0');`,
   );
   await evaluate(
     `d.getElementById('confucius-literature-capsule').click();return true;`,
   );
   await wait(
-    `return !d.getElementById('confucius-literature-popup').hidden && d.querySelector('.confucius-literature-scroll').textContent.includes('当前条件下没有文献');`,
+    `return !d.getElementById('confucius-literature-popup').hidden && d.querySelector('.confucius-literature-review .ar-card-area').textContent.includes('当前条件下没有文献');`,
   );
   assert.equal(
     await evaluate(
-      `return d.querySelectorAll('.confucius-literature-history > div').length===1 && !d.querySelector('.confucius-literature-history').textContent.includes('另一轮检索') && d.querySelectorAll('.confucius-literature-row').length===0;`,
+      `return d.querySelectorAll('.confucius-literature-history > div').length===1 && !d.querySelector('.confucius-literature-history').textContent.includes('另一轮检索') && d.querySelectorAll('.confucius-literature-review .ar-list-row:not([hidden])').length===0;`,
     ),
     true,
   );
@@ -332,13 +354,13 @@ try {
     `d.querySelector('[data-task-id="'+qa.taskId+'"] .confucius-task-open').click();return true;`,
   );
   await wait(
-    `return !d.querySelector('.confucius-literature-dock').hidden && d.getElementById('confucius-literature-capsule').textContent.includes('2 / 100');`,
+    `return !d.querySelector('.confucius-literature-review').hidden && d.getElementById('confucius-literature-capsule').textContent.includes('2 / 100');`,
   );
   await evaluate(
     `d.getElementById('confucius-literature-capsule').click();return true;`,
   );
   await wait(
-    `return !d.getElementById('confucius-literature-popup').hidden && d.querySelectorAll('.confucius-literature-row').length===2;`,
+    `return !d.getElementById('confucius-literature-popup').hidden && d.querySelectorAll('.confucius-literature-review .ar-list-row:not([hidden])').length===80;`,
   );
   checks.push({
     editorContinuity: {
@@ -353,13 +375,13 @@ try {
   );
   assert.equal(before, 1);
   await evaluate(
-    `[...d.querySelectorAll('.confucius-literature button')].find(b=>b.textContent==='确认候选').click();return true;`,
+    `[...d.querySelectorAll('.confucius-literature-review button')].find(b=>b.textContent==='确认候选').click();return true;`,
   );
   await wait(
-    `return [...d.querySelectorAll('.confucius-literature button')].some(b=>b.textContent==='确认并获取全文');`,
+    `return [...d.querySelectorAll('.confucius-literature-review button')].some(b=>b.textContent==='确认并获取全文'&&!b.disabled);`,
   );
   await evaluate(
-    `[...d.querySelectorAll('.confucius-literature button')].find(b=>b.textContent==='确认并获取全文').click();return true;`,
+    `[...d.querySelectorAll('.confucius-literature-review button')].find(b=>b.textContent==='确认并获取全文').click();return true;`,
   );
   await wait(
     `const p=await host.literature.load(qa.taskId);return p.works[0].acquisition.status==='available' && p.works[1].acquisition.status==='failed';`,
@@ -399,11 +421,87 @@ try {
   checks.push({ forgedPdf: { parserRejected: true } });
   await wait(`return !!d.querySelector('.confucius-literature-drop');`);
   await evaluate(
-    `await host.rpc('literature/browser',{taskId:qa.taskId,id:'W900001'});const drop=d.querySelector('[data-work-id="W900001"]').querySelector('.confucius-literature-drop');const event=new win.Event('drop',{bubbles:true,cancelable:true});Object.defineProperty(event,'dataTransfer',{value:{files:[{path:${JSON.stringify(join(root, "scripts/fixtures/confucius-tool-e2e-fixture.pdf"))}}]}});drop.dispatchEvent(event);return true;`,
+    `qa.attachmentPrepareCalls=0;const nativeRpc=host.rpc.bind(host);host.rpc=(method,params)=>{if(method==='attachment/prepare')qa.attachmentPrepareCalls++;return nativeRpc(method,params);};
+    qa.dragFile=(target,type)=>{const event=new win.Event(type,{bubbles:true,cancelable:true});Object.defineProperty(event,'dataTransfer',{value:{types:['Files'],files:[{path:${JSON.stringify(join(root, "scripts/fixtures/confucius-tool-e2e-fixture.pdf"))}}],dropEffect:'none'}});target.dispatchEvent(event);return event.defaultPrevented;};
+    await host.rpc('literature/browser',{taskId:qa.taskId,id:'W900001'});const drop=d.querySelector('.confucius-literature-review .ar-list-row[data-entry-id="W900001"]').querySelector('.confucius-literature-drop');
+    qa.dragFile(d.querySelector('.confucius-workspace-root'),'dragenter');qa.dragFile(drop,'dragenter');qa.dragFile(drop,'dragover');return true;`,
+  );
+  await capture("manual-pdf-drag-target");
+  const targetFeedback = await evaluate(
+    `const hint=d.getElementById('confucius-drop-hint'),drop=d.querySelector('.confucius-literature-review .ar-list-row[data-entry-id="W900001"] .confucius-literature-drop');return {composerHintHidden:hint.getAttribute('aria-hidden')==='true',paperHighlighted:drop.dataset.over==='true'};`,
+  );
+  await evaluate(
+    `qa.dragFile(d.querySelector('.confucius-literature-review .ar-list-row[data-entry-id="W900001"] .confucius-literature-drop'),'drop');return true;`,
   );
   await wait(
     `return (await host.literature.get(qa.taskId,'W900001')).acquisition.status==='available';`,
   );
+  await capture("manual-pdf-after-drop");
+  const completedFeedback = await evaluate(
+    `const hint=d.getElementById('confucius-drop-hint');return {hintHidden:hint.getAttribute('aria-hidden')==='true',attachmentPrepareCalls:qa.attachmentPrepareCalls};`,
+  );
+  assert.deepEqual(targetFeedback, {
+    composerHintHidden: true,
+    paperHighlighted: true,
+  });
+  assert.deepEqual(completedFeedback, {
+    hintHidden: true,
+    attachmentPrepareCalls: 0,
+  });
+  checks.push({ manualPdfDragRouting: { targetFeedback, completedFeedback } });
+  const composerFeedback = await evaluate(
+    `const card=d.querySelector('.confucius-composer-card'),hint=d.getElementById('confucius-drop-hint'),timeline=d.querySelector('.confucius-timeline-pane');qa.dragFile(timeline,'dragenter');qa.dragFile(timeline,'dragover');const h=hint.getBoundingClientRect(),c=card.getBoundingClientRect(),s=win.getComputedStyle(hint);return {visible:hint.getAttribute('aria-hidden')==='false',inside:h.left>=c.left&&h.right<=c.right&&h.top>=c.top&&h.bottom<=c.bottom,noBlur:s.backdropFilter==='none',pointerTransparent:s.pointerEvents==='none'};`,
+  );
+  await wait(
+    `const hint=d.getElementById('confucius-drop-hint'),style=win.getComputedStyle(hint);return hint.getAttribute('aria-hidden')==='false' && style.visibility==='visible' && Number(style.opacity)===1;`,
+  );
+  assert.deepEqual(composerFeedback, {
+    visible: true,
+    inside: true,
+    noBlur: true,
+    pointerTransparent: true,
+  });
+  await capture("composer-local-drop-hint");
+  checks.push({ composerDropFeedback: composerFeedback });
+  const outsideDrop = await evaluate(
+    `const prevented=qa.dragFile(d.querySelector('.confucius-timeline-pane'),'drop');return {prevented,hintHidden:d.getElementById('confucius-drop-hint').getAttribute('aria-hidden')==='true',attachmentPrepareCalls:qa.attachmentPrepareCalls};`,
+  );
+  assert.deepEqual(outsideDrop, {
+    prevented: true,
+    hintHidden: true,
+    attachmentPrepareCalls: 0,
+  });
+  checks.push({ outsideComposerDropIgnored: outsideDrop });
+  const cancellations = await evaluate(
+    `const root=d.querySelector('.confucius-workspace-root'),hint=d.getElementById('confucius-drop-hint');return ['Escape','dragend','blur','dragleave'].map(reason=>{qa.dragFile(root,'dragenter');if(reason==='Escape')d.dispatchEvent(new win.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));else if(reason==='blur')win.dispatchEvent(new win.Event('blur'));else if(reason==='dragend')d.dispatchEvent(new win.Event('dragend',{bubbles:true}));else qa.dragFile(root,'dragleave');return {reason,hidden:hint.getAttribute('aria-hidden')==='true'};});`,
+  );
+  assert.ok(
+    cancellations.every((result) => result.hidden),
+    JSON.stringify(cancellations),
+  );
+  checks.push({ cancelledFileDrags: cancellations });
+  await evaluate(
+    `qa.savedInput=d.getElementById('confucius-prompt').value;d.getElementById('confucius-prompt').value='Preserved drag draft';qa.dragFile(d.getElementById('confucius-prompt'),'dragenter');qa.dragFile(d.getElementById('confucius-prompt'),'dragover');qa.dragFile(d.getElementById('confucius-prompt'),'drop');return true;`,
+  );
+  await wait(
+    `return !!d.querySelector('#confucius-attachment-tray .confucius-attachment-chip[data-status="ready"]');`,
+  );
+  const composerAttachment = await evaluate(
+    `return {prepares:qa.attachmentPrepareCalls,hintHidden:d.getElementById('confucius-drop-hint').getAttribute('aria-hidden')==='true',draftPreserved:d.getElementById('confucius-prompt').value==='Preserved drag draft',ready:!!d.querySelector('#confucius-attachment-tray .confucius-attachment-chip[data-status="ready"]')};`,
+  );
+  assert.deepEqual(composerAttachment, {
+    prepares: 1,
+    hintHidden: true,
+    draftPreserved: true,
+    ready: true,
+  });
+  await evaluate(
+    `d.querySelector('#confucius-attachment-tray .confucius-attachment-remove').click();d.getElementById('confucius-prompt').value=qa.savedInput;return true;`,
+  );
+  await wait(
+    `return !d.querySelector('#confucius-attachment-tray .confucius-attachment-chip');`,
+  );
+  checks.push({ composerPdfAttachment: composerAttachment });
   assert.equal(await evaluate(`return qa.opened.length;`), 1);
   await evaluate(
     `await host.rpc('literature/confirm',{taskId:qa.taskId,candidateRevision:host.sessions.get(qa.taskId).record.literature.candidateRevision});return true;`,
@@ -475,7 +573,7 @@ try {
   );
   await capture("subagent-popup");
   await evaluate(
-    `d.dispatchEvent(new win.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));return true;`,
+    `(d.getElementById('confucius-subagent-popup')?d:d.querySelector('.confucius-literature-review')).dispatchEvent(new win.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));return true;`,
   );
   assert.equal(
     await evaluate(
@@ -507,7 +605,7 @@ try {
     true,
   );
   await evaluate(
-    `d.dispatchEvent(new win.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));return true;`,
+    `(d.getElementById('confucius-subagent-popup')?d:d.querySelector('.confucius-literature-review')).dispatchEvent(new win.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));return true;`,
   );
   checks.push({
     subagentCompletionBubble: {
@@ -579,8 +677,8 @@ try {
   await capture("literature-continue-abstracts");
   // A preview started before Continue must not reopen after the user proceeds.
   await evaluate(`qa.originalRpc=host.rpc;
-    host.rpc=async function(method,params){const value=await qa.originalRpc.call(this,method,params);if(params?.taskId===qa.abstractTask){if(method==='literature/preview')await new Promise(resolve=>{qa.finishPreview=resolve;});if(method==='literature/continue')qa.deferContinueList=true;if(method==='literature/list'&&qa.deferContinueList){qa.deferContinueList=false;await new Promise(resolve=>{qa.finishContinueList=resolve;});}}return value;};
-    qa.previewButton=[...d.querySelectorAll('.confucius-literature-footer button')].find(b=>b.textContent==='确认候选');qa.previewButton.click();return true;`);
+    host.rpc=async function(method,params){const value=await qa.originalRpc.call(this,method,params);if(params?.taskId===qa.abstractTask){if(method==='literature/preview')await new Promise(resolve=>{qa.finishPreview=resolve;});if(method==='literature/continue')qa.deferContinueList=true;if(method==='literature/review/list'&&qa.deferContinueList){qa.deferContinueList=false;await new Promise(resolve=>{qa.finishContinueList=resolve;});}}return value;};
+    qa.previewButton=[...d.querySelectorAll('.confucius-literature-review .ar-domain-footer button')].find(b=>b.textContent==='确认候选');qa.previewButton.click();return true;`);
   await wait(`return !!qa.finishPreview;`);
   assert.equal(
     await evaluate(
@@ -602,7 +700,7 @@ try {
     `return d.querySelector('[data-task-id="'+qa.taskId+'"]').dataset.active==='true' && !d.getElementById('confucius-literature-dock')?.hidden;`,
   );
   await evaluate(
-    `d.getElementById('confucius-literature-capsule').click();qa.continuationFocus=d.querySelector('.confucius-literature-tabs button');qa.continuationFocus.focus();qa.finishContinueList();qa.finishPreview();host.rpc=qa.originalRpc;return true;`,
+    `d.getElementById('confucius-literature-capsule').click();qa.continuationFocus=d.querySelector('.confucius-literature-review .ar-view-switch button');qa.continuationFocus.focus();qa.finishContinueList();qa.finishPreview();host.rpc=qa.originalRpc;return true;`,
   );
   await evaluate(
     `await new Promise(resolve=>win.setTimeout(resolve,250));return true;`,
@@ -678,20 +776,24 @@ try {
     `d.getElementById('confucius-literature-capsule').click();return true;`,
   );
   await wait(
-    `return [...d.querySelectorAll('.confucius-literature-footer button')].some(b=>b.textContent==='确认候选'&&!b.disabled);`,
+    `return [...d.querySelectorAll('.confucius-literature-review .ar-domain-footer button')].some(b=>b.textContent==='确认候选'&&!b.disabled);`,
   );
   await evaluate(
-    `[...d.querySelectorAll('.confucius-literature-footer button')].find(b=>b.textContent==='确认候选').click();return true;`,
+    `[...d.querySelectorAll('.confucius-literature-review .ar-domain-footer button')].find(b=>b.textContent==='确认候选').click();return true;`,
   );
   await wait(`return !!d.querySelector('[data-confirm]:not(:disabled)');`);
   await evaluate(`d.querySelector('[data-confirm]').click();return true;`);
   await wait(
-    `const s=host.sessions.get(qa.partialTask).record.literature;return s.awaitingFulltext && s.available===1 && s.acquiring===1 && d.getElementById('confucius-literature-continue').textContent==='按当前结果继续' && d.querySelector('.confucius-literature-footer').textContent.includes('全文 1 / 2');`,
+    `const s=host.sessions.get(qa.partialTask).record.literature;return s.awaitingFulltext && s.available===1 && s.acquiring===1 && d.getElementById('confucius-literature-continue').textContent==='按当前结果继续' && d.querySelector('.confucius-literature-review .ar-domain-footer').textContent.includes('全文 1 / 2');`,
   );
   await capture("literature-continue-partial");
   for (const width of [420, 280]) {
     await evaluate(`win.resizeTo(${width},720);return true;`);
     await wait(`return win.innerWidth<=${width};`);
+    // Window resizing and container styles settle after the native size changes.
+    await evaluate(
+      `await new Promise(resolve=>win.requestAnimationFrame(()=>win.requestAnimationFrame(resolve)));return true;`,
+    );
     const geometry = await evaluate(
       `const p=d.getElementById('confucius-literature-popup').getBoundingClientRect(),b=d.getElementById('confucius-literature-continue').getBoundingClientRect();return {width:win.innerWidth,inside:b.left>=p.left&&b.right<=p.right&&b.top>=p.top&&b.bottom<=p.bottom,buttonHeight:b.height,popupHeight:p.height,popupHidden:d.getElementById('confucius-literature-popup').hidden,buttonHidden:d.getElementById('confucius-literature-continue').hidden,visible:b.height>=28,overflow:d.documentElement.scrollWidth>d.documentElement.clientWidth+1};`,
     );
@@ -707,10 +809,10 @@ try {
   await evaluate(`const p=await host.literature.load(qa.partialTask);delete p.works[1].abstract;const item=Zotero.Items.getByLibraryAndKey(p.works[1].acquisition.item.libraryID,p.works[1].acquisition.item.key);item.setField('abstractNote','');await item.saveTx();await host.literature.save(p);
     host.openAlex.transport=async(url,...args)=>url.includes('/works/W900001')?new Promise(resolve=>{qa.finishAbstract=resolve;}):qa.baseTransport(url,...args);return true;`);
   await wait(
-    `return !!d.querySelector('[data-work-id="W900001"] [data-action="abstract"]');`,
+    `return !!d.querySelector('.confucius-literature-review .ar-list-row[data-entry-id="W900001"] [data-action="abstract"]');`,
   );
   await evaluate(
-    `d.querySelector('[data-work-id="W900001"] details').open=true;d.querySelector('[data-work-id="W900001"] [data-action="abstract"]').click();return true;`,
+    `d.querySelector('.confucius-literature-review .ar-list-row[data-entry-id="W900001"] details').open=true;d.querySelector('.confucius-literature-review .ar-list-row[data-entry-id="W900001"] [data-action="abstract"]').click();return true;`,
   );
   await wait(`return !!qa.finishAbstract;`);
   assert.equal(
@@ -719,11 +821,11 @@ try {
     ),
     true,
   );
-  await evaluate(`qa.beforePartialRpc=host.rpc;host.rpc=async function(method,params){const value=await qa.beforePartialRpc.call(this,method,params);if(params?.taskId===qa.partialTask){if(method==='literature/continue')qa.deferPartialList=true;if(method==='literature/list'&&qa.deferPartialList){qa.deferPartialList=false;await new Promise(resolve=>qa.finishPartialList=resolve);}}return value;};
-    d.querySelector('.confucius-literature-header button').focus();d.getElementById('confucius-literature-continue').click();return true;`);
+  await evaluate(`qa.beforePartialRpc=host.rpc;host.rpc=async function(method,params){const value=await qa.beforePartialRpc.call(this,method,params);if(params?.taskId===qa.partialTask){if(method==='literature/continue')qa.deferPartialList=true;if(method==='literature/review/list'&&qa.deferPartialList){qa.deferPartialList=false;await new Promise(resolve=>qa.finishPartialList=resolve);}}return value;};
+    d.querySelector('.confucius-literature-review .ar-header > button').focus();d.getElementById('confucius-literature-continue').click();return true;`);
   await wait(`return !!qa.finishPartialList;`);
   await evaluate(
-    `qa.partialFocus=d.querySelector('.confucius-literature-filter');qa.partialFocus.closest('details').open=true;qa.partialFocus.focus();qa.finishPartialList();host.rpc=qa.beforePartialRpc;return true;`,
+    `qa.partialFocus=d.querySelector('.confucius-literature-review .ar-search');qa.partialFocus.focus();qa.finishPartialList();host.rpc=qa.beforePartialRpc;return true;`,
   );
   await evaluate(
     `await new Promise(resolve=>win.setTimeout(resolve,250));return true;`,
@@ -776,30 +878,38 @@ try {
   await evaluate(
     `const main=Zotero.getMainWindow();main.document.getElementById('confucius-toolbar-button').dispatchEvent(new main.Event('command'));return true;`,
   );
-  await wait(`return !!d?.querySelector('.confucius-literature');`);
+  await wait(`return !!d?.querySelector('.confucius-literature-review');`);
   await evaluate(
     `win.resizeTo(420,720);const timeline=d.querySelector('.confucius-timeline-pane');timeline.scrollTop=0;timeline.dispatchEvent(new win.Event('scroll'));return true;`,
   );
   await new Promise((resolve) => setTimeout(resolve, 1000));
   await wait(
-    `return !d.querySelector('.confucius-literature-dock').hidden && !d.getElementById('confucius-latest').hidden;`,
+    `return !d.querySelector('.confucius-literature-review').hidden && !d.getElementById('confucius-latest').hidden;`,
   );
+  assert.equal(
+    await evaluate(
+      `return d.getElementById('confucius-literature-popup').hidden && !d.getElementById('confucius-literature-capsule').dataset.reminder;`,
+    ),
+    true,
+  );
+  checks.push({ historyReopenStaysMinimized: true });
   await evaluate(
     `d.getElementById('confucius-literature-capsule').click();return true;`,
   );
   await wait(`return !d.getElementById('confucius-literature-popup').hidden;`);
   const narrow = await evaluate(
-    `const popup=d.getElementById('confucius-literature-popup'),scroll=popup.querySelector('.confucius-literature-scroll');scroll.scrollTop=scroll.scrollHeight;const rect=popup.getBoundingClientRect();return {left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom,viewport:win.innerWidth,scrollable:scroll.scrollHeight>scroll.clientHeight,reachedEnd:Math.abs(scroll.scrollHeight-scroll.scrollTop-scroll.clientHeight)<2};`,
+    `const popup=d.getElementById('confucius-literature-popup'),scroll=popup.querySelector('.ar-list');scroll.scrollTop=scroll.scrollHeight;const rect=popup.getBoundingClientRect();return {left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom,viewport:win.innerWidth,bodyHeight:scroll.clientHeight,scrollable:scroll.scrollHeight>scroll.clientHeight,reachedEnd:Math.abs(scroll.scrollHeight-scroll.scrollTop-scroll.clientHeight)<2};`,
   );
   assert.ok(
     narrow.left >= 7 &&
       narrow.right <= narrow.viewport - 7 &&
       narrow.scrollable &&
+      narrow.bodyHeight >= 48 &&
       narrow.reachedEnd,
   );
   checks.push({ narrowPopover: narrow });
   await evaluate(
-    `d.querySelector('.confucius-literature-scroll').scrollTop=0;return true;`,
+    `d.querySelector('.confucius-literature-review .ar-list').scrollTop=0;return true;`,
   );
   await capture("literature-dark-narrow");
   await evaluate(
@@ -829,6 +939,12 @@ try {
     true,
   );
   await capture("literature-dark-280");
+  assert.ok(
+    await evaluate(
+      `return d.querySelector('.confucius-literature-review .ar-list').clientHeight>=48;`,
+    ),
+  );
+  checks.push({ narrowListKeepsReadableSpace: true });
   assert.equal(
     await evaluate(
       `const p=d.getElementById('confucius-literature-popup').getBoundingClientRect(),b=d.getElementById('confucius-literature-continue').getBoundingClientRect();return b.width>0&&b.height>=28&&b.left>=p.left&&b.right<=p.right&&b.top>=p.top&&b.bottom<=p.bottom;`,
@@ -837,6 +953,21 @@ try {
   );
   checks.push({ englishContinueAt280: true });
   checks.push({ smallestDock });
+  await evaluate(
+    `qa.dragFile(d.getElementById('confucius-prompt'),'dragenter');return true;`,
+  );
+  await wait(
+    `const hint=d.getElementById('confucius-drop-hint'),style=win.getComputedStyle(hint);return hint.getAttribute('aria-hidden')==='false' && style.visibility==='visible' && Number(style.opacity)===1;`,
+  );
+  const narrowHint = await evaluate(
+    `const hint=d.getElementById('confucius-drop-hint').getBoundingClientRect(),card=d.querySelector('.confucius-composer-card').getBoundingClientRect();return {inside:hint.left>=card.left&&hint.right<=card.right&&hint.top>=card.top&&hint.bottom<=card.bottom,noOverflow:d.documentElement.scrollWidth<=d.documentElement.clientWidth+1};`,
+  );
+  assert.deepEqual(narrowHint, { inside: true, noOverflow: true });
+  await capture("composer-dark-drop-280");
+  await evaluate(
+    `d.dispatchEvent(new win.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));return true;`,
+  );
+  checks.push({ narrowComposerDropHint: narrowHint });
   assert.equal(
     await evaluate(
       `return d.documentElement.scrollWidth<=d.documentElement.clientWidth+1;`,
@@ -868,33 +999,34 @@ try {
     assert.equal(continued.summary.read, 0);
   }
   checks.push({ continuedChoicesSurviveRestart: true });
-  try {
-    const live = await instance.rpc("task/new", {
-      title: "OpenAlex anonymous connection check",
-    });
-    const response = await instance.rpc(
-      "literature/search",
-      {
-        taskId: live.id,
-        query: "bibliographic coupling",
-        fromYear: 2020,
-        toYear: 2026,
-        sort: "relevance",
-      },
-      45000,
-    );
-    checks.push({
-      onlineOpenAlex: {
-        authenticated: false,
-        pool: response.summary.pool,
-        total: response.queries[0]?.total,
-      },
-    });
-  } catch (error) {
-    checks.push({
-      onlineOpenAlex: { authenticated: false, error: String(error) },
-    });
-  }
+  if (process.env.CONFUCIUS_LITERATURE_ONLINE === "1")
+    try {
+      const live = await instance.rpc("task/new", {
+        title: "OpenAlex anonymous connection check",
+      });
+      const response = await instance.rpc(
+        "literature/search",
+        {
+          taskId: live.id,
+          query: "bibliographic coupling",
+          fromYear: 2020,
+          toYear: 2026,
+          sort: "relevance",
+        },
+        45000,
+      );
+      checks.push({
+        onlineOpenAlex: {
+          authenticated: false,
+          pool: response.summary.pool,
+          total: response.queries[0]?.total,
+        },
+      });
+    } catch (error) {
+      checks.push({
+        onlineOpenAlex: { authenticated: false, error: String(error) },
+      });
+    }
   console.log(
     JSON.stringify(
       { passed: true, checks, liveKey: "not used", onlineModels: "not used" },

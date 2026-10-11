@@ -132,6 +132,8 @@ type EventPayloads = {
   literature_updated: {
     summary: import("./literature").LiteratureSummary;
     sources: import("./research").LockedContextSnapshot;
+    /** Newly discovered works only; choices and acquisition receipts stay quiet. */
+    workIds?: string[];
   };
   session_updated: { title?: string; mode?: SessionMode };
   turn_started: { userText: string };
@@ -155,7 +157,7 @@ type EventPayloads = {
   };
   approval_required: { request: ApprovalRequest };
   approval_resolved: { resolution: ApprovalResolution };
-  annotation_review_changed: { revision: number };
+  annotation_review_changed: { revision: number; batchId?: string };
   artifact_upserted: { artifact: ArtifactSummary };
   text_delta: {
     text: string;

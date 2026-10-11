@@ -1821,19 +1821,21 @@ describe("AgentHost lifecycle ownership", () => {
     const { host, state, backend } = fixture();
     state.record.run = run(state.record);
     state.activeTurnId = "silent-runtime";
-    const previous = Reflect.get(Zotero, "getMainWindow");
+    const previous = Reflect.get(globalThis, "ChromeUtils");
     let tick: (() => void) | undefined;
     let delay = 0;
-    Reflect.set(Zotero, "getMainWindow", () => ({
-      setTimeout: (callback: () => void, ms: number) => {
-        tick = callback;
-        delay = ms;
-        return 1;
-      },
-      clearTimeout: () => {
-        tick = undefined;
-      },
-    }));
+    Reflect.set(globalThis, "ChromeUtils", {
+      importESModule: () => ({
+        setTimeout: (callback: () => void, ms: number) => {
+          tick = callback;
+          delay = ms;
+          return 1;
+        },
+        clearTimeout: () => {
+          tick = undefined;
+        },
+      }),
+    });
     try {
       let callbacks: BackendCallbacks | undefined;
       backend.startTurn = async (_input, received) => {
@@ -1883,7 +1885,7 @@ describe("AgentHost lifecycle ownership", () => {
       assert.equal(state.events.length, count);
       assert.equal(tick, undefined);
     } finally {
-      Reflect.set(Zotero, "getMainWindow", previous);
+      Reflect.set(globalThis, "ChromeUtils", previous);
     }
   });
 
@@ -2065,12 +2067,17 @@ describe("AgentHost lifecycle ownership", () => {
     it(`cancels tasks and writes the final recovery snapshot before clearing sessions${runtimeFailure ? " even after runtime disposal fails" : ""}`, async () => {
       const { host, state } = fixture();
       const previousZotero = Reflect.get(globalThis, "Zotero");
+      const previousChromeUtils = Reflect.get(globalThis, "ChromeUtils");
       const previousToolkit = Reflect.get(globalThis, "ztoolkit");
       const clearedTimers: number[] = [];
       Reflect.set(globalThis, "Zotero", {
-        getMainWindows: () => [
-          { clearTimeout: (id: number) => clearedTimers.push(id) },
-        ],
+        getMainWindows: () => [],
+        getMainWindow: () => null,
+      });
+      Reflect.set(globalThis, "ChromeUtils", {
+        importESModule: () => ({
+          clearTimeout: (id: number) => clearedTimers.push(id),
+        }),
       });
       Reflect.set(globalThis, "ztoolkit", { log() {} });
       const controller = new AbortController();
@@ -2179,6 +2186,7 @@ describe("AgentHost lifecycle ownership", () => {
       } finally {
         saving.resolve();
         Reflect.set(globalThis, "Zotero", previousZotero);
+        Reflect.set(globalThis, "ChromeUtils", previousChromeUtils);
         Reflect.set(globalThis, "ztoolkit", previousToolkit);
       }
     });

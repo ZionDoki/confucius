@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { IsolatedZotero, until } from "./lib/zotero-live.mjs";
 import { annotationReviewPanelRegressions } from "./lib/annotation-review-panel.mjs";
+import { literatureReviewPanelRegressions } from "./lib/literature-review-panel.mjs";
 import { resolveZoteroExecutable } from "../apps/zotero-addon/src/development/zoteroExecutable.ts";
 const root = resolve(import.meta.dirname, ".."),
   output = join(root, "output/annotation-review-minimize-acceptance");
@@ -101,6 +102,16 @@ try {
     `const root=d.querySelector('.confucius-annotation-review'),draft=d.querySelector('#confucius-prompt');draft.value='Continue checking evidence';globalThis.reviewDraftBox=draft.getBoundingClientRect().toJSON();root.querySelector('.ar-capsule').click();return {background:win.getComputedStyle(root.querySelector('.ar-popup')).backgroundColor,blur:win.getComputedStyle(root.querySelector('.ar-popup')).backdropFilter};`,
   );
   await capture("zotero-deck");
+  check(
+    "Native hover shows gradient arrows and a real edge click turns the card",
+    await ui(
+      `const r=d.querySelector('.confucius-annotation-review'),range=r.querySelector('.ar-range');range.value='2';range.dispatchEvent(new win.Event('input',{bubbles:true}));const p=r.querySelector('.ar-paper').getBoundingClientRect();win.windowUtils.sendMouseEvent('mousemove',p.x+p.width/2,p.y+16,0,0,0);await new Promise(resolve=>win.setTimeout(resolve,200));const next=r.querySelector('.ar-card-next'),style=win.getComputedStyle(next),box=next.getBoundingClientRect(),visible=style.opacity==='1'&&style.backgroundImage.startsWith('linear-gradient');win.windowUtils.sendMouseEvent('mousedown',box.x+box.width/2,box.y+box.height/2,0,1,0);win.windowUtils.sendMouseEvent('mouseup',box.x+box.width/2,box.y+box.height/2,0,1,0);const moved=range.value==='3';range.value='2';range.dispatchEvent(new win.Event('input',{bubbles:true}));return visible&&moved;`,
+    ),
+  );
+  await capture("zotero-deck-hover");
+  await ui(
+    `const range=d.querySelector('.ar-range');range.value='1';range.dispatchEvent(new win.Event('input',{bubbles:true}));return true;`,
+  );
   check(
     "The active card or list view has a visible selected state",
     await ui(
@@ -352,6 +363,121 @@ try {
   );
   for (const name of await annotationReviewPanelRegressions(root, ui))
     check(name);
+  for (const name of (await literatureReviewPanelRegressions(root, ui)).checks)
+    check(name);
+  const liveTask = await evaluate(
+    `const q=globalThis.reviewQA;q.livePDF=await Zotero.Attachments.importFromFile({file:${JSON.stringify(join(root, "scripts/fixtures/confucius-tool-e2e-fixture.pdf"))},parentItemID:q.pdf.parentItemID});const reader=await Zotero.Reader.open(q.livePDF.id);await reader._initPromise;q.liveTask=q.host.sessionNew({title:'First live annotation arrival'});const context={taskId:q.liveTask.id,taskTitle:q.liveTask.title,agent:'native'};const pages=await q.provider.call('get_pages',{libraryID:q.livePDF.libraryID,key:q.livePDF.key,start:1,end:2},undefined,context);if(!pages.ok)throw new Error(JSON.stringify(pages));q.liveAnchors=[...JSON.stringify(pages.data).matchAll(/\\[anchor:([^\\]]+)\\]/g)].map(x=>x[1]);q.liveCall=annotations=>q.provider.call('commit_annotations',{libraryID:q.livePDF.libraryID,key:q.livePDF.key,annotations},undefined,context);return {id:q.liveTask.id};`,
+  );
+  await until(
+    () =>
+      ui(
+        `return !!d.querySelector('[data-task-id="${liveTask.id}"] .confucius-task-open');`,
+      ),
+    30000,
+  );
+  await ui(
+    `d.querySelector('[data-task-id="${liveTask.id}"] .confucius-task-open').click();return true;`,
+  );
+  await until(
+    () => ui(`return d.querySelector('.confucius-annotation-review').hidden;`),
+    30000,
+  );
+  await ui(
+    `const r=d.querySelector('.confucius-annotation-review'),capsule=r.querySelector('.ar-capsule'),draft=d.querySelector('#confucius-prompt');draft.value='Keep this draft while the Agent works';draft.focus();globalThis.arrivalMonitor={reminders:0};globalThis.arrivalObserver=new win.MutationObserver(records=>{if(records.some(record=>record.attributeName==='data-reminder')&&capsule.dataset.reminder==='true')globalThis.arrivalMonitor.reminders++;});globalThis.arrivalObserver.observe(capsule,{attributes:true,attributeFilter:['data-reminder']});return true;`,
+  );
+  const firstLive = await evaluate(
+    `const q=globalThis.reviewQA;const result=await q.liveCall([{anchor:q.liveAnchors[0],comment:'Live arrival one'}]);return {result,pool:await q.host.reviews().list(q.liveTask.id)};`,
+  );
+  check(
+    "A fresh live Agent submission creates the first review batch",
+    firstLive.result.ok &&
+      firstLive.pool.batches.length === 1 &&
+      firstLive.pool.batches[0].entries[0].status === "pending",
+  );
+  await until(
+    () =>
+      ui(
+        `const r=d.querySelector('.confucius-annotation-review');return !r.hidden&&!r.querySelector('.ar-popup').hidden;`,
+      ),
+    30000,
+  );
+  check(
+    "The real workspace automatically opens the first live batch while preserving composer focus and draft",
+    await ui(
+      `const r=d.querySelector('.confucius-annotation-review'),draft=d.querySelector('#confucius-prompt');return r.dataset.view==='card'&&d.activeElement===draft&&draft.value==='Keep this draft while the Agent works'&&globalThis.arrivalMonitor.reminders===0;`,
+    ),
+  );
+  await capture("zotero-first-live-batch");
+  check(
+    "Auto-opening uses the same overlay height without moving the composer on minimize",
+    await ui(
+      `const r=d.querySelector('.confucius-annotation-review'),draft=d.querySelector('#confucius-prompt'),y=draft.getBoundingClientRect().y;r.querySelector('.ar-header > button').click();draft.focus();return Math.abs(y-draft.getBoundingClientRect().y)<1;`,
+    ),
+  );
+  const secondLive = await evaluate(
+    `const q=globalThis.reviewQA;const result=await q.liveCall([{anchor:q.liveAnchors[1],comment:'Live arrival two'}]);return {result,pool:await q.host.reviews().list(q.liveTask.id)};`,
+  );
+  await until(() => ui(`return globalThis.arrivalMonitor.reminders>0;`), 30000);
+  check(
+    "A later real Agent submission animates the capsule while retaining minimized state and focus",
+    await ui(
+      `const r=d.querySelector('.confucius-annotation-review'),draft=d.querySelector('#confucius-prompt');return r.querySelector('.ar-popup').hidden&&r.querySelector('.ar-capsule-new').textContent==='+1'&&d.activeElement===draft&&draft.value==='Keep this draft while the Agent works';`,
+    ),
+  );
+  check(
+    "The real reminder floats the whole capsule up 6px at exactly 1.12 scale without moving the composer",
+    await ui(
+      `const c=d.querySelector('.ar-capsule'),draft=d.querySelector('#confucius-prompt'),y=draft.getBoundingClientRect().y,a=c.getAnimations().find(a=>a.animationName==='confucius-ar-reminder');if(!a)throw new Error('Reminder animation missing');a.pause();a.currentTime=Number(a.effect.getTiming().duration)*.4;const m=new win.DOMMatrix(win.getComputedStyle(c).transform),box=c.getBoundingClientRect();return Math.abs(m.a-1.12)<.001&&Math.abs(m.d-1.12)<.001&&Math.abs(m.m42+6)<.01&&Math.abs(draft.getBoundingClientRect().y-y)<1&&c.contains(d.elementFromPoint(box.x+box.width/2,box.y+box.height/2));`,
+    ),
+  );
+  await capture("zotero-arrival-reminder");
+  await ui(
+    `d.querySelector('.ar-capsule').getAnimations().find(a=>a.animationName==='confucius-ar-reminder').play();return true;`,
+  );
+  await until(
+    () => ui(`return !d.querySelector('.ar-capsule').dataset.reminder;`),
+    30000,
+  );
+  check(
+    "The real capsule reminder finishes and returns to its resting size and elevation",
+    await ui(
+      `const c=d.querySelector('.ar-capsule');return c.getAnimations({subtree:true}).every(a=>!a.animationName?.startsWith('confucius-ar-reminder'))&&win.getComputedStyle(c).transform==='none';`,
+    ),
+  );
+  const reminderCount = await ui(`return globalThis.arrivalMonitor.reminders;`);
+  await evaluate(
+    `const q=globalThis.reviewQA;await q.liveCall([{anchor:q.liveAnchors[1],comment:'Live arrival two'}]);return true;`,
+  );
+  await ui(
+    `await new Promise(resolve=>win.setTimeout(resolve,1200));return true;`,
+  );
+  const repeatedArrival = await ui(
+    `const r=d.querySelector('.confucius-annotation-review');return {reminders:globalThis.arrivalMonitor.reminders,hidden:r.querySelector('.ar-popup').hidden,copy:r.querySelector('.ar-capsule').textContent};`,
+  );
+  report.repeatedArrival = {
+    expectedReminders: reminderCount,
+    ...repeatedArrival,
+  };
+  check(
+    "Repeated real Agent suggestions do not replay the reminder",
+    repeatedArrival.reminders === reminderCount && repeatedArrival.hidden,
+  );
+  await instance.rpc("annotation/review/decide", {
+    taskId: liveTask.id,
+    action: "reject",
+    entries: [entry(secondLive.pool.batches[1])],
+  });
+  await until(
+    () => ui(`return d.querySelector('.ar-capsule-new').hidden;`),
+    30000,
+  );
+  check(
+    "Real review decisions update results without reopening or animating the capsule",
+    await ui(
+      `return globalThis.arrivalMonitor.reminders===${reminderCount}&&d.querySelector('.ar-popup').hidden;`,
+    ),
+  );
+  await ui(`globalThis.arrivalObserver.disconnect();return true;`);
   await evaluate("await globalThis.reviewQA.host.persistNow();return true;");
   await instance.stop({ graceful: true });
   await instance.launch();
@@ -369,6 +495,35 @@ try {
     `const pdf=Zotero.Items.getByLibraryAndKey(${fixture.libraryID},${JSON.stringify(fixture.key)});await pdf.reload(['childItems'],true);return pdf.getAnnotations().length;`,
   );
   check("Restart never replays native writes", count === 3);
+  await evaluate(
+    `const main=Zotero.getMainWindow();main.document.getElementById('confucius-toolbar-button').dispatchEvent(new main.Event('command'));return true;`,
+  );
+  await until(
+    () =>
+      ui(
+        `return !!d?.querySelector('[data-task-id="${liveTask.id}"] .confucius-task-open');`,
+      ),
+    30000,
+  );
+  await ui(
+    `d.querySelector('[data-task-id="${liveTask.id}"] .confucius-task-open').click();return true;`,
+  );
+  await until(
+    () =>
+      ui(
+        `return !!d.querySelector('.confucius-annotation-review:not([hidden])');`,
+      ),
+    30000,
+  );
+  await ui(
+    `await new Promise(resolve=>win.setTimeout(resolve,1200));return true;`,
+  );
+  check(
+    "Restarting and loading historical submission events neither opens review nor replays the reminder",
+    await ui(
+      `const r=d.querySelector('.confucius-annotation-review'),c=r.querySelector('.ar-capsule');return r.querySelector('.ar-popup').hidden&&!c.dataset.reminder&&c.getAnimations({subtree:true}).every(a=>!a.animationName?.startsWith('confucius-ar-reminder'));`,
+    ),
+  );
 } catch (e) {
   report.error = String(e);
   throw e;

@@ -21,6 +21,74 @@ const batch = (id: string): AnnotationReviewBatch => ({
     status: "pending",
   })),
 });
+
+it("opens the first live batch once even when a snapshot or receipt arrived ahead of its event", () => {
+  const m = new AnnotationReviewModel("task");
+  m.update({ taskId: "task", revision: 1, batches: [batch("first")] });
+  assert.equal(m.arrived([]), undefined, "History does not signal an arrival");
+  assert.equal(m.arrived(["not-yet-loaded"]), undefined);
+  assert.equal(m.arrived(["first"]), "open");
+  assert.equal(m.unseen.size, 0);
+  assert.equal(m.arrived(["first"]), undefined);
+  const first = batch("first");
+  first.entries[0].status = "accepted";
+  m.update({ taskId: "task", revision: 2, batches: [first] });
+  assert.equal(m.arrived([]), undefined, "Write receipts never notify");
+  assert.equal(m.arrived(["first"]), undefined);
+  m.update({
+    taskId: "task",
+    revision: 3,
+    batches: [first, batch("not-yet-loaded")],
+  });
+  assert.equal(m.arrived(["not-yet-loaded"]), "remind");
+});
+
+it("coalesces first arrivals and reminds on later batches without changing the active view", () => {
+  const m = new AnnotationReviewModel("task");
+  m.update({
+    taskId: "task",
+    revision: 2,
+    batches: [batch("first"), batch("second")],
+  });
+  assert.equal(m.arrived(["first", "second"]), "open");
+  assert.deepEqual([...m.unseen], ["second"]);
+  m.presentation = "list";
+  m.turn(1);
+  m.selectAll(true);
+  m.view.query = "first";
+  m.view.scroll = 120;
+  const view = m.view,
+    current = m.current()?.key,
+    selection = [...view.selected];
+  m.update({
+    taskId: "task",
+    revision: 3,
+    batches: [batch("first"), batch("second"), batch("third")],
+  });
+  assert.equal(m.arrived(["third", "second"]), "remind");
+  assert.equal(m.arrived(["third"]), undefined);
+  assert.equal(m.view, view);
+  assert.equal(m.presentation, "list");
+  assert.equal(m.current()?.key, current);
+  assert.deepEqual([...view.selected], selection);
+  assert.equal(view.query, "first");
+  assert.equal(view.scroll, 120);
+});
+
+it("keeps old completed batches quiet and marks a new batch when its live event follows initial history loading", () => {
+  const m = new AnnotationReviewModel("task"),
+    done = batch("done");
+  done.entries.forEach((entry) => (entry.status = "accepted"));
+  m.update({
+    taskId: "task",
+    revision: 4,
+    batches: [done, batch("new")],
+  });
+  assert.equal(m.arrived(["done"]), undefined);
+  assert.equal(m.arrived(["new"]), "remind");
+  assert.deepEqual([...m.unseen], ["new"]);
+});
+
 it("preserves card, search, scroll and the explicit selection across incoming batches", () => {
   const m = new AnnotationReviewModel("task");
   m.update({ taskId: "task", revision: 1, batches: [batch("a")] });
@@ -154,4 +222,35 @@ it("view new mounts the first unresolved new entry even beyond a long queue and 
   m.update({ taskId: "task", revision: 3, batches: [older, newer, checking] });
   assert.equal(m.viewNew()?.batch.id, "checking");
   assert.equal(m.view.status, "all");
+});
+
+it("chooses cards below ten and a list from ten, after an initially empty pool", () => {
+  for (const count of [0, 1, 9, 10, 11]) {
+    const model = new AnnotationReviewModel("task");
+    model.update({ taskId: "task", revision: 0, batches: [] });
+    const b = batch("sized");
+    b.entries = Array.from({ length: count }, (_, index) => ({
+      ...b.entries[0],
+      id: String(index),
+    }));
+    model.update({ taskId: "task", revision: 1, batches: [b] });
+    assert.equal(model.presentation, count >= 10 ? "list" : "card");
+  }
+});
+it("does not change the chosen presentation on arrivals, filtering or smaller snapshots", () => {
+  const model = new AnnotationReviewModel("task"),
+    a = batch("first");
+  model.update({ taskId: "task", revision: 0, batches: [a] });
+  model.presentation = "card";
+  const many = batch("many");
+  many.entries = Array.from({ length: 12 }, (_, i) => ({
+    ...many.entries[0],
+    id: String(i),
+  }));
+  model.update({ taskId: "task", revision: 1, batches: [a, many] });
+  model.filter("all", "many");
+  assert.equal(model.presentation, "card");
+  model.presentation = "list";
+  model.update({ taskId: "task", revision: 2, batches: [a] });
+  assert.equal(model.presentation, "list");
 });

@@ -69,7 +69,8 @@ function intent(...ids: string[]): PreparedOperation {
 function setup() {
   const storage = memoryJsonStorage(),
     operations = new Map<string, OperationRecord>(),
-    calls: PreparedOperation[] = [];
+    calls: PreparedOperation[] = [],
+    changes: Array<{ taskId: string; revision: number; batchId?: string }> = [];
   let next = 0;
   const execute = async (
     snapshot: PreparedOperation,
@@ -113,12 +114,14 @@ function setup() {
     execute,
     operation: async (id: string) => operations.get(id),
     reconcile: async () => {},
-    changed: () => {},
+    changed: (taskId: string, revision: number, batchId?: string) => {
+      changes.push({ taskId, revision, batchId });
+    },
   };
   const service = new AnnotationReviewService(options);
   const stage = (ids: string[], op = ids.join("_")) =>
     service.stage(intent(...ids), { taskId: "task", operationId: op });
-  return { service, storage, options, stage, calls, operations };
+  return { service, storage, options, stage, calls, operations, changes };
 }
 it("lets unlocatable suggestions be dismissed and restored without becoming writable", async () => {
   const t = setup(),
@@ -211,6 +214,10 @@ it("publishes multiple immutable batches without native writes, and deduplicates
   assert.equal(t.calls.length, 0);
   assert.equal(pool.batches.length, 2);
   assert.equal(pool.batches[0].entries[0].annotationKey, undefined);
+  assert.deepEqual(
+    t.changes.map((change) => change.batchId),
+    pool.batches.map((batch) => batch.id),
+  );
   await t.service.decide({
     taskId: "task",
     action: "reject",
@@ -223,6 +230,10 @@ it("publishes multiple immutable batches without native writes, and deduplicates
   assert.equal(pool.batches[0].entries[0].status, "rejected");
   assert.equal(t.calls.length, 0);
   assert(!("intent" in pool.batches[0]));
+  assert(
+    t.changes.slice(2).every((change) => change.batchId === undefined),
+    "Decisions and duplicate submissions must not signal a new batch",
+  );
   assert(!("context" in pool.batches[0]));
 });
 it("does not let an older unresolved batch overwrite an entry being retried", async () => {

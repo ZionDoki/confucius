@@ -97,8 +97,9 @@ function fixture({ failShutdown = false, failToolbar = false } = {}) {
         assert.equal(addon.data.initialized, true);
         calls.push("workspace.restore");
       },
-      closeWorkspaceSidebar(win) {
+      closeWorkspaceForMainWindow(win) {
         calls.push(`sidebar.dispose.${win.id}`);
+        calls.push(`workspace.owner-dispose.${win.id}`);
       },
       closeWorkspaceWindow() {
         calls.push("workspace.dispose");
@@ -221,6 +222,15 @@ it("real hooks continue cleanup after window or host disposal fails", async () =
   ])
     assert.ok(f.calls.includes(value));
   assert.equal(f.Zotero.Confucius, undefined);
+});
+
+it("closing a main window releases its workspace without shutting down the host", async () => {
+  const f = fixture({ failToolbar: true });
+  await f.hooks.onMainWindowUnload(f.windows[0]);
+  assert.ok(f.calls.includes("workspace.owner-dispose.first"));
+  assert.equal(f.calls.includes("workspace.owner-dispose.second"), false);
+  assert.equal(f.calls.includes("host.dispose"), false);
+  assert.equal(f.addon.data.alive, true);
 });
 
 it("a startup that returns after shutdown cannot register old window handlers", async () => {

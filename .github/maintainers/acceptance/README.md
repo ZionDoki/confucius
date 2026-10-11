@@ -17,6 +17,7 @@ below preserve test sections formerly mixed into the runtime and report guides.
 
 | Record                                          | Original language  |
 | ----------------------------------------------- | ------------------ |
+| [Release 0.6.1-beta.1](release-0.6.1-beta.1.md) | English            |
 | [Release 0.6.0 stable](release-0.6.0.md)        | English            |
 | [Release 0.6.0-beta.1](release-0.6.0-beta.1.md) | Simplified Chinese |
 | [Release 0.5.1-beta.1](release-0.5.1-beta.1.md) | Simplified Chinese |
@@ -42,6 +43,9 @@ below preserve test sections formerly mixed into the runtime and report guides.
 
 | Record                                                                                                              | Original language  |
 | ------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| [Local file-drop feedback — 2026-10-11](file-drop-2026-10-11.md)                                                    | English            |
+| [Shared candidate and annotation review — 2026-10-11](shared-review-2026-10-11.md)                                  | English            |
+| [Workspace lifetime — 2026-10-10](workspace-lifetime-2026-10-10.md)                                                 | English            |
 | [User feedback fixes — 2026-10-10](user-feedback-2026-10-10.md)                                                     | English            |
 | [Agent permissions and memory review — 2026-10-07](agent-memory-review-2026-10-07.md)                               | Simplified Chinese |
 | [Context and memory refactor — 2026-09-08](context-memory-refactor-2026-09-08.md)                                   | Simplified Chinese |

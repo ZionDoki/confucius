@@ -267,6 +267,8 @@ import {
 import { getPref, setPref, hasUserPref } from "../../utils/prefs";
 import {
   createAbortController,
+  scheduleHostTimeout,
+  cancelHostTimeout,
   hostFetch,
   hostFetchCanStream,
 } from "../../utils/webPlatform";
@@ -933,14 +935,18 @@ export class AgentHost {
         context: state.record.context,
       });
     },
-    changed: async (id, summary) => {
+    changed: async (id, summary, workIds) => {
       const state = this.requireSession(id);
       state.record.literature = summary;
       this.emitSessionEvent(
         state,
         state.activeTurnId ?? undefined,
         "literature_updated",
-        { summary, sources: state.record.lockedContext },
+        {
+          summary,
+          sources: state.record.lockedContext,
+          ...(workIds?.length ? { workIds } : {}),
+        },
       );
       await this.persistNow();
     },
@@ -1171,14 +1177,14 @@ export class AgentHost {
         operation: (id) => this.execution.getOperation(id),
         reconcile: (taskId, operationIds) =>
           this.execution.unresolvedForTask(taskId, { operationIds }),
-        changed: (taskId, revision) => {
+        changed: (taskId, revision, batchId) => {
           const state = this.sessions.get(taskId);
           if (state)
             this.emitSessionEvent(
               state,
               undefined,
               "annotation_review_changed",
-              { revision },
+              { revision, batchId },
             );
         },
       });
@@ -1277,7 +1283,7 @@ export class AgentHost {
   private mcpProviders: McpToolProvider[] = [];
   private mcpDiscovery?: AbortController;
   private listeners = new Set<(event: ConfuciusEvent) => void>();
-  private persistTimer: number | null = null;
+  private persistTimer: unknown = null;
   private persistQueue: Promise<void> = Promise.resolve();
   private shuttingDown = false;
   private shutdownTask?: Promise<void>;
@@ -1482,7 +1488,7 @@ export class AgentHost {
         ztoolkit.log("[Confucius] btw shutdown failed", error);
       });
       if (this.persistTimer !== null) {
-        Zotero.getMainWindows()[0]?.clearTimeout(this.persistTimer);
+        cancelHostTimeout(this.persistTimer);
         this.persistTimer = null;
       }
       const states = [...this.sessions.values()];
@@ -1992,18 +1998,12 @@ export class AgentHost {
     if (this.persistTimer !== null) {
       return;
     }
-    this.persistTimer =
-      Zotero.getMainWindows()[0]?.setTimeout(() => {
-        this.persistTimer = null;
-        void this.persistNow().catch((error) =>
-          ztoolkit.log("[Confucius] persist failed", error),
-        );
-      }, 400) ?? null;
-    if (this.persistTimer === null) {
+    this.persistTimer = scheduleHostTimeout(() => {
+      this.persistTimer = null;
       void this.persistNow().catch((error) =>
         ztoolkit.log("[Confucius] persist failed", error),
       );
-    }
+    }, 400);
   }
 
   private persistNow(): Promise<void> {
@@ -2511,6 +2511,8 @@ export class AgentHost {
         return this.openAlex.test();
       case "literature/list":
         return this.literature.list(String(params.taskId), params);
+      case "literature/review/list":
+        return this.literature.review(String(params.taskId));
       case "literature/get":
         return this.literature.get(String(params.taskId), String(params.id));
       case "literature/abstract":
@@ -2640,7 +2642,7 @@ export class AgentHost {
       return { endpointId: requested, models: [], error: "Unknown endpoint" };
     }
     const controller = createAbortController();
-    const timer = Zotero.getMainWindows()[0]?.setTimeout(() => {
+    const timer = scheduleHostTimeout(() => {
       controller.abort();
     }, 8000);
     try {
@@ -2651,23 +2653,20 @@ export class AgentHost {
       );
       return { endpointId: endpoint.id, ...listed };
     } finally {
-      if (timer) {
-        Zotero.getMainWindows()[0]?.clearTimeout(timer);
-      }
+      cancelHostTimeout(timer);
     }
   }
 
   private async configModelCatalog(params: Record<string, unknown>) {
     const controller = createAbortController();
-    const win = Zotero.getMainWindow();
-    const timer = win.setTimeout(() => controller.abort(), 12_000);
+    const timer = scheduleHostTimeout(() => controller.abort(), 12_000);
     try {
       return await this.modelCatalog.search(
         String(params.query ?? ""),
         controller.signal,
       );
     } finally {
-      win.clearTimeout(timer);
+      cancelHostTimeout(timer);
     }
   }
 
@@ -6655,10 +6654,8 @@ export class AgentHost {
             signal,
             onProgress: request.onRequestProgress,
             maxAttempts: request.maxAttempts,
-            scheduleTimeout: (callback, ms) =>
-              Zotero.getMainWindow().setTimeout(callback, ms),
-            cancelTimeout: (handle) =>
-              Zotero.getMainWindow().clearTimeout(Number(handle)),
+            scheduleTimeout: scheduleHostTimeout,
+            cancelTimeout: cancelHostTimeout,
           },
         );
       },
@@ -7494,10 +7491,8 @@ export class AgentHost {
         switchContext: async () => this.switchExternalContext(state),
         wait: (ms, signal) =>
           modelRetryDelay(ms, signal, {
-            scheduleTimeout: (callback, delay) =>
-              Zotero.getMainWindow().setTimeout(callback, delay),
-            cancelTimeout: (handle) =>
-              Zotero.getMainWindow().clearTimeout(Number(handle)),
+            scheduleTimeout: scheduleHostTimeout,
+            cancelTimeout: cancelHostTimeout,
           }),
         progress: (message) =>
           this.emitSessionEvent(state, turnId, "text_delta", {
@@ -7663,8 +7658,6 @@ export class AgentHost {
           return;
         }
         this.listeners.add(onHostEvent);
-        const timerWindow =
-          typeof Zotero !== "undefined" ? Zotero.getMainWindow?.() : undefined;
         monitor = new ExternalExecutionMonitor(
           () =>
             finish({
@@ -7678,16 +7671,8 @@ export class AgentHost {
               },
             }),
           {
-            schedule: (callback, ms) =>
-              timerWindow?.setTimeout
-                ? timerWindow.setTimeout(callback, ms)
-                : globalThis.setTimeout(callback, ms),
-            cancel: (handle) =>
-              timerWindow?.clearTimeout
-                ? timerWindow.clearTimeout(Number(handle))
-                : globalThis.clearTimeout(
-                    handle as ReturnType<typeof setTimeout>,
-                  ),
+            schedule: scheduleHostTimeout,
+            cancel: cancelHostTimeout,
           },
         );
       }
@@ -8184,10 +8169,8 @@ export class AgentHost {
       systemPrompt,
       transientMediaTimeoutMs: 45_000,
       createAbortController,
-      scheduleTimeout: (callback, ms) =>
-        Zotero.getMainWindow().setTimeout(callback, ms),
-      cancelTimeout: (handle) =>
-        Zotero.getMainWindow().clearTimeout(Number(handle)),
+      scheduleTimeout: scheduleHostTimeout,
+      cancelTimeout: cancelHostTimeout,
       transientMediaFallbackMessage: (reason) =>
         getString(
           reason === "timeout"
@@ -9966,10 +9949,8 @@ export class AgentHost {
       contextWindowTokens: endpoint.contextWindowTokens,
       fetchImpl: hostFetch,
       createAbortController,
-      scheduleTimeout: (callback, delayMs) =>
-        Zotero.getMainWindow().setTimeout(callback, delayMs),
-      cancelTimeout: (handle) =>
-        Zotero.getMainWindow().clearTimeout(handle as number),
+      scheduleTimeout: scheduleHostTimeout,
+      cancelTimeout: cancelHostTimeout,
       ...extras,
     });
   }

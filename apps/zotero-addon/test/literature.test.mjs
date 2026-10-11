@@ -1115,3 +1115,38 @@ test("lightweight card anchor and draft status survive reload without embedding 
   );
   assert.equal(JSON.stringify(f.summaries.at(-1)).includes("Paper 1"), false);
 });
+
+test("provides one complete review snapshot and signals only newly discovered paper IDs", async () => {
+  const arrivals = [],
+    f = fixture({ changed: async (id, summary, ids) => arrivals.push(ids) });
+  await f.service.search("review", { query: "paper" });
+  const page = await f.service.review("review");
+  assert.equal(page.items.length, 100);
+  assert.equal(page.summary.pool, 100);
+  assert.equal(page.total, 100);
+  assert.equal(page.nextOffset, null);
+  assert.deepEqual(
+    arrivals[0],
+    page.items.map((w) => w.id),
+  );
+  await f.service.search("review", { query: "deduplicated" });
+  assert.equal(
+    arrivals[1],
+    undefined,
+    "Repeated identities never replay arrivals",
+  );
+  await f.service.updateCandidates("review", page.summary.candidateRevision, [
+    { id: page.items[0].id, selected: true },
+  ]);
+  assert.equal(arrivals[2], undefined, "Candidate choices are not discoveries");
+  const revised = await f.service.review("review");
+  assert.equal(revised.summary.candidates, 1);
+  assert.equal(revised.items[0].decision.selected, true);
+  assert.equal(revised.queries.length, 2);
+  revised.items[0].decision.selected = false;
+  assert.equal(
+    (await f.service.get("review", revised.items[0].id)).decision.selected,
+    true,
+    "The UI cannot mutate service records through its snapshot",
+  );
+});

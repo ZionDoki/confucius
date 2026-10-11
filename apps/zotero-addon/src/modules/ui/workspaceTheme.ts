@@ -1,5 +1,5 @@
 import { SURFACE_CSS } from "./workspaceSurface";
-import { ANNOTATION_REVIEW_CSS } from "./annotationReviewStyles";
+import { REVIEW_CSS } from "./reviewStyles";
 import { REPORT_STYLE_CSS } from "./reportStyleStyles";
 
 export const TUI_CSS = `
@@ -311,6 +311,7 @@ ${REPORT_STYLE_CSS}
 }
 .confucius-composer-card {
   --confucius-composer-control-size: 36px;
+  position: relative;
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -500,26 +501,24 @@ ${REPORT_STYLE_CSS}
 .confucius-attachment-remove:hover { background: var(--confucius-hover); color: var(--confucius-ink); }
 .confucius-drop-hint {
   position: absolute;
-  inset: 6px;
-  z-index: 950;
+  inset: 8px;
+  z-index: 2;
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: 12px;
   border: 1px dashed var(--confucius-accent);
   border-radius: 12px;
-  background: var(--confucius-drop-surface);
-  backdrop-filter: blur(4px);
+  background: var(--confucius-elevated);
   color: var(--confucius-accent-text);
   font-size: 12px;
-  font-weight: 700;
-  letter-spacing: .01em;
+  font-weight: 550;
   text-align: center;
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
   transition: opacity 120ms ease, visibility 0s linear 120ms;
 }
-.confucius-workspace-root[data-file-drop-active="true"] .confucius-drop-hint {
+.confucius-composer-card[data-file-drop-active="true"] .confucius-drop-hint {
   opacity: 1;
   visibility: visible;
   transition-delay: 0s;
@@ -1153,7 +1152,7 @@ ${REPORT_STYLE_CSS}
 .confucius-workspace-root[data-confucius-layout=sidebar] .confucius-template-button { min-height: 64px; padding: 12px; }
 .confucius-attachment-chip { border-radius: 8px; }
 ${SURFACE_CSS}
-${ANNOTATION_REVIEW_CSS}
+${REVIEW_CSS}
 
 .confucius-knowledge-index .confucius-knowledge-header { display:flex; align-items:center; justify-content:space-between; padding:10px 14px; gap:10px; }
 .confucius-knowledge-index [hidden] { display:none !important; }

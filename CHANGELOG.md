@@ -2,6 +2,61 @@
 
 ## Unreleased
 
+## 0.6.1-beta.1 - 2026-10-11
+
+This Beta fixes review-card layout and arrival feedback, shares candidate and
+annotation review, and keeps file-drop hints local to their target.
+
+### Fixed
+
+- File-drop feedback stays inside the composer or the target paper's PDF box,
+  leaving the workspace visible. Paper drops and cancelled drags clear composer
+  feedback; dropping elsewhere no longer adds a chat attachment.
+- Literature candidates and annotation suggestions now use the same review
+  cards, list, filters and arrival reminder. Fewer than ten entries start in
+  cards; ten or more start in a list. Manual view choices survive later arrivals.
+  Candidate confirmation and fulltext acquisition retain their existing boundary.
+- Closing a Zotero library window also closes its Confucius workspace, saving
+  drafts and releasing the view. Background request deadlines, retries and state
+  saving no longer depend on a library-window timer.
+- Annotation review cards fill the overlay's remaining height, with long passages
+  scrolling inside the card. Hovering or focusing a card reveals narrow gradient
+  arrows on its available edges; click them to browse previous/next suggestions.
+- The first live Agent annotation batch opens review automatically without taking
+  focus. Later batches float the capsule up and enlarge it to 1.12× before
+  returning to rest, while retaining the current view. History and write receipts
+  stay quiet, with reduced-motion support.
+
+### Upgrade notes
+
+- This is a Beta release. Enable **Include prereleases** in Confucius Settings →
+  Update to upgrade from 0.6.0 or an earlier Beta. Stable Latest remains 0.6.0.
+- No data migration or new setting is required. Existing tasks, drafts,
+  annotation decisions, confirmed writes and literature selections are preserved.
+- A detached Confucius workspace now closes with the Zotero library window that
+  opened it; reopening the workspace restores the saved draft.
+
+### Validation and known limits
+
+- `npm test` passed 1,354 tests with no failures, skips or cancellations.
+  Version consistency, skills synchronization, type checking, lint and the full
+  production build passed for 0.6.1-beta.1.
+- The ordinary Beta XPI passed 128 native annotation/candidate review checks,
+  37 literature and file-drop check groups, and 15 workspace-lifetime checks.
+  Closing the owner window, background requests and retries, PDF imports,
+  review decisions and restart persistence passed.
+- Candidate upgrades from original public 0.6.0 and 0.6.0-beta.1 packages passed
+  20 and 26 checks, preserving drafts, notes, report revisions, research records,
+  budgets and confirmed writes through restarts. Seven hot-update checks passed.
+  Original-old-package online discovery and upgrade require separate public
+  acceptance after publication.
+- [Beta acceptance](https://github.com/ZionDoki/confucius/blob/v0.6.1-beta.1/.github/maintainers/acceptance/release-0.6.1-beta.1.md)
+  records the exact candidate, checks and scope.
+- Native checks use macOS 26.6.2 (ARM64), Zotero 10.0.6 and isolated profiles.
+  This release has no new Windows/Linux or Zotero 7/8/9 device validation.
+  External Codex/Kimi processes, live research/model services, OS font scaling
+  and manual Finder/browser drag gestures were not tested.
+
 ## 0.6.0 - 2026-10-10
 
 Confucius 0.6.0 brings annotation review, more reliable fulltext recovery and
