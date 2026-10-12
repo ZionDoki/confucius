@@ -10,6 +10,35 @@ import type {
 import { taskArticles, taskCategory } from "../host/TaskSources";
 const NS = "http://www.w3.org/1999/xhtml";
 
+function taskActionIcon(doc: Document, kind: "more" | "new"): Element {
+  const svgNS = "http://www.w3.org/2000/svg";
+  const icon = doc.createElementNS(svgNS, "svg");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.setAttribute("width", "20");
+  icon.setAttribute("height", "20");
+  icon.setAttribute("aria-hidden", "true");
+  icon.setAttribute("focusable", "false");
+  if (kind === "more") {
+    icon.setAttribute("fill", "currentColor");
+    for (const x of [5, 12, 19]) {
+      const dot = doc.createElementNS(svgNS, "circle");
+      dot.setAttribute("cx", String(x));
+      dot.setAttribute("cy", "12");
+      dot.setAttribute("r", "1.7");
+      icon.append(dot);
+    }
+  } else {
+    icon.setAttribute("fill", "none");
+    icon.setAttribute("stroke", "currentColor");
+    icon.setAttribute("stroke-width", "1.8");
+    icon.setAttribute("stroke-linecap", "round");
+    const path = doc.createElementNS(svgNS, "path");
+    path.setAttribute("d", "M12 5v14M5 12h14");
+    icon.append(path);
+  }
+  return icon;
+}
+
 export type TaskOrganization = "articles" | "time";
 
 export interface ArticleTaskGroup {
@@ -180,8 +209,10 @@ export function createTaskList(
       const meta = doc.createElementNS(NS, "small") as HTMLElement;
       open.append(title, meta);
       open.addEventListener("click", () => options.open(task.id));
-      const trigger = createWorkspaceButton(doc, "", "···");
+      const trigger = createWorkspaceButton(doc, "", "");
       trigger.classList.add("confucius-task-menu-trigger");
+      trigger.title = options.text("workspace-task-actions");
+      trigger.append(taskActionIcon(doc, "more"));
       trigger.setAttribute(
         "aria-label",
         options.text("workspace-task-actions"),
@@ -286,8 +317,9 @@ export function createTaskList(
         heading.append(count);
         row.append(heading);
         if (article && options.newForArticle) {
-          const create = createWorkspaceButton(doc, "", "+");
+          const create = createWorkspaceButton(doc, "", "");
           create.classList.add("confucius-article-new");
+          create.append(taskActionIcon(doc, "new"));
           create.title = options.text("workspace-article-new-chat");
           create.setAttribute("aria-label", create.title);
           create.addEventListener("click", (event) => {

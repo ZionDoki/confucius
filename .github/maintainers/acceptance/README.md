@@ -17,6 +17,7 @@ below preserve test sections formerly mixed into the runtime and report guides.
 
 | Record                                          | Original language  |
 | ----------------------------------------------- | ------------------ |
+| [Release 0.6.2 stable](release-0.6.2.md)        | English            |
 | [Release 0.6.1 stable](release-0.6.1.md)        | English            |
 | [Release 0.6.1-beta.2](release-0.6.1-beta.2.md) | English            |
 | [Release 0.6.1-beta.1](release-0.6.1-beta.1.md) | English            |
@@ -45,6 +46,8 @@ below preserve test sections formerly mixed into the runtime and report guides.
 
 | Record                                                                                                              | Original language  |
 | ------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| [Conversation sidebar typography — 2026-10-12](sidebar-typography-2026-10-12.md)                                    | English            |
+| [UI, attachments and idle work — 2026-10-12](ui-quality-2026-10-12.md)                                              | English            |
 | [Venue ratings and ShowJCR imports — 2026-10-11](venue-ratings-2026-10-11.md)                                       | English            |
 | [Local file-drop feedback — 2026-10-11](file-drop-2026-10-11.md)                                                    | English            |
 | [Shared candidate and annotation review — 2026-10-11](shared-review-2026-10-11.md)                                  | English            |

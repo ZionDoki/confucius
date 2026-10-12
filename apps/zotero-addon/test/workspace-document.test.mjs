@@ -213,7 +213,6 @@ test("composer has plus menu, slash commands, context ring, single send/stop", (
   assert.equal(view.includes("task/setPermissions"), true);
   assert.equal(view.includes("task/new-context"), true);
   assert.equal(view.includes("task/context"), true);
-  assert.equal(view.includes("logs/list"), true);
   assert.equal(view.includes("reasoningEffort"), true);
   assert.equal(view.includes("contextWindowTokens"), true);
   assert.equal(view.includes("config/listModels"), true);

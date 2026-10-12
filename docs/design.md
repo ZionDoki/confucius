@@ -48,6 +48,13 @@ Width means the available workspace or reader-window width.
 - Align peer content. Avoid stacking horizontal padding on a container and its body.
 - The compact app action area retains four columns. Reader actions may wrap while keeping the same padding and gaps. Do not shrink text to 10px to force one row.
 - Long titles may truncate. Keep button labels readable and allow wrapping with increased height. Reading content is centered, at most 680px wide; compact readers keep 10px side margins.
+- Conversation sidebars grow from 248px to at most 384px with larger fonts.
+  Keep at least 512px for the conversation when docking; use a bounded drawer
+  when both columns do not fit. Typography changes update this layout without
+  requiring a window resize. Search, tabs and conversation/article rows grow
+  with their text, with 34px minimum targets and 4px row gaps. Titles use up to
+  two lines from 20px. Keep 20px SVGs in 34px action targets and account for the
+  actual sticky navigation height when scrolling keyboard focus into view.
 
 ## Window lifecycle
 
@@ -66,10 +73,18 @@ Width means the available workspace or reader-window width.
 - Icon buttons use `.confucius-icon-button`: 34px × 34px, zero padding, 8px radius, transparent background, `ink` color, `surface` hover, and a 20px icon slot.
 - Disabled text buttons use the shared `opacity: .48`, default cursor, and no hover feedback. Their `title` explains the actual reason, such as a running task, pending confirmation, or empty content.
 - Icon buttons have both `title` and `aria-label`. Keep visible keyboard focus and keyboard menu navigation.
+- Task action buttons use a fixed 20px SVG icon with `currentColor`; font changes
+  must not alter the icon's dots, alignment or geometry.
+- In settings and review overlays, pointer interactions do not add an outer focus outline to sliders, checkboxes, radio buttons, color swatches or select menus. Keep visible keyboard focus, checked/selected states, color-swatch boundaries and text-input focus/error feedback.
 - Do not override shared radii, font weights, or state colors in readers. Before adding controls, check [workspaceSurface.ts](../apps/zotero-addon/src/modules/ui/workspaceSurface.ts) and [workspaceTheme.ts](../apps/zotero-addon/src/modules/ui/workspaceTheme.ts).
 
 ## File drop
 
+- Sent attachments belong beneath the text of their user message. Reuse the
+  composer's file labels and metadata with shared colors; omit removal actions
+  from sent files. File names wrap at narrow widths and larger font sizes.
+  Pending messages use the submitted file snapshot and yield to the durable
+  host event without duplicating the message.
 - Show the chat attachment hint inside the composer card, using an opaque shared
   background and a structural dashed border. Surrounding workspace drags may
   reveal the hint; only a drop inside the composer card adds an attachment.

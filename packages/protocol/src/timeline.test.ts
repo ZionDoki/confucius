@@ -34,6 +34,54 @@ describe("nextReasoningFold", () => {
 });
 
 describe("coalesceTimeline", () => {
+  it("restores each message's attachment metadata without adding files to later turns", () => {
+    const attachments = [
+      {
+        id: "pdf-1",
+        name: "论文 <draft>.pdf",
+        kind: "pdf",
+        mediaType: "application/pdf",
+        size: 2048,
+        originalCharacters: 1000,
+        includedCharacters: 1000,
+        truncated: false,
+        preparedAt: 1,
+        extractedPages: 2,
+        totalPages: 2,
+      },
+      {
+        id: "notes-1",
+        name: "notes.md",
+        kind: "markdown",
+        mediaType: "text/markdown",
+        size: 100,
+        originalCharacters: 100,
+        includedCharacters: 100,
+        truncated: false,
+        preparedAt: 2,
+      },
+    ];
+    const restored = JSON.parse(
+      JSON.stringify([
+        event("turn_started", { userText: "Read these", attachments }),
+        event("text_delta", { text: "Done" }),
+        event("turn_completed", {}),
+        event("turn_started", { userText: "Follow up" }, { turnId: "next" }),
+      ]),
+    ) as ConfuciusEvent[];
+    assert.deepEqual(
+      coalesceTimeline(restored).filter((block) => block.kind === "user"),
+      [
+        { kind: "user", text: "Read these", attachments },
+        { kind: "user", text: "Follow up" },
+      ],
+    );
+    assert.deepEqual(
+      coalesceTimeline([event("turn_started", { userText: "Legacy message" })]),
+      [{ kind: "user", text: "Legacy message" }],
+    );
+  });
+
   it("attaches out-of-order receipts across flushed groups without crossing reused turn IDs", () => {
     const events = [event("turn_started", { userText: "First" })];
     for (let i = 0; i < 1000; i++) {

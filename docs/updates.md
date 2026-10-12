@@ -14,6 +14,10 @@ English · [简体中文](updates.zh-CN.md)
 Confucius checks versions and verifies packages itself. Zotero's global automatic
 update switch does not disable Confucius's manual check.
 
+When upgrading from 0.6.1 or earlier to 0.6.2, restart Zotero once after
+installation so the focus and workspace interaction fixes take full effect.
+Your tasks, drafts and appearance settings remain saved.
+
 ## Stable or Beta?
 
 | Setting                  | Versions offered                             |

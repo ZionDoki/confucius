@@ -7,6 +7,7 @@ import type {
   Citation,
   MemoryProposal,
   RuntimeStatus,
+  TaskAttachment,
   TaskStatus,
 } from "./research";
 
@@ -136,7 +137,7 @@ type EventPayloads = {
     workIds?: string[];
   };
   session_updated: { title?: string; mode?: SessionMode };
-  turn_started: { userText: string };
+  turn_started: { userText: string; attachments?: TaskAttachment[] };
   plan_updated: { steps: PlanStep[] };
   tool_requested: {
     callId: string;

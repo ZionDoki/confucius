@@ -7451,6 +7451,13 @@ export class AgentHost {
       }
       this.emitSessionEvent(state, turnId, "turn_started", {
         userText: trimmed,
+        ...(preparedAttachments.length
+          ? {
+              attachments: preparedAttachments.map(({ record }) => ({
+                ...record,
+              })),
+            }
+          : {}),
       });
       this.emitSessionEvent(state, turnId, "task_status_changed", {
         status: "running",

@@ -2,6 +2,73 @@
 
 ## Unreleased
 
+## 0.6.2 - 2026-10-12
+
+### Fixed
+
+- Conversation sidebars grow with larger fonts; search, tabs and rows retain
+  readable padding and height, and large titles show up to two lines. Smaller
+  windows use a bounded drawer, with keyboard focus clear of the sticky header.
+- Sent PDF, Markdown and TXT attachments remain visible in their user message,
+  with file name, size and PDF page coverage, when revisiting the task or
+  restarting Zotero. In-flight sends retain their attachment snapshot during
+  task switches and do not duplicate the optimistic message when events arrive.
+- Sending while task creation or context updates are pending keeps the original
+  destination and attachment snapshot. Late results and failures cannot select
+  another conversation or overwrite its draft, and switching remains responsive.
+- Task action buttons use a fixed SVG three-dot icon, preserving its position
+  and shape across custom fonts and font sizes.
+- Disabling or updating the add-on disposes document input listeners; repeated
+  keyboard or pointer events no longer rewrite an unchanged focus state.
+- Closing or remounting a workspace releases its document menu and window
+  listeners. Idle polling no longer fetches unused memory bodies/log statistics
+  or rewrites unchanged model-button labels and attributes.
+- Sliders, checkboxes, radio buttons, color swatches and select menus no longer
+  retain an extra outer focus outline after pointer interaction in settings and
+  review overlays. Keyboard focus, selected states and input errors remain visible.
+
+### Upgrade notes
+
+- This is the stable release. Use Confucius Settings → Update; **Include
+  prereleases** is not required. Explicit update-channel and automatic-check
+  choices remain unchanged, and turning Betas off never causes a downgrade.
+- No data migration or reconfiguration is required. Existing tasks, drafts,
+  notes, annotations, research records, budgets and appearance settings remain
+  intact. After upgrading from 0.6.1 or earlier, restart Zotero once to clear
+  input listeners retained by the older package and fully apply the interaction
+  cleanup. Completed hot updates still restore open workspaces and settings;
+  staged installations follow Zotero's restart prompt.
+- Attachment summaries are saved for newly sent messages. Older messages without
+  saved metadata cannot recover their original attachment chips. These summaries
+  do not copy dropped files into the Zotero library or add an Open file action.
+
+### Validation and known limits
+
+- `npm test` passed 1,379 tests with zero failures, skips or cancellations.
+  Version consistency, skill/catalog synchronization, type checking, full lint
+  and the production build passed; XPI and both update files agree on 0.6.2.
+- The ordinary candidate passed 12 attachment/send groups and 16 SVG geometry
+  cases on macOS 26.6.2 (ARM64), Zotero 10.0.6. Checks include real PDF/Markdown/TXT
+  extraction, model delivery through a local fixture, sent-message persistence,
+  duplicate suppression, delayed creation/context/prompt responses, task switching,
+  failure recovery, narrow large-font wrapping and a full restart.
+- The same candidate passed 96 sidebar layouts, 29 navigation groups with 615
+  clicks, 24 Appearance/Runtime settings groups, 131 shared-review checks, seven
+  input-lifecycle stages and eight hot-update checks. Keyboard focus, high
+  contrast, live typography changes and repeated remounts passed; idle polling
+  made no unused memory/log reads or unchanged model-button mutations.
+- Ordinary-package upgrades from public 0.6.1 and 0.6.1-beta.2 passed 21 and 27
+  checks, retaining original history/working-note hashes, notes, report revisions,
+  memory/proposals, research records, drafts, budgets, appearance values and
+  explicit channel choices. Upgrade/restart did not replay model requests or
+  confirmed writes; explicit continuation reused saved receipts.
+- Windows/Linux, other Zotero versions, online model responses, live external CLI
+  authentication, interactive OS file dialogs and manual desktop drag gestures
+  were not exercised. Native input/keyboard tests use privileged automation;
+  background-window focus checks may use Gecko pseudo-class locks.
+- Exact package and regression/upgrade scope is recorded in the
+  [stable acceptance record](https://github.com/ZionDoki/confucius/blob/v0.6.2/.github/maintainers/acceptance/release-0.6.2.md).
+
 ## 0.6.1 - 2026-10-11
 
 Confucius 0.6.1 adds customizable appearance and clearer Runtime settings, venue

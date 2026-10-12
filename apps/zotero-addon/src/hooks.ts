@@ -24,6 +24,7 @@ import {
 import { AgentHost } from "./modules/host/AgentHost";
 import { registerBtwReader, unregisterBtwReader } from "./modules/ui/btwReader";
 import { disposeAppearanceBindings } from "./modules/ui/workspaceAppearance";
+import { disposeFocusBindings } from "./modules/ui/workspaceSurface";
 import { artifactWindows } from "./modules/ui/artifactWindow";
 import {
   bindPrefsWindow,
@@ -115,6 +116,7 @@ async function onShutdown(isUpdate = false): Promise<void> {
   cleanup(closeWorkspaceWindow, "workspace window");
   cleanup(() => artifactWindows.closeAll(), "artifact windows");
   cleanup(disposeAppearanceBindings, "appearance bindings");
+  cleanup(disposeFocusBindings, "focus bindings");
   cleanup(unregisterReaderContextMenu, "reader context menu");
   cleanup(unregisterBtwReader, "btw reader");
   try {

@@ -427,20 +427,8 @@ ${REPORT_STYLE_CSS}
   flex-wrap: wrap;
   gap: 6px;
 }
-.confucius-attachment-chip {
-  max-width: min(310px, 100%);
-  min-width: 0;
-  display: grid;
+.confucius-attachment-tray .confucius-attachment-chip {
   grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 7px;
-  padding: 5px 6px 5px 8px;
-  border: 0;
-  border-radius: 8px;
-  background: var(--confucius-surface);
-  color: var(--confucius-ink);
-  box-sizing: border-box;
-  box-shadow: none;
 }
 .confucius-attachment-chip[data-status="preparing"] { color: var(--confucius-accent-text); }
 .confucius-attachment-chip[data-status="error"] {
@@ -448,40 +436,9 @@ ${REPORT_STYLE_CSS}
   background: var(--confucius-danger-surface);
   color: var(--confucius-danger);
 }
-.confucius-attachment-kind {
-  min-width: 30px;
-  padding: 3px 5px;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--confucius-accent-text);
-  font-size: .75em;
-  font-weight: 800;
-  letter-spacing: .06em;
-  text-align: center;
-}
 .confucius-attachment-chip[data-status="error"] .confucius-attachment-kind {
   background: var(--confucius-danger-surface);
   color: var(--confucius-danger);
-}
-.confucius-attachment-copy { min-width: 0; }
-.confucius-attachment-name {
-  display: block;
-  overflow: hidden;
-  font-size: .9em;
-  font-weight: 650;
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.confucius-attachment-meta {
-  display: block;
-  overflow: hidden;
-  margin-top: 1px;
-  color: var(--confucius-muted);
-  font-size: .78em;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .confucius-attachment-remove {
   appearance: none;
@@ -1080,31 +1037,32 @@ ${REPORT_STYLE_CSS}
 :is(#confucius-settings-overlay, #confucius-knowledge-overlay) :is(input, textarea, select) { color: var(--confucius-ink); accent-color: var(--confucius-accent); }
 .confucius-workspace-root :is(button, input, select, summary) { min-height: 28px; }
 .confucius-workspace-root textarea::placeholder { color: var(--confucius-muted); opacity: 1; }
-.confucius-workspace-root .confucius-task-search { width: 100%; height: 32px; max-height: none; min-height: 32px; box-sizing: border-box; padding: 6px 9px; margin-bottom: 8px; border: 0; border-radius: 7px; background: var(--confucius-surface); font: inherit; }
+.confucius-workspace-root .confucius-task-search { width: 100%; height: auto; max-height: none; min-height: 34px; box-sizing: border-box; padding: 6px 10px; margin-bottom: 8px; border: 0; border-radius: 8px; background: var(--confucius-surface); font: inherit; line-height: 1.4; }
 .confucius-session-pane { scroll-padding: 104px 0 12px; }
 .confucius-task-navigation { position: sticky; top: 0; z-index: 2; padding-bottom: 1px; background: var(--confucius-canvas); }
 .confucius-task-navigation .confucius-task-search { position: static; }
-.confucius-task-organization { display: flex; gap: 2px; padding: 3px; margin-bottom: 10px; border-radius: 8px; background: var(--confucius-surface); }
-.confucius-task-organization [role=tab] { flex: 1; min-width: 0; padding: 4px 6px; border: 0; border-radius: 6px; font: inherit; font-size: .9em; color: var(--confucius-muted); background: transparent; }
+.confucius-task-organization { display: flex; gap: 4px; padding: 4px; margin-bottom: 8px; border-radius: 8px; background: var(--confucius-surface); }
+.confucius-task-organization [role=tab] { flex: 1; min-width: 0; min-height: 34px; height: auto; max-height: none; padding: 6px 8px; border: 0; border-radius: 8px; font: inherit; font-size: .9em; line-height: 1.4; overflow-wrap: anywhere; color: var(--confucius-muted); background: transparent; }
 .confucius-task-organization [aria-selected=true] { color: var(--confucius-ink); background: var(--confucius-selected); }
 .confucius-task-period { margin: 14px 0 4px; padding: 4px 8px; color: var(--confucius-muted); font: inherit; font-size: .85em; font-weight: 600; }
 .confucius-task-group:first-child .confucius-task-period { margin-top: 4px; }
 .confucius-task-group-body[hidden] { display: none; }
-.confucius-session-pane .confucius-task-row { position: relative; display: flex; align-items: center; gap: 2px; margin-bottom: 2px; padding: 0 3px; border-radius: 6px; }
+.confucius-session-pane .confucius-task-row { position: relative; display: flex; align-items: center; gap: 4px; margin-bottom: 4px; padding: 0 4px; border-radius: 8px; }
 .confucius-session-pane[data-organization=articles] .confucius-task-row { margin-left: 17px; }
 .confucius-task-row[data-active=true] { background: var(--confucius-selected); }
 .confucius-task-row:hover { background: var(--confucius-hover); }
-.confucius-task-open { appearance: none; display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; height: 32px; max-height: none; min-height: 32px; margin: 0; padding: 5px 6px; border: 0; border-radius: 6px; box-sizing: border-box; background: transparent; color: var(--confucius-ink); text-align: left; cursor: pointer; font: inherit; }
-.confucius-task-open span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 450; }
+.confucius-task-open { appearance: none; display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; height: auto; max-height: none; min-height: 34px; margin: 0; padding: 6px 8px; border: 0; border-radius: 8px; box-sizing: border-box; background: transparent; color: var(--confucius-ink); text-align: left; cursor: pointer; font: inherit; line-height: 1.4; }
+.confucius-task-open span { flex: 1; min-width: 0; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 450; }
+.confucius-workspace-root[data-confucius-large-type=true] .confucius-task-open span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow-wrap: anywhere; }
 .confucius-task-open small { display: none; }
 .confucius-task-row:is([data-task-status=running], [data-task-status=awaiting_approval]) .confucius-task-open::after { content: ''; flex: 0 0 5px; width: 5px; height: 5px; border-radius: 50%; background: var(--confucius-accent); }
 .confucius-task-row[data-task-status=awaiting_approval] .confucius-task-open::after { border-radius: 1px; transform: rotate(45deg); }
-.confucius-session-pane :is(.confucius-task-menu-trigger, .confucius-article-new) { flex: 0 0 26px; width: 26px; min-width: 26px; min-height: 28px; height: 28px; padding: 0; border: 0; background: transparent; opacity: 0; }
+.confucius-session-pane :is(.confucius-task-menu-trigger, .confucius-article-new) { flex: 0 0 34px; width: 34px; min-width: 34px; min-height: 34px; height: 34px; padding: 0; border: 0; border-radius: 8px; background: transparent; opacity: 0; }
 .confucius-task-row:is(:hover, :focus-within) .confucius-task-menu-trigger,
 .confucius-article-row:is(:hover, :focus-within) .confucius-article-new { opacity: 1; }
-.confucius-article-row { display: flex; align-items: center; gap: 2px; padding: 0 3px; border-radius: 6px; margin-bottom: 2px; }
+.confucius-article-row { display: flex; align-items: center; gap: 4px; padding: 0 4px; border-radius: 8px; margin-bottom: 4px; }
 .confucius-article-row:hover { background: var(--confucius-hover); }
-.confucius-article-toggle { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; height: 34px; border: 0; border-radius: 6px; padding: 6px; background: transparent; color: var(--confucius-ink); font: inherit; text-align: left; cursor: pointer; }
+.confucius-article-toggle { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; height: auto; min-height: 34px; border: 0; border-radius: 8px; padding: 6px 8px; background: transparent; color: var(--confucius-ink); font: inherit; line-height: 1.4; text-align: left; cursor: pointer; }
 .confucius-article-toggle::before { content: ''; flex: 0 0 5px; width: 5px; height: 5px; border-right: 1.5px solid var(--confucius-muted); border-bottom: 1.5px solid var(--confucius-muted); transform: rotate(-45deg); }
 .confucius-article-toggle[aria-expanded=true]::before { transform: rotate(45deg); }
 .confucius-article-toggle span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

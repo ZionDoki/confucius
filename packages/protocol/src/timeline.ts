@@ -1,5 +1,5 @@
 import type { ConfuciusEvent, PlanStep } from "./events";
-import type { ArtifactSummary } from "./research";
+import type { ArtifactSummary, TaskAttachment } from "./research";
 import type { ToolResult } from "./tools";
 import type { LiteratureSummary } from "./literature";
 import type { SubagentSummary } from "./subagents";
@@ -17,7 +17,7 @@ export interface TimelineToolCall {
 }
 
 export type TimelineBlock =
-  | { kind: "user"; text: string }
+  | { kind: "user"; text: string; attachments?: TaskAttachment[] }
   | { kind: "reasoning"; text: string }
   | { kind: "commentary"; text: string }
   | { kind: "text"; text: string; turnId?: string }
@@ -236,7 +236,13 @@ export function coalesceTimeline(events: ConfuciusEvent[]): TimelineBlock[] {
       // A retry can reuse both turn and call IDs; its receipts belong only to
       // the new attempt. Distinct turns still accept their own late receipts.
       callsByTurn.set(currentTurn, new Map());
-      blocks.push({ kind: "user", text: event.payload.userText });
+      blocks.push({
+        kind: "user",
+        text: event.payload.userText,
+        ...(event.payload.attachments?.length
+          ? { attachments: event.payload.attachments }
+          : {}),
+      });
       continue;
     }
     if (event.type === "plan_updated") {

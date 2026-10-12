@@ -22,6 +22,7 @@ import {
   type PromptContextOptions,
   lockedContextSourceIds,
   type WorkSnapshot,
+  type TaskAttachment,
 } from "@confucius/protocol";
 import { AgentHost } from "./AgentHost";
 import { AnnotationReviewService } from "./AnnotationReview";
@@ -363,6 +364,82 @@ async function waitFor(predicate: () => boolean) {
   }
   assert.fail("Lifecycle did not reach the expected state");
 }
+
+it("persists attachment summaries before consuming files without exposing paths or extracted content", async (test) => {
+  const previousZotero = Reflect.get(globalThis, "Zotero");
+  test.after(() => Reflect.set(globalThis, "Zotero", previousZotero));
+  Reflect.set(globalThis, "Zotero", {
+    locale: "en-US",
+    Prefs: { get: () => "en-US" },
+  });
+  const { host, state } = fixture();
+  const record: TaskAttachment = {
+    id: "dropped-pdf",
+    name: "论文.pdf",
+    kind: "pdf",
+    mediaType: "application/pdf",
+    size: 2048,
+    originalCharacters: 20,
+    includedCharacters: 20,
+    truncated: false,
+    preparedAt: 1,
+    extractedPages: 1,
+    totalPages: 1,
+  };
+  const expected = { ...record };
+  const privateText = "Private PDF contents";
+  const privatePath = "/private/论文.pdf";
+  const saved: ConfuciusEvent[][] = [];
+  const prompts: string[] = [];
+  Object.assign(host, {
+    attachments: {
+      resolve: (ids: string[]) =>
+        ids.length
+          ? [{ record, content: privateText, sourcePath: privatePath }]
+          : [],
+      consume: (ids: string[]) => {
+        if (ids.length) record.name = "Consumed record";
+      },
+    },
+    persistNow: async () => {
+      saved.push(JSON.parse(JSON.stringify(state.events)));
+    },
+    executeBackend: async (_state: TestState, input: BackendTurnInput) => {
+      prompts.push(input.prompt);
+      return { stopReason: "completed", text: "Done" };
+    },
+  });
+  await host.sessionPrompt(state.record.id, "Read this PDF", undefined, [
+    record.id,
+  ]);
+  await waitFor(() => state.activeTurnId === null);
+  const started = state.events.find((event) => event.type === "turn_started");
+  assert.ok(started?.type === "turn_started");
+  assert.deepEqual(started.payload, {
+    userText: "Read this PDF",
+    attachments: [expected],
+  });
+  assert.ok(
+    saved.some((events) =>
+      events.some(
+        (event) =>
+          event.type === "turn_started" &&
+          event.payload.attachments?.[0]?.name === expected.name,
+      ),
+    ),
+  );
+  assert.match(prompts[0], /Private PDF contents/);
+  const timeline = JSON.stringify(coalesceTimeline(state.events));
+  assert.equal(timeline.includes(privateText), false);
+  assert.equal(timeline.includes(privatePath), false);
+  await host.sessionPrompt(state.record.id, "Follow up");
+  await waitFor(() => state.activeTurnId === null);
+  assert.deepEqual(
+    state.events.filter((event) => event.type === "turn_started").at(-1)
+      ?.payload,
+    { userText: "Follow up" },
+  );
+});
 
 it("prepared MCP sessions may discover a directory but cannot execute before activation", () => {
   const { host, state } = fixture();

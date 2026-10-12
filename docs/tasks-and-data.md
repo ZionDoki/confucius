@@ -15,6 +15,11 @@ the composer's dashed box. Dragging over the surrounding workspace shows this
 hint; dropping elsewhere does not add an attachment. For a research paper's
 missing PDF, use that paper's own dashed target in the literature review.
 
+From 0.6.2, newly sent attachments show their file name, size and PDF page coverage
+in the corresponding message, including after switching tasks or restarting
+Zotero. Older messages that did not save attachment metadata keep their existing
+display.
+
 The sidebar offers **By time** and **By article**. Article groups reflect where
 a conversation was created; later source additions do not duplicate it under
 every paper. Research started from a blank conversation appears under literature

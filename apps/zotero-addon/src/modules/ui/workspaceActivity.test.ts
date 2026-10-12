@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
-import type { ConfuciusEvent } from "@confucius/protocol";
+import type {
+  ConfuciusEvent,
+  TaskAttachment,
+  TimelineBlock,
+} from "@confucius/protocol";
 import {
   contextActivity,
   keyedTimeline,
@@ -8,7 +12,71 @@ import {
   turnAwaitingReply,
   waitingTextParts,
   sendErrorInTimeline,
+  userMessageInTimeline,
 } from "./workspaceActivity";
+
+it("replaces pending messages only with this attempt's text and attachment IDs", () => {
+  const attachment: TaskAttachment = {
+    id: "pdf-1",
+    name: "paper.pdf",
+    kind: "pdf",
+    mediaType: "application/pdf",
+    size: 100,
+    originalCharacters: 50,
+    includedCharacters: 50,
+    truncated: false,
+    preparedAt: 1,
+  };
+  const pending: Extract<TimelineBlock, { kind: "user" }> = {
+    kind: "user",
+    text: "Read the paper",
+    attachments: [attachment],
+  };
+  const first: ConfuciusEvent = {
+    id: "old",
+    sessionId: "task",
+    turnId: "first",
+    type: "turn_started",
+    ts: 1,
+    payload: { userText: pending.text, attachments: [attachment] },
+  };
+  const boundary: ConfuciusEvent = {
+    id: "boundary",
+    sessionId: "task",
+    turnId: "first",
+    type: "turn_completed",
+    ts: 2,
+    payload: { phase: "done" },
+  };
+  const otherFile: ConfuciusEvent = {
+    ...first,
+    id: "different-file",
+    turnId: "second",
+    payload: {
+      userText: pending.text,
+      attachments: [{ ...attachment, id: "pdf-2" }],
+    },
+  };
+  const events = [first, boundary, otherFile];
+  assert.equal(userMessageInTimeline(pending, events, "boundary"), false);
+  events.push({ ...first, id: "accepted", turnId: "third" });
+  assert.equal(userMessageInTimeline(pending, events, "boundary"), true);
+  assert.equal(userMessageInTimeline(pending, events, "missing"), false);
+  assert.equal(userMessageInTimeline(pending, events, undefined), false);
+  assert.equal(userMessageInTimeline(pending, [first], null), true);
+  assert.equal(
+    userMessageInTimeline({ kind: "user", text: pending.text }, [first], null),
+    false,
+  );
+  assert.equal(
+    userMessageInTimeline(
+      { kind: "user", text: pending.text },
+      [{ ...first, payload: { userText: pending.text } }],
+      null,
+    ),
+    true,
+  );
+});
 
 it("distinguishes gateway, service, throttling and transport failures and clears retry status on success", () => {
   for (const [code, message, chinese, english] of [

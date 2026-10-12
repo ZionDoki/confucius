@@ -92,6 +92,7 @@ export type FluentMessageId =
   | 'confucius-workspace-attachment-path-error'
   | 'confucius-workspace-attachment-reading'
   | 'confucius-workspace-attachment-remove'
+  | 'confucius-workspace-attachment-sent-list'
   | 'confucius-workspace-attachment-truncated'
   | 'confucius-workspace-attachment-wait'
   | 'confucius-workspace-awaiting-approval'

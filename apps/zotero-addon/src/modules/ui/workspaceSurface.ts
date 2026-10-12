@@ -1,15 +1,19 @@
 import { config, version } from "../../../package.json";
 import { bindAppearance } from "./workspaceAppearance";
 
-const focusDocuments = new WeakSet<Document>();
+const focusDocuments = new Map<Document, () => void>();
 
 /** Chrome documents can retain a visible focus ring after a pointer click.
  * Track input modality without blurring controls or changing keyboard focus. */
 function bindFocusModality(doc: Document): void {
   if (focusDocuments.has(doc)) return;
-  focusDocuments.add(doc);
   const attribute = "data-confucius-input";
-  const pointer = () => doc.documentElement?.setAttribute(attribute, "pointer");
+  const setModality = (value: "pointer" | "keyboard") => {
+    const root = doc.documentElement;
+    if (root && root.getAttribute(attribute) !== value)
+      root.setAttribute(attribute, value);
+  };
+  const pointer = () => setModality("pointer");
   const keyboard = (event: Event) => {
     const key = event as KeyboardEvent;
     if (
@@ -18,20 +22,23 @@ function bindFocusModality(doc: Document): void {
       ["Shift", "Control", "Alt", "Meta"].includes(key.key)
     )
       return;
-    doc.documentElement?.setAttribute(attribute, "keyboard");
+    setModality("keyboard");
   };
   doc.addEventListener("pointerdown", pointer, true);
   doc.addEventListener("keydown", keyboard, true);
-  doc.defaultView?.addEventListener(
-    "unload",
-    () => {
-      doc.removeEventListener("pointerdown", pointer, true);
-      doc.removeEventListener("keydown", keyboard, true);
-      doc.documentElement?.removeAttribute(attribute);
-      focusDocuments.delete(doc);
-    },
-    { once: true },
-  );
+  const cleanup = () => {
+    doc.removeEventListener("pointerdown", pointer, true);
+    doc.removeEventListener("keydown", keyboard, true);
+    doc.defaultView?.removeEventListener("unload", cleanup);
+    doc.documentElement?.removeAttribute(attribute);
+    focusDocuments.delete(doc);
+  };
+  focusDocuments.set(doc, cleanup);
+  doc.defaultView?.addEventListener("unload", cleanup, { once: true });
+}
+
+export function disposeFocusBindings(): void {
+  for (const cleanup of [...focusDocuments.values()]) cleanup();
 }
 
 /** One palette for the startup page, embedded surfaces and portalled menus. */
@@ -176,12 +183,20 @@ export const SURFACE_CSS = `
 .confucius-menu-row[data-danger=true] { color: var(--confucius-danger); }
 .confucius-topbar :is(#confucius-new-session, #confucius-toggle-sessions) { min-height: 34px; height: 34px; margin: 0; }
 .confucius-topbar #confucius-new-session, .confucius-artifact-toolbar .confucius-button { min-height: 34px; height: 34px; padding: 6px 8px; font-size: 13px; }
-.confucius-task-menu-trigger { width: 28px; min-width: 28px; height: 28px; padding: 0; background: transparent; color: var(--confucius-muted); opacity: 0; }
+.confucius-task-menu-trigger { width: 34px; min-width: 34px; min-height: 34px; height: 34px; padding: 0; background: transparent; color: var(--confucius-muted); opacity: 0; }
 .confucius-task-row:is(:hover, :focus-within) .confucius-task-menu-trigger,
 .confucius-task-menu-trigger[aria-expanded=true] { opacity: 1; }
 @media (hover: none) { .confucius-task-menu-trigger { opacity: 1; } }
 .confucius-task-search { position: sticky; top: 0; z-index: 1; }
 .confucius-user-message { width: fit-content; max-width: 88%; margin: 20px 0 24px auto; padding: 12px 16px; border-radius: 16px 16px 4px 16px; background: var(--confucius-surface); color: var(--confucius-ink); white-space: pre-wrap; overflow-wrap: anywhere; box-sizing: border-box; }
+.confucius-attachment-chip { max-width: min(310px, 100%); min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 7px; padding: 5px 6px 5px 8px; border: 0; border-radius: 8px; background: var(--confucius-surface); color: var(--confucius-ink); box-sizing: border-box; box-shadow: none; }
+.confucius-attachment-kind { min-width: 30px; padding: 3px 5px; border-radius: 5px; background: transparent; color: var(--confucius-accent-text); font-size: .75em; font-weight: 800; letter-spacing: .06em; text-align: center; }
+.confucius-attachment-copy { min-width: 0; }
+.confucius-attachment-name { display: block; overflow: hidden; font-size: .9em; font-weight: 650; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+.confucius-attachment-meta { display: block; overflow: hidden; margin-top: 1px; color: var(--confucius-muted); font-size: .78em; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.confucius-user-attachments { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin-top: 8px; max-width: 400px; white-space: normal; }
+.confucius-user-attachments .confucius-attachment-chip { width: 100%; max-width: 100%; padding: 8px; background: var(--confucius-paper); }
+.confucius-user-attachments :is(.confucius-attachment-name, .confucius-attachment-meta) { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
 .confucius-plan, .confucius-command { margin: 12px 0; padding: 12px 16px; border-radius: 12px; background: var(--confucius-surface); }
 .confucius-command { font-family: ui-monospace, Consolas, monospace; font-size: .88em; }
 .confucius-approval { margin: 16px 0; padding: 16px; border: 0; border-radius: 12px; background: var(--confucius-warning-surface); }
@@ -285,6 +300,10 @@ export const SURFACE_CSS = `
   border: 0 !important; border-radius: 8px; box-sizing: border-box; background: var(--confucius-surface) !important; color: var(--confucius-ink); font: inherit;
 }
 :is(.confucius-settings-shell, .confucius-dialog-panel, #confucius-preferences) :is(input, textarea, select):focus { outline: 2px solid var(--confucius-focus); outline-offset: 0; box-shadow: none; }
+:is(.confucius-settings-shell, .confucius-dialog-panel, #confucius-preferences, .confucius-review) :is(input:is([type=checkbox], [type=radio], [type=range], [type=color]), select):focus { outline: none; box-shadow: none; }
+:is(.confucius-settings-shell, .confucius-dialog-panel, #confucius-preferences, .confucius-review) :is(input:is([type=checkbox], [type=radio], [type=range], [type=color]), select):focus-visible,
+[data-confucius-input=keyboard] :is(.confucius-settings-shell, .confucius-dialog-panel, #confucius-preferences, .confucius-review) :is(input:is([type=checkbox], [type=radio], [type=range], [type=color]), select):focus { outline: 2px solid var(--confucius-focus); outline-offset: 0; }
+[data-confucius-input=pointer] :is(.confucius-settings-shell, .confucius-dialog-panel, #confucius-preferences, .confucius-review) :is(input:is([type=checkbox], [type=radio], [type=range], [type=color]), select):focus { outline: none !important; box-shadow: none !important; }
 :is(.confucius-settings-shell, #confucius-preferences) [role=radio] { border: 0 !important; background: transparent !important; color: var(--confucius-muted) !important; }
 :is(.confucius-settings-shell, #confucius-preferences) [role=radio]:hover:not(:disabled),
 :is(.confucius-settings-shell, #confucius-preferences) [role=radio][aria-checked=true] { background: var(--confucius-surface) !important; color: var(--confucius-ink) !important; }

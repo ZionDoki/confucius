@@ -57,7 +57,12 @@ import {
   createWaitingIndicator,
   updateWaitingIndicator,
   sendErrorInTimeline,
+  userMessageInTimeline,
 } from "./workspaceActivity";
+import {
+  createAttachmentChip,
+  taskAttachmentMeta,
+} from "./workspaceAttachments";
 import {
   composerKeyAction,
   taskMentionChoice,
@@ -238,16 +243,6 @@ type ApprovalRow = {
   after?: string;
   kind?: string;
   origin?: string;
-};
-
-type MemoryRow = {
-  lastUsedAt?: number;
-  protection?: "user" | "none";
-  id: string;
-  type: string;
-  title: string;
-  content: string;
-  tags?: string[];
 };
 
 type ModelConfig = {
@@ -1067,10 +1062,12 @@ function bindWorkspace(
     lastEventId: null as string | null,
     skills: [] as ConfuciusSkill[],
     approvals: [] as ApprovalRow[],
-    memories: [] as MemoryRow[],
-    logCount: 0,
     mode: "agent" as "agent" | "plan",
-    pendingUserText: "",
+    pendingUserMessage: null as {
+      block: Extract<TimelineBlock, { kind: "user" }>;
+      taskId: string | null;
+      afterEventId?: string | null;
+    } | null,
     sendError: "",
     sending: false,
     config: null as ModelConfig | null,
@@ -1085,6 +1082,7 @@ function bindWorkspace(
     runtimeHostConnected: false,
   };
   let initialViewReady = false;
+  let disposed = false;
   let failedPrompt:
     | { taskId: string; afterEventId: string | null; message: string }
     | undefined;
@@ -1131,6 +1129,7 @@ function bindWorkspace(
     error?: string;
   };
   const pendingAttachments: PendingAttachment[] = [];
+  const inFlightAttachmentIds = new Set<string>();
   let attachmentDragDepth = 0;
 
   type ModelListCache = {
@@ -1649,12 +1648,30 @@ function bindWorkspace(
   root.appendChild(topbar);
   root.appendChild(columns);
   composerCard.appendChild(dropHint);
+  // Workspace bounds stay fixed when typography changes. Observe an em-sized
+  // box so a saved font size updates layout without idle style measurements.
+  const typographyProbe = el(
+    doc,
+    "span",
+    {
+      position: "absolute",
+      top: "0",
+      left: "0",
+      width: "1em",
+      height: "1em",
+      visibility: "hidden",
+      pointerEvents: "none",
+    },
+    { "aria-hidden": "true" },
+  );
+  root.appendChild(typographyProbe);
 
   let sessionsLabel = getString("workspace-toggle-sessions");
   let sendLabel = getString("workspace-send");
   let stopLabel = getString("workspace-stop");
   let auxiliaryOverlay = compact;
   let responsiveWidth = 0;
+  let preferredSidebarWidth = 248;
   let density: "wide" | "compact" | "narrow" = compact ? "compact" : "wide";
 
   function applyLocalizedChrome(): void {
@@ -1728,12 +1745,16 @@ function bindWorkspace(
       sessionPane.style.maxWidth = "";
       sessionPane.style.boxShadow = "none";
       sessionPane.style.display = showSessions ? "block" : "none";
-      sessionPane.style.width = "248px";
-      sessionPane.style.minWidth = "220px";
+      sessionPane.style.width = `${preferredSidebarWidth}px`;
+      sessionPane.style.minWidth = `${preferredSidebarWidth}px`;
+      syncSidebarScrollPadding();
       return;
     }
 
-    const drawerWidth = Math.min(320, Math.max(0, responsiveWidth));
+    const drawerWidth = Math.min(
+      Math.max(320, preferredSidebarWidth),
+      Math.max(0, responsiveWidth),
+    );
     Object.assign(sessionPane.style, {
       position: "absolute",
       top: "0px",
@@ -1747,6 +1768,15 @@ function bindWorkspace(
       boxShadow: "var(--confucius-shadow)",
       display: showSessions ? "block" : "none",
     });
+    syncSidebarScrollPadding();
+  }
+
+  function syncSidebarScrollPadding(): void {
+    const height = sessionPane
+      .querySelector(".confucius-task-navigation")
+      ?.getBoundingClientRect().height;
+    if (height)
+      sessionPane.style.scrollPaddingTop = `${Math.ceil(height) + 8}px`;
   }
 
   function applyResponsiveLayout(): void {
@@ -1757,13 +1787,21 @@ function bindWorkspace(
       return;
     }
     const previousOverlay = auxiliaryOverlay;
+    const widthChanged = responsiveWidth !== measured;
+    const fontSize =
+      Number.parseFloat(win?.getComputedStyle(root)?.fontSize ?? "14") || 14;
+    preferredSidebarWidth = Math.min(
+      384,
+      Math.max(248, Math.round(248 + (fontSize - 14) * 10)),
+    );
     responsiveWidth = measured;
     density = measured < 300 ? "narrow" : measured < 620 ? "compact" : "wide";
-    auxiliaryOverlay = compact || measured < 760;
-    if (auxiliaryOverlay && !previousOverlay) {
+    auxiliaryOverlay = compact || measured < preferredSidebarWidth + 512;
+    if (auxiliaryOverlay && !previousOverlay && widthChanged) {
       showSessions = false;
     }
     root.setAttribute("data-confucius-density", density);
+    root.setAttribute("data-confucius-large-type", String(fontSize >= 20));
     root.setAttribute("data-confucius-compact-panels", String(measured < 900));
 
     const stacked = density !== "wide";
@@ -1820,6 +1858,7 @@ function bindWorkspace(
       })
     : null;
   resizeObserver?.observe(root);
+  resizeObserver?.observe(typographyProbe);
   win?.addEventListener("resize", onWindowResize);
   const unregisterSnapshot = registerWorkspaceSnapshot(root, () => {
     rememberComposerDraft();
@@ -1834,6 +1873,7 @@ function bindWorkspace(
     };
   });
   layoutCleanups.set(root, () => {
+    disposed = true;
     knowledgeLibrary.close();
     annotationReview.destroy();
     literaturePanel.destroy();
@@ -1860,6 +1900,8 @@ function bindWorkspace(
     }
     resizeObserver?.disconnect();
     win?.removeEventListener("resize", onWindowResize);
+    win?.removeEventListener("unload", onWindowUnload);
+    doc.removeEventListener("mousedown", onWorkspacePointerDown);
     root.removeEventListener("dragenter", onAttachmentDragEnter, true);
     root.removeEventListener("dragover", onAttachmentDragOver, true);
     root.removeEventListener("dragleave", onAttachmentDragLeave, true);
@@ -1884,23 +1926,6 @@ function bindWorkspace(
     return host.rpc(method, params);
   }
 
-  function attachmentKindLabel(item: PendingAttachment): string {
-    if (item.record?.kind === "pdf" || /\.pdf$/iu.test(item.name)) return "PDF";
-    if (
-      item.record?.kind === "markdown" ||
-      /\.(?:md|markdown)$/iu.test(item.name)
-    ) {
-      return "MD";
-    }
-    return "TXT";
-  }
-
-  function formatAttachmentBytes(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
-
   function attachmentMeta(item: PendingAttachment): string {
     if (item.status === "preparing") {
       return getString("workspace-attachment-reading");
@@ -1908,19 +1933,7 @@ function bindWorkspace(
     if (item.status === "error") {
       return item.error || getString("workspace-attachment-error");
     }
-    const record = item.record!;
-    const parts = [formatAttachmentBytes(record.size)];
-    if (record.kind === "pdf" && typeof record.extractedPages === "number") {
-      parts.push(
-        typeof record.totalPages === "number"
-          ? `${record.extractedPages}/${record.totalPages} ${getString("workspace-attachment-pages")}`
-          : `${record.extractedPages} ${getString("workspace-attachment-pages")}`,
-      );
-    }
-    if (record.truncated) {
-      parts.push(getString("workspace-attachment-truncated"));
-    }
-    return parts.join(" · ");
+    return taskAttachmentMeta(item.record!);
   }
 
   function renderAttachmentTray(): void {
@@ -1928,24 +1941,13 @@ function bindWorkspace(
     attachmentTray.textContent = "";
     attachmentTray.style.display = pendingAttachments.length ? "flex" : "none";
     for (const item of pendingAttachments) {
-      const chip = el(doc, "div", undefined, {
-        "data-status": item.status,
+      const chip = createAttachmentChip(doc, {
+        name: item.name,
+        kind: item.record?.kind,
+        meta: attachmentMeta(item),
+        status: item.status,
         title: item.error || item.name,
       });
-      chip.className = "confucius-attachment-chip";
-      const kind = el(doc, "span");
-      kind.className = "confucius-attachment-kind";
-      kind.textContent = attachmentKindLabel(item);
-      const copy = el(doc, "span");
-      copy.className = "confucius-attachment-copy";
-      const name = el(doc, "span");
-      name.className = "confucius-attachment-name";
-      name.textContent = item.name;
-      const meta = el(doc, "span");
-      meta.className = "confucius-attachment-meta";
-      meta.textContent = attachmentMeta(item);
-      copy.appendChild(name);
-      copy.appendChild(meta);
       const remove = el(doc, "button", undefined, {
         type: "button",
         title: getString("workspace-attachment-remove"),
@@ -1958,8 +1960,6 @@ function bindWorkspace(
         event.stopPropagation();
         removePendingAttachment(item.uiId);
       });
-      chip.appendChild(kind);
-      chip.appendChild(copy);
       chip.appendChild(remove);
       attachmentTray.appendChild(chip);
     }
@@ -1970,7 +1970,7 @@ function bindWorkspace(
     const index = pendingAttachments.findIndex((item) => item.uiId === uiId);
     if (index < 0) return;
     const [removed] = pendingAttachments.splice(index, 1);
-    if (removed.record?.id) {
+    if (removed.record?.id && !inFlightAttachmentIds.has(removed.record.id)) {
       void rpc("attachment/release", { id: removed.record.id }).catch(
         () => undefined,
       );
@@ -1984,7 +1984,8 @@ function bindWorkspace(
       .filter((id): id is string => Boolean(id));
     pendingAttachments.splice(0);
     for (const id of ids) {
-      void rpc("attachment/release", { id }).catch(() => undefined);
+      if (!inFlightAttachmentIds.has(id))
+        void rpc("attachment/release", { id }).catch(() => undefined);
     }
     attachmentTray.textContent = "";
     attachmentTray.style.display = "none";
@@ -2125,7 +2126,6 @@ function bindWorkspace(
             async (id, verdict) => {
               await rpc("memory/proposal/resolve", { id, verdict });
               await refreshMemoryProposals();
-              await refreshMemories();
               renderLists();
               renderKnowledgeWindow();
             },
@@ -2133,7 +2133,6 @@ function bindWorkspace(
         ),
     async () => {
       await refreshMemoryProposals();
-      await refreshMemories();
       renderLists();
     },
     (taskId) => {
@@ -2492,6 +2491,7 @@ function bindWorkspace(
     // Shared preference observers update every open surface after Save.
     root.style.fontFamily = "var(--confucius-font-family)";
     root.style.fontSize = "var(--confucius-font-size, 13px)";
+    if (!resizeObserver) applyResponsiveLayout();
   }
 
   function renderApprovalCard(
@@ -2751,7 +2751,7 @@ function bindWorkspace(
       state.sessionId = taskId;
       state.lastEventId = null;
       state.running = false;
-      state.pendingUserText = "";
+      state.pendingUserMessage = null;
       state.sendError = "";
       if (switching || loadedComposerTaskId !== taskId) {
         loadedComposerTaskId = taskId;
@@ -2793,6 +2793,13 @@ function bindWorkspace(
     refresh = false,
     taskId = state.sessionId,
   ): Promise<void> {
+    if (
+      !taskId ||
+      state.sessionId !== taskId ||
+      state.running ||
+      (state.sending && !refresh)
+    )
+      return Promise.resolve();
     const update = pendingReaderUpdate
       .catch(() => undefined)
       .then(async () => {
@@ -3762,7 +3769,7 @@ function bindWorkspace(
           state.events = [];
           state.lastEventId = null;
           state.running = false;
-          state.pendingUserText = "";
+          state.pendingUserMessage = null;
           state.artifacts = [];
           prompt.value = "";
           renderedTimelineTaskId = null;
@@ -3776,6 +3783,10 @@ function bindWorkspace(
       });
     },
   });
+  const taskNavigation = sessionPane.querySelector(
+    ".confucius-task-navigation",
+  );
+  if (taskNavigation) resizeObserver?.observe(taskNavigation);
 
   let lastListSignature = "";
 
@@ -3791,7 +3802,7 @@ function bindWorkspace(
         ? readerAttachmentIdentity(state.live.lockedSnapshot)
         : "",
       state.live?.lockedSnapshot?.reader?.title ?? "",
-      state.pendingUserText,
+      JSON.stringify(state.pendingUserMessage),
       state.sendError,
       state.mode,
       state.approvals.map((item) => item.id).join(","),
@@ -3810,6 +3821,7 @@ function bindWorkspace(
   }
 
   function renderLists(): void {
+    if (disposed) return;
     annotationReview.update(state.sessionId ?? undefined);
     literaturePanel.update(
       state.sessionId ?? undefined,
@@ -3886,15 +3898,6 @@ function bindWorkspace(
       banner.appendChild(configure);
       activityStream.appendChild(banner);
     }
-    if (state.pendingUserText) {
-      activityStream.appendChild(
-        conversation.render(
-          doc,
-          { kind: "user", text: state.pendingUserText },
-          "pending",
-        )!,
-      );
-    }
     if (
       state.sendError &&
       !sendErrorInTimeline(
@@ -3925,7 +3928,6 @@ function bindWorkspace(
           async (id, verdict) => {
             await rpc("memory/proposal/resolve", { id, verdict });
             await refreshMemoryProposals();
-            await refreshMemories();
             renderLists();
             renderKnowledgeWindow();
           },
@@ -3946,7 +3948,7 @@ function bindWorkspace(
     if (
       !state.events.length &&
       !state.artifacts.length &&
-      !state.pendingUserText &&
+      !state.pendingUserMessage &&
       !state.sendError
     ) {
       // The task overview already provides the starting actions.
@@ -4033,6 +4035,19 @@ function bindWorkspace(
       card.dataset.entryId = `approval:${item.id}`;
       activityStream.appendChild(card);
     }
+    const pendingMessage = state.pendingUserMessage;
+    if (
+      pendingMessage?.taskId === state.sessionId &&
+      !userMessageInTimeline(
+        pendingMessage.block,
+        state.events,
+        pendingMessage.afterEventId,
+      )
+    ) {
+      const bubble = conversation.render(doc, pendingMessage.block, "pending")!;
+      bubble.dataset.entryId = "pending-user-message";
+      activityStream.appendChild(bubble);
+    }
     if (
       state.sending ||
       turnAwaitingReply(state.events) ||
@@ -4097,7 +4112,7 @@ function bindWorkspace(
     }
     if (initialViewReady) renderedTimelineTaskId = timelineTaskId;
     timelinePane.scrollTop =
-      followTimeline && (state.events.length > 0 || state.pendingUserText)
+      followTimeline && (state.events.length > 0 || state.pendingUserMessage)
         ? timelinePane.scrollHeight
         : savedTimelineScroll;
     rememberTimelineViewport();
@@ -4190,6 +4205,21 @@ function bindWorkspace(
     chip.setAttribute("aria-label", chip.title);
   }
 
+  function presentEndpointButton(
+    text: string,
+    label: string,
+    title: string,
+  ): void {
+    if (endpointName.textContent !== text) endpointName.textContent = text;
+    for (const [attribute, value] of [
+      ["aria-label", label],
+      ["title", title],
+      ["aria-expanded", String(endpointMenuOpen)],
+    ])
+      if (endpointBtn.getAttribute(attribute) !== value)
+        endpointBtn.setAttribute(attribute, value);
+  }
+
   function syncEndpointButton(): void {
     const task = currentTask();
     if (task && task.backend !== "native") {
@@ -4206,18 +4236,11 @@ function bindWorkspace(
         task.runtimeModel?.modelId ||
         runtimeLabel(task.backend);
       const effort = task.runtimeModel?.reasoningEffort;
-      endpointName.textContent = effort
-        ? `${label} · ${effortLabel(effort)}`
-        : label;
-      endpointBtn.setAttribute(
-        "aria-label",
-        `${runtimeLabel(task.backend)} · ${endpointName.textContent}`,
-      );
-      endpointBtn.title =
-        runtime?.message || getString("workspace-runtime-external");
-      endpointBtn.setAttribute(
-        "aria-expanded",
-        endpointMenuOpen ? "true" : "false",
+      const text = effort ? `${label} · ${effortLabel(effort)}` : label;
+      presentEndpointButton(
+        text,
+        `${runtimeLabel(task.backend)} · ${text}`,
+        runtime?.message || getString("workspace-runtime-external"),
       );
       return;
     }
@@ -4234,11 +4257,10 @@ function bindWorkspace(
       active?.reasoningEffort,
       active?.reasoning?.[active.model],
     );
-    endpointName.textContent =
+    const text =
       activeEffort !== "auto"
         ? `${label} · ${effortLabel(activeEffort)}`
         : label;
-    endpointBtn.setAttribute("aria-label", label);
     const detail = [
       active?.name,
       active?.model,
@@ -4246,11 +4268,7 @@ function bindWorkspace(
     ]
       .filter(Boolean)
       .join(" · ");
-    endpointBtn.title = detail || getString("workspace-model");
-    endpointBtn.setAttribute(
-      "aria-expanded",
-      endpointMenuOpen ? "true" : "false",
-    );
+    presentEndpointButton(text, label, detail || getString("workspace-model"));
   }
 
   function collectApprovals(): void {
@@ -4326,7 +4344,12 @@ function bindWorkspace(
       state.sessionId = null;
     if (!state.sessionId && !state.sessions.length)
       prompt.value = composerDrafts.get("new") ?? "";
-    if (!state.sessionId && !pendingTaskId && state.sessions[0]) {
+    if (
+      !state.sessionId &&
+      !state.sending &&
+      !pendingTaskId &&
+      state.sessions[0]
+    ) {
       state.sessionId = state.sessions[0].id;
     }
     // The first poll restores the selected task without calling loadTask.
@@ -4404,7 +4427,29 @@ function bindWorkspace(
     state.sending = true;
     state.sendError = "";
     failedPrompt = undefined;
-    state.pendingUserText = text;
+    const submittedTaskId = state.sessionId;
+    const selection = submittedTaskId
+      ? taskLoadGeneration
+      : ++taskLoadGeneration;
+    const submittedDraft = prompt.value;
+    let promptSessionId = submittedTaskId;
+    const pendingMessage = {
+      block: {
+        kind: "user" as const,
+        text,
+        ...(submittedAttachments.length
+          ? {
+              attachments: submittedAttachments.map((item) => ({
+                ...item.record,
+              })),
+            }
+          : {}),
+      },
+      taskId: submittedTaskId,
+      afterEventId: undefined as string | null | undefined,
+    };
+    state.pendingUserMessage = pendingMessage;
+    for (const id of attachmentIds) inFlightAttachmentIds.add(id);
     sendBtn.setAttribute("disabled", "true");
     status.style.color = "var(--confucius-accent)";
     status.textContent = getString("workspace-sending");
@@ -4412,7 +4457,7 @@ function bindWorkspace(
     let promptAttempt:
       { taskId: string; afterEventId: string | null } | undefined;
     try {
-      if (!state.sessionId) {
+      if (!promptSessionId) {
         const lockedContext = mentionSources.context();
         const created = (await rpc("task/new", {
           title: (enteredText || submittedAttachments[0]?.name || text).slice(
@@ -4422,19 +4467,38 @@ function bindWorkspace(
           lockedContext,
           mode: state.mode,
         })) as SessionRow;
-        state.sessionId = created.id;
+        promptSessionId = created.id;
         referenceDrafts.set(created.id, submittedReferences);
         referenceDrafts.delete("new");
-        state.events = [];
-        state.lastEventId = null;
-        state.running = false;
-        state.sessions.unshift(created);
+        composerDrafts.set(created.id, submittedDraft);
+        state.sessions = [
+          created,
+          ...state.sessions.filter((task) => task.id !== created.id),
+        ];
+        // Sending belongs to the captured task, while selection may change
+        // independently during task creation or context/permission updates.
+        if (!disposed && selection === taskLoadGeneration) {
+          state.sessionId = created.id;
+          loadedComposerTaskId = created.id;
+          composerDrafts.set(created.id, prompt.value);
+          state.events = [];
+          state.lastEventId = null;
+          state.running = false;
+        }
         mentionSources.adoptDraft(created.id, created.lockedContext);
       }
       // A user can select a permission mode and immediately press Send. Wait
       // for the queued session update so the visible mode is the mode used by
       // the turn that follows.
-      const promptSessionId = state.sessionId;
+      pendingMessage.taskId = promptSessionId;
+      promptAttempt = {
+        taskId: promptSessionId,
+        afterEventId:
+          state.sessionId === promptSessionId
+            ? (state.events.at(-1)?.id ?? null)
+            : null,
+      };
+      pendingMessage.afterEventId = promptAttempt.afterEventId;
       await Promise.all([
         pendingPermissionUpdate,
         mentionSources.flush(promptSessionId),
@@ -4442,10 +4506,6 @@ function bindWorkspace(
       await syncFocusedReader(true, promptSessionId);
       await refreshSessions();
       renderLists();
-      promptAttempt = {
-        taskId: promptSessionId,
-        afterEventId: state.events.at(-1)?.id ?? null,
-      };
       const started = (await rpc("task/prompt", {
         taskId: promptSessionId,
         text,
@@ -4459,9 +4519,6 @@ function bindWorkspace(
       }
       renderAttachmentTray();
       if (state.sessionId !== promptSessionId) {
-        if (state.pendingUserText === text) {
-          state.pendingUserText = "";
-        }
         return;
       }
       // Keep text typed while the request was in flight; only clear the
@@ -4471,7 +4528,6 @@ function bindWorkspace(
         if (promptSessionId) composerDrafts.set(promptSessionId, "");
         rememberComposerDraft();
       }
-      state.pendingUserText = "";
       state.running = !started.superseded;
       updateRunningUI();
       await refreshSessions();
@@ -4480,9 +4536,6 @@ function bindWorkspace(
         taskId: promptSessionId,
       })) as { events?: ConfuciusEvent[] };
       if (state.sessionId !== promptSessionId) {
-        if (state.pendingUserText === text) {
-          state.pendingUserText = "";
-        }
         return;
       }
       const incoming = bundle.events || [];
@@ -4512,14 +4565,28 @@ function bindWorkspace(
       renderLists();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (promptAttempt && state.sessionId !== promptAttempt.taskId) return;
+      if (
+        disposed ||
+        state.sessionId !== promptSessionId ||
+        (!promptSessionId && selection !== taskLoadGeneration)
+      )
+        return;
       failedPrompt = promptAttempt ? { ...promptAttempt, message } : undefined;
       state.sendError = message;
       status.style.color = "var(--confucius-danger)";
       status.textContent = getString("workspace-task-status-failed");
       renderLists();
     } finally {
+      for (const id of attachmentIds) {
+        inFlightAttachmentIds.delete(id);
+        if (!pendingAttachments.some((item) => item.record?.id === id))
+          void rpc("attachment/release", { id }).catch(() => undefined);
+      }
       state.sending = false;
+      if (state.pendingUserMessage === pendingMessage) {
+        state.pendingUserMessage = null;
+        renderLists();
+      }
       updateRunningUI();
     }
   }
@@ -5759,25 +5826,6 @@ function bindWorkspace(
       refreshMemoryProposals(),
       runUpdateAction("update/status"),
     ]);
-  }
-
-  async function refreshMemories(): Promise<void> {
-    try {
-      const listed = (await rpc("memory/list", { limit: 200 })) as {
-        memories?: MemoryRow[];
-      };
-      state.memories = listed.memories ?? [];
-    } catch {
-      state.memories = [];
-    }
-    try {
-      const listed = (await rpc("logs/list", { limit: 1 })) as {
-        stats?: { sessions?: number };
-      };
-      state.logCount = listed.stats?.sessions ?? 0;
-    } catch {
-      state.logCount = 0;
-    }
   }
 
   interface SlashCommand {
@@ -7199,6 +7247,7 @@ function bindWorkspace(
   }
 
   function updateRunningUI(): void {
+    if (disposed) return;
     endpointBtn.toggleAttribute(
       "disabled",
       modelUpdatePending || modeUpdatePending || state.running || state.sending,
@@ -7223,7 +7272,7 @@ function bindWorkspace(
   let pollInFlight = false;
 
   async function poll(): Promise<void> {
-    if (pollInFlight) {
+    if (disposed || pollInFlight) {
       return;
     }
     pollInFlight = true;
@@ -7231,13 +7280,16 @@ function bindWorkspace(
       if (!state.config) {
         await refreshConfig();
       }
+      if (disposed) return;
       await refreshSessions();
+      if (disposed) return;
       try {
         const live = (await rpc("context/live", {})) as LiveContextResult;
         state.live = live;
       } catch {
         /* Retry on the next poll; Send captures its own fresh reader context. */
       }
+      if (disposed) return;
       try {
         // Item and reader entry points carry a click-time context snapshot.
         const launch = (await rpc(
@@ -7253,6 +7305,7 @@ function bindWorkspace(
       } catch {
         /* launch queue is cosmetic */
       }
+      if (disposed) return;
       if (state.sessionId) {
         const polledSessionId = state.sessionId;
         const selection = taskLoadGeneration;
@@ -7295,7 +7348,6 @@ function bindWorkspace(
         if (incoming.some((event) => event.type === "literature_updated"))
           await literaturePanel.refresh(candidateIds);
         if (incoming.some((event) => event.type === "memory_updated")) {
-          await refreshMemories();
           renderKnowledgeWindow();
         }
         if (incoming.some((event) => event.type === "memory_proposed")) {
@@ -7376,7 +7428,6 @@ function bindWorkspace(
       }
       await Promise.all([
         ensureSkills(),
-        refreshMemories(),
         !state.runtimes.length ? refreshRuntimes(false) : undefined,
         !state.memoryProposals.length ? refreshMemoryProposals() : undefined,
       ]);
@@ -7544,7 +7595,7 @@ function bindWorkspace(
     event.stopPropagation();
     toggleEndpointMenu();
   });
-  doc.addEventListener("mousedown", (event) => {
+  function onWorkspacePointerDown(event: Event): void {
     const target = event.target as Node | null;
     const contextDetails = doc.getElementById("confucius-context-details");
     if (
@@ -7593,7 +7644,8 @@ function bindWorkspace(
       return;
     }
     closeEndpointMenu();
-  });
+  }
+  doc.addEventListener("mousedown", onWorkspacePointerDown);
   contextRing.node.addEventListener("click", toggleContextDetails);
   contextRing.node.addEventListener("keydown", (event) => {
     if (["Enter", " "].includes((event as KeyboardEvent).key)) {
@@ -7723,11 +7775,10 @@ function bindWorkspace(
     if (timer) {
       pollTimers.set(root, timer);
     }
-    win?.addEventListener("unload", () => {
-      if (timer) {
-        win.clearInterval(timer);
-        pollTimers.delete(root);
-      }
-    });
+    win?.addEventListener("unload", onWindowUnload, { once: true });
+  }
+
+  function onWindowUnload(): void {
+    unmountWorkspace(root);
   }
 }

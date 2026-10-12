@@ -110,6 +110,11 @@ function fixture({ failShutdown = false, failToolbar = false } = {}) {
         calls.push("appearance.dispose");
       },
     },
+    "./modules/ui/workspaceSurface": {
+      disposeFocusBindings() {
+        calls.push("focus.dispose");
+      },
+    },
     "./modules/ui/artifactWindow": {
       artifactWindows: {
         closeAll() {
@@ -194,6 +199,7 @@ it("real hooks reuse one Addon toolkit and release every main-window surface on 
   );
   assert.ok(f.calls.indexOf("http.dispose") < f.calls.indexOf("host.dispose"));
   assert.ok(f.calls.indexOf("btw.dispose") < f.calls.indexOf("host.dispose"));
+  assert.equal(f.calls.filter((value) => value === "focus.dispose").length, 1);
   assert.equal(
     f.calls.filter((value) => value === "artifacts.dispose").length,
     1,
@@ -217,6 +223,7 @@ it("real hooks continue cleanup after window or host disposal fails", async () =
     "menu.dispose.second",
     "reader.dispose",
     "appearance.dispose",
+    "focus.dispose",
     "artifacts.dispose",
     "toolkit.dispose",
   ])

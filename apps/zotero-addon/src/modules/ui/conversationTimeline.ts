@@ -9,6 +9,10 @@ import { getString } from "../../utils/locale";
 import { UI_FONT_STACKS } from "./workspaceTypography";
 import { markScrollContainer } from "./workspaceScrollbars";
 import { setActivitySignature } from "./workspaceActivity";
+import {
+  createAttachmentChip,
+  taskAttachmentMeta,
+} from "./workspaceAttachments";
 
 export interface ConversationPresentation {
   fillAnswerHtml(node: HTMLElement, text: string): void;
@@ -205,6 +209,25 @@ export function createConversationRenderer(
       const row = el(targetDoc, "div");
       row.className = "confucius-user-message";
       row.textContent = block.text;
+      if (block.attachments?.length) {
+        const attachments = el(targetDoc, "div");
+        attachments.className = "confucius-user-attachments";
+        attachments.setAttribute("role", "list");
+        attachments.setAttribute(
+          "aria-label",
+          getString("workspace-attachment-sent-list"),
+        );
+        for (const record of block.attachments) {
+          const chip = createAttachmentChip(targetDoc, {
+            ...record,
+            meta: taskAttachmentMeta(record),
+          });
+          chip.dataset.attachmentId = record.id;
+          chip.setAttribute("role", "listitem");
+          attachments.append(chip);
+        }
+        row.append(attachments);
+      }
       return row;
     }
     if (block.kind === "text") {

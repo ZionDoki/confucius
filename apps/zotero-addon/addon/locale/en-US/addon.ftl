@@ -67,6 +67,7 @@ confucius-workspace-toggle-sessions = Tasks
 confucius-workspace-status-idle = Ready
 confucius-workspace-composer-placeholder = Ask a research question; @ a paper or conversation
 confucius-workspace-attachment-list = Files attached to the next message
+confucius-workspace-attachment-sent-list = Attached files
 confucius-workspace-attachment-drop = Drop PDF, Markdown, or TXT inside this dashed box
 confucius-workspace-attachment-reading = Reading file…
 confucius-workspace-attachment-error = File could not be read

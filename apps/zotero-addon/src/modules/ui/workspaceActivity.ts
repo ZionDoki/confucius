@@ -24,6 +24,32 @@ export function sendErrorInTimeline(
     );
 }
 
+/** An arriving host event replaces only this submission's optimistic bubble. */
+export function userMessageInTimeline(
+  message: Extract<TimelineBlock, { kind: "user" }>,
+  events: readonly ConfuciusEvent[],
+  afterEventId: string | null | undefined,
+): boolean {
+  if (afterEventId === undefined) return false;
+  const boundary = afterEventId
+    ? events.findIndex((event) => event.id === afterEventId)
+    : -1;
+  if (afterEventId && boundary < 0) return false;
+  const ids = message.attachments?.map((attachment) => attachment.id) ?? [];
+  return events.slice(boundary + 1).some((event) => {
+    if (
+      event.type !== "turn_started" ||
+      event.payload.userText !== message.text
+    )
+      return false;
+    const attachments = event.payload.attachments ?? [];
+    return (
+      attachments.length === ids.length &&
+      attachments.every((attachment, index) => attachment.id === ids[index])
+    );
+  });
+}
+
 /** Only the final elapsed clock stays outside the animated status text. */
 export function waitingTextParts(text: string): {
   message: string;

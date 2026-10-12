@@ -105,6 +105,47 @@ try {
     `const root=d.querySelector('.confucius-annotation-review'),draft=d.querySelector('#confucius-prompt');draft.value='Continue checking evidence';globalThis.reviewDraftBox=draft.getBoundingClientRect().toJSON();root.querySelector('.ar-capsule').click();return {background:win.getComputedStyle(root.querySelector('.ar-popup')).backgroundColor,blur:win.getComputedStyle(root.querySelector('.ar-popup')).backdropFilter};`,
   );
   await capture("zotero-deck");
+  const assertReviewChoiceFocus = async (label) => {
+    const samples = await ui(`
+      const root=d.querySelector('.confucius-annotation-review'),previous=d.activeElement,inspector=win.InspectorUtils;
+      const controls=[...root.querySelectorAll('input[type=range],input[type=checkbox],input[type=radio]')].filter(n=>n.getClientRects().length&&!n.disabled);
+      const samples=[];
+      for(const control of controls){
+        control.focus({preventScroll:true});const focused=!control.matches(':focus'),visible=!control.matches(':focus-visible');
+        if(focused)inspector.addPseudoClassLock(control,':focus');if(visible)inspector.addPseudoClassLock(control,':focus-visible');
+        const read=()=>{const s=win.getComputedStyle(control);return {outline:s.outlineStyle,width:s.outlineWidth,shadow:s.boxShadow};};
+        control.dispatchEvent(new win.KeyboardEvent('keydown',{key:'Tab',bubbles:true}));const keyboard=read();
+        control.dispatchEvent(new win.MouseEvent('pointerdown',{bubbles:true}));const pointer=read();
+        samples.push({type:control.type,keyboard,pointer});
+        if(visible)inspector.removePseudoClassLock(control,':focus-visible');if(focused)inspector.removePseudoClassLock(control,':focus');
+      }
+      if(previous?.isConnected)previous.focus({preventScroll:true});return samples;
+    `);
+    assert(samples.length > 0, label);
+    const expected = label.includes("slider")
+      ? "range"
+      : label.includes("checkboxes")
+        ? "checkbox"
+        : "radio";
+    assert(
+      samples.some((sample) => sample.type === expected),
+      label,
+    );
+
+    for (const sample of samples) {
+      assert.equal(sample.keyboard.outline, "solid", JSON.stringify(sample));
+      assert.equal(sample.keyboard.width, "2px");
+      assert.equal(sample.pointer.outline, "none", JSON.stringify(sample));
+      assert.equal(sample.pointer.shadow, "none");
+    }
+    report.choiceFocus ??= [];
+    report.choiceFocus.push({ label, samples });
+    check(label);
+  };
+  await assertReviewChoiceFocus(
+    "Review card slider retains keyboard focus without a pointer outline",
+  );
+
   check(
     "Native hover shows gradient arrows and a real edge click turns the card",
     await ui(
@@ -142,6 +183,19 @@ try {
       (!uiState.blur || uiState.blur === "none"),
   );
   await capture("zotero-list-before-selection");
+  await assertReviewChoiceFocus(
+    "Review selection checkboxes retain keyboard focus without pointer outlines",
+  );
+  await ui(
+    `d.querySelector('.confucius-annotation-review .ar-search-row > button').click();return true;`,
+  );
+  await assertReviewChoiceFocus(
+    "Review filter radio buttons retain keyboard focus without pointer outlines",
+  );
+  await ui(
+    `d.querySelector('.confucius-annotation-review .ar-search-row > button').click();return true;`,
+  );
+
   check(
     "Popup collapse control is aligned with the right content edge",
     await ui(

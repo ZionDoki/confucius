@@ -67,6 +67,7 @@ confucius-workspace-toggle-sessions = 任务
 confucius-workspace-status-idle = 就绪
 confucius-workspace-composer-placeholder = 输入研究问题，@ 引用文献或会话
 confucius-workspace-attachment-list = 下一条消息的附件
+confucius-workspace-attachment-sent-list = 已发送的附件
 confucius-workspace-attachment-drop = 将 PDF、Markdown 或 TXT 拖入此虚线框
 confucius-workspace-attachment-reading = 正在读取文件…
 confucius-workspace-attachment-error = 无法读取文件
