@@ -138,7 +138,80 @@ real host parsing, storage and package installs. Runtime path persistence uses
 external hosting disabled. Raw reports, screenshots, profiles and packages remain
 in ignored output/scaffold directories.
 
-Source checks, feature/race regressions, candidate upgrades and hot updates are
-complete at tag preparation. CI, draft asset verification, public anonymous
-discovery/download checks and unchanged-old-package online upgrades are distinct
-post-publication steps and are not claimed by this preparation record.
+Source checks, feature/race regressions, candidate upgrades and hot updates were
+complete at tag preparation. Public acceptance was outstanding then; the
+following sections record the completed post-publication checks. The tag, source
+and published package remain unchanged.
+
+## CI and original public package
+
+Release source: `ede81cad2276189412dbb730b95ff0533bc69b6a`.
+[Tag CI](https://github.com/ZionDoki/confucius/actions/runs/38206459500) and
+[master CI](https://github.com/ZionDoki/confucius/actions/runs/38206459440) passed.
+Node.js 22 and 24 each passed **1,379 tests**, zero failures, skips or cancellations,
+plus type checking, lint, skill/version checks and production builds. Node 22's
+TAP summaries and Node 24's spec summaries were checked separately. Draft asset
+inspection passed before the workflow published the release; its anonymous
+discovery and download gate also passed.
+
+[Confucius v0.6.2](https://github.com/ZionDoki/confucius/releases/tag/v0.6.2)
+was published at **2026-10-12T05:08:06Z**, release ID `410192422`, with
+`draft=false`, `prerelease=false`, as stable **Latest**. The latest-release endpoint
+names `v0.6.2`; title, tag and body match the notes generated from CHANGELOG.
+
+| Original public CI artifact | Bytes  | SHA-256                                                            |
+| --------------------------- | ------ | ------------------------------------------------------------------ |
+| `confucius.xpi`             | 812007 | `d3bcd2c4f9254a0b6160c70803f53b37dc1bb6e3fd71ec111990868e1d616a81` |
+| `update.json`               | 573    | `4e698ccbff1b3df50931cc4dc5b7048a7345214b8480dc4b98054e83d66eece8` |
+| `update-beta.json`          | 573    | `4e698ccbff1b3df50931cc4dc5b7048a7345214b8480dc4b98054e83d66eece8` |
+
+All **19 unpacked files** have identical names and SHA-256 digests between the
+tested local candidate and the original public CI XPI. Archive metadata and
+compression account for the byte difference. Public files were saved as
+downloaded; no locally rebuilt file replaced the CI artifacts.
+
+A separate local `release-assets.mjs --public` run against these original public
+files passed **three consecutive anonymous release-list reads** and both the
+old-client asset-API and browser XPI download paths. Uploaded states, display
+filenames, sizes, SHA-256, manifest, stable/Beta update metadata, SHA-512 and
+versioned addresses all passed inspection.
+
+A final native focus sweep on the same candidate code sampled **812 control
+states** across all six settings tabs, both entry points and light/dark/contrast
+themes: **zero pointer-outline issues and zero missing keyboard-focus states**.
+It used Gecko pseudo-class locks for background-window focus and did not invoke
+real connection, file-picker or color-picker actions. The public artifact's
+identical unpacked files establish that this is also the shipped style code.
+
+## Original-old-package online upgrades
+
+The unchanged public 0.6.1 and 0.6.1-beta.2 XPIs used their own updater against
+real GitHub endpoints. No reported version, updater implementation, discovery or
+download response was replaced. Tests used ordinary installed packages in
+isolated Zotero profiles, not temporary addons.
+
+| Suite                               | From         | Checks | Explicit channel | Result |
+| ----------------------------------- | ------------ | ------ | ---------------- | ------ |
+| `live-legacy-update.mjs`            | 0.6.1        | 13     | Stable           | Passed |
+| `live-legacy-update.mjs`            | 0.6.1-beta.2 | 13     | Stable           | Passed |
+| `live-release-upgrade.mjs --public` | 0.6.1        | 29     | Beta             | Passed |
+| `live-release-upgrade.mjs --public` | 0.6.1-beta.2 | 35     | Stable           | Passed |
+
+Both old packages discovered the higher stable release with Betas disabled,
+downloaded, verified and installed it. Full restart confirmed version 0.6.2 and
+the exact original public XPI digest. Chinese drafts and explicit channel choices
+survived. Already-current checks did not reinstall; turning Betas off did not
+downgrade, and automatic-check preferences remained independent after restart.
+
+Full public data-upgrade acceptance retained every original history/working-note
+hash (28 files from stable; 40 from Beta), source annotations, notes, report
+revisions, memory/proposals, drafts, creation grouping, appearance values and
+consumed budgets. The Beta's saved research queries, candidates, decisions,
+child identities/results and trace events survived another restart. Upgrade and
+restart did not call the model or repeat confirmed writes. Explicit continuation
+reused the saved receipt and existing budget.
+
+Source preparation, ordinary-package feature/race checks, candidate upgrades,
+hot updates, Node.js 22/24 CI, public discovery/download verification and genuine
+old-client online data upgrades are complete. Platform and fixture limitations
+remain those recorded above; no personal Zotero installation/library was changed.
