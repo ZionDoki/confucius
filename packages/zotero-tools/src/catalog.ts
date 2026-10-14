@@ -11,6 +11,8 @@ import {
   LIBRARY_WRITE_TOOLS,
   MEMORY_READ_TOOLS,
   MEMORY_WRITE_TOOLS,
+  ORGANIZER_READ_TOOLS,
+  ORGANIZER_WRITE_TOOLS,
   PAPER_READ_TOOLS,
   PAPER_WRITE_TOOLS,
 } from "@confucius/protocol";
@@ -741,6 +743,174 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     ["sessionId"],
   ),
+  def(
+    "organizer_get_outline",
+    "Read the Flex Annotations Organizer outline tree for a collection (or the library). Returns outline headings with hierarchy, paths, depths, and § tags.",
+    {
+      collection: {
+        type: "string",
+        description:
+          "Collection key (or name). Resolves the top-level collection ancestor and its outline tree. If omitted, returns the library-wide outline.",
+      },
+      collectionKey: {
+        type: "string",
+        description: "Compatibility alias for collection.",
+      },
+      libraryID: {
+        type: "integer",
+        description: "Zotero libraryID (defaults to current user library).",
+      },
+    },
+  ),
+  def(
+    "organizer_list_annotations",
+    "List reading annotations on works belonging to a collection and its subcollections for Organizer assignment. Annotations carry quotes, comments, tags, work metadata, and current § heading tags.",
+    {
+      collection: {
+        type: "string",
+        description:
+          "Collection key (or name). Annotations belonging to works in this collection and its subcollections will be returned.",
+      },
+      collectionKey: {
+        type: "string",
+        description: "Compatibility alias for collection.",
+      },
+      libraryID: {
+        type: "integer",
+        description: "Zotero libraryID.",
+      },
+      unassignedOnly: {
+        type: "boolean",
+        description:
+          "If true (default), returns only annotations not yet assigned to any heading in this collection's outline.",
+      },
+      limit: {
+        type: "integer",
+        minimum: 1,
+        maximum: 100,
+        description: "Maximum annotations to return (default 50).",
+      },
+      offset: {
+        type: "integer",
+        minimum: 0,
+        description: "0-based offset for pagination.",
+      },
+    },
+    ["collection"],
+  ),
+  def(
+    "organizer_get_annotation_context",
+    "Get surrounding fulltext context from the parent attachment around an annotation's quote.",
+    {
+      key: {
+        type: "string",
+        description: "Annotation item key.",
+      },
+      annotationKey: {
+        type: "string",
+        description: "Compatibility alias for key.",
+      },
+      libraryID: {
+        type: "integer",
+        description: "Zotero libraryID.",
+      },
+      chars: {
+        type: "integer",
+        minimum: 100,
+        maximum: 5000,
+        description:
+          "Number of characters of surrounding fulltext to return (default 1000).",
+      },
+    },
+    ["key"],
+  ),
+  def(
+    "organizer_assign_annotations",
+    "Assign reading annotations to Organizer outline headings by adding §Heading tags. Requires approval.",
+    {
+      collection: {
+        type: "string",
+        description:
+          "Collection key (or name) whose outline defines the allowed headings.",
+      },
+      collectionKey: {
+        type: "string",
+        description: "Compatibility alias for collection.",
+      },
+      libraryID: {
+        type: "integer",
+        description: "Zotero libraryID.",
+      },
+      assignments: {
+        type: "array",
+        description: "Batch of assignments to apply.",
+        items: {
+          type: "object",
+          properties: {
+            key: { type: "string", description: "Annotation item key." },
+            headings: {
+              type: "array",
+              items: { type: "string" },
+              description: "Heading titles (without the § prefix) to assign.",
+            },
+            reason: {
+              type: "string",
+              description:
+                "Optional short explanation of why the quote fits this heading.",
+            },
+          },
+          required: ["key", "headings"],
+        },
+      },
+      dryRun: {
+        type: "boolean",
+        description:
+          "If true, returns the planned tag additions without writing changes to Zotero.",
+      },
+    },
+    ["collection", "assignments"],
+  ),
+  def(
+    "organizer_unassign_annotations",
+    "Remove Organizer heading tags (§Heading) from annotations. Requires approval.",
+    {
+      collection: {
+        type: "string",
+        description: "Collection key (or name) of the outline.",
+      },
+      collectionKey: {
+        type: "string",
+        description: "Compatibility alias for collection.",
+      },
+      libraryID: {
+        type: "integer",
+        description: "Zotero libraryID.",
+      },
+      assignments: {
+        type: "array",
+        description: "Batch of unassignments to apply.",
+        items: {
+          type: "object",
+          properties: {
+            key: { type: "string", description: "Annotation item key." },
+            headings: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Heading titles to unassign (remove the §Heading tag).",
+            },
+          },
+          required: ["key"],
+        },
+      },
+      dryRun: {
+        type: "boolean",
+        description:
+          "If true, returns the planned removals without writing changes to Zotero.",
+      },
+    },
+    ["collection", "assignments"],
+  ),
 ];
 
 function meta(
@@ -779,15 +949,23 @@ for (const name of MEMORY_READ_TOOLS) {
 for (const name of MEMORY_WRITE_TOOLS) {
   TOOL_META[name] = meta(name, "memory.write", "serial", true);
 }
+for (const name of ORGANIZER_READ_TOOLS) {
+  TOOL_META[name] = meta(name, "library.read", "parallel_safe", false);
+}
+for (const name of ORGANIZER_WRITE_TOOLS) {
+  TOOL_META[name] = meta(name, "library.write", "serial", true);
+}
 
 export const WRITE_TOOL_NAMES = new Set<string>([
   ...LIBRARY_WRITE_TOOLS,
   ...PAPER_WRITE_TOOLS,
   ...MEMORY_WRITE_TOOLS,
+  ...ORGANIZER_WRITE_TOOLS,
 ]);
 
 export const READ_ONLY_TOOL_NAMES = new Set<string>([
   ...LIBRARY_READ_TOOLS,
   ...PAPER_READ_TOOLS,
   ...MEMORY_READ_TOOLS,
+  ...ORGANIZER_READ_TOOLS,
 ]);

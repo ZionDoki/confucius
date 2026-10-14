@@ -39,7 +39,7 @@ for (const slug of entries) {
   if (!existsSync(path)) {
     continue;
   }
-  const markdown = readFileSync(path, "utf8");
+  const markdown = readFileSync(path, "utf8").replace(/\r\n/g, "\n");
   lines.push(`  ${JSON.stringify(slug)}:`);
   lines.push(`    ${JSON.stringify(markdown)},`);
 }

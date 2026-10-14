@@ -17,6 +17,7 @@ import { createLiteraturePanel } from "./literaturePanel";
 import { reviewArrivals } from "./reviewArrivals";
 import { renderMemoryProposal } from "./memoryProposalCards";
 import { createAnnotationReviewPanel } from "./annotationReviewPanel";
+import { renderOrganizerReviewCard } from "./organizerReviewCard";
 import { bindBtwSelection } from "./btwPopup";
 import { artifactWindows } from "./artifactWindow";
 import { mountWorkspaceArtifact } from "./artifactWorkspace";
@@ -92,6 +93,7 @@ import type {
   ModelEndpoint,
   ModelReasoningOverride,
   ModelReasoningOverrides,
+  OrganizerAssignmentReview,
 } from "@confucius/protocol";
 import {
   modelReasoning,
@@ -115,7 +117,7 @@ import {
 } from "@confucius/protocol";
 import { slashMenuToken, type ConfuciusSkill } from "@confucius/skill-format";
 import { renderToString as katexRender } from "katex";
-import { getString } from "../../utils/locale";
+import { configuredUiLanguage, getString } from "../../utils/locale";
 import { hrefFromEvent } from "./anchorFromEvent";
 import { droppedFilePaths, droppedFilename, hasDroppedFiles } from "./fileDrop";
 import {
@@ -243,6 +245,7 @@ type ApprovalRow = {
   after?: string;
   kind?: string;
   origin?: string;
+  organizerReview?: OrganizerAssignmentReview;
 };
 
 type ModelConfig = {
@@ -2498,6 +2501,38 @@ function bindWorkspace(
     targetDoc: Document,
     item: ApprovalRow,
   ): HTMLElement {
+    if (
+      (item.toolName === "organizer_assign_annotations" ||
+        item.toolName === "annotations_assign" ||
+        item.toolName === "organizer_unassign_annotations" ||
+        item.toolName === "annotations_unassign") &&
+      (item.organizerReview ||
+        Array.isArray(item.args.assignments) ||
+        Array.isArray(item.args.keys) ||
+        typeof item.args.key === "string")
+    ) {
+      return renderOrganizerReviewCard(targetDoc, item, {
+        resolve: (verdict, scope, editedArgs) => {
+          void resolveApproval(item.id, verdict, scope, editedArgs);
+        },
+        locate: (key, libraryID) => {
+          void rpc("reader/open", {
+            libraryID:
+              libraryID ??
+              (typeof item.args.libraryID === "number"
+                ? item.args.libraryID
+                : undefined),
+            key,
+            annotationKey: key,
+            selectItem: true,
+          }).catch(() => {
+            /* locate is cosmetic */
+          });
+        },
+        language: configuredUiLanguage(),
+      });
+    }
+
     const card = el(targetDoc, "section", undefined, {
       "aria-label": getString("workspace-awaiting-approval"),
     });
@@ -4285,6 +4320,7 @@ function bindWorkspace(
           after: request.after,
           kind: request.kind,
           origin: request.origin,
+          organizerReview: request.organizerReview,
         });
       }
       if (event.type === "approval_resolved") {
@@ -4595,8 +4631,9 @@ function bindWorkspace(
     id: string,
     verdict: "allow" | "deny",
     scope: "once" | "session",
+    editedArgs?: Record<string, unknown>,
   ) {
-    await rpc("approval/resolve", { id, verdict, scope });
+    await rpc("approval/resolve", { id, verdict, scope, editedArgs });
     collectApprovals();
     renderLists();
   }
