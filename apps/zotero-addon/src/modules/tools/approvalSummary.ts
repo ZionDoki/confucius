@@ -4,6 +4,8 @@
  * Pure; the caller injects a title resolver backed by Zotero.
  */
 
+import { describeOrganizerApproval } from "./organizerApprovalSummary";
+
 export interface SummaryItemLike {
   /** Resolved display title for the referenced item. */
   title: string;
@@ -91,38 +93,8 @@ export function describeCallForApproval(
       ? (resolveItem(ref.libraryID, ref.key)?.title ?? "")
       : "";
 
-  if (
-    toolName === "organizer_assign_annotations" ||
-    toolName === "annotations_assign"
-  ) {
-    const count = Array.isArray(args.assignments) ? args.assignments.length : 0;
-    if (language === "zh-CN") {
-      return `分配 ${count} 条标注至 Flex Annotations 大纲`;
-    }
-    if (String(language).startsWith("de")) {
-      return `${count} Annotation${count === 1 ? "" : "en"} der Flex-Annotations-Gliederung zuweisen`;
-    }
-    return `Assign ${count} annotation${count === 1 ? "" : "s"} to Flex Annotations outline`;
-  }
-  if (
-    toolName === "organizer_unassign_annotations" ||
-    toolName === "annotations_unassign"
-  ) {
-    const count = Array.isArray(args.assignments)
-      ? args.assignments.length
-      : Array.isArray(args.keys)
-        ? args.keys.length
-        : typeof args.key === "string" && args.key
-          ? 1
-          : 0;
-    if (language === "zh-CN") {
-      return `移除 ${count} 条标注的大纲归类`;
-    }
-    if (String(language).startsWith("de")) {
-      return `Gliederungszuweisung von ${count} Annotation${count === 1 ? "" : "en"} entfernen`;
-    }
-    return `Unassign ${count} annotation${count === 1 ? "" : "s"} from Flex Annotations outline`;
-  }
+  const organizerSummary = describeOrganizerApproval(toolName, args, language);
+  if (organizerSummary) return organizerSummary;
 
   if (
     [

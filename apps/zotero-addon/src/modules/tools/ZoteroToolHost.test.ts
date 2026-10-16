@@ -3842,4 +3842,48 @@ describe("organizer integration tools", () => {
     );
     assert.deepEqual(env.ann3.tags, ["to-read"]);
   });
+
+  // Regressionsschutz: Die Organizer-Preflight muss auch unter Alias-Namen
+  // laufen. Vorher wurde in prepareOrganizerRead/Write gegen den rohen
+  // `name` statt des kanonischen Namens verglichen, wodurch der not_found-
+  // Preflight unter `annotation_context`/`annotations_list` übersprungen wurde.
+  it("organizer read preflight runs under aliases (canonical-name resolution)", async () => {
+    const env = installOrganizerFixture();
+
+    // annotation_context-Alias: fehlende Annotation muss not_found liefern,
+    // nicht stillschweigend durchlaufen.
+    const missing = await env.host.prepare("annotation_context", {
+      key: "MISSING",
+    });
+    assert.ok(missing);
+    assert.equal((missing as { code: string }).code, "not_found");
+
+    // Vorhandene Annotation unter dem Alias passiert die Preflight.
+    const hit = await env.host.prepare("annotation_context", {
+      key: "ANN_1",
+    });
+    assert.equal(hit, null);
+
+    // annotations_list-Alias: fehlende Collection wird abgewiesen.
+    const noCol = await env.host.prepare("annotations_list", {});
+    assert.ok(noCol);
+    assert.equal((noCol as { code: string }).code, "invalid_args");
+  });
+
+  it("organizer write prepare under alias resolves canonical domain and resources", async () => {
+    const env = installOrganizerFixture();
+    const ctx: ToolExecutionContext = {};
+    const res = await env.host.prepare(
+      "annotations_assign",
+      {
+        collection: "COL_ROOT",
+        assignments: [{ key: "ANN_1", headings: ["Background"] }],
+      },
+      ctx,
+    );
+    assert.equal(res, null);
+    assert.equal(ctx.preparedOperation?.domain, "library.write");
+    assert.ok(ctx.resources?.includes("zotero-collection:1:COL_ROOT"));
+    assert.ok(ctx.resources?.includes("zotero:1:ANN_1"));
+  });
 });
