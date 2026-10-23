@@ -39,6 +39,8 @@ interface Manifest {
   shardBytes?: Record<string, number>;
   backupBytes?: number;
   manifestBytes?: number;
+  /** Task-relative files whose deletion was authorized by prune(). */
+  cleanupFiles?: string[];
   retention?: HistoryRetentionState;
   windows: ContextWindowState[];
   items: HistoryItem[];
@@ -365,6 +367,131 @@ export class HistoryStore {
     );
     this.cacheManifest(taskId, manifest);
   }
+  /** A cleared task re-enters the recent tier as soon as it holds new work.
+   *  An interrupted cleanup keeps its delete signal (and backup accounting)
+   *  until every recorded file is actually gone; it must never look complete. */
+  private async reopened(taskId: string, index: Manifest): Promise<Manifest> {
+    let current = index;
+    if (index.cleanupPending) {
+      try {
+        await this.deletePending(taskId, index);
+        current = {
+          ...index,
+          cleanupPending: false,
+          cleanupFiles: undefined,
+          backupBytes: 0,
+          ...(index.retention?.tier === "pruned"
+            ? { retainedBytes: 0, shardBytes: {} }
+            : {}),
+        };
+        // Persist the cleared signal before charging new work; a crash here
+        // leaves an already-cleaned tombstone, not a stale deletion promise.
+        await this.commit(taskId, current);
+      } catch {
+        // Keep cleanupPending/cleanupFiles/backupBytes; the next append, write
+        // or prune retries the files that are still on disk.
+      }
+    }
+    if (current.retention?.tier !== "pruned") return current;
+    const empty = !current.items.length && !current.notes.length;
+    return {
+      ...current,
+      prunedAt: undefined,
+      ...(empty && !current.cleanupPending
+        ? { retainedBytes: 0, shardBytes: {}, backupBytes: 0 }
+        : {}),
+      retention: { version: 1, tier: "hot" },
+    };
+  }
+  /** Only paths prune() may have recorded, so a tampered index cannot delete
+   *  arbitrary user files. */
+  private pendingFiles(index: Manifest): string[] {
+    return (index.cleanupFiles ?? []).filter(
+      (path) =>
+        path === "index.pre-archive.json" ||
+        /^windows\/[\w-]+\/(?:[\w-]+\.txt|terms\.json)$/.test(path) ||
+        /^notes\/[\w-]+_\d+\.txt$/.test(path),
+    );
+  }
+  /** Enumerate what an interrupted prune left behind. Used for tombstones from
+   *  before cleanupFiles existed, and when the tombstone itself is written. */
+  private async enumeratePending(taskId: string): Promise<string[]> {
+    const base = this.path(taskId, "");
+    const pending: string[] = [];
+    const visit = async (dir: string): Promise<void> => {
+      const prefix = dir.replace(/\/+$/, "") + "/";
+      for (const path of await this.fs.listFiles(dir)) {
+        if (!path.startsWith(prefix)) continue;
+        if (path.endsWith(".txt") || path.endsWith("/terms.json"))
+          pending.push(path.slice(base.length));
+        else if (!path.slice(prefix.length).includes("/")) await visit(path);
+      }
+    };
+    await visit(this.path(taskId, "windows"));
+    await visit(this.path(taskId, "notes"));
+    const backup = this.path(taskId, "index.pre-archive.json");
+    if ((await this.fs.listFiles(base)).includes(backup))
+      pending.push("index.pre-archive.json");
+    return pending.filter(
+      (path) =>
+        /^windows\/[\w-]+\/(?:[\w-]+\.txt|terms\.json)$/.test(path) ||
+        /^notes\/[\w-]+_\d+\.txt$/.test(path) ||
+        path === "index.pre-archive.json",
+    );
+  }
+  /** Delete the recorded pre-prune files, but never a body, note revision or
+   *  shard that current work has already replaced at the same path. */
+  private async deletePending(taskId: string, index: Manifest): Promise<void> {
+    const recorded = this.pendingFiles(index);
+    let files: string[];
+    if (index.cleanupFiles !== undefined) files = recorded;
+    else if (!index.items.length && !index.notes.length)
+      files = await this.enumeratePending(taskId);
+    else
+      // Cannot distinguish old files from current work: keep the signal.
+      throw new Error("Pending history cleanup cannot be identified");
+    const keep = new Set<string>();
+    for (const item of index.items)
+      keep.add(`windows/${safeId(item.windowId)}/${safeId(item.itemId)}.txt`);
+    for (const note of index.notes)
+      keep.add(`notes/${safeId(note.name)}_${note.revision}.txt`);
+    const keepTerms = new Set(
+      index.items.map((item) => `windows/${safeId(item.windowId)}/terms.json`),
+    );
+    const listed = new Map<string, Set<string>>();
+    for (const file of files) {
+      if (keep.has(file) || keepTerms.has(file)) continue;
+      const path = this.path(taskId, file);
+      const dir = path.slice(0, path.lastIndexOf("/"));
+      let entries = listed.get(dir);
+      if (!entries) {
+        entries = new Set(await this.fs.listFiles(dir));
+        listed.set(dir, entries);
+      }
+      if (!entries.has(path)) continue;
+      entries.delete(path);
+      await this.fs.deleteFile(path);
+      if (file.endsWith("/terms.json")) {
+        const key = `${taskId}/${file.split("/")[1]}`;
+        this.shards.delete(key);
+        this.shardSizes.delete(key);
+      }
+    }
+  }
+  /** New writes overwrite a path that was pending deletion; that path no longer
+   *  holds pre-prune content, so it must not be deleted later. */
+  private written(
+    index: Manifest,
+    paths: string[],
+  ): Pick<Manifest, "cleanupFiles" | "cleanupPending" | "backupBytes"> {
+    if (index.cleanupFiles === undefined) return {};
+    const cleanupFiles = index.cleanupFiles.filter(
+      (path) => !paths.includes(path),
+    );
+    if (!index.cleanupPending || cleanupFiles.length) return { cleanupFiles };
+    // Every recorded file has now been overwritten: nothing is left to retry.
+    return { cleanupFiles: undefined, cleanupPending: false, backupBytes: 0 };
+  }
   async isDeleted(taskId: string): Promise<boolean> {
     return Boolean((await this.load(taskId)).deleted);
   }
@@ -377,8 +504,14 @@ export class HistoryStore {
   }
   async addWindow(taskId: string, window: ContextWindowState): Promise<void> {
     await this.serial(async () => {
-      const index = await this.load(taskId);
-      if (index.deleted) throw new Error("History task was deleted");
+      const current = await this.load(taskId);
+      if (current.deleted) throw new Error("History task was deleted");
+      // A new window alone carries no evidence; only existing work reopens a
+      // cleared task here. Its first append/writeNote does the same directly.
+      const index =
+        current.items.length || current.notes.length
+          ? await this.reopened(taskId, current)
+          : current;
       safeId(window.id);
       const previous = index.windows.find((w) => w.id === window.id);
       if (previous && JSON.stringify(previous) === JSON.stringify(window))
@@ -402,7 +535,10 @@ export class HistoryStore {
   }
   async append(input: HistoryAppend): Promise<HistoryItemRef> {
     return this.serial(async () => {
-      const index = await this.load(input.taskId);
+      const index = await this.reopened(
+        input.taskId,
+        await this.load(input.taskId),
+      );
       if (index.deleted) throw new Error("History task was deleted");
       const ref = {
         taskId: input.taskId,
@@ -428,6 +564,8 @@ export class HistoryStore {
               )
             : undefined,
       };
+      const bodyFile = `windows/${ref.windowId}/${ref.itemId}.txt`;
+      const termsFile = `windows/${ref.windowId}/terms.json`;
       const dir = this.path(ref.taskId, `windows/${ref.windowId}`);
       await this.fs.makeDirectory(dir);
       await this.fs.writeFile(`${dir}/${ref.itemId}.txt`, content);
@@ -470,6 +608,7 @@ export class HistoryStore {
       }
       await this.commit(ref.taskId, {
         ...index,
+        ...this.written(index, [bodyFile, termsFile]),
         sourceProgress,
         items: [...index.items, item],
         shardBytes: { ...index.shardBytes, [ref.windowId]: shardBytes },
@@ -648,6 +787,7 @@ export class HistoryStore {
       const bytes = await this.writeShard(taskId, windowId, converted);
       await this.commit(taskId, {
         ...index,
+        ...this.written(index, [`windows/${safeId(windowId)}/terms.json`]),
         passageShards: [...new Set([...(index.passageShards ?? []), windowId])],
         shardBytes: { ...index.shardBytes, [windowId]: bytes },
       });
@@ -924,7 +1064,7 @@ export class HistoryStore {
     if (content.length > 250000)
       throw new Error("Working note is too large; create another note");
     return this.serial(async () => {
-      const index = await this.load(taskId);
+      const index = await this.reopened(taskId, await this.load(taskId));
       if (index.deleted) throw new Error("History task was deleted");
       validate?.();
       const previous = index.notes.find((n) => n.name === name);
@@ -939,15 +1079,14 @@ export class HistoryStore {
       };
       await this.fs.makeDirectory(this.path(taskId, "notes"));
       validate?.();
-      await this.fs.writeFile(
-        this.path(taskId, `notes/${name}_${note.revision}.txt`),
-        content,
-      );
+      const noteFile = `notes/${name}_${note.revision}.txt`;
+      await this.fs.writeFile(this.path(taskId, noteFile), content);
       validate?.();
       await this.commit(
         taskId,
         {
           ...index,
+          ...this.written(index, [noteFile]),
           notes: [...index.notes.filter((n) => n.name !== name), note],
           sourceProgress: state
             ? [
@@ -987,11 +1126,14 @@ export class HistoryStore {
   async sourceCoverage(taskId: string, run: RunState) {
     await this.queue;
     const index = await this.load(taskId);
+    // Only a pruned task without new items has no covering evidence; a task
+    // that already received new work reports it normally.
+    const cleared = Boolean(index.prunedAt) && !index.items.length;
     return projectSourceCoverage(
       taskId,
       run,
-      index.deleted || index.prunedAt ? [] : index.items,
-      index.deleted || index.prunedAt ? [] : (index.sourceProgress ?? []),
+      index.deleted || cleared ? [] : index.items,
+      index.deleted || cleared ? [] : (index.sourceProgress ?? []),
     );
   }
   async evidenceDependencies(taskId: string): Promise<string[]> {
@@ -1022,7 +1164,9 @@ export class HistoryStore {
     const index = await this.load(taskId);
     return {
       bytes:
-        index.retention?.tier === "pruned"
+        index.retention?.tier === "pruned" &&
+        !index.items.length &&
+        !index.notes.length
           ? 0
           : (index.retainedBytes ?? 0) +
             (index.manifestBytes ?? 0) +
@@ -1147,6 +1291,7 @@ export class HistoryStore {
       if (this.isPinned(taskId))
         throw new Error("History is pinned by an in-flight read or handoff");
       const index = await this.load(taskId);
+      const cleanupFiles = await this.enumeratePending(taskId);
       const cleared: Manifest = {
         ...index,
         items: [],
@@ -1157,6 +1302,9 @@ export class HistoryStore {
         migrated: true,
         prunedAt: index.prunedAt ?? now,
         cleanupPending: true,
+        cleanupFiles,
+        retainedBytes: 0,
+        shardBytes: {},
         retention: {
           version: 1,
           tier: "pruned",
@@ -1164,25 +1312,7 @@ export class HistoryStore {
         },
       };
       await this.commit(taskId, cleared);
-      const removeText = async (dir: string): Promise<void> => {
-        const prefix = dir.replace(/\/+$/, "") + "/";
-        for (const path of await this.fs.listFiles(dir)) {
-          if (!path.startsWith(prefix)) continue;
-          if (path.endsWith(".txt") || path.endsWith("/terms.json"))
-            await this.fs.deleteFile(path);
-          else if (!path.slice(prefix.length).includes("/"))
-            await removeText(path);
-        }
-      };
-      await removeText(this.path(taskId, "windows"));
-      await removeText(this.path(taskId, "notes"));
-      if (
-        (index.backupBytes ?? 0) > 0 &&
-        (await this.fs.listFiles(this.path(taskId, ""))).includes(
-          this.path(taskId, "index.pre-archive.json"),
-        )
-      )
-        await this.fs.deleteFile(this.path(taskId, "index.pre-archive.json"));
+      await this.deletePending(taskId, cleared);
       for (const key of this.shards.keys())
         if (key.startsWith(`${taskId}/`)) {
           this.shards.delete(key);
@@ -1193,10 +1323,32 @@ export class HistoryStore {
         retainedBytes: 0,
         shardBytes: {},
         backupBytes: 0,
+        cleanupFiles: undefined,
         cleanupPending: false,
       });
     });
   }
+  /**
+   * Retry the file deletions recorded by an interrupted prune. The tombstone is
+   * the only authority: items or notes that reopened the task are current work
+   * and are never cleared. The pending signals are dropped only after every
+   * recorded file is gone. Returns false when there was nothing to retry.
+   */
+  async resumeCleanup(taskId: string): Promise<boolean> {
+    return this.serial(async () => {
+      const index = await this.load(taskId);
+      if (!index.cleanupPending) return false;
+      await this.deletePending(taskId, index);
+      await this.commit(taskId, {
+        ...index,
+        cleanupPending: false,
+        cleanupFiles: undefined,
+        backupBytes: 0,
+      });
+      return true;
+    });
+  }
+
   async markMigrated(taskId: string): Promise<void> {
     await this.serial(async () =>
       this.commit(taskId, { ...(await this.load(taskId)), migrated: true }),

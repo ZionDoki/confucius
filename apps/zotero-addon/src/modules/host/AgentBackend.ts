@@ -330,8 +330,14 @@ export class ExternalBackend implements AgentBackend {
         );
         if (controller.signal.aborted || this.polls.get(taskId) !== controller)
           return;
+        // A trimmed/cleared buffer reports cursorFound=false and returns every
+        // retained event. Older-turn entries may already have been delivered,
+        // so skip them and jump the cursor to the newest retained event instead
+        // of replaying the whole buffer into the live turn.
+        const replayAll = page.cursorFound === false;
         for (const event of page.events) {
           cursor = event.id;
+          if (replayAll && event.turnId !== turnId) continue;
           callbacks.event(event);
           if (
             event.turnId === turnId &&

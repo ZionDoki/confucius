@@ -1,5 +1,48 @@
 import type { ArtifactKind } from "./research";
+import { contextTextHead } from "./contextPolicy";
 import { taskTemplate } from "./templates";
+
+export const MAX_ARTIFACT_TITLE_CHARACTERS = 160;
+
+export interface NormalizedArtifactTitle {
+  /** Single line, control-free, trimmed, and at most the character bound. */
+  text: string;
+  /** True when the source title had to be cut to fit the bound. */
+  truncated: boolean;
+}
+
+/**
+ * Stored artifact titles become system-prompt lines, so persistence and prompt
+ * listing must normalize them identically. Store `text`; prompt display adds
+ * the ellipsis so a cut is visible, and callers that require a title reject an
+ * empty `text` instead of inventing one.
+ */
+export function normalizeArtifactTitle(
+  value: unknown,
+): NormalizedArtifactTitle {
+  const singleLine = String(value ?? "")
+    .replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!singleLine) return { text: "", truncated: false };
+  if (singleLine.length <= MAX_ARTIFACT_TITLE_CHARACTERS) {
+    return { text: singleLine, truncated: false };
+  }
+  return {
+    text: contextTextHead(singleLine, MAX_ARTIFACT_TITLE_CHARACTERS).trimEnd(),
+    truncated: true,
+  };
+}
+
+/**
+ * A stored title becomes part of the system prompt, so it must not add lines,
+ * fake list entries, control characters, or unbounded budget by itself.
+ */
+export function artifactPromptTitle(title: string): string {
+  const { text, truncated } = normalizeArtifactTitle(title);
+  if (!text) return "untitled";
+  return truncated ? `${text}…` : text;
+}
 
 export interface ArtifactPromptRef {
   id: string;
@@ -56,7 +99,7 @@ export function artifactUpsertGuidance(
       const revision =
         typeof artifact.revision === "number" ? `r${artifact.revision}` : "r1";
       lines.push(
-        `- ${artifact.id} (${artifact.kind}, ${revision}): ${artifact.title}`,
+        `- ${artifact.id} (${artifact.kind}, ${revision}): ${artifactPromptTitle(artifact.title)}`,
       );
     }
     lines.push(

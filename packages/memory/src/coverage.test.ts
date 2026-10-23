@@ -218,3 +218,53 @@ test("model prose and unstamped legacy results do not create read receipts; coll
   assert.equal(coverage.enumeration, "collection-members-unknown");
   assert.equal(coverage.entries[0].read, "unread");
 });
+
+test("a cleared task reports new reads and its hot tier again", async () => {
+  const f = fixture();
+  await f.read(0, [1, 2]);
+  await f.store.prune("task", 10);
+  const cleared = await f.store.retentionInfo("task");
+  assert.equal(cleared.retention.tier, "pruned");
+  assert.equal(cleared.bytes, 0);
+  assert.deepEqual(
+    (await f.store.sourceCoverage("task", f.run)).entries[0].pagesObserved,
+    [],
+  );
+  await f.read(0, [1]);
+  const info = await f.store.retentionInfo("task");
+  assert.equal(info.retention.tier, "hot");
+  assert.equal(info.prunedAt, undefined);
+  assert.ok(info.rawBytes > 0);
+  const coverage = await f.store.sourceCoverage("task", f.run);
+  assert.deepEqual(coverage.entries[0].pagesObserved, [1]);
+  assert.equal(coverage.entries[0].read, "partial");
+});
+
+test("an upgraded pruned manifest that still has items keeps coverage and byte totals", async () => {
+  const f = fixture();
+  await f.read(0, [1, 2]);
+  // Rewrite the index in the pre-archive layout: an interrupted old prune could
+  // leave prunedAt next to still readable items and notes.
+  const raw = JSON.parse(await f.fs.readFile("/history/task/index.json"));
+  const legacy = {
+    version: 1,
+    prunedAt: 10,
+    windows: raw.windows,
+    items: raw.items,
+    notes: raw.notes,
+    sourceProgress: raw.sourceProgress,
+  };
+  await f.fs.writeFile("/history/task/index.json", JSON.stringify(legacy));
+  const restored = new HistoryStore(f.fs, "/history");
+  restored.register(f.task);
+  const info = await restored.retentionInfo("task");
+  assert.equal(info.retention.tier, "pruned");
+  assert.equal(info.prunedAt, 10);
+  assert.equal(info.items, 1);
+  assert.equal(info.cleanupPending, false);
+  assert.ok(info.rawBytes > 0);
+  assert.ok(info.bytes > info.rawBytes);
+  const coverage = await restored.sourceCoverage("task", f.run);
+  assert.deepEqual(coverage.entries[0].pagesObserved, [1, 2]);
+  assert.equal(coverage.entries[0].read, "complete-text-observed");
+});

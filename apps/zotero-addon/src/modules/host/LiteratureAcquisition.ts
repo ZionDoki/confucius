@@ -118,7 +118,8 @@ export class ZoteroLiteratureAcquirer implements LiteratureAcquirer {
       );
     return item;
   }
-  private async existing(
+  /** Inspect only local files, using the same identity checks as a new download. */
+  async findExisting(
     work: LiteratureWork,
     signal?: AbortSignal,
   ): Promise<LiteratureAcquisitionResult | undefined> {
@@ -206,7 +207,7 @@ export class ZoteroLiteratureAcquirer implements LiteratureAcquirer {
   ): Promise<LiteratureAcquisitionResult> {
     if (signal.aborted) throw new LiteratureError("cancelled", "Cancelled");
     await stage("existing");
-    const existing = await this.existing(work, signal);
+    const existing = await this.findExisting(work, signal);
     if (existing) return existing;
     const attempts: LiteratureAttempt[] = [];
     const tried = new Set<string>();
@@ -532,7 +533,7 @@ export class ZoteroLiteratureAcquirer implements LiteratureAcquirer {
       ],
       async () => {
         if (signal.aborted) throw new LiteratureError("cancelled", "Cancelled");
-        const existing = await this.existing(work, signal);
+        const existing = await this.findExisting(work, signal);
         if (existing) return existing;
         const directory = runtimePath("literature-downloads");
         await IOUtils.makeDirectory(runtimeIoPath(directory), {

@@ -239,6 +239,10 @@ export class OpenAlexClient {
     try {
       for (let attempt = 0; ; attempt++) {
         response = await this.transport(url, this.key(), signal);
+        // Authenticated API requests fail closed on redirects: never treat a
+        // redirected response as trusted OpenAlex works/abstract data.
+        if (response.status >= 300 && response.status < 400)
+          throw new LiteratureError("network", "OpenAlex API redirect refused");
         if (response.status !== 429) break;
         if (
           response.remaining === "0" ||
@@ -330,6 +334,7 @@ export const zoteroOpenAlexTransport: OpenAlexTransport = async (
       responseType: "json",
       timeout: 30_000,
       successCodes: false,
+      followRedirects: false,
       headers: key ? { Authorization: `Bearer ${key}` } : {},
       requestObserver: (request: XMLHttpRequest) => {
         xhr = request;

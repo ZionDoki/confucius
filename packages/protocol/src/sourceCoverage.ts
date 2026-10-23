@@ -52,8 +52,41 @@ export function contextSourceVersions(
   );
 }
 
-export function coverageSummary(coverage: SourceCoverage) {
-  const entries = coverage.entries;
+export type CoverageSummary =
+  | {
+      enumeration: SourceCoverage["enumeration"];
+      expected: number;
+      observed: number;
+      completeTextObserved: number;
+      analysisReported: number;
+      staleAnalysis: number;
+      failed: number;
+      verification: "unknown";
+      details: string;
+    }
+  | { damaged: true; details: string };
+
+export function coverageSummary(
+  coverage: SourceCoverage | null | undefined,
+): CoverageSummary {
+  // Restoration validates this shape, but a direct projection must not crash on
+  // an older or hand-edited snapshot, and must not report a damaged snapshot as
+  // "zero sources observed".
+  if (!coverage || typeof coverage !== "object") return damagedCoverage();
+  const entries = Array.isArray(coverage.entries) ? coverage.entries : null;
+  if (
+    !entries ||
+    (coverage.enumeration !== "bound-items" &&
+      coverage.enumeration !== "collection-members-unknown") ||
+    entries.some(
+      (entry) =>
+        !entry ||
+        typeof entry !== "object" ||
+        !Array.isArray(entry.pagesObserved),
+    )
+  ) {
+    return damagedCoverage();
+  }
   return {
     enumeration: coverage.enumeration,
     expected: entries.length,
@@ -67,5 +100,13 @@ export function coverageSummary(coverage: SourceCoverage) {
     verification: "unknown",
     details:
       "context_search view=coverage; observation and reported analysis are not business verification",
+  };
+}
+
+function damagedCoverage(): CoverageSummary {
+  return {
+    damaged: true,
+    details:
+      "Saved context coverage is damaged; source observation and analysis are unknown",
   };
 }

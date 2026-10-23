@@ -208,64 +208,69 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
         sink,
         approvals,
       });
-      const request = sessionSetup(
-        input.cwd,
-        input.capabilityProfile === "workspace" ? [input.cwd] : [],
-        [
-          {
-            type: "http",
-            name: "confucius",
-            url: input.mcp.url,
-            headers: [
-              {
-                name: "Authorization",
-                value: `Bearer ${input.mcp.token}`,
-              },
-            ],
-          },
-        ],
-      );
-      let sessionId = externalSessionId;
-      if (sessionId) {
-        try {
-          opened.modelState = await withTimeout(
-            opened.rpc.request("session/resume", { sessionId, ...request }),
-            15_000,
-            "Kimi session resume timed out",
-          );
-        } catch {
-          opened.modelState = await withTimeout(
-            opened.rpc.request("session/load", { sessionId, ...request }),
-            15_000,
-            "Kimi session load timed out",
-          );
-        }
-      } else {
-        const created = await withTimeout(
-          opened.rpc.request<Record<string, unknown>>("session/new", request),
-          15_000,
-          "Kimi session creation timed out",
+      try {
+        const request = sessionSetup(
+          input.cwd,
+          input.capabilityProfile === "workspace" ? [input.cwd] : [],
+          [
+            {
+              type: "http",
+              name: "confucius",
+              url: input.mcp.url,
+              headers: [
+                {
+                  name: "Authorization",
+                  value: `Bearer ${input.mcp.token}`,
+                },
+              ],
+            },
+          ],
         );
-        opened.modelState = created;
-        sessionId = String(created.sessionId ?? "");
+        let sessionId = externalSessionId;
+        if (sessionId) {
+          try {
+            opened.modelState = await withTimeout(
+              opened.rpc.request("session/resume", { sessionId, ...request }),
+              15_000,
+              "Kimi session resume timed out",
+            );
+          } catch {
+            opened.modelState = await withTimeout(
+              opened.rpc.request("session/load", { sessionId, ...request }),
+              15_000,
+              "Kimi session load timed out",
+            );
+          }
+        } else {
+          const created = await withTimeout(
+            opened.rpc.request<Record<string, unknown>>("session/new", request),
+            15_000,
+            "Kimi session creation timed out",
+          );
+          opened.modelState = created;
+          sessionId = String(created.sessionId ?? "");
+        }
+        if (!sessionId) throw new Error("Kimi did not return a session id");
+        // Kimi's default mode requests approval; plan mode remains read-only.
+        await withTimeout(
+          opened.rpc.request("session/set_mode", {
+            sessionId,
+            modeId: input.mode === "plan" ? "plan" : "default",
+          }),
+          5_000,
+          "Kimi mode selection timed out",
+        );
+        opened.sessionId = sessionId;
+        opened.cwd = input.cwd;
+        session = opened;
+        this.sessions.set(sessionKey, session);
+      } catch (error) {
+        // The ACP child process is only registered after setup succeeds. Close
+        // it here so a failed setup never leaves an orphan that dispose cannot reach.
+        this.sessions.delete(sessionKey);
+        await this.closeConnection(opened);
+        throw error;
       }
-      if (!sessionId) {
-        opened.rpc.close();
-        throw new Error("Kimi did not return a session id");
-      }
-      // Kimi's default mode requests approval; plan mode remains read-only.
-      await withTimeout(
-        opened.rpc.request("session/set_mode", {
-          sessionId,
-          modeId: input.mode === "plan" ? "plan" : "default",
-        }),
-        5_000,
-        "Kimi mode selection timed out",
-      );
-      opened.sessionId = sessionId;
-      opened.cwd = input.cwd;
-      session = opened;
-      this.sessions.set(sessionKey, session);
     } else {
       session.profile = input.capabilityProfile;
       session.sink = sink;
@@ -413,8 +418,7 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
       // Older Kimi ACP builds need only process teardown.
     }
     this.sessions.delete(taskId);
-    if (session.rpc.closeAndWait) await session.rpc.closeAndWait();
-    else session.rpc.close();
+    await this.closeConnection(session);
   }
 
   async disposeAll(): Promise<void> {
@@ -563,10 +567,19 @@ export class PluginKimiAdapter implements PluginRuntimeAdapter {
         throw new Error("Kimi must support ACP v1");
       }
     } catch (error) {
-      rpc.close();
+      await this.closeConnection(holder);
       throw error;
     }
     return holder;
+  }
+
+  private async closeConnection(session: KimiSession): Promise<void> {
+    try {
+      if (session.rpc.closeAndWait) await session.rpc.closeAndWait();
+      else session.rpc.close();
+    } catch {
+      session.rpc.close();
+    }
   }
 
   private async onRequest(

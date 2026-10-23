@@ -28,6 +28,10 @@ export interface HostOperationDomainOptions {
   /** External domains must supply authoritative verification, never infer effects from caches. */
   reconcileMemory?: (operation: OperationRecord) => Promise<ToolResult | null>;
   reconcileMcp?: (operation: OperationRecord) => Promise<ToolResult | null>;
+  /** Verify a literature download against the pool acquisition or native attachment. */
+  reconcileLiterature?: (
+    operation: OperationRecord,
+  ) => Promise<ToolResult | null>;
 }
 
 const absent = (operation: OperationRecord, message: string): ToolResult => ({
@@ -229,11 +233,14 @@ export function registerHostOperationDomains(
     reconcileHistory(operation, options.history);
   const memory = options.reconcileMemory ?? (() => Promise.resolve(null));
   const mcp = options.reconcileMcp ?? (() => Promise.resolve(null));
+  const literature =
+    options.reconcileLiterature ?? (() => Promise.resolve(null));
   for (const [name, reconcile] of Object.entries({
     artifact,
     history,
     memory,
     mcp,
+    literature,
     zotero: (operation: OperationRecord) => options.tools.reconcile(operation),
   }))
     execution.registerDomain(name, {
@@ -255,6 +262,8 @@ export function registerHostOperationDomains(
     if (["notes_write", "new_context"].includes(operation.name))
       return history(operation);
     if (memoryNames.has(operation.name)) return memory(operation);
+    if (operation.name === "literature_download_fulltext")
+      return literature(operation);
     if (operation.name.startsWith("mcp.")) return mcp(operation);
     return options.tools.reconcile(operation);
   });

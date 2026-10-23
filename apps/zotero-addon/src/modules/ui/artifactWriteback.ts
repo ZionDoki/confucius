@@ -135,6 +135,9 @@ export function showArtifactWriteback(
   requestApproval.disabled = true;
   let busy = false;
   let previewGeneration = 0;
+  // A failed preview must leave a retry path: the primary action re-runs the
+  // preview until one succeeds, then prepares the write.
+  let previewReady = false;
   const updateControls = () => {
     heading.textContent =
       target.value === "zotero_note"
@@ -201,6 +204,7 @@ export function showArtifactWriteback(
   };
   const loadPreview = async () => {
     const generation = ++previewGeneration;
+    previewReady = false;
     requestApproval.disabled = true;
     errorLine.textContent = "";
     status.textContent =
@@ -216,6 +220,7 @@ export function showArtifactWriteback(
       })) as WritebackPreview;
       if (!overlay.isConnected || generation !== previewGeneration) return;
       showPreview(result);
+      previewReady = true;
       requestApproval.disabled = false;
     } catch (error) {
       if (!overlay.isConnected || generation !== previewGeneration) return;
@@ -223,6 +228,9 @@ export function showArtifactWriteback(
       status.textContent = "";
       errorLine.textContent =
         error instanceof Error ? error.message : String(error);
+      // Keep the action usable so a transient failure can be retried in place
+      // instead of forcing the user to lose the selected target.
+      requestApproval.disabled = false;
     } finally {
       if (generation === previewGeneration)
         preview.removeAttribute("aria-busy");
@@ -231,6 +239,10 @@ export function showArtifactWriteback(
   cancel.addEventListener("click", closeWriteback);
   requestApproval.addEventListener("click", () => {
     if (busy) return;
+    if (!previewReady) {
+      void loadPreview();
+      return;
+    }
     busy = true;
     requestApproval.disabled = true;
     menu.hidden = true;

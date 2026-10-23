@@ -186,10 +186,18 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     { ...itemRef, offset: { type: "integer", minimum: 0 } },
     ["libraryID", "key"],
   ),
-  def("get_collections", "List collections.", {
-    libraryID: { type: "integer" },
-    parentKey: { type: "string" },
-  }),
+  def(
+    "get_collections",
+    "List top-level collections, or direct subcollections of parentKey. To traverse nested collections, pass a returned collection's libraryID and key as libraryID and parentKey.",
+    {
+      libraryID: {
+        type: "integer",
+        description:
+          "Defaults to the task source's library, or the personal library when there is no task source.",
+      },
+      parentKey: { type: "string" },
+    },
+  ),
   def(
     "get_collection_items",
     "List a page of items in a collection. Continue at nextOffset until null; total reports the complete count.",

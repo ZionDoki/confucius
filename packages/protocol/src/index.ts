@@ -124,10 +124,12 @@ export type {
 export {
   MCP_TASK_GATEWAY_INSTRUCTIONS,
   artifactUpsertGuidance,
+  normalizeArtifactTitle,
 } from "./artifactPrompt";
 export type {
   ArtifactPromptRef,
   ArtifactUpsertGuidanceInput,
+  NormalizedArtifactTitle,
 } from "./artifactPrompt";
 export type {
   AgentBackendKind,

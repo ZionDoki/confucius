@@ -39,6 +39,8 @@ export interface MemoryRecord {
   retentionStartedAt?: number;
   protection?: "user" | "none";
   sourceRefs?: string[];
+  /** Complete research source-task ids, separate from the display-capped sourceRefs. */
+  researchTasks?: string[];
   retentionVersion?: 1;
   accessCount: number;
   /** 0..1 extraction confidence. */

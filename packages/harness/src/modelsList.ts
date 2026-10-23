@@ -1,6 +1,7 @@
 import {
   describeNonJsonModelBody,
   detectApiStyle,
+  joinEndpointUrl,
   normalizeOpenAICompatibleBaseUrl,
   type ApiStyle,
 } from "./OpenAICompatibleAdapter";
@@ -16,10 +17,6 @@ export interface ListModelsInput {
 export interface ListModelsResult {
   models: string[];
   error?: string;
-}
-
-function joinUrl(base: string, path: string): string {
-  return `${base.replace(/\/+$/, "")}${path}`;
 }
 
 /** Resolve the provider catalog URL for an endpoint Base URL. */
@@ -41,11 +38,11 @@ export function modelsListRequest(baseUrl: string): {
       parsed.hash = "";
       return { url: parsed.toString(), style };
     } catch {
-      return { url: joinUrl(trimmed, "/api/tags"), style };
+      return { url: joinEndpointUrl(trimmed, "/api/tags"), style };
     }
   }
   const root = normalizeOpenAICompatibleBaseUrl(trimmed);
-  return { url: joinUrl(root, "/models"), style };
+  return { url: joinEndpointUrl(root, "/models"), style };
 }
 
 export function parseModelsList(style: ApiStyle, payload: unknown): string[] {

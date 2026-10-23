@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { initialContextWindow } from "@confucius/protocol";
+import { contextInputLimit, initialContextWindow } from "@confucius/protocol";
 import {
   WindowContext,
   estimateRequestTokens,
+  truncateWithoutSplitSurrogate,
   type WindowContextOptions,
 } from "./WindowContext";
 import { createHarness, session } from "./test-kit";
@@ -667,4 +668,208 @@ test("oversized base input fails once instead of cycling through windows", async
   assert.match(result.failureMessage!, /exceed/);
   assert.equal(requests, 0);
   assert.equal(c.switches(), 0);
+});
+
+test("rollover keeps model-only attachment, Btw and subagent prompt content", async () => {
+  const cases = [
+    {
+      label: "attachment",
+      userText: "Summarize this file",
+      modelUserText:
+        "Summarize this file\n\n<confucius_read_only_attachments>ATTACHMENT_BODY",
+    },
+    {
+      label: "Btw",
+      userText: "Explain the selected evidence",
+      modelUserText:
+        "Explain the selected evidence\n\nBTW_SELECTION_AND_PRIOR_CONVERSATION",
+    },
+    {
+      label: "subagent",
+      userText: "Research the topic",
+      modelUserText:
+        "Research the topic\n\nSUBAGENT_BACKGROUND_AND_PRIOR_ATTEMPT",
+    },
+  ];
+  for (const { label, userText, modelUserText } of cases) {
+    const c = context();
+    const messages: ModelMessage[] = [
+      { role: "system", content: "Task rules" },
+      { role: "user", content: modelUserText },
+      { role: "assistant", content: "x".repeat(60000) },
+    ];
+    c.manager.start(
+      {
+        session: session(),
+        turnId: "rollover",
+        userText,
+        modelUserText,
+      },
+      messages,
+    );
+    await c.manager.record({
+      turnId: "rollover",
+      iteration: 1,
+      savedAt: 1,
+      messages,
+      toolExecutions: [],
+    });
+    c.manager.request();
+    await c.manager.prepare(messages, []);
+    assert.equal(c.switches(), 1, label);
+    assert.equal(messages[1].role, "user", label);
+    assert.equal(
+      messages[1].content,
+      modelUserText,
+      `${label} model-only content must survive rollover`,
+    );
+    assert.ok(
+      c.archived.some(
+        (entry) =>
+          entry.message.role === "user" && entry.message.content === userText,
+      ),
+      `${label} visible text remains archived`,
+    );
+  }
+});
+
+test("rollover truncates an oversized model-only attachment with an explicit notice", async () => {
+  const c = context(false, {
+    contextWindowTokens: 6000,
+    maxOutputTokens: 1000,
+  });
+  const userText = "Summarize this file";
+  const attachment = "A".repeat(64 * 1024);
+  const modelUserText = `${userText}\n\n<confucius_read_only_attachments>${attachment}`;
+  const messages: ModelMessage[] = [
+    { role: "system", content: "Task rules" },
+    { role: "user", content: modelUserText },
+    { role: "assistant", content: "Working on it" },
+  ];
+  c.manager.start(
+    {
+      session: session(),
+      turnId: "rollover",
+      userText,
+      modelUserText,
+    },
+    messages,
+  );
+  await c.manager.record({
+    turnId: "rollover",
+    iteration: 1,
+    savedAt: 1,
+    messages,
+    toolExecutions: [],
+  });
+  c.manager.request();
+  await c.manager.prepare(messages, []);
+  assert.equal(c.switches(), 1, "rollover completes instead of failing");
+  assert.equal(messages[1].role, "user");
+  assert.match(
+    messages[1].content,
+    /^Summarize this file/,
+    "the visible request stays complete",
+  );
+  assert.match(
+    messages[1].content,
+    /model-only input .* were omitted/,
+    "the model is told that attachment content was omitted",
+  );
+  assert.ok(
+    messages[1].content.length < attachment.length,
+    "the oversized attachment is not re-sent in full",
+  );
+  assert.ok(
+    estimateRequestTokens({ messages, tools: [] }) <=
+      contextInputLimit(6000, 1000),
+    "the fresh window fits the model input limit",
+  );
+});
+
+/** Detect UTF-16 halves whose partner was cut away, including at the boundary. */
+function hasLoneSurrogate(text: string): boolean {
+  for (let index = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+      index++;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+test("model-only truncation never cuts through a surrogate pair", () => {
+  const emoji = "😀"; // One non-BMP code point, two UTF-16 code units.
+  assert.equal(truncateWithoutSplitSurrogate(`x${emoji}y`, 2), "x");
+  assert.equal(truncateWithoutSplitSurrogate(`x${emoji}y`, 3), `x${emoji}`);
+  assert.equal(truncateWithoutSplitSurrogate(`x${emoji}y`, 4), `x${emoji}y`);
+  const text = `标题${emoji.repeat(4)}尾`;
+  for (let end = 0; end <= text.length; end++)
+    assert.equal(
+      hasLoneSurrogate(truncateWithoutSplitSurrogate(text, end)),
+      false,
+      `a prefix cut at ${end} code units must not leave half a surrogate pair`,
+    );
+});
+
+test("rollover truncation of a non-BMP attachment keeps every surrogate pair intact", async () => {
+  // These capacities place the budget cut right after a high surrogate unless
+  // the cut backs off one code unit; each must leave no isolated surrogate.
+  for (const contextWindowTokens of [6002, 6005, 6008]) {
+    const c = context(false, { contextWindowTokens, maxOutputTokens: 1000 });
+    const userText = "Summarize this file";
+    const attachment = "😀".repeat(20 * 1024);
+    const modelUserText = `${userText}\n\n<confucius_read_only_attachments>${attachment}`;
+    const messages: ModelMessage[] = [
+      { role: "system", content: "Task rules" },
+      { role: "user", content: modelUserText },
+      { role: "assistant", content: "Working on it" },
+    ];
+    c.manager.start(
+      {
+        session: session(),
+        turnId: "rollover",
+        userText,
+        modelUserText,
+      },
+      messages,
+    );
+    await c.manager.record({
+      turnId: "rollover",
+      iteration: 1,
+      savedAt: 1,
+      messages,
+      toolExecutions: [],
+    });
+    c.manager.request();
+    await c.manager.prepare(messages, []);
+    assert.equal(
+      c.switches(),
+      1,
+      `${contextWindowTokens}: rollover completes instead of failing`,
+    );
+    assert.match(
+      messages[1].content,
+      /model-only input .* were omitted/,
+      `${contextWindowTokens}: the model is told that attachment content was omitted`,
+    );
+    assert.equal(
+      hasLoneSurrogate(messages[1].content),
+      false,
+      `${contextWindowTokens}: the truncated attachment must not leave an isolated surrogate`,
+    );
+    assert.ok(
+      messages[1].content.length < attachment.length,
+      `${contextWindowTokens}: the oversized attachment is not re-sent in full`,
+    );
+    assert.ok(
+      estimateRequestTokens({ messages, tools: [] }) <=
+        contextInputLimit(contextWindowTokens, 1000),
+      `${contextWindowTokens}: the fresh window fits the model input limit`,
+    );
+  }
 });

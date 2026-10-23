@@ -85,7 +85,10 @@ import {
   runtimeDigest,
   clearMigratedContextCopies,
 } from "./RuntimeStorage";
-import { ToolExecutionService } from "./ReliableToolProvider";
+import {
+  ToolExecutionService,
+  type OperationRecord,
+} from "./ReliableToolProvider";
 import { artifactWritebackFor } from "./ArtifactWriteback";
 import {
   prepareKnowledgeWrite,
@@ -127,6 +130,7 @@ import {
 } from "./ContextMaintenance";
 import {
   CONTEXT_POLICY,
+  contextInputLimit,
   contextTextSlice,
   contextTextHead,
   contextTextTokens,
@@ -351,11 +355,7 @@ import {
   type PresetWorkflow,
 } from "./PresetWorkflow";
 
-import {
-  contextArticles,
-  followReaderContext,
-  readerAttachmentIdentity,
-} from "./TaskSources";
+import { contextArticles } from "./TaskSources";
 
 const MAX_EVENTS_PER_SESSION = 2_000;
 const CONTEXT_ITEM_SEARCH_CACHE_MS = 15_000;
@@ -1168,6 +1168,25 @@ export class AgentHost {
   private literatureTools(state: SessionState) {
     return new LiteratureToolProvider(this.literature, state.record.id);
   }
+  /**
+   * A timed-out candidate download must not leave a permanent unknown write:
+   * the literature pool records whether an attachment was ultimately saved.
+   */
+  private reconcileLiteratureOperation(
+    operation: OperationRecord,
+  ): Promise<ToolResult | null> {
+    if (operation.name !== "literature_download_fulltext")
+      return Promise.resolve(null);
+    const recovery = operation.intent?.recovery ?? {};
+    const taskId = String(recovery.taskId ?? operation.context.taskId ?? "");
+    const workId = String(recovery.workId ?? operation.args.id ?? "");
+    if (!taskId || !workId) return Promise.resolve(null);
+    return this.literature.reconcileDownload(
+      taskId,
+      workId,
+      String(recovery.linkId ?? operation.args.linkId ?? ""),
+    );
+  }
 
   private annotationReviews?: AnnotationReviewService;
   private reviews(): AnnotationReviewService {
@@ -1287,6 +1306,11 @@ export class AgentHost {
   >();
   private mcpProviders: McpToolProvider[] = [];
   private mcpDiscovery?: AbortController;
+  /**
+   * Last optional-MCP configuration failures. Process-level state exposed by
+   * config/get; never written to a task timeline or used to refresh task times.
+   */
+  private mcpLoadErrors: string[] = [];
   private listeners = new Set<(event: ConfuciusEvent) => void>();
   private persistTimer: unknown = null;
   private persistQueue: Promise<void> = Promise.resolve();
@@ -1337,6 +1361,8 @@ export class AgentHost {
       artifacts: this.artifacts,
       history: this.history,
       tools: this.tools,
+      reconcileLiterature: (operation) =>
+        this.reconcileLiteratureOperation(operation),
       reconcileMemory: async (operation) => {
         if (operation.name !== "context_save")
           return reconcileKnowledgeWrite(this.memory, operation);
@@ -1667,6 +1693,7 @@ export class AgentHost {
         const retention = await this.history.retentionInfo(record.id);
         record.historyRetention = retention.retention;
         record.historyRetainedBytes = retention.bytes;
+        this.syncHistoryCleared(record, retention);
         await this.history.addWindow(record.id, record.contextWindow!);
         if (
           Number((entry.record as Partial<ResearchTaskRecord>).schemaVersion) <
@@ -2319,18 +2346,14 @@ export class AgentHost {
       case RPC_METHODS.taskPreviewCapabilities:
         return this.taskPreviewCapabilities(params);
       case RPC_METHODS.taskToolList:
-        return this.taskToolList(
-          String(params.taskId ?? ""),
-          params.lease,
-          params.runtimeGateway,
-        );
+        return this.taskToolList(String(params.taskId ?? ""), params.lease);
       case RPC_METHODS.taskToolCall:
         return this.taskToolCall(params);
       case RPC_METHODS.artifactList:
         return this.artifactList(String(params.taskId ?? ""));
       case RPC_METHODS.artifactGet:
         return this.artifactGet(String(params.id ?? ""));
-      case "artifact/export":
+      case RPC_METHODS.artifactExport:
         return this.artifactExport(params);
       case RPC_METHODS.artifactUpsert:
         return this.artifactUpsert(params as unknown as ArtifactUpsertInput);
@@ -2425,22 +2448,22 @@ export class AgentHost {
         return this.memoryRpcProtect(params);
       case RPC_METHODS.memoryDelete:
         return this.memoryRpcDelete(params);
-      case "knowledge/index":
+      case RPC_METHODS.knowledgeIndex:
         return this.knowledgeIndex().search(
           String(params.query ?? ""),
           Number(params.offset),
           Number(params.limit),
         );
-      case "knowledge/read":
+      case RPC_METHODS.knowledgeRead:
         return this.knowledgeIndex().read(String(params.id), true);
-      case "knowledge/correct":
+      case RPC_METHODS.knowledgeCorrect:
         await this.researchMemory().correct(
           String(params.id),
           String(params.content ?? ""),
           String(params.expected ?? ""),
         );
         return { saved: true };
-      case "knowledge/forget":
+      case RPC_METHODS.knowledgeForget:
         await this.researchMemory().forget(String(params.id));
         return { removed: true };
       case RPC_METHODS.knowledgeList:
@@ -2514,12 +2537,12 @@ export class AgentHost {
           return { hasKey: true };
         }
         return this.openAlex.test();
-      case "literature/ratings/list":
+      case RPC_METHODS.literatureRatingsList:
         return this.venueRatings.list();
-      case "literature/ratings/import":
-      case "literature/ratings/remove": {
+      case RPC_METHODS.literatureRatingsImport:
+      case RPC_METHODS.literatureRatingsRemove: {
         const result =
-          method === "literature/ratings/import"
+          method === RPC_METHODS.literatureRatingsImport
             ? await this.venueRatings.importFile(String(params.path ?? ""))
             : await this.venueRatings.remove(String(params.id ?? ""));
         for (const state of this.sessions.values()) {
@@ -2538,7 +2561,7 @@ export class AgentHost {
       }
       case "literature/list":
         return this.literature.list(String(params.taskId), params);
-      case "literature/review/list":
+      case RPC_METHODS.literatureReviewList:
         return this.literature.review(String(params.taskId));
       case "literature/get":
         return this.literature.get(String(params.taskId), String(params.id));
@@ -2639,7 +2662,7 @@ export class AgentHost {
     }
   }
 
-  configGet(): ModelConfigView {
+  configGet(): ModelConfigView & { mcpLoadErrors: string[] } {
     const { store, dirty } = this.readEndpointStore();
     if (dirty) {
       this.writeEndpointStore(store);
@@ -2649,6 +2672,7 @@ export class AgentHost {
       runtimeStoragePath: runtimePath(),
       storageStatus:
         this.historyFailure || this.stateStorageFailure ? "unsaved" : "ready",
+      mcpLoadErrors: [...this.mcpLoadErrors],
     };
   }
 
@@ -3234,12 +3258,23 @@ export class AgentHost {
     let ownerWindow = state.record.contextWindow;
     const ownerSources = ownerRun?.sources ?? state.record.lockedContext;
     const ownerSourceVersions = contextSourceVersions(ownerSources);
+    // A live literature confirmation may legitimately add sources to the same
+    // run while the turn is paused. Identity is run/generation/window/turn; the
+    // source binding is recomputed from the current run so a mid-run addition
+    // is not read as a context switch.
+    const liveRun = () =>
+      state.record.run === ownerRun ? state.record.run : ownerRun;
+    const liveSources = () => liveRun()?.sources ?? state.record.lockedContext;
+    const liveBinding = () => executionBinding(liveRun());
+    const liveSourceVersions = () =>
+      liveRun() === ownerRun
+        ? contextSourceVersions(liveSources())
+        : ownerSourceVersions;
     const current = () =>
       state.record.run === ownerRun &&
       state.record.run?.generation === ownerGeneration &&
       state.record.contextWindow === ownerWindow &&
-      state.activeTurnId === ownerTurn &&
-      sameContextBinding(ownerBinding, executionBinding(state.record.run));
+      state.activeTurnId === ownerTurn;
     return new WindowContext({
       sourceReads: state.latestCheckpoint?.sourceReads,
       window: state.record.contextWindow,
@@ -3248,6 +3283,7 @@ export class AgentHost {
       nextId: () => this.ids(),
       archive: async ({ id, turnId, windowId, message, toolName }) => {
         const ref = { taskId: state.record.id, windowId, itemId: id };
+        const sources = liveSources();
         await this.queueHistory({
           taskId: state.record.id,
           window: { ...state.record.contextWindow!, id: windowId },
@@ -3257,8 +3293,8 @@ export class AgentHost {
               turnId,
               role: message.role === "system" ? "event" : message.role,
               toolName,
-              binding: ownerBinding,
-              sourceVersions: ownerSourceVersions,
+              binding: liveBinding(),
+              sourceVersions: liveSourceVersions(),
               purpose:
                 message.role === "assistant" &&
                 message.toolCalls?.length &&
@@ -3267,7 +3303,7 @@ export class AgentHost {
                   : undefined,
               content: historyMessageText(message),
               sourceIds: historySourceRefs(
-                message.role === "assistant" ? undefined : ownerSources,
+                message.role === "assistant" ? undefined : sources,
                 message,
               ),
             },
@@ -3332,7 +3368,7 @@ export class AgentHost {
             state.record.contextSwitch = {
               version: 1,
               id: `switch_${this.ids()}`,
-              binding: executionBinding(ownerRun)!,
+              binding: liveBinding() ?? ownerBinding!,
               handoffId: state.record.contextHandoff.id,
               from: state.record.contextWindow!,
               to: window,
@@ -3453,7 +3489,7 @@ export class AgentHost {
       window: record.contextWindow!,
       items: [],
     }).catch(() => undefined);
-    this.sessions.set(id, {
+    const state: SessionState = {
       record,
       events: [],
       messages: [],
@@ -3461,7 +3497,8 @@ export class AgentHost {
       sessionGrants: new Set(),
       abort: null,
       activeTurnId: null,
-    });
+    };
+    this.sessions.set(id, state);
     this.persistSoon();
     return record;
   }
@@ -3712,30 +3749,19 @@ export class AgentHost {
   ): Promise<ResearchTaskRecord> {
     const taskId = String(params.taskId ?? params.sessionId ?? "");
     const state = this.requireSession(taskId);
-    const follow = params.mode === "follow_reader";
-    if (follow) return state.record;
+    // The reader-follow mode is a poll refresh only: it never rebinds sources,
+    // so it returns before any write path below (covered by TaskSources tests).
+    if (params.mode === "follow_reader") return state.record;
     if (state.activeTurnId)
       throw new Error("Wait for the running research before changing sources");
     // Preserve the original association of legacy tasks before the reader moves.
     state.record.createdFrom ??= taskArticles(state.record);
-    // A running turn keeps its source/approval boundary. The UI can preview the
-    // next attachment; the next idle poll or Send applies it to the task.
-    if (follow && state.activeTurnId) return state.record;
     const supplied = params.context;
-    const context =
-      !follow && isLockedContextSnapshot(supplied)
-        ? withLockedContextFingerprint(supplied)
-        : this.captureLockedContext();
-    if (
-      follow &&
-      !params.refresh &&
-      readerAttachmentIdentity(context) ===
-        readerAttachmentIdentity(state.record.lockedContext)
-    )
-      return state.record;
-    const nextContext = follow
-      ? followReaderContext(state.record.lockedContext, context)
-      : params.mode === "add"
+    const context = isLockedContextSnapshot(supplied)
+      ? withLockedContextFingerprint(supplied)
+      : this.captureLockedContext();
+    const nextContext =
+      params.mode === "add"
         ? mergeLockedContexts(state.record.lockedContext, {
             ...context,
             items: context.items.map((item) => ({
@@ -3744,14 +3770,7 @@ export class AgentHost {
             })),
           })
         : context;
-    if (
-      follow &&
-      nextContext.fingerprint === state.record.lockedContext.fingerprint
-    )
-      return state.record;
-    if (state.record.run && !follow)
-      await this.freezeBoundAnnotations(state, nextContext);
-    const previousUpdatedAt = state.record.updatedAt;
+    if (state.record.run) await this.freezeBoundAnnotations(state, nextContext);
     state.record.lockedContext = nextContext;
     state.driftReportedForLockedFingerprint = undefined;
     state.record.context = legacyContextForLocked(state.record.lockedContext);
@@ -3764,7 +3783,6 @@ export class AgentHost {
         context: state.record.context,
       },
     );
-    if (follow) state.record.updatedAt = previousUpdatedAt;
     this.persistSoon();
     return state.record;
   }
@@ -3927,7 +3945,13 @@ export class AgentHost {
     await this.reviews().remove(sessionId);
     await this.persistNow();
     if (this.historyFailure) throw this.historyFailure;
-    await clearMigratedContextCopies();
+    try {
+      await clearMigratedContextCopies();
+    } catch (error) {
+      // Old migrated copies are redundant backups of already-pruned history.
+      // Losing them must not block deleting the task itself.
+      ztoolkit.log("[Confucius] migrated context cleanup was deferred", error);
+    }
     await this.history.deleteTask(sessionId);
     await this.logs.deleteSession(sessionId);
     await this.execution.retireContext(sessionId);
@@ -4588,16 +4612,14 @@ export class AgentHost {
   private validatedRuntimeLease(
     state: SessionState,
     value: unknown,
-    runtimeGateway?: unknown,
     allowPrepared = false,
-  ): RuntimeTurnLease | undefined {
-    if (value === undefined) {
-      if (runtimeGateway)
-        throw new Error(
-          "External tool gateways must use a host-issued execution lease and connect directly to the host MCP endpoint",
-        );
-      return undefined;
-    }
+  ): RuntimeTurnLease {
+    // Task tools are only reachable through a host-issued execution lease. The
+    // pairing secret (the old /rpc path) must never act as a task capability.
+    if (value === undefined)
+      throw new Error(
+        "A host-issued execution lease is required; connect to the host MCP endpoint instead of task/toolCall",
+      );
     const lease = value as RuntimeTurnLease;
     const preparing =
       allowPrepared &&
@@ -4630,11 +4652,7 @@ export class AgentHost {
     return lease;
   }
 
-  private taskToolList(
-    taskId: string,
-    lease?: unknown,
-    runtimeGateway?: unknown,
-  ) {
+  private taskToolList(taskId: string, lease?: unknown) {
     const child = this.subagentManager?.run(taskId);
     if (child) {
       this.validateSubagentLease(child, lease);
@@ -4646,8 +4664,13 @@ export class AgentHost {
       return { tools: btw.tools.listTools() };
     }
     const state = this.requireSession(taskId);
-    this.validatedRuntimeLease(state, lease, runtimeGateway, true);
-    const tools = [
+    this.validatedRuntimeLease(state, lease, true);
+    return { tools: this.advertisedTaskTools(state) };
+  }
+
+  /** Host-internal tool surface; never exposed without a validated lease. */
+  private advertisedTaskTools(state: SessionState) {
+    return [
       ...this.literatureTools(state).listTools(),
       ...this.subagentTools(state).listTools(),
       ...this.reviewTools().listTools(),
@@ -4655,17 +4678,16 @@ export class AgentHost {
       ...advertisedArtifactTools(state.record.run?.requiredArtifactKinds),
       ...this.historyTools(state).listTools(),
       ...this.skillProvider(state).listTools(),
-    ].filter(
-      (tool) =>
-        !state.externalToolNames || state.externalToolNames.has(tool.name),
-    );
-    return {
-      tools: tools.map((tool) => ({
+    ]
+      .filter(
+        (tool) =>
+          !state.externalToolNames || state.externalToolNames.has(tool.name),
+      )
+      .map((tool) => ({
         name: tool.name,
         description: tool.description,
         inputSchema: tool.inputSchema,
-      })),
-    };
+      }));
   }
 
   private async taskToolCall(params: Record<string, unknown>) {
@@ -4802,23 +4824,17 @@ export class AgentHost {
   private async taskToolCallNow(params: Record<string, unknown>) {
     const taskId = String(params.taskId ?? "");
     const state = this.requireSession(taskId);
-    const lease = this.validatedRuntimeLease(
-      state,
-      params.lease,
-      params.runtimeGateway,
-    );
+    const lease = this.validatedRuntimeLease(state, params.lease);
     const ownerRun = state.record.run;
     const ownerTurn = state.activeTurnId;
     const runSignal = state.abort?.signal;
-    const leaseSignal = lease
-      ? this.pluginRuntime.leaseSignal(lease)
-      : undefined;
+    const leaseSignal = this.pluginRuntime.leaseSignal(lease);
     const current = () =>
       this.sessions.get(taskId) === state &&
       state.record.run === ownerRun &&
       state.activeTurnId === ownerTurn &&
       !runSignal?.aborted &&
-      (!lease || this.pluginRuntime.isCurrentLease(lease));
+      this.pluginRuntime.isCurrentLease(lease);
     const name = String(params.name ?? "");
     const cancelled = () =>
       mcpToolResult({
@@ -5106,7 +5122,7 @@ export class AgentHost {
       this.alwaysAllowedTools().has(toolName)
     )
       return Promise.resolve({ id: callId, verdict: "allow", scope: "once" });
-    const id = `approval_${callId}`;
+    const id = newApprovalId();
     const request: ApprovalRequest = {
       id,
       sessionId: state.record.id,
@@ -5223,7 +5239,10 @@ export class AgentHost {
         );
       const existing =
         artifact.writeback?.target === "zotero_note"
-          ? parseLibraryTarget(artifact.writeback.targetRef)
+          ? resolveNoteTarget(
+              artifact.writeback.targetRef,
+              artifact.writeback.state,
+            )
           : null;
       const source = revision.citations[0];
       const item = state.record.lockedContext.items[0];
@@ -5705,7 +5724,7 @@ export class AgentHost {
       throw new Error(
         "Zotero contents changed after the preview; review the updated changes before saving",
       );
-    let targetRef: string;
+    let targetRef: string | undefined;
     let annotationOutcome: ToolResult | undefined;
     const prepared = params.preparedWriteback as
       | {
@@ -5719,7 +5738,10 @@ export class AgentHost {
       const item = state.record.lockedContext.items[0];
       const existing =
         artifact.writeback?.target === "zotero_note"
-          ? parseLibraryTarget(artifact.writeback.targetRef)
+          ? resolveNoteTarget(
+              artifact.writeback.targetRef,
+              artifact.writeback.state,
+            )
           : null;
       const result = prepared
         ? await this.execution
@@ -5758,7 +5780,26 @@ export class AgentHost {
       annotationOutcome = result;
       const data = (result.ok ? result.data : result.details) as
         { libraryID?: number; key?: string } | undefined;
-      targetRef = `${data?.libraryID ?? prepared?.args.libraryID ?? existing?.libraryID ?? ""}:${data?.key ?? prepared?.context.plannedKeys?.item ?? existing?.key ?? ""}`;
+      const libraryID =
+        data?.libraryID ?? prepared?.args.libraryID ?? existing?.libraryID;
+      const plannedKey = prepared?.context.plannedKeys?.item;
+      let key = data?.key ?? existing?.key;
+      // A planned key is only a real note after Zotero confirmed the write (or
+      // the note actually exists). An unknown outcome must not claim it.
+      const committed =
+        annotationOutcome.ok === true && annotationOutcome.effect !== "unknown";
+      if (!key && plannedKey && committed) key = plannedKey;
+      if (!key && plannedKey && libraryID !== undefined) {
+        const confirmed = resolveNoteTarget(
+          `${libraryID}:${plannedKey}`,
+          "unknown",
+        );
+        if (confirmed) key = confirmed.key;
+      }
+      targetRef =
+        libraryID !== undefined && key !== undefined
+          ? `${libraryID}:${key}`
+          : undefined;
     } else if (target === "zotero_annotations") {
       if (
         revision.body.type !== "annotation_set" ||
@@ -6430,6 +6471,55 @@ export class AgentHost {
 
   private disposeNativeTask(taskId: string): void {
     this.abortTaskRuntime(taskId);
+  }
+
+  /**
+   * Resolve interrupted `started` executions against the operation journal
+   * before resuming the turn. A durable receipt becomes the tool result; an
+   * operation without a verified receipt stays marked so TurnLoop closes it as
+   * failed instead of blocking every later rollover on it.
+   *
+   * The returned checkpoint deliberately leaves `status: "started"` on
+   * reconciled entries: TurnLoop owns closing the journal, and only those
+   * receipts may be replayed as already-applied writes.
+   */
+  private async reconcileResumedCheckpoint(
+    state: SessionState,
+    checkpoint: TurnCheckpoint,
+  ): Promise<TurnCheckpoint> {
+    const started = checkpoint.toolExecutions.filter(
+      (entry) => entry.status === "started",
+    );
+    if (!started.length) return checkpoint;
+    try {
+      await this.execution.recoverStorage();
+    } catch {
+      /* Resolve from whatever the journal already loaded. */
+    }
+    const toolExecutions = checkpoint.toolExecutions.map((entry) => ({
+      ...entry,
+      ...(entry.args ? { args: { ...entry.args } } : {}),
+      ...(entry.requestedArgs
+        ? { requestedArgs: { ...entry.requestedArgs } }
+        : {}),
+    }));
+    for (const execution of toolExecutions) {
+      if (execution.status !== "started") continue;
+      const operationId = `${state.record.id}:${checkpoint.turnId}:${execution.callId}`;
+      let receipt = (await this.execution.getOperation(operationId))?.result;
+      if (!receipt || receipt.effect === "unknown") {
+        try {
+          await this.execution.unresolvedForTask(state.record.id, {
+            operationIds: [operationId],
+          });
+        } catch {
+          /* Keep the journal unresolved; TurnLoop closes it as failed. */
+        }
+        receipt = (await this.execution.getOperation(operationId))?.result;
+      }
+      if (receipt && receipt.effect !== "unknown") execution.result = receipt;
+    }
+    return { ...checkpoint, toolExecutions };
   }
 
   private async saveCheckpoint(
@@ -7127,7 +7217,53 @@ export class AgentHost {
         "Confucius is shutting down; restart the workspace before submitting a task",
       );
     const state = this.requireSession(sessionId);
+    // Reject cheaply invalid prompts before they can claim a submission. A
+    // second invalid prompt must not cancel a valid prompt that is waiting for
+    // context cleanup; only prompts that can actually run claim a submission.
+    const preparedAttachments = this.attachments.resolve(
+      requestedAttachmentIds,
+    );
+    const trimmed =
+      text.trim() ||
+      (preparedAttachments.length ? "Analyze the attached file(s)." : "");
+    if (!trimmed) throw new Error("Empty prompt");
+    const promptReferences =
+      promptContext?.references !== undefined
+        ? taskContextReferences(promptContext.references)
+        : undefined;
+    const continues =
+      !resuming &&
+      Boolean(state.record.run) &&
+      state.record.run!.status !== "completed" &&
+      !state.activeTurnId &&
+      requestedAttachmentIds.length === 0 &&
+      (promptReferences === undefined ||
+        JSON.stringify(
+          promptReferences.filter((ref) => ref.taskId !== sessionId),
+        ) === JSON.stringify(state.record.references ?? [])) &&
+      isContinueRequest(text);
+    const template = taskTemplate(state.record.templateId);
+    if (!continues) {
+      if (state.record.backend === "native") this.requireEndpoint();
+      if (template) {
+        const validation = validateTemplateContext(
+          template,
+          state.record.lockedContext,
+        );
+        if (!validation.ok)
+          throw new Error(
+            getString(`workspace-template-context-${validation.reason}`),
+          );
+      }
+    }
+    // Claim the newest submission synchronously, before any await. A delayed
+    // older prompt must not claim after a newer one has started and then abort
+    // or cancel that newer run from its supersession check.
+    const submission = (state.promptSubmission ?? 0) + 1;
+    state.promptSubmission = submission;
+    const superseded = () => state.promptSubmission !== submission;
     if (state.contextCleanup) await state.contextCleanup;
+    if (superseded()) return { sessionId, superseded: true };
     if (
       [...this.sessions.values()].some((owner) =>
         owner.record.postProcessing?.some(
@@ -7137,57 +7273,28 @@ export class AgentHost {
       )
     )
       await this.resumeContextCleanup(state);
+    if (superseded()) return { sessionId, superseded: true };
     state.record.historyCleanupBatch = undefined;
-    if (
-      !resuming &&
-      state.record.run &&
-      state.record.run.status !== "completed" &&
-      !state.activeTurnId &&
-      requestedAttachmentIds.length === 0 &&
-      (promptContext?.references === undefined ||
-        JSON.stringify(
-          taskContextReferences(promptContext.references).filter(
-            (ref) => ref.taskId !== sessionId,
-          ),
-        ) === JSON.stringify(state.record.references ?? [])) &&
-      isContinueRequest(text)
-    )
-      return this.taskContinue(sessionId);
-    const preparedAttachments = this.attachments.resolve(
-      requestedAttachmentIds,
-    );
-    const trimmed =
-      text.trim() ||
-      (preparedAttachments.length ? "Analyze the attached file(s)." : "");
-    if (!trimmed) throw new Error("Empty prompt");
-    if (state.record.backend === "native") this.requireEndpoint();
+    if (continues) return this.taskContinue(sessionId);
     const effectiveContext = state.record.lockedContext;
-    const template = taskTemplate(state.record.templateId);
-    if (template) {
-      const validation = validateTemplateContext(template, effectiveContext);
-      if (!validation.ok)
-        throw new Error(
-          getString(`workspace-template-context-${validation.reason}`),
-        );
-    }
-    if (promptContext?.references !== undefined)
-      state.record.references = taskContextReferences(
-        promptContext.references,
-      ).filter((ref) => ref.taskId !== sessionId);
-    const submission = (state.promptSubmission ?? 0) + 1;
-    state.promptSubmission = submission;
+    if (promptReferences !== undefined)
+      state.record.references = promptReferences.filter(
+        (ref) => ref.taskId !== sessionId,
+      );
     // Materialize legacy navigation before replacing/mutating the previous run.
     state.record.createdFrom ??= taskArticles(state.record);
-    if (!resuming && state.record.subagentIds?.length)
+    if (!resuming && state.record.subagentIds?.length) {
       await this.subagentManager?.cancel(sessionId);
+      if (superseded()) return { sessionId, superseded: true };
+    }
+    if (superseded()) return { sessionId, superseded: true };
     const previous = state.record.run;
     state.abort?.abort();
     this.rejectPendingApprovals(sessionId, "superseded by a new prompt");
     await this.backendFor(state.record.backend)
       .interrupt(sessionId)
       .catch(() => undefined);
-    if (state.promptSubmission !== submission)
-      return { sessionId, superseded: true };
+    if (superseded()) return { sessionId, superseded: true };
     const abort = createAbortController();
     const turnId = newTurnId();
     const now = Date.now();
@@ -7335,59 +7442,62 @@ export class AgentHost {
         ? (priorAllowance?.handoffAttempts ?? CONTEXT_POLICY.handoffAttempts)
         : 0,
     };
-    if (
-      !sameContextBinding(
-        state.record.contextHandoff?.binding,
-        executionBinding(run),
-      )
-    ) {
-      const obsolete = state.record.contextSwitch;
-      if (obsolete && state.record.backend !== "native") {
-        const backend = this.backendFor(state.record.backend);
-        await backend.discardSession?.(state.record.id, obsolete.id);
-        await backend.dispose(state.record.id);
-      }
-      state.record.contextHandoff = undefined;
-      state.record.contextSwitch = undefined;
-      state.record.contextResetRequested = undefined;
-    }
-    await this.history.touch(sessionId);
-    if (
-      state.record.historyRetention?.tier === "archived" &&
-      !state.messages.length
-    ) {
-      const notes = await readWorkingNotes(
-        this.history,
-        sessionId,
-        CONTEXT_POLICY.handoffTokens,
-        presetWorkflow(state.record.templateId)
-          ? historySourceRefs(run.sources)
-          : undefined,
-      );
-      state.messages = notes.length
-        ? [
-            {
-              role: "user",
-              content: `Retained task notes (historical evidence):\n${notes.join("\n\n")}`,
-            },
-          ]
-        : [];
-      state.record.contextWindow = {
-        ...initialContextWindow(sessionId, state.record.backend),
-        id: `ctx_${this.ids()}`,
-        number: (state.record.contextWindow?.number ?? 0) + 1,
-      };
-      await this.history.addWindow(sessionId, state.record.contextWindow);
-      state.record.historyRetention = (
-        await this.history.retentionInfo(sessionId)
-      ).retention;
-    }
-    state.record.status = "running";
+    // The turn is armed above. Every reversible setup await must run inside
+    // this try so a storage/backend failure still finalizes the run and clears
+    // activeTurnId instead of stranding a running turn with no coordinator.
     const isCurrent = () =>
       this.sessions.get(sessionId) === state &&
       state.record.run === run &&
       state.activeTurnId === turnId;
     try {
+      if (
+        !sameContextBinding(
+          state.record.contextHandoff?.binding,
+          executionBinding(run),
+        )
+      ) {
+        const obsolete = state.record.contextSwitch;
+        if (obsolete && state.record.backend !== "native") {
+          const backend = this.backendFor(state.record.backend);
+          await backend.discardSession?.(state.record.id, obsolete.id);
+          await backend.dispose(state.record.id);
+        }
+        state.record.contextHandoff = undefined;
+        state.record.contextSwitch = undefined;
+        state.record.contextResetRequested = undefined;
+      }
+      await this.history.touch(sessionId);
+      if (
+        state.record.historyRetention?.tier === "archived" &&
+        !state.messages.length
+      ) {
+        const notes = await readWorkingNotes(
+          this.history,
+          sessionId,
+          CONTEXT_POLICY.handoffTokens,
+          presetWorkflow(state.record.templateId)
+            ? historySourceRefs(run.sources)
+            : undefined,
+        );
+        state.messages = notes.length
+          ? [
+              {
+                role: "user",
+                content: `Retained task notes (historical evidence):\n${notes.join("\n\n")}`,
+              },
+            ]
+          : [];
+        state.record.contextWindow = {
+          ...initialContextWindow(sessionId, state.record.backend),
+          id: `ctx_${this.ids()}`,
+          number: (state.record.contextWindow?.number ?? 0) + 1,
+        };
+        await this.history.addWindow(sessionId, state.record.contextWindow);
+        const info = await this.history.retentionInfo(sessionId);
+        state.record.historyRetention = info.retention;
+        this.syncHistoryCleared(state.record, info);
+      }
+      state.record.status = "running";
       if (
         state.record.backend !== "native" &&
         state.record.contextSwitch &&
@@ -7595,18 +7705,27 @@ export class AgentHost {
       if (isCurrent()) {
         run.status = "failed";
         run.stopReason = "error";
-        await this.finalizeRun(
-          state,
-          run,
-          turnId,
-          {
-            stopReason: "error",
-            text: "",
-            failureMessage: errorMessage(error),
-            work: { completed: [], missing: [], unknownOperationIds: [] },
-          },
-          isCurrent,
-        );
+        try {
+          await this.finalizeRun(
+            state,
+            run,
+            turnId,
+            {
+              stopReason: "error",
+              text: "",
+              failureMessage: errorMessage(error),
+              work: { completed: [], missing: [], unknownOperationIds: [] },
+            },
+            isCurrent,
+          );
+        } finally {
+          // finalizeRun normally clears these; guarantee a failed setup can
+          // never leave the task armed with an active turn.
+          if (state.activeTurnId === turnId) {
+            state.activeTurnId = null;
+            state.abort = null;
+          }
+        }
       }
       throw error;
     }
@@ -7718,6 +7837,9 @@ export class AgentHost {
       const callbacks: BackendCallbacks = {
         stopped: finish,
         event: (event) => {
+          // Buffered runtime events from an earlier turn must never update this
+          // turn's window, budget, history, approvals or terminal outcome.
+          if (event.turnId !== input.turnId) return;
           if (settled || signal.aborted || state.activeTurnId !== input.turnId)
             return;
           event.origin = "executor";
@@ -7839,7 +7961,9 @@ export class AgentHost {
           state.record.backend === "native"
             ? 0
             : contextTextTokens(
-                JSON.stringify(this.taskToolList(state.record.id).tools),
+                JSON.stringify({
+                  tools: this.advertisedTaskTools(state),
+                }),
               );
         const maxTokens =
           capacity -
@@ -8055,6 +8179,11 @@ export class AgentHost {
     const state = this.requireSession(input.task.id);
     const abort = state.abort!;
     const run = state.record.run!;
+    // Close interrupted executions before the model sees the checkpoint, so a
+    // committed write replays its receipt instead of being dispatched twice.
+    const resumeCheckpoint = input.resumeCheckpoint
+      ? await this.reconcileResumedCheckpoint(state, input.resumeCheckpoint)
+      : undefined;
     const window = this.nativeWindowContext(state);
     const providers: ToolProvider[] = [
       this.literatureTools(state),
@@ -8224,7 +8353,7 @@ export class AgentHost {
         userText: run.request,
         modelUserText: input.modelPrompt ?? input.prompt,
         history: state.messages,
-        resume: input.resumeCheckpoint,
+        resume: resumeCheckpoint,
         signal: abort.signal,
       })
       .then((result) =>
@@ -8358,7 +8487,7 @@ export class AgentHost {
       evidence = reportEvidence(artifact, state.events, state.messages);
       const outputAllowance =
         state.record.backend === "native"
-          ? this.maxOutputTokens() || 8192
+          ? this.maxOutputTokens() || 4096
           : 8192;
       const capacity =
         state.record.backend === "native"
@@ -8373,7 +8502,7 @@ export class AgentHost {
         style: state.record.reportStyle,
         artifact,
         evidence,
-        maxInputTokens: Math.max(0, capacity - outputAllowance - 1024),
+        maxInputTokens: contextInputLimit(capacity, outputAllowance),
       });
       if (!canCallModel()) throw new Error("No remaining model budget");
       const configuredTimeout =
@@ -8541,7 +8670,9 @@ export class AgentHost {
             : outcome.stopReason));
     if (
       completed &&
-      !state.record.postProcessing?.some((job) => job.turnId === turnId)
+      !state.record.postProcessing?.some(
+        (job) => job.turnId === turnId && job.pending.length > 0,
+      )
     ) {
       const pending: Array<"title" | "memory"> = [];
       if (state.record.titleState === "pending") pending.push("title");
@@ -8886,6 +9017,30 @@ export class AgentHost {
     }
   }
 
+  /**
+   * Bind a retention decision to the run/turn generation it was made for.
+   * Cleanup awaits yields to the event loop; a new prompt may start a run while
+   * it is waiting and must not have its state cleared by the old decision.
+   */
+  private retirementSnapshot(state: SessionState) {
+    return {
+      run: state.record.run,
+      activeTurnId: state.activeTurnId,
+      status: state.record.status,
+    };
+  }
+
+  private sameRetirementGeneration(
+    state: SessionState,
+    snapshot: ReturnType<AgentHost["retirementSnapshot"]>,
+  ): boolean {
+    return (
+      state.record.run === snapshot.run &&
+      state.activeTurnId === snapshot.activeTurnId &&
+      state.record.status === snapshot.status
+    );
+  }
+
   private async canRetireContext(
     state: SessionState,
     ownsCleanup = false,
@@ -8909,6 +9064,27 @@ export class AgentHost {
 
   private historyCleanupEnabled(): boolean {
     return getPref("historyAutoCleanup") !== false;
+  }
+
+  /**
+   * A retention tombstone is a store fact: only a store that reopened the task
+   * with retained work may lift the cleared-history banner. Never synthesize a
+   * tier here; the maintenance pass must not disagree with history storage.
+   */
+  private syncHistoryCleared(
+    record: ResearchTaskRecord,
+    info: {
+      retention: { tier: string };
+      items: number;
+      notes: number;
+    },
+  ): void {
+    if (
+      record.historyClearedAt !== undefined &&
+      info.retention.tier === "hot" &&
+      (info.items > 0 || info.notes > 0)
+    )
+      record.historyClearedAt = undefined;
   }
 
   private async retentionReasons(state: SessionState): Promise<string[]> {
@@ -9066,6 +9242,7 @@ export class AgentHost {
       const info = await this.history.retentionInfo(state.record.id);
       state.record.historyRetention = info.retention;
       state.record.historyRetainedBytes = info.bytes;
+      this.syncHistoryCleared(state.record, info);
       state.record.historyRetentionReasons = await this.retentionReasons(state);
       rows.push({
         id: state.record.id,
@@ -9099,6 +9276,7 @@ export class AgentHost {
       const info = await this.history.retentionInfo(state.record.id);
       state.record.historyRetention = info.retention;
       state.record.historyRetainedBytes = info.bytes;
+      this.syncHistoryCleared(state.record, info);
       const reasons = await this.retentionReasons(state);
       state.record.historyRetentionReasons = reasons;
       if (info.retention.tier === "archived")
@@ -9110,14 +9288,25 @@ export class AgentHost {
           lastReadAt: info.retention.lastReadAt,
           protected: reasons.length > 0,
         });
-      if (info.cleanupPending && !reasons.length)
-        await this.clearRetiredContext(state);
+      if (info.cleanupPending && !reasons.length) {
+        // A pending tombstone retries the recorded deletions only: pruning again
+        // would discard work appended after the interrupted cleanup.
+        const snapshot = this.retirementSnapshot(state);
+        const cleanup = this.resumeRetiredContext(state, snapshot);
+        state.contextCleanup = cleanup;
+        try {
+          await cleanup;
+        } finally {
+          state.contextCleanup = undefined;
+        }
+      }
     }
     if (this.historyCleanupEnabled())
       for (const row of archivesToPrune(archived)) {
         const state = this.sessions.get(row.id)!;
         if ((await this.retentionReasons(state)).length) continue;
-        const cleanup = this.clearRetiredContext(state);
+        const snapshot = this.retirementSnapshot(state);
+        const cleanup = this.clearRetiredContext(state, snapshot);
         state.contextCleanup = cleanup;
         try {
           await cleanup;
@@ -9352,8 +9541,17 @@ export class AgentHost {
           async () => {
             if (!(await stillSource()))
               throw new Error("Source changed; maintenance cancelled");
+            // A forgotten topic stays forgotten even when the archived batch is
+            // old enough that its task was trimmed from the memory's sourceRefs.
+            const research = this.researchMemory();
+            const allowed: MemoryOp[] = [];
+            for (const op of ops) {
+              if (op.op === "add" && (await research.suppressesTitle(op.title)))
+                continue;
+              allowed.push(op);
+            }
             await this.memory.applyOrdinaryOps(
-              ops,
+              allowed,
               target.record.id,
               job.maintenanceBatchId!,
               [
@@ -9403,15 +9601,62 @@ export class AgentHost {
     }
   }
 
-  private async clearRetiredContext(state: SessionState): Promise<void> {
+  /**
+   * Shared preflight for both first-time retirement and tombstone retries.
+   * Every await may let a user prompt claim the task, so eligibility and the
+   * run/turn generation are rechecked synchronously before destructive work.
+   */
+  private async retirementReady(
+    state: SessionState,
+    snapshot: ReturnType<AgentHost["retirementSnapshot"]>,
+  ): Promise<boolean> {
     await this.backendFor(state.record.backend).dispose(state.record.id);
     await this.persistNow();
     if (this.historyFailure) throw this.historyFailure;
+    if (!this.sameRetirementGeneration(state, snapshot)) return false;
+    if (!(await this.canRetireContext(state, true))) return false;
+    return this.sameRetirementGeneration(state, snapshot);
+  }
+
+  private async clearRetiredContext(
+    state: SessionState,
+    snapshot = this.retirementSnapshot(state),
+  ): Promise<void> {
+    if (!(await this.retirementReady(state, snapshot))) return;
     // Tombstones precede raw deletion and survive interruption. User artifacts,
     // source identities and authoritative write receipts keep their own stores.
     await this.history.prune(state.record.id);
+    await this.finishRetiredContext(state, snapshot);
+  }
+
+  /**
+   * Retry a prune that committed its tombstone but failed to delete every
+   * recorded file. Never prune again: work appended after the interruption is
+   * current evidence, and only the tombstone's own paths may be removed.
+   */
+  private async resumeRetiredContext(
+    state: SessionState,
+    snapshot = this.retirementSnapshot(state),
+  ): Promise<void> {
+    if (!(await this.retirementReady(state, snapshot))) return;
+    if (!(await this.history.resumeCleanup(state.record.id))) return;
+    const info = await this.history.retentionInfo(state.record.id);
+    // New work reopened the task as hot; only a still-empty tombstone may
+    // finish the host-side retirement that the interrupted prune started.
+    if (info.retention.tier !== "pruned" || info.items || info.notes) return;
+    await this.finishRetiredContext(state, snapshot);
+  }
+
+  private async finishRetiredContext(
+    state: SessionState,
+    snapshot: ReturnType<AgentHost["retirementSnapshot"]>,
+  ): Promise<void> {
+    // Only the run captured by the decision may be retired. Anything newer is
+    // a live turn whose messages, request, handoff and draft must survive.
+    if (!this.sameRetirementGeneration(state, snapshot)) return;
     await this.logs.deleteSession(state.record.id);
     await this.execution.retireContext(state.record.id);
+    if (!this.sameRetirementGeneration(state, snapshot)) return;
     state.messages = [];
     state.events = [];
     state.latestCheckpoint = undefined;
@@ -10009,6 +10254,7 @@ export class AgentHost {
     this.mcpProviders = [];
     const raw = String(getPref("mcpServersJson") || "").trim();
     const providers: McpToolProvider[] = [];
+    const failures: string[] = [];
     if (raw) {
       try {
         const parsed = JSON.parse(raw) as McpServerConfig[] | McpServerConfig;
@@ -10025,6 +10271,9 @@ export class AgentHost {
               );
               if (!discovery.signal.aborted) providers.push(provider);
             } catch (error) {
+              failures.push(
+                `Optional MCP server "${config.id}" was not loaded: ${errorMessage(error)}. Its tools stay unavailable until it reconnects.`,
+              );
               ztoolkit.log(
                 `[Confucius] MCP server "${config.id}" not loaded`,
                 error,
@@ -10033,11 +10282,18 @@ export class AgentHost {
           }),
         );
       } catch (error) {
+        failures.push(
+          `Optional MCP servers were not loaded because mcpServersJson is invalid: ${errorMessage(error)}`,
+        );
         ztoolkit.log("[Confucius] mcpServersJson invalid", error);
       }
     }
-    if (!discovery.signal.aborted && !this.shuttingDown)
+    if (!discovery.signal.aborted && !this.shuttingDown) {
       this.mcpProviders = providers;
+      // Optional integration state, never a task outcome: keep failures on the
+      // process and expose them through config/get without touching timelines.
+      this.mcpLoadErrors = failures;
+    }
   }
 
   /**
@@ -10080,6 +10336,15 @@ function newTurnId(): string {
   return `turn_${Date.now().toString(36)}_${Math.random()
     .toString(36)
     .slice(2, 8)}`;
+}
+
+/** Approval ids are server entropy, never derived from caller-chosen call ids. */
+function newApprovalId(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return `approval_${Array.from(bytes, (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("")}`;
 }
 
 function normalizeCheckpoint(value: unknown): TurnCheckpoint | undefined {
@@ -10265,6 +10530,25 @@ function parseLibraryTarget(
   return Number.isInteger(libraryID) && match[2]
     ? { libraryID, key: match[2] }
     : null;
+}
+
+/**
+ * A persisted note target is only authoritative when Zotero still holds that
+ * note. A planned key from an interrupted create must not select update_note.
+ */
+function resolveNoteTarget(
+  value: string | undefined,
+  state: ArtifactWriteback["state"] | undefined,
+): { libraryID: number; key: string } | null {
+  const target = parseLibraryTarget(value);
+  if (!target) return null;
+  const lookup = Zotero.Items?.getByLibraryAndKey;
+  // A committed/partial receipt is already evidence of a real note. Test
+  // doubles may not expose the lookup; production always does.
+  if (typeof lookup !== "function")
+    return state === "committed" || state === "partial" ? target : null;
+  const item = lookup(target.libraryID, target.key);
+  return item && item.isNote() ? target : null;
 }
 
 function parseKnowledgeTarget(

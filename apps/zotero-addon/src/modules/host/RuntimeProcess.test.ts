@@ -134,6 +134,76 @@ function makeProcess(
     },
   };
 }
+/** A fake JSON-RPC CLI: answers each request written to stdin and exits on kill. */
+function rpcProcess(respond: (message: Record<string, any>) => unknown) {
+  const queue: string[] = [];
+  let wake: (() => void) | undefined;
+  let closed = false;
+  let finishExit: (value: { exitCode: number }) => void = () => {};
+  const exited = new Promise<{ exitCode: number }>((resolve) => {
+    finishExit = resolve;
+  });
+  const stdin = {
+    closed: false,
+    async close() {
+      stdin.closed = true;
+      await stdout.close();
+    },
+    async write(text: string) {
+      for (const line of text.split("\n")) {
+        if (!line.trim()) continue;
+        const message = JSON.parse(line) as Record<string, any>;
+        const result = respond(message);
+        if (result === undefined) continue;
+        queue.push(
+          `${JSON.stringify({ jsonrpc: "2.0", id: message.id, result })}\n`,
+        );
+        wake?.();
+        wake = undefined;
+      }
+    },
+  };
+  const stdout = {
+    closed: false,
+    async readString() {
+      while (queue.length === 0) {
+        if (closed) return "";
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+      }
+      return queue.shift()!;
+    },
+    async close() {
+      closed = true;
+      stdout.closed = true;
+      wake?.();
+      wake = undefined;
+    },
+  };
+  return {
+    pid: 13,
+    stdin,
+    stdout,
+    stderr: {
+      closed: true,
+      async readString() {
+        return "";
+      },
+      async close() {},
+    },
+    wait: () => exited,
+    async kill() {
+      closed = true;
+      stdout.closed = true;
+      stdin.closed = true;
+      wake?.();
+      wake = undefined;
+      finishExit({ exitCode: 0 });
+      return { exitCode: 0 };
+    },
+  };
+}
 globals.Services = {
   appinfo: {
     get OS() {
@@ -561,8 +631,128 @@ describe("Runtime process launch", () => {
     assert.equal(result.executable, binary);
     assert.deepEqual(calls[0].arguments, ["--version", "a b", "$(literal)"]);
     assert.ok(calls[0].environment.PATH.startsWith(`${home}/工具:`));
-    assert.equal(calls[0].environmentAppend, true);
+    // The external runtime gets an explicit allowlist, not Zotero's environment.
+    assert.equal(calls[0].environmentAppend, false);
     assert.equal(calls[0].command, binary);
+  });
+
+  it("passes runtime configuration and credentials but drops unrelated launcher secrets", async () => {
+    env.HOME = "/Users/Test";
+    env.LANG = "en_US.UTF-8";
+    env.HTTPS_PROXY = "http://proxy.example";
+    env.CODEX_HOME = "/Users/Test/.codex";
+    env.KIMI_CODE_HOME = "/Users/Test/.kimi-code";
+    env.KIMI_SHARE_DIR = "/Users/Test/.kimi";
+    env.OPENAI_API_KEY = "openai-runtime-key";
+    env.CODEX_API_KEY = "codex-runtime-key";
+    env.KIMI_API_KEY = "kimi-runtime-key";
+    env.MOONSHOT_API_KEY = "moonshot-runtime-key";
+    env.OPENAI_BASE_URL = "https://gateway.example/v1";
+    env.AWS_SECRET_ACCESS_KEY = "aws-secret";
+    env.GITHUB_TOKEN = "github-secret";
+    env.SSH_AUTH_SOCK = "/tmp/agent.sock";
+    env.NODE_OPTIONS = "--require payload.js";
+    const binary = file(`${home}/.kimi-code/bin/kimi`);
+    await runRuntimeCommand(binary, "kimi", ["--version"]);
+    await RuntimeJsonLineProcess.open(binary, "kimi", ["acp"], "/task path");
+
+    for (const call of calls.slice(0, 2)) {
+      assert.equal(call.environmentAppend, false);
+      assert.equal(call.environment.HOME, "/Users/Test");
+      assert.equal(call.environment.LANG, "en_US.UTF-8");
+      assert.equal(call.environment.HTTPS_PROXY, "http://proxy.example");
+      assert.equal(call.environment.PYTHONUTF8, "1");
+      assert.equal(call.environment.CODEX_HOME, "/Users/Test/.codex");
+      assert.equal(call.environment.KIMI_CODE_HOME, "/Users/Test/.kimi-code");
+      assert.equal(call.environment.KIMI_SHARE_DIR, "/Users/Test/.kimi");
+      assert.equal(call.environment.OPENAI_API_KEY, "openai-runtime-key");
+      assert.equal(call.environment.CODEX_API_KEY, "codex-runtime-key");
+      assert.equal(call.environment.KIMI_API_KEY, "kimi-runtime-key");
+      assert.equal(call.environment.MOONSHOT_API_KEY, "moonshot-runtime-key");
+      assert.equal(
+        call.environment.OPENAI_BASE_URL,
+        "https://gateway.example/v1",
+      );
+      for (const secret of [
+        "AWS_SECRET_ACCESS_KEY",
+        "GITHUB_TOKEN",
+        "SSH_AUTH_SOCK",
+        "NODE_OPTIONS",
+      ])
+        assert.equal(call.environment[secret], undefined);
+    }
+  });
+
+  it("gives real Kimi sessions their own home and credentials, never unrelated secrets", async () => {
+    env.HOME = "/Users/Test";
+    env.KIMI_CODE_HOME = "/Users/Test/custom-kimi-code";
+    env.KIMI_SHARE_DIR = "/Users/Test/custom-kimi-share";
+    env.CODEX_HOME = "/Users/Test/custom-codex";
+    env.OPENAI_API_KEY = "openai-runtime-key";
+    env.CODEX_API_KEY = "codex-runtime-key";
+    env.KIMI_API_KEY = "kimi-runtime-key";
+    env.MOONSHOT_API_KEY = "moonshot-runtime-key";
+    env.OPENAI_BASE_URL = "https://gateway.example/v1";
+    env.AWS_ACCESS_KEY_ID = "aws-key";
+    env.SSH_AUTH_SOCK = "/tmp/agent.sock";
+    env.NODE_OPTIONS = "--require payload.js";
+    file(`${home}/.kimi-code/bin/kimi`);
+    processFactory = () =>
+      rpcProcess((message) =>
+        message.method === "initialize"
+          ? { protocolVersion: 1 }
+          : message.method === "session/new"
+            ? { sessionId: "session-1", configOptions: [] }
+            : {},
+      );
+    const adapter = new PluginKimiAdapter();
+    try {
+      await adapter.startTurn(
+        {
+          taskId: "task",
+          turnId: "turn",
+          prompt: "Summarize the evidence",
+          mode: "agent",
+          capabilityProfile: "zotero_only",
+          cwd: "/workspace",
+          mcp: {
+            url: "http://127.0.0.1:23119/confucius/v1/mcp",
+            token: "lease",
+          },
+          developerInstructions: "Rules",
+        },
+        { emit() {} },
+        {
+          request: async () => ({
+            id: "approval",
+            verdict: "deny",
+            scope: "once",
+          }),
+        },
+      );
+      const environment = calls.at(-1)?.environment as Record<string, string>;
+      assert.equal(
+        environment.HOME,
+        "/Users/Test",
+        "the real session keeps the launcher home",
+      );
+      assert.equal(environment.KIMI_CODE_HOME, "/Users/Test/custom-kimi-code");
+      assert.equal(environment.KIMI_SHARE_DIR, "/Users/Test/custom-kimi-share");
+      assert.equal(environment.CODEX_HOME, "/Users/Test/custom-codex");
+      assert.equal(environment.OPENAI_API_KEY, "openai-runtime-key");
+      assert.equal(environment.CODEX_API_KEY, "codex-runtime-key");
+      assert.equal(environment.KIMI_API_KEY, "kimi-runtime-key");
+      assert.equal(environment.MOONSHOT_API_KEY, "moonshot-runtime-key");
+      assert.equal(environment.OPENAI_BASE_URL, "https://gateway.example/v1");
+      for (const secret of [
+        "AWS_ACCESS_KEY_ID",
+        "SSH_AUTH_SOCK",
+        "NODE_OPTIONS",
+      ])
+        assert.equal(environment[secret], undefined);
+    } finally {
+      await adapter.dispose("task");
+    }
   });
 
   it("uses the same environment for version probes and JSON-RPC sessions", async () => {

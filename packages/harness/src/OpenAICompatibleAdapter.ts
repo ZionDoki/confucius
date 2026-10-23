@@ -4,6 +4,7 @@ import { abortError, isAbortError } from "./abort";
 import {
   ModelError,
   type ModelEnd,
+  type ModelErrorCode,
   type ModelReplayState,
 } from "./ModelAdapter";
 import {
@@ -108,7 +109,11 @@ export function normalizeOpenAICompatibleBaseUrl(baseUrl: string): string {
     return trimmed;
   }
   if (detectApiStyle(trimmed) === "ollama") {
-    return trimmed.replace(/\/+$/, "");
+    // Preserve a query string verbatim; only the path may end with "/".
+    const url = new URL(trimmed);
+    url.pathname = url.pathname.replace(/\/+$/, "") || "/";
+    url.hash = "";
+    return url.toString();
   }
   try {
     const url = new URL(trimmed);
@@ -121,7 +126,7 @@ export function normalizeOpenAICompatibleBaseUrl(baseUrl: string): string {
     }
     url.pathname = path;
     url.hash = "";
-    return url.toString().replace(/\/+$/, "");
+    return url.toString();
   } catch {
     const stripped = trimmed
       .replace(/\/+$/, "")
@@ -294,7 +299,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     const url =
       this.style === "ollama"
         ? this.baseUrl
-        : joinUrl(this.baseUrl, "/chat/completions");
+        : joinEndpointUrl(this.baseUrl, "/chat/completions");
     const stream = this.config.stream !== false;
     const body: Record<string, unknown> =
       this.style === "ollama"
@@ -471,12 +476,10 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       } catch {
         throw new ModelError("Malformed JSON in model stream", "protocol");
       }
-      if (payload.error)
-        throw new ModelError(
-          payload.error.message ?? "Model stream error",
-          "server",
-          { retryable: true },
-        );
+      if (payload.error) {
+        const providerError = providerErrorEnvelope(payload.error);
+        if (providerError) throw providerError;
+      }
       sawData = true;
       if (payload.choices?.[0]?.finish_reason)
         finish = normalizeFinish(payload.choices[0].finish_reason);
@@ -645,8 +648,10 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       } catch {
         throw new ModelError("Malformed JSON in Ollama stream", "protocol");
       }
-      if (chunk.error)
-        throw new ModelError(chunk.error, "server", { retryable: true });
+      if (chunk.error) {
+        const providerError = providerErrorEnvelope(chunk.error);
+        if (providerError) throw providerError;
+      }
       sawData = true;
       if (chunk.message?.thinking) {
         thinking += chunk.message.thinking;
@@ -783,6 +788,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         };
       }>;
       usage?: ModelUsage | null;
+      error?: { message?: unknown; code?: unknown } | string;
     };
     try {
       payload = JSON.parse(text) as typeof payload;
@@ -792,6 +798,8 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         "protocol",
       );
     }
+    const providerError = providerErrorEnvelope(payload.error);
+    if (providerError) throw providerError;
     const message = payload.choices?.[0]?.message;
     if (!message) {
       throw new ModelError(
@@ -856,7 +864,10 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       prompt_eval_count?: number;
       eval_count?: number;
       done_reason?: string;
+      error?: unknown;
     };
+    const providerError = providerErrorEnvelope(payload.error);
+    if (providerError) throw providerError;
     const message = payload.message;
     if (!message) {
       throw new ModelError("Ollama response missing message", "protocol");
@@ -1069,8 +1080,93 @@ function headerValue(response: Response, name: string): string {
   }
 }
 
-function joinUrl(base: string, path: string): string {
-  return `${base.replace(/\/+$/, "")}${path}`;
+/**
+ * Join an endpoint path onto a Base URL without letting a query string end up
+ * inside the path. Gateways may keep a version or key in the query.
+ */
+export function joinEndpointUrl(base: string, path: string): string {
+  try {
+    const url = new URL(base);
+    // Only the path may end with "/"; a trailing slash in a query value (an
+    // upstream URL or token) is part of that value and must be preserved.
+    url.pathname = `${url.pathname.replace(/\/+$/, "")}${path}`;
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return `${base.replace(/\/+$/, "")}${path}`;
+  }
+}
+
+/**
+ * A completed HTTP response can still carry a provider failure envelope.
+ * Retry only transient capacity/upstream failures; quota, auth, malformed
+ * requests and context overflows fail fast so the turn can compact or stop.
+ */
+function providerErrorEnvelope(error: unknown): ModelError | undefined {
+  if (!error) return undefined;
+  const record: { message?: unknown; code?: unknown } =
+    typeof error === "string"
+      ? { message: error }
+      : (error as { message?: unknown; code?: unknown });
+  const message =
+    typeof record?.message === "string" && record.message.trim()
+      ? record.message.trim()
+      : "Model provider returned an error";
+  const rawCode = record?.code;
+  const code =
+    typeof rawCode === "string" || typeof rawCode === "number"
+      ? String(rawCode)
+      : undefined;
+  const kind = classifyProviderError(code, message);
+  return new ModelError(code ? `${message} (${code})` : message, kind.code, {
+    retryable: kind.retryable,
+  });
+}
+
+function classifyProviderError(
+  code: string | undefined,
+  message: string,
+): { code: ModelErrorCode; retryable: boolean } {
+  // Structured provider codes are authoritative, even when a token-rate error
+  // also mentions a "token limit" in its human-readable message.
+  switch (code?.toLowerCase()) {
+    case "rate_limit_exceeded":
+    case "rate_limit_error":
+    case "429":
+      return { code: "rate_limit", retryable: true };
+    case "insufficient_quota":
+    case "billing_hard_limit_reached":
+      return { code: "rate_limit", retryable: false };
+    case "context_length_exceeded":
+    case "context_window_exceeded":
+      return { code: "context_overflow", retryable: false };
+  }
+  const text = `${code ?? ""} ${message}`.toLowerCase();
+  const has = (pattern: RegExp) => pattern.test(text);
+  if (has(/quota|billing|payment|insufficient[_ -]?funds/))
+    return { code: "rate_limit", retryable: false };
+  if (has(/rate[_ -]?limit|tokens? per (?:min(?:ute)?|second)|\b(?:tpm|rpm)\b/))
+    return { code: "rate_limit", retryable: true };
+  if (
+    has(
+      /context.{0,30}(length|window|limit)|(?:input|prompt).{0,20}tokens?.{0,30}(limit|exceed|maximum)/,
+    )
+  )
+    return { code: "context_overflow", retryable: false };
+  if (
+    has(
+      /\bauth(?:entication|orization)?\b|\bauth[_ -]|api[_ -]?key|unauthor|forbidden|permission|credential/,
+    )
+  )
+    return { code: "auth", retryable: false };
+  if (
+    has(
+      /invalid|bad[_ -]?request|not[_ -]?(?:found|supported)|unsupported|validation/,
+    )
+  )
+    return { code: "invalid_request", retryable: false };
+  // Overloaded, upstream, server and unknown transient envelopes may recover.
+  return { code: "server", retryable: true };
 }
 
 function toOpenAIMessage(

@@ -46,6 +46,35 @@ const words = (text: string) =>
     .split(/[^\p{L}\p{N}]+/u)
     .filter(Boolean);
 const compact = (text: string) => words(text).join("");
+/**
+ * Short titles that are common enough to appear in unrelated first-page prose or
+ * headers. They cannot be established by a mention plus a matching author alone;
+ * only a DOI with the complete author name is strong enough.
+ */
+const genericShortTitles = new Set([
+  "ai",
+  "ml",
+  "dl",
+  "nlp",
+  "llm",
+  "cv",
+  "ir",
+  "go",
+  "c",
+  "r",
+  "hci",
+  "iot",
+  "data",
+  "model",
+  "models",
+  "survey",
+  "review",
+]);
+const wholeWords = (text: string, phrase: string) => {
+  const parts = words(phrase);
+  if (!parts.length) return false;
+  return ` ${words(text).join(" ")} `.includes(` ${parts.join(" ")} `);
+};
 
 /** Conservative identity evidence from the first page, never from references. */
 export function verifyPdfIdentity(
@@ -86,9 +115,36 @@ export function verifyPdfIdentity(
       "这是补充材料，不是论文全文 / Supplementary material is not the article",
     );
   const title = compact(work.title);
-  const titleMatched = title.length >= 6 && compact(front).includes(title);
   const frontWords = words(front);
-  const nameText = ` ${frontWords.join(" ")} `;
+  const frontText = ` ${frontWords.join(" ")} `;
+  // A first-page mention is not a title. Only the first lines can establish a
+  // short title without DOI evidence, so affiliations and prose cannot pass.
+  const titleRegionLines = frontLines
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 4);
+  const titleMatched =
+    title.length >= 6 ? compact(front).includes(title) : false;
+  const shortTitle = title.length > 0 && title.length < 6;
+  const normalizedTitle = work.title.replace(/\s+/g, " ").trim();
+  // A short title (Latin or CJK) must stand alone on one of the first lines,
+  // optionally followed by a punctuated subtitle. A mention in front matter
+  // prose is not a title, even when the author also matches: CJK text has no
+  // word boundaries, so a bare substring needs the same line discipline.
+  const titleRegionMatched =
+    normalizedTitle.length > 0 &&
+    titleRegionLines.some((line) => {
+      const normalizedLine = line.replace(/\s+/g, " ").trim();
+      if (
+        !normalizedLine.toLowerCase().startsWith(normalizedTitle.toLowerCase())
+      )
+        return false;
+      const rest = normalizedLine.slice(normalizedTitle.length).trimStart();
+      return !rest || /^[^\p{L}\p{N}]/u.test(rest);
+    });
+  const shortTitleMatched =
+    shortTitle && titleRegionMatched && !genericShortTitles.has(title);
+  const nameText = frontText;
   const authorMatched = work.authors.some((author) => {
     const parts = words(author);
     if (!parts.length) return false;
@@ -119,6 +175,10 @@ export function verifyPdfIdentity(
       return false;
     });
   });
+  // Short titles must not be established by "word on the page + author" alone.
+  const fullAuthorMatched = work.authors.some((author) =>
+    wholeWords(front, author),
+  );
   const dois = [...front.matchAll(/\b10\.\d{4,9}\/[^\s<>"\p{Cc}]+/giu)]
     .map((match) => normalizeDoi(match[0].replace(/[.,;:]+$/, "")))
     .filter(Boolean);
@@ -129,7 +189,12 @@ export function verifyPdfIdentity(
       "identity_mismatch",
       "PDF 首页 DOI 与目标论文不符 / First-page DOI does not match the paper",
     );
-  if (!titleMatched || (!doiMatched && !authorMatched))
+  // Short titles (Latin and CJK alike) need an exact DOI with the complete
+  // author name, or a standalone title-region line that is not a generic word.
+  const titleAccepted = shortTitle
+    ? (doiMatched && fullAuthorMatched) || shortTitleMatched
+    : titleMatched;
+  if (!titleAccepted || (!doiMatched && !authorMatched))
     throw new LiteratureError(
       page.trim() ? "identity_mismatch" : "unverified_pdf",
       "无法核对 PDF 首页的标题与 DOI／作者，请人工核对 / Could not verify the first-page title and DOI or author; check the file manually",
@@ -137,7 +202,7 @@ export function verifyPdfIdentity(
   return {
     method: doiMatched ? "doi_title" : "title_author",
     doiMatched,
-    titleMatched,
+    titleMatched: shortTitle ? shortTitleMatched : titleMatched,
     authorMatched,
   };
 }

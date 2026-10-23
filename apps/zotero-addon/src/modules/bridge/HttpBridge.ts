@@ -13,6 +13,7 @@ import {
   TOOL_DEFINITIONS,
 } from "@confucius/zotero-tools";
 import type { AgentHost } from "../host/AgentHost";
+import { readMcpToken } from "./pairingToken";
 import { getPref } from "../../utils/prefs";
 import pkg from "../../../package.json";
 
@@ -104,16 +105,28 @@ const pendingToolRequests = new Map<
   { request: string; result: Promise<unknown> }
 >();
 
+function readOnlyMcpToken(): string {
+  // Provisioning happens at startup and when the Security pane opens. The
+  // authorization path must never write preferences, and it must fail closed
+  // when that provisioning could not persist a token.
+  return readMcpToken();
+}
+
 function authorizeMcp(
   host: AgentHost,
   options?: EndpointOptions,
 ): McpAuthorization | null {
   const token = bearerToken(options);
   if (!token) return null;
-  const pairingToken = String(getPref("pairingToken") || "");
-  if (pairingToken && timingSafeEqual(token, pairingToken)) {
+  // The read-only MCP profile has its own credential. It reads the evidence
+  // tools but cannot authenticate /rpc, /events or the task gateway.
+  const readOnly = readOnlyMcpToken();
+  if (readOnly && timingSafeEqual(token, readOnly)) {
     return { kind: "pairing" };
   }
+  // The pairing token authenticates the full RPC surface, never this endpoint.
+  // If no read-only token could be provisioned, /mcp stays closed instead of
+  // silently widening the long-lived pairing secret.
   const capability = host.resolveRuntimeCapability(token);
   return capability
     ? {

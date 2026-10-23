@@ -1,10 +1,12 @@
 import { retryModelRequest } from "./ModelRetry";
 import type { WindowContext } from "./WindowContext";
-import type {
-  ConfuciusEvent,
-  SessionRecord,
-  ToolResult,
-  ToolTransientMedia,
+import {
+  contextTextHead,
+  type ConfuciusEvent,
+  type SessionRecord,
+  type ToolExecutionScope,
+  type ToolResult,
+  type ToolTransientMedia,
 } from "@confucius/protocol";
 import { BudgetAccountant } from "./BudgetAccountant";
 import type {
@@ -139,23 +141,74 @@ export class TurnLoop {
             ).length,
         },
       );
+    const resumed = input.resume
+      ? (cloneValue(input.resume.messages.slice(1)) as ModelMessage[])
+      : (input.history ?? []);
     const messages: ModelMessage[] = [
       {
         role: "system",
         content:
           this.deps.systemPrompt ?? "You are Confucius, a research agent.",
       },
-      ...(input.resume
-        ? (cloneValue(input.resume.messages.slice(1)) as ModelMessage[])
-        : (input.history ?? [])),
-      { role: "user", content: input.modelUserText ?? input.userText },
+      ...resumed,
     ];
+    const turnUserText = input.modelUserText ?? input.userText;
+    if (!input.resume) {
+      messages.push({ role: "user", content: turnUserText });
+    } else if (requestAlreadyStored(resumed, turnUserText)) {
+      // The checkpoint already carries this request. Re-appending it doubles the
+      // input and can break providers that require alternating roles.
+      messages.push({
+        role: "system",
+        content: RESUME_CONTINUATION_INSTRUCTION,
+      });
+    } else {
+      messages.push({ role: "user", content: turnUserText });
+    }
 
-    closeToolGroups(messages, input.resume?.toolExecutions ?? []);
-    this.deps.context?.start(input, messages);
+    // Every started execution from the resumed checkpoint must be closed: the
+    // host may already have reconciled it to a durable receipt (status stays
+    // "started" with a result), otherwise there is no verified effect and the
+    // journal records a failed attempt instead of a permanent blocker.
     const toolExecutions: ToolExecutionCheckpoint[] = cloneValue(
       input.resume?.toolExecutions ?? [],
     );
+    const resumedReceipts = new Map<string, ToolResult>();
+    for (const execution of toolExecutions) {
+      if (execution.status !== "started") continue;
+      const receipt = execution.result as ToolResult | undefined;
+      if (
+        receipt &&
+        typeof receipt.ok === "boolean" &&
+        receipt.effect !== "unknown"
+      ) {
+        execution.status = receipt.ok ? "completed" : "failed";
+        resumedReceipts.set(execution.callId, receipt);
+      } else {
+        execution.status = "failed";
+      }
+    }
+    // A receipt that proves the write landed must not be dispatched again when
+    // the resumed model repeats the same request under a fresh call id.
+    const resumedWrites = new Map<string, ToolResult>();
+    for (const execution of toolExecutions) {
+      const receipt = resumedReceipts.get(execution.callId);
+      if (
+        !receipt ||
+        !this.deps.tools.getMeta(execution.toolName)?.mutatesState ||
+        (receipt.effect !== "applied" && receipt.effect !== "partial")
+      )
+        continue;
+      resumedWrites.set(
+        writeKey(execution.toolName, execution.requestedArgs ?? execution.args),
+        receipt,
+      );
+    }
+
+    closeToolGroups(messages, toolExecutions, resumedReceipts, (result) =>
+      this.budgetResumedResult(result, messages),
+    );
+    this.deps.context?.start(input, messages);
 
     this.emit(input, "turn_started", { userText: input.userText });
     await this.checkpoint(
@@ -396,6 +449,7 @@ export class TurnLoop {
           toolCalls,
           messages,
           toolExecutions,
+          resumedWrites,
         );
         if (executed === "aborted") {
           this.emit(input, "turn_aborted", { reason: "signal" });
@@ -600,8 +654,10 @@ export class TurnLoop {
     toolCalls: ModelToolCall[],
     messages: ModelMessage[],
     toolExecutions: ToolExecutionCheckpoint[],
+    resumedWrites: ReadonlyMap<string, ToolResult>,
   ): Promise<"ok" | "aborted" | "tool_budget"> {
     const allowed: ScheduledCall[] = [];
+    const operationIds = new Map<string, string>();
     let toolBudgetExhausted = false;
     const availableToolNames = new Set(
       this.deps.tools.listTools().map((tool) => tool.name),
@@ -610,6 +666,9 @@ export class TurnLoop {
     // pages in the next request can wedge otherwise healthy compatible APIs,
     // so keep exactly one visual page and preserve text anchors for the rest.
     let transientImageAttached = false;
+    // Every prepared call waits for all approvals in this round, so its scope
+    // clock must be frozen while any later call is asking the user.
+    const pendingScopes = new Set<ToolExecutionScope>();
 
     for (const requestedCall of toolCalls) {
       // Preparation may expand a proposal ID into an approved concrete batch.
@@ -692,6 +751,35 @@ export class TurnLoop {
         });
         continue;
       }
+      // The host reconciled the interrupted attempt to a durable receipt. If
+      // the resumed model repeats the exact same write under a new call id,
+      // replay that receipt instead of applying the effect twice.
+      const reconciled = this.deps.tools.getMeta(call.name)?.mutatesState
+        ? resumedWrites.get(writeKey(call.name, call.args))
+        : undefined;
+      if (reconciled) {
+        this.emit(input, "tool_result", {
+          callId: eventId,
+          result: reconciled,
+        });
+        messages.push({
+          role: "tool",
+          content: JSON.stringify(
+            this.budgetResumedResult(reconciled, messages),
+          ),
+          toolCallId: call.id,
+        });
+        continue;
+      }
+      // Keep the operation identity stable across resume so the executor can
+      // match a previously dispatched intent instead of creating a duplicate.
+      const resumedExecution = findResumedExecution(input, call);
+      const operationId = operationIdFor(
+        input.session.id,
+        resumedExecution && input.resume ? input.resume.turnId : input.turnId,
+        resumedExecution?.callId ?? eventId,
+      );
+      operationIds.set(eventId, operationId);
 
       const completionTool =
         this.deps.completionToolNames?.has(call.name) === true;
@@ -717,24 +805,25 @@ export class TurnLoop {
           taskId: input.session.id,
           signal: input.signal,
           turnId: input.turnId,
-          operationId: `${input.session.id}:${input.turnId}:${eventId}`,
+          operationId,
           onProgress: (progress) =>
             this.emit(input, "tool_progress", {
               callId: eventId,
               message: `${progress.stage} · ${Math.floor(progress.elapsedMs / 1000)}s`,
             }),
         };
-      const beforeApproval =
-        (await this.deps.tools.prepare?.(
-          call.name,
-          call.args,
-          prepareContext,
-        )) ??
-        validateArgs(
-          call.name,
-          this.deps.tools.getSchema(call.name),
-          call.args,
-        );
+      const schema = this.deps.tools.getSchema(call.name);
+      // Enforce "validate, then prepare" for every provider, not only the
+      // Reliable wrapper, and keep validating the expanded result afterwards.
+      let beforeApproval = validateArgs(call.name, schema, call.args);
+      if (!beforeApproval && this.deps.tools.prepare) {
+        beforeApproval =
+          (await this.deps.tools.prepare(
+            call.name,
+            call.args,
+            prepareContext,
+          )) ?? validateArgs(call.name, schema, call.args);
+      }
       if (beforeApproval) {
         this.emit(input, "tool_result", {
           callId: eventId,
@@ -760,8 +849,10 @@ export class TurnLoop {
         continue;
       }
       if (input.signal?.aborted) return "aborted";
+      if (prepareContext.executionScope)
+        pendingScopes.add(prepareContext.executionScope);
       let decision: Awaited<ReturnType<PermissionGate["decide"]>>;
-      prepareContext.executionScope?.pause?.();
+      for (const scope of pendingScopes) scope.pause?.();
       try {
         decision = await this.deps.permissions.decide({
           sessionId: input.session.id,
@@ -776,7 +867,7 @@ export class TurnLoop {
           },
         });
       } finally {
-        prepareContext.executionScope?.resume?.();
+        for (const scope of pendingScopes) scope.resume?.();
       }
 
       if (decision.resolution) {
@@ -808,7 +899,6 @@ export class TurnLoop {
       }
 
       const approvedArgs = decision.resolution?.editedArgs ?? call.args;
-      const schema = this.deps.tools.getSchema(call.name);
       const invalid = validateArgs(call.name, schema, approvedArgs);
       if (invalid) {
         this.emit(input, "tool_result", { callId: eventId, result: invalid });
@@ -819,6 +909,13 @@ export class TurnLoop {
         });
         continue;
       }
+      // User-edited arguments are a new write, not the interrupted operation
+      // whose identity was reused for replay protection.
+      if (decision.resolution?.editedArgs)
+        operationIds.set(
+          eventId,
+          operationIdFor(input.session.id, input.turnId, eventId),
+        );
 
       if (!completionTool) {
         this.deps.budget.recordToolCalls(1);
@@ -877,7 +974,9 @@ export class TurnLoop {
                 outputBudgetTokens,
                 taskId: input.session.id,
                 turnId: input.turnId,
-                operationId: `${input.session.id}:${input.turnId}:${call.callId}`,
+                operationId:
+                  operationIds.get(call.callId) ??
+                  operationIdFor(input.session.id, input.turnId, call.callId),
                 onProgress: (progress) =>
                   this.emit(input, "tool_progress", {
                     callId: call.callId,
@@ -1027,6 +1126,23 @@ export class TurnLoop {
       : "ok";
   }
 
+  /**
+   * Cap a resumed receipt before it enters model history. The complete receipt
+   * stays in the execution journal so reconciliation retains the evidence, and
+   * the compact receipt keeps the effect visible when a small first window
+   * rolls over and can only retain bounded tool groups.
+   */
+  private budgetResumedResult(
+    result: ToolResult,
+    messages: ModelMessage[],
+  ): ToolResult {
+    const budgeted = budgetToolResult(
+      result,
+      this.deps.context?.readBudget(messages),
+    );
+    return compactResumedReceipt(budgeted, result);
+  }
+
   private async checkpoint(
     turnId: string,
     iteration: number,
@@ -1116,6 +1232,60 @@ function durableToolResult(result: ToolResult): ToolResult {
   return durable;
 }
 
+/** Longest payload preview a compact resumed receipt may carry into history. */
+const RESUMED_RECEIPT_PREVIEW_CHARS = 1200;
+/** Receipts up to this size already fit a small first window unchanged. */
+const RESUMED_RECEIPT_COMPACT_AT = 1600;
+/** Keep the failure message for the model, but never let it restore the bulk. */
+const RESUMED_RECEIPT_MESSAGE_CHARS = 500;
+
+/**
+ * A resumed write receipt must still prove its effect in the first request of a
+ * small context window. Keep the outcome fields of the recorded receipt and a
+ * short payload preview so a rollover retains the evidence instead of dropping
+ * the whole tool group; the complete receipt remains in the execution journal
+ * and checkpoint. The budgeted form is returned for receipts that already fit.
+ */
+function compactResumedReceipt(
+  budgeted: ToolResult,
+  recorded: ToolResult,
+): ToolResult {
+  const encoded = JSON.stringify(recorded);
+  if (encoded.length <= RESUMED_RECEIPT_COMPACT_AT) return budgeted;
+  const preview = contextTextHead(
+    JSON.stringify(recorded.ok ? recorded.data : (recorded.details ?? null)),
+    RESUMED_RECEIPT_PREVIEW_CHARS,
+  );
+  const truncated = {
+    truncated: true,
+    preview,
+    originalChars: encoded.length,
+    note: "Compact receipt for a resumed call. The recorded effect is authoritative; the complete result remains in the execution journal and checkpoint.",
+  };
+  if (!recorded.ok) {
+    return {
+      ok: false,
+      toolName: recorded.toolName,
+      code: recorded.code,
+      message: contextTextHead(recorded.message, RESUMED_RECEIPT_MESSAGE_CHARS),
+      ...(recorded.effect ? { effect: recorded.effect } : {}),
+      ...(recorded.retryable === undefined
+        ? {}
+        : { retryable: recorded.retryable }),
+      details: truncated,
+    };
+  }
+  return {
+    ok: true,
+    toolName: recorded.toolName,
+    ...(recorded.effect ? { effect: recorded.effect } : {}),
+    ...(recorded.retryable === undefined
+      ? {}
+      : { retryable: recorded.retryable }),
+    data: truncated,
+  };
+}
+
 function durableMessages(messages: ModelMessage[]): ModelMessage[] {
   return messages
     .filter((message) => !message.transient)
@@ -1141,12 +1311,83 @@ class TurnStopError extends ModelError {
     super(message, "invalid_request");
   }
 }
+
+const RESUME_CONTINUATION_INSTRUCTION =
+  "This turn resumes a saved checkpoint. Continue the current task from that state: reconcile interrupted tool executions before retrying a write, reuse results already present, and finish the remaining work without repeating completed steps.";
+
+/** A resume prefix is complete history; never repeat a request already stored in it. */
+function requestAlreadyStored(
+  messages: readonly ModelMessage[],
+  text: string,
+): boolean {
+  const needle = text.trim();
+  if (!needle) return false;
+  return messages.some((message) => {
+    if (message.role !== "user") return false;
+    const content = message.content.trim();
+    // Attachment/Btw subagent model-only text extends the visible request.
+    return content === needle || content.startsWith(`${needle}\n`);
+  });
+}
+/** Match a call against the execution journal of the resumed checkpoint. */
+function findResumedExecution(
+  input: TurnLoopInput,
+  call: ModelToolCall,
+): ToolExecutionCheckpoint | undefined {
+  if (!input.resume) return undefined;
+  return [...input.resume.toolExecutions]
+    .reverse()
+    .find(
+      (entry) =>
+        entry.toolName === call.name &&
+        canonicalArguments(entry.requestedArgs ?? entry.args) ===
+          canonicalArguments(call.args) &&
+        (entry.modelCallId
+          ? entry.modelCallId === call.id
+          : entry.callId === call.id) &&
+        reusableOperationId(entry),
+    );
+}
+
+/**
+ * Only an attempt whose outcome is still unresolved keeps its operation
+ * identity across resume. A definitely failed write gets a new identity so the
+ * executor can actually retry it instead of replaying the old failed receipt.
+ */
+function reusableOperationId(execution: ToolExecutionCheckpoint): boolean {
+  // Host reconciliation leaves the checkpoint status at started while attaching
+  // a definitive receipt. That receipt takes precedence over the old status.
+  const receipt = execution.result as ToolResult | undefined;
+  return !(
+    receipt &&
+    typeof receipt.ok === "boolean" &&
+    receipt.effect !== "unknown"
+  );
+}
+
+/** One operation identity for a call, stable across checkpoint resume. */
+function operationIdFor(
+  sessionId: string,
+  turnId: string,
+  callId: string,
+): string {
+  return `${sessionId}:${turnId}:${callId}`;
+}
+
+function writeKey(name: string, args: unknown): string {
+  return `${name}\u0000${canonicalArguments(args)}`;
+}
+
 /** Keep model history protocol-valid after cancellation or a failed tool batch.
  * This only repairs the conversation; it never resolves an execution journal.
+ * A started execution reconciled by the host carries a verified receipt and is
+ * surfaced as its tool result; everything else stays explicitly unknown.
  */
 function closeToolGroups(
   messages: ModelMessage[],
   executions: readonly ToolExecutionCheckpoint[],
+  receipts: ReadonlyMap<string, ToolResult> = new Map(),
+  budget?: (result: ToolResult) => ToolResult,
 ): void {
   const repaired: ModelMessage[] = [];
   let pending: ModelToolCall[] = [];
@@ -1161,21 +1402,26 @@ function closeToolGroups(
             canonicalArguments(entry.requestedArgs ?? entry.args) ===
               canonicalArguments(call.args),
         );
+      const receipt = execution ? receipts.get(execution.callId) : undefined;
       repaired.push({
         role: "tool",
         toolCallId: call.id,
         // Call ids may be reused by compatible models across rounds. A
         // matching old receipt is not proof this pending proposal executed.
-        content: JSON.stringify({
-          ok: false,
-          toolName: call.name,
-          code: "internal",
-          effect: execution ? "unknown" : "none",
-          retryable: false,
-          message: execution
-            ? "Execution was interrupted; reconcile its journal before retrying."
-            : "The turn stopped before this tool was executed.",
-        }),
+        content: JSON.stringify(
+          receipt
+            ? (budget?.(receipt) ?? receipt)
+            : {
+                ok: false,
+                toolName: call.name,
+                code: "internal",
+                effect: execution ? "unknown" : "none",
+                retryable: false,
+                message: execution
+                  ? "Execution was interrupted; reconcile its journal before retrying."
+                  : "The turn stopped before this tool was executed.",
+              },
+        ),
       });
     }
     pending = [];

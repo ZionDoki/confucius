@@ -38,6 +38,12 @@ const firstPage = `${title}\n${author}\nhttps://doi.org/10.1234/test\nAbstract\n
 const bytes = new TextEncoder().encode(
   "%PDF-1.7\n" + "x".repeat(80) + "\n%%EOF",
 );
+const publicPeer = {
+  QueryInterface: () => ({
+    remoteAddress: "93.184.216.34",
+    isProxyUsed: false,
+  }),
+};
 const work = (extra = {}) => ({
   ...openAlexWork(
     {
@@ -116,6 +122,7 @@ function runtime(t, options = {}) {
           getResponseHeader: (name) =>
             result.headers?.[name] ?? "application/pdf",
           ...result,
+          channel: result.channel ?? publicPeer,
         };
       },
     },
@@ -252,6 +259,127 @@ test("identity requires title plus DOI or author, rejects references and supplem
     "title_author",
   );
 });
+test("short titles stay verifiable through DOI plus author or whole-word evidence", () => {
+  const short = work({
+    title: "BERT",
+    authors: ["Jane Smith"],
+    doi: "10.1234/test",
+  });
+  assert.equal(
+    verifyPdfIdentity(short, "BERT\nJane Smith\nhttps://doi.org/10.1234/test")
+      .method,
+    "doi_title",
+  );
+  const region = verifyPdfIdentity(
+    short,
+    "BERT\nJane Smith\nAbstract\nStudy text",
+  );
+  assert.equal(region.method, "title_author");
+  assert.equal(region.titleMatched, true);
+  // A short title inside another word is not a whole-word title match.
+  assert.throws(
+    () =>
+      verifyPdfIdentity(short, "Robertson\nJane Smith\nAbstract\nStudy text"),
+    { code: "identity_mismatch" },
+  );
+  // A mention in first-page prose is not a title, even with the right author.
+  assert.throws(
+    () =>
+      verifyPdfIdentity(
+        short,
+        "A different paper\nJane Smith\nWe compare BERT and other models\nAbstract\nStudy text",
+      ),
+    { code: "identity_mismatch" },
+  );
+  // Authors never excuse a different first-page DOI.
+  assert.throws(
+    () =>
+      verifyPdfIdentity(
+        short,
+        "BERT\nJane Smith\nhttps://doi.org/10.1234/other",
+      ),
+    { code: "identity_mismatch" },
+  );
+  // Generic short words cannot be established by a mention plus a matching
+  // author; only an exact DOI with the complete author name is enough.
+  for (const title of ["AI", "Go"]) {
+    const generic = work({ title, authors: ["Jane Smith"], doi: undefined });
+    assert.throws(
+      () =>
+        verifyPdfIdentity(
+          generic,
+          `A different paper\nJane Smith\n${title} methods are widely used\nAbstract\nStudy text`,
+        ),
+      { code: "identity_mismatch" },
+    );
+    // The generic word alone on the title line is still not evidence.
+    assert.throws(
+      () => verifyPdfIdentity(generic, `${title}\nJane Smith\nAbstract`),
+      { code: "identity_mismatch" },
+    );
+    const withDoi = work({
+      title,
+      authors: ["Jane Smith"],
+      doi: "10.1234/test",
+    });
+    assert.equal(
+      verifyPdfIdentity(
+        withDoi,
+        "A different paper\nJane Smith\nhttps://doi.org/10.1234/test\nAbstract\nStudy text",
+      ).method,
+      "doi_title",
+    );
+    // The DOI path still requires the complete author name, not a surname.
+    assert.throws(
+      () =>
+        verifyPdfIdentity(
+          withDoi,
+          "A different paper\nJ. Smith\nhttps://doi.org/10.1234/test\nAbstract\nStudy text",
+        ),
+      { code: "identity_mismatch" },
+    );
+  }
+  const cjk = work({ title: "文献研究", authors: ["张三"], doi: undefined });
+  assert.equal(
+    verifyPdfIdentity(cjk, "文献研究\n张三\n摘要").method,
+    "title_author",
+  );
+  // A two-character CJK title embedded in other first-page text is not evidence.
+  assert.throws(
+    () =>
+      verifyPdfIdentity(
+        work({ title: "研究", authors: ["张三"], doi: undefined }),
+        "其他论文标题\n张三\n本研究讨论方法\n关键词\n摘要\n研究内容",
+      ),
+    { code: "identity_mismatch" },
+  );
+  // A boundary-delimited CJK mention inside another paper's abstract is not a
+  // standalone title line either, even with the matching author.
+  assert.throws(
+    () =>
+      verifyPdfIdentity(
+        work({ title: "研究", authors: ["张三"], doi: undefined }),
+        "其他论文标题\n张三\n摘要\n研究 表明该方法有效",
+      ),
+    { code: "identity_mismatch" },
+  );
+  // A short CJK title that stands alone on a title line with its author verifies.
+  assert.equal(
+    verifyPdfIdentity(
+      work({ title: "研究", authors: ["张三"], doi: undefined }),
+      "研究\n张三\n摘要\n研究内容",
+    ).method,
+    "title_author",
+  );
+  // Without a title line, an exact DOI plus the complete author still verifies.
+  assert.equal(
+    verifyPdfIdentity(
+      work({ title: "研究", authors: ["张三"], doi: "10.1234/test" }),
+      "其他论文标题\n张三\nhttps://doi.org/10.1234/test\n摘要\n本研究讨论方法",
+    ).method,
+    "doi_title",
+  );
+});
 test("a valid header never substitutes for PDF parsing", async (t) => {
   runtime(t);
   globalThis.Zotero.PDFWorker._query = async () => {
@@ -305,6 +433,7 @@ test("redirects are checked before following and cache keys never cross origins"
   assert.equal(f.requests[1], "https://cdn.example.org/a.pdf");
   globalThis.Zotero.HTTP.request = async () => ({
     status: 302,
+    channel: publicPeer,
     getResponseHeader: () => "http://127.0.0.1/private",
   });
   await assert.rejects(
@@ -382,7 +511,10 @@ test("mismatched and cancelled downloads never import, and rate-limit diagnostic
     acquirer.acquire(work(), controller.signal, async () => {}),
     { code: "cancelled" },
   );
-  globalThis.Zotero.HTTP.request = async () => ({ status: 429 });
+  globalThis.Zotero.HTTP.request = async () => ({
+    status: 429,
+    channel: publicPeer,
+  });
   await assert.rejects(
     acquirer.acquire(
       work({ pdfUrls: ["https://repo.example.org/b.pdf"] }),
@@ -646,6 +778,201 @@ test("reserved IPv6 addresses cannot bypass checks with expanded notation", () =
   assert.equal(publicAddress("2606:4700:4700::1111"), true);
 });
 
+test("a response from a non-public peer is rejected even when DNS looked public", async (t) => {
+  runtime(t);
+  globalThis.Ci.nsIHttpChannelInternal = {};
+  const aborted = [];
+  const privateChannel = {
+    QueryInterface: () => ({ remoteAddress: "127.0.0.1", isProxyUsed: false }),
+  };
+  globalThis.Zotero.HTTP.request = async (_method, _url, options) => {
+    const request = {
+      readyState: 2,
+      channel: privateChannel,
+      addEventListener: (name, listener) => {
+        if (name === "readystatechange") listener();
+      },
+      getResponseHeader: () => "application/pdf",
+      abort: () => aborted.push(true),
+    };
+    options.requestObserver(request);
+    return {
+      status: 200,
+      response: bytes.buffer,
+      channel: privateChannel,
+      getResponseHeader: () => "application/pdf",
+    };
+  };
+  await assert.rejects(
+    requestFulltext(
+      "https://repository.example.org/a",
+      new AbortController().signal,
+    ),
+    { code: "unsafe_url" },
+  );
+  assert.deepEqual(aborted, [true]);
+  const publicChannel = {
+    QueryInterface: () => ({
+      remoteAddress: "93.184.216.34",
+      isProxyUsed: false,
+    }),
+  };
+  globalThis.Zotero.HTTP.request = async () => ({
+    status: 200,
+    response: bytes.buffer,
+    channel: publicChannel,
+    getResponseHeader: () => "application/pdf",
+  });
+  const response = await requestFulltext(
+    "https://repository.example.org/b",
+    new AbortController().signal,
+  );
+  assert.equal(response.bytes.length, bytes.length);
+});
+
+test("proxy and unknown connection interfaces fail closed with an explicit log", async (t) => {
+  runtime(t);
+  const logs = [];
+  const previousZtoolkit = globalThis.ztoolkit;
+  globalThis.ztoolkit = { log: (...args) => logs.push(args.join(" ")) };
+  globalThis.Ci.nsIHttpChannelInternal = {};
+  const response = (channel) => async () => ({
+    status: 200,
+    response: bytes.buffer,
+    channel,
+    getResponseHeader: () => "application/pdf",
+  });
+  try {
+    for (const channel of [
+      {
+        QueryInterface: () => ({
+          remoteAddress: "93.184.216.34",
+          isProxyUsed: true,
+        }),
+      },
+      {
+        QueryInterface: () => {
+          throw new Error("internal interface unavailable");
+        },
+      },
+      { QueryInterface: () => undefined },
+      {},
+    ]) {
+      globalThis.Zotero.HTTP.request = response(channel);
+      await assert.rejects(
+        requestFulltext(
+          "https://repository.example.org/proxy",
+          new AbortController().signal,
+        ),
+        { code: "unsafe_url" },
+      );
+    }
+    assert.equal(logs.length, 4);
+    assert.match(logs[0], /proxied/);
+    assert.match(logs[1], /internal interface unavailable/);
+    assert.match(logs[2], /no internal interface/);
+    assert.match(logs[3], /no QueryInterface/);
+  } finally {
+    if (previousZtoolkit === undefined) delete globalThis.ztoolkit;
+    else globalThis.ztoolkit = previousZtoolkit;
+  }
+});
+
+test("browser connections are re-checked per channel and reject non-public peers", async (t) => {
+  let lookups = 0;
+  runtime(t, {
+    addresses: () => {
+      lookups++;
+      return lookups <= 2 ? ["93.184.216.34"] : ["10.0.0.1"];
+    },
+  });
+  globalThis.Ci.nsIHttpChannelInternal = {};
+  const observers = {};
+  globalThis.Services.obs = {
+    addObserver: (observer, topic) => {
+      observers[topic] = observer;
+    },
+    removeObserver: () => {},
+  };
+  globalThis.Zotero.HTTP.newCookieContext = () => ({ id: 998, dispose() {} });
+  globalThis.Zotero.BrowserRequest = { _makePDFMIMETypeHandler: () => ({}) };
+  globalThis.Zotero.MIMETypeHandler = { addHandlers() {}, removeHandlers() {} };
+  let loaded;
+  const ready = new Promise((resolve) => {
+    loaded = resolve;
+  });
+  globalThis.ChromeUtils = {
+    importESModule: () => ({
+      HiddenBrowser: class {
+        _createdPromise = Promise.resolve();
+        _browser = {};
+        load() {
+          loaded();
+          return new Promise(() => {});
+        }
+        destroy() {}
+      },
+    }),
+  };
+  const controller = new AbortController(),
+    browser = new LiteratureBrowser();
+  const pending = browser.read(
+    "https://publisher.example.org/article",
+    controller.signal,
+  );
+  await ready;
+  const channelFor = (spec) => {
+    const state = { cancelled: 0, resumed: 0 };
+    const channel = {
+      loadInfo: { originAttributes: { userContextId: 998 } },
+      URI: { spec },
+      suspend() {},
+      cancel() {
+        state.cancelled++;
+      },
+      resume() {
+        state.resumed++;
+      },
+    };
+    return { channel, state };
+  };
+  const first = channelFor("https://cdn.example.org/a.js");
+  observers["http-on-modify-request"].observe({
+    QueryInterface: () => first.channel,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(first.state.cancelled, 0);
+  assert.equal(first.state.resumed, 1);
+  // The same host is checked again instead of reusing the earlier public answer.
+  const second = channelFor("https://cdn.example.org/b.js");
+  observers["http-on-modify-request"].observe({
+    QueryInterface: () => second.channel,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(second.state.cancelled, 1);
+  assert.equal(second.state.resumed, 1);
+  // A public DNS answer cannot hide the actual non-public TCP peer.
+  let peerCancelled = 0;
+  const peer = {
+    loadInfo: { originAttributes: { userContextId: 998 } },
+    URI: { spec: "https://cdn.example.org/b.js" },
+    QueryInterface: () => ({
+      remoteAddress: "10.0.0.1",
+      isProxyUsed: false,
+    }),
+    cancel() {
+      peerCancelled++;
+    },
+  };
+  observers["http-on-examine-response"].observe({
+    QueryInterface: () => peer,
+  });
+  assert.equal(peerCancelled, 1);
+  controller.abort();
+  await assert.rejects(pending, { code: "cancelled" });
+  browser.dispose();
+});
+
 test("malformed search rows do not discard usable Tavily results", async (t) => {
   runtime(t, {
     response: () => ({
@@ -670,6 +997,7 @@ test("malformed search rows do not discard usable Tavily results", async (t) => 
   globalThis.Zotero.HTTP.request = async () => ({
     status: 200,
     response: new TextEncoder().encode("null").buffer,
+    channel: publicPeer,
     getResponseHeader: () => "application/json",
   });
   await assert.rejects(
@@ -1268,6 +1596,7 @@ test("Tavily sends credentials only to its API and results contain observed link
   assert.equal(f.requests.length, 1);
   globalThis.Zotero.HTTP.request = async () => ({
     status: 302,
+    channel: publicPeer,
     getResponseHeader: () => "https://other.example.org/collect",
   });
   await assert.rejects(
@@ -1348,11 +1677,11 @@ test("repository discovery requires the matching DOI and reads the actual PMC ve
 test("browser cancellation cleans native listeners, cookies and suspended network requests", async (t) => {
   runtime(t, { addresses: () => ["127.0.0.1"] });
   // Initial navigation is public; the page then attempts a private subresource.
-  let observer,
-    removed = 0,
+  let removed = 0,
     destroyed = 0,
     disposed = 0,
     handlerRemoved = 0;
+  const observers = {};
   globalThis.Services.dns.asyncResolve = (
     host,
     _type,
@@ -1381,11 +1710,12 @@ test("browser cancellation cleans native listeners, cookies and suspended networ
     return { cancel() {} };
   };
   globalThis.Services.obs = {
-    addObserver: (o) => {
-      observer = o;
+    addObserver: (o, topic) => {
+      observers[topic] = o;
     },
-    removeObserver: (o) => {
-      assert.equal(o, observer);
+    removeObserver: (o, topic) => {
+      assert.equal(o, observers[topic]);
+      delete observers[topic];
       removed++;
     },
   };
@@ -1433,14 +1763,16 @@ test("browser cancellation cleans native listeners, cookies and suspended networ
     cancel: () => cancelled++,
     resume: () => resumed++,
   };
-  observer.observe({ QueryInterface: () => channel });
+  observers["http-on-modify-request"].observe({
+    QueryInterface: () => channel,
+  });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(cancelled, 1);
   assert.equal(resumed, 1);
   controller.abort();
   await assert.rejects(pending, { code: "cancelled" });
   browser.dispose();
-  assert.equal(removed, 1);
+  assert.equal(removed, 2);
   assert.equal(destroyed, 1);
   assert.equal(disposed, 1);
   assert.equal(handlerRemoved, 1);
@@ -1592,6 +1924,78 @@ test("a rendered landing-page session reaches verified download and is disposed 
   assert.equal(JSON.stringify(opened).includes("userContextId"), false);
 });
 
+test("page-level version prose cannot label every observed PDF link", async (t) => {
+  const doc = page(
+    [anchor("/download/42", "Download PDF")],
+    "The article compares the accepted manuscript with a preprint version. ".repeat(
+      10,
+    ),
+  );
+  doc.title = "Accepted manuscript: evidence";
+  runtime(t, {
+    doc,
+    response: () => ({
+      status: 200,
+      response: new TextEncoder().encode("PAGE").buffer,
+      headers: { "Content-Type": "text/html" },
+    }),
+  });
+  const agent = new LiteratureFulltextAgent();
+  t.after(() => agent.dispose());
+  const paper = work({ landingUrl: "https://repo.example.org/article" });
+  const found = await agent.search(
+    "task",
+    paper,
+    1,
+    "title",
+    new AbortController().signal,
+  );
+  const opened = await agent.open(
+    "task",
+    paper,
+    1,
+    found.knownSources[0].id,
+    new AbortController().signal,
+  );
+  assert.equal(opened.links[0].kind, "pdf");
+  assert.equal(opened.links[0].version, "unknown");
+  assert.equal(opened.links[0].url, "https://repo.example.org/download/42");
+  // A source record bound to the exact PDF URL may still supply its version.
+  const bound = work({
+    id: "W2",
+    landingUrl: "https://repo.example.org/article2",
+    locations: [
+      {
+        pdfUrl: "https://repo.example.org/download/42",
+        landingUrl: "https://repo.example.org/article2",
+        version: "publishedVersion",
+        openAccess: true,
+      },
+    ],
+  });
+  const boundFound = await agent.search(
+    "task",
+    bound,
+    1,
+    "title",
+    new AbortController().signal,
+  );
+  const landing = boundFound.knownSources.find(
+    (link) => link.url === "https://repo.example.org/article2",
+  );
+  const boundOpened = await agent.open(
+    "task",
+    bound,
+    1,
+    landing.id,
+    new AbortController().signal,
+  );
+  assert.equal(
+    boundOpened.links.find((link) => link.kind === "pdf").version,
+    "publishedVersion",
+  );
+});
+
 test("opening a 6 MiB PDF enables one fresh retry and download reuses bytes while still verifying identity", async (t) => {
   const pdf = "https://repo.example.org/large.pdf";
   const large = new TextEncoder().encode(
@@ -1668,6 +2072,92 @@ test("HTML retains its 5 MiB limit even though PDF reads allow 100 MiB", async (
   );
 });
 
+test("the first HTTP fulltext request already uses the isolated cookie jar", async (t) => {
+  const seen = [];
+  runtime(t, {
+    response: (_url, options) => {
+      seen.push(options);
+      return { status: 200, response: bytes.buffer };
+    },
+  });
+  let disposed = 0;
+  globalThis.Zotero.HTTP.newCookieContext = () => ({
+    id: 77,
+    dispose() {
+      disposed++;
+    },
+  });
+  const browser = new LiteratureBrowser();
+  assert.equal(browser.hasSession, false);
+  await browser.request(
+    "https://repository.example.org/paper.pdf",
+    new AbortController().signal,
+  );
+  await browser.request(
+    "https://repository.example.org/other.pdf",
+    new AbortController().signal,
+  );
+  assert.equal(browser.hasSession, true);
+  assert.deepEqual(
+    seen.map((options) => options.userContextId),
+    [77, 77],
+  );
+  browser.dispose();
+  assert.equal(disposed, 1);
+});
+
+test("the cookie-session pre-probe applies the 5 MiB HTML cap", async (t) => {
+  runtime(t);
+  const probes = [];
+  let abortedByLimit = false;
+  globalThis.Zotero.HTTP.request = async (_method, _url, options) => {
+    probes.push(options);
+    const request = {
+      onprogress: null,
+      addEventListener: () => {},
+      getResponseHeader: () => "text/html",
+      abort: () => {
+        abortedByLimit = true;
+      },
+    };
+    options.requestObserver(request);
+    request.onprogress({
+      loaded: 6 * 1024 * 1024,
+      lengthComputable: true,
+      total: 6 * 1024 * 1024,
+    });
+    throw new Error("request aborted by size limit");
+  };
+  globalThis.Zotero.HTTP.newCookieContext = () => ({ id: 41, dispose() {} });
+  globalThis.Zotero.BrowserRequest = { _makePDFMIMETypeHandler: () => ({}) };
+  globalThis.Zotero.MIMETypeHandler = { addHandlers() {}, removeHandlers() {} };
+  globalThis.Services.obs = { addObserver() {}, removeObserver() {} };
+  globalThis.ChromeUtils = {
+    importESModule: () => ({
+      HiddenBrowser: class {
+        _createdPromise = Promise.resolve();
+        _browser = {};
+        async load() {
+          throw new Error("probe finished");
+        }
+        destroy() {}
+      },
+    }),
+  };
+  const browser = new LiteratureBrowser();
+  browser.context = globalThis.Zotero.HTTP.newCookieContext();
+  await assert.rejects(
+    browser.read(
+      "https://publisher.example.org/article",
+      new AbortController().signal,
+    ),
+    /probe finished/,
+  );
+  assert.equal(probes.length, 1);
+  assert.equal(probes[0].userContextId, 41);
+  assert.equal(abortedByLimit, true);
+});
+
 test("script-only pages render, and an observed meta refresh follows only a public bounded target", async (t) => {
   runtime(t, {
     response: () => ({
@@ -1721,6 +2211,7 @@ test("script-only pages render, and an observed meta refresh follows only a publ
       response: new TextEncoder().encode(
         url.endsWith("/refresh") ? "REFRESH" : "ARTICLE",
       ).buffer,
+      channel: publicPeer,
       getResponseHeader: () => "text/html",
     };
   };

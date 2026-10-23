@@ -12,7 +12,10 @@ pref-api-key = API key
 pref-model = Model
 pref-max-tokens = Max tokens (0 = provider default)
 pref-bridge-title = Local API
-pref-bridge-help = Bearer token for the local MCP and HTTP API. The API listens only on 127.0.0.1.
+pref-bridge-help = Bearer token for the local UI RPC and event API. The API listens only on 127.0.0.1.
+pref-mcp-token-help = Read-only token for the local MCP endpoint. It can list and call read-only Zotero tools, but cannot change settings, tasks, approvals or library data.
+pref-mcp-token-unavailable = Confucius could not create the read-only MCP token for this profile, so the MCP endpoint stays closed. Check that Zotero preferences are writable, then reopen this pane.
+pref-mcp-token-migration = MCP clients that still use the pairing token must switch to this read-only token. The pairing token is no longer accepted on the MCP endpoint.
 pref-mcp-json = Extra MCP servers JSON (optional)
 pref-agent-title = Agent behavior
 pref-agent-help = Streaming and turn limits apply to every native model endpoint.

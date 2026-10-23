@@ -16,7 +16,11 @@ import {
   mapMarkdownCitations,
 } from "@confucius/protocol";
 import type { ToolProvider } from "@confucius/harness";
-import { ArtifactWriteCancelled, type ArtifactStore } from "./ArtifactStore";
+import {
+  ArtifactWriteCancelled,
+  ArtifactWriteRejected,
+  type ArtifactStore,
+} from "./ArtifactStore";
 import { throwIfScopeExpired } from "./ExecutionScope";
 import {
   ARTIFACT_READ_TOOL,
@@ -709,6 +713,11 @@ export class ArtifactToolProvider implements ToolProvider {
     context.expectedAfter.artifactRevision ??= String(
       Number(context.expected[`artifact:${args.id}`]) + 1,
     );
+    // Omitted citations must preserve the current list, while an explicit []
+    // still clears it. prepare validated markers against this snapshot; pin it
+    // so the full-replace store write lands the same list.
+    const preservedCitations =
+      args.citations === undefined && existing ? existing.citations : undefined;
     context.resources = [`artifact:${args.id}`];
     context.preparedOperation = {
       schemaVersion: 1,
@@ -720,6 +729,7 @@ export class ArtifactToolProvider implements ToolProvider {
         taskId: this.taskId,
         expectedRevision: Number(context.expected[`artifact:${args.id}`]),
         artifactRevision: Number(context.expectedAfter.artifactRevision),
+        ...(preservedCitations !== undefined ? { preservedCitations } : {}),
       },
     };
     return null;
@@ -910,10 +920,18 @@ export class ArtifactToolProvider implements ToolProvider {
         message: `Artifact body does not match kind ${normalizedArgs.kind}. Expected ${artifactBodyShapeHint(normalizedArgs.kind)}. ${artifactBodyDiagnostic(normalizedArgs.body)}`,
       };
     }
+    const preservedCitations =
+      normalizedArgs.citations === undefined
+        ? (context.preparedOperation?.recovery.preservedCitations as
+            ArtifactUpsertInput["citations"] | undefined)
+        : undefined;
     try {
       const artifact = await this.store.upsert(
         {
           ...(normalizedArgs as unknown as Omit<ArtifactUpsertInput, "taskId">),
+          ...(preservedCitations !== undefined
+            ? { citations: preservedCitations }
+            : {}),
           taskId: this.taskId,
         },
         this.backend,
@@ -950,9 +968,7 @@ export class ArtifactToolProvider implements ToolProvider {
           error instanceof ArtifactWriteCancelled ? "timeout" : "unavailable",
         effect:
           error instanceof ArtifactWriteCancelled ||
-          /changed after preflight|belongs to another task|cannot change|Invalid artifact/.test(
-            String(error),
-          )
+          error instanceof ArtifactWriteRejected
             ? "none"
             : "unknown",
         retryable: false,

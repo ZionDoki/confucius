@@ -1,5 +1,6 @@
 import { LiteratureError } from "./OpenAlexClient";
 import {
+  checkPublicConnection,
   checkPublicHost,
   fulltextUrl,
   requestFulltext,
@@ -72,6 +73,12 @@ export class LiteratureBrowser {
     signal: AbortSignal,
     options: Parameters<typeof requestFulltext>[2] = {},
   ) {
+    // Create the isolated jar on the first HTTP request, not only before a render,
+    // so no fulltext request can fall back to Zotero's shared Firefox cookie jar.
+    if (!this.context) {
+      const api = Zotero as unknown as BrowserRuntime;
+      this.context = api.HTTP?.newCookieContext?.();
+    }
     return requestFulltext(raw, signal, {
       ...options,
       userContextId: this.context?.id,
@@ -107,6 +114,7 @@ export class LiteratureBrowser {
       try {
         const response = await requestFulltext(url, signal, {
           userContextId: this.context.id,
+          maxHtmlBytes: 5 * 1024 * 1024,
         });
         if (validPdf(response.bytes)) return response;
       } catch (error) {
@@ -133,7 +141,10 @@ export class LiteratureBrowser {
     let handler: unknown;
     let pdf: Blob | undefined;
     const channels = new Set<nsIHttpChannel>();
-    const hosts = new Map<string, Promise<void>>();
+    let unsafeConnection: LiteratureError | undefined;
+    const assertSafeConnection = () => {
+      if (unsafeConnection) throw unsafeConnection;
+    };
     // Suspend before sending every HTTP request in this browser, including redirects
     // and subresources. A public landing page must not grant access to the LAN.
     const observer = {
@@ -150,13 +161,9 @@ export class LiteratureBrowser {
         void (async () => {
           try {
             const target = fulltextUrl(channel.URI.spec);
-            const host = new URL(target).hostname;
-            let check = hosts.get(host);
-            if (!check) {
-              check = checkPublicHost(target, controller.signal);
-              hosts.set(host, check);
-            }
-            await check;
+            // Re-resolve for every connection. A host check is never reused by a
+            // later request, so DNS rebinding cannot ride an earlier public answer.
+            await checkPublicHost(target, controller.signal);
             if (closed) channel.cancel(Cr.NS_BINDING_ABORTED);
           } catch {
             channel.cancel(Cr.NS_BINDING_ABORTED);
@@ -169,6 +176,25 @@ export class LiteratureBrowser {
             }
           }
         })();
+      },
+    };
+    // The DNS answer and the actual TCP peer can differ. Cancel responses read from
+    // a non-public address, so rebinding cannot deliver internal content to the page.
+    const responseObserver = {
+      observe(subject: nsISupports) {
+        const channel = subject.QueryInterface!(Ci.nsIHttpChannel);
+        if (channel.loadInfo.originAttributes.userContextId !== contextId)
+          return;
+        try {
+          checkPublicConnection(channel);
+        } catch (error) {
+          unsafeConnection = error as LiteratureError;
+          try {
+            channel.cancel(Cr.NS_BINDING_ABORTED);
+          } catch {
+            /* Channel already cancelled. */
+          }
+        }
       },
     };
     let rejectStop!: (error: Error) => void;
@@ -186,6 +212,7 @@ export class LiteratureBrowser {
       25_000,
     );
     try {
+      Services.obs.addObserver(responseObserver, "http-on-examine-response");
       Services.obs.addObserver(observer, "http-on-modify-request");
       if (signal.aborted) abort();
       return await Promise.race([
@@ -201,9 +228,11 @@ export class LiteratureBrowser {
           );
           api.MIMETypeHandler.addHandlers("application/pdf", handler, true);
           await browser.load(url);
+          assertSafeConnection();
           let last = "",
             stableSince = Date.now();
           while (!closed) {
+            assertSafeConnection();
             if (pdf) {
               if (pdf.size > MAX_PDF_BYTES)
                 throw new LiteratureError("invalid_pdf", "PDF exceeds 100 MiB");
@@ -264,6 +293,12 @@ export class LiteratureBrowser {
           // Each native resource must be released even if another one fails.
         }
       };
+      release(() =>
+        Services.obs.removeObserver(
+          responseObserver,
+          "http-on-examine-response",
+        ),
+      );
       release(() =>
         Services.obs.removeObserver(observer, "http-on-modify-request"),
       );

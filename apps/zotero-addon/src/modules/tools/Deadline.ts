@@ -18,13 +18,25 @@ export class ToolTimeout extends Error {
     this.name = "ToolTimeout";
   }
 }
+/**
+ * A deadline that can be frozen while the host waits for a user decision.
+ * Paused time is excluded; resume re-arms the timer with the remaining budget.
+ */
+export interface PausableDeadline<T> extends Promise<T> {
+  pause(): void;
+  resume(): void;
+}
 export function deadline<T>(
   promise: Promise<T>,
   milliseconds: number,
   signal?: AbortSignal,
-): Promise<T> {
-  return new Promise((resolve, reject) => {
+): PausableDeadline<T> {
+  let pause = () => {};
+  let resume = () => {};
+  const bounded = new Promise<T>((resolve, reject) => {
     let done = false;
+    let pausedAt: number | undefined;
+    let deadlineAt = Date.now() + milliseconds;
     let cancelTimer = () => {};
     const finish = (work: () => void) => {
       if (done) return;
@@ -33,16 +45,32 @@ export function deadline<T>(
       signal?.removeEventListener("abort", abort);
       work();
     };
-    const abort = () => finish(() => reject(new ToolTimeout("Tool cancelled")));
-    cancelTimer = schedule(
-      () =>
-        finish(() =>
-          reject(
-            new ToolTimeout(`Tool stage timed out after ${milliseconds} ms`),
+    const arm = () => {
+      const remaining = Math.max(0, deadlineAt - Date.now());
+      cancelTimer = schedule(
+        () =>
+          finish(() =>
+            reject(
+              new ToolTimeout(`Tool stage timed out after ${milliseconds} ms`),
+            ),
           ),
-        ),
-      milliseconds,
-    );
+        remaining,
+      );
+    };
+    const abort = () => finish(() => reject(new ToolTimeout("Tool cancelled")));
+    pause = () => {
+      if (done || pausedAt !== undefined) return;
+      pausedAt = Date.now();
+      cancelTimer();
+      cancelTimer = () => {};
+    };
+    resume = () => {
+      if (done || pausedAt === undefined) return;
+      deadlineAt += Date.now() - pausedAt;
+      pausedAt = undefined;
+      arm();
+    };
+    arm();
     signal?.addEventListener("abort", abort, { once: true });
     if (signal?.aborted) abort();
     promise.then(
@@ -50,6 +78,9 @@ export function deadline<T>(
       (error) => finish(() => reject(error)),
     );
   });
+  (bounded as PausableDeadline<T>).pause = () => pause();
+  (bounded as PausableDeadline<T>).resume = () => resume();
+  return bounded as PausableDeadline<T>;
 }
 export class ToolProgress {
   private started = Date.now();

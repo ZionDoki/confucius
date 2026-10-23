@@ -68,5 +68,10 @@ export type {
 export { HistoryStore } from "./history";
 export type { HistoryAppend, HistoryExport, HistoryQuery } from "./history";
 
-export { indexPassages, passageExcerpt, rankPassages } from "./passages";
+export {
+  foldedIndex,
+  indexPassages,
+  passageExcerpt,
+  rankPassages,
+} from "./passages";
 export type { Passage, PassageIndex } from "./passages";

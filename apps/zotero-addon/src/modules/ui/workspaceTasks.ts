@@ -41,6 +41,260 @@ function taskActionIcon(doc: Document, kind: "more" | "new"): Element {
 
 export type TaskOrganization = "articles" | "time";
 
+/** Confirm text for the irreversible delete action, including the task name. */
+export function taskDeleteConfirmation(
+  title: string,
+  language: string,
+): string {
+  const name = title || (language === "zh-CN" ? "未命名任务" : "Untitled task");
+  return language === "zh-CN"
+    ? `删除任务“${name}”？这会永久删除对话历史、运行日志和诊断信息，且无法撤销。`
+    : `Delete the task “${name}”? This permanently deletes its conversation history, run logs, and diagnostics. It cannot be undone.`;
+}
+
+export type PermissionMode = "ask" | "auto_allow" | "deny";
+
+export interface TaskSelection {
+  taskId: string | null;
+  generation: number;
+}
+
+/** A deferred write or error may only land on the task that captured it. */
+export function taskSelectionCurrent(
+  captured: TaskSelection,
+  current: TaskSelection,
+): boolean {
+  return (
+    captured.taskId === current.taskId &&
+    captured.generation === current.generation
+  );
+}
+
+export interface TaskScopedFailure {
+  taskId: string;
+  message: string;
+}
+
+/** Report a failure only to the task that still owns the visible composer. */
+export function taskScopedFailure(
+  captured: TaskSelection,
+  current: TaskSelection,
+  error: unknown,
+): TaskScopedFailure | null {
+  if (!taskSelectionCurrent(captured, current)) return null;
+  return {
+    taskId: captured.taskId ?? "",
+    message: error instanceof Error ? error.message : String(error),
+  };
+}
+
+export interface PermissionUpdateOptions {
+  send: () => Promise<unknown>;
+  /** Whether the task that issued the choice still owns the visible mode. */
+  isCurrent: () => boolean;
+  rejected: (confirmed: PermissionMode, error: unknown) => void;
+}
+
+export interface PermissionUpdates {
+  readonly confirmed: PermissionMode;
+  /** Adopt the mode loaded from the host for the selected task. */
+  reset(mode: PermissionMode): void;
+  /**
+   * Queue a choice; rejected choices roll back to the last host value. The
+   * returned gate rejects when the host write failed so a dependent action
+   * (a prompt) can abort; the queue itself never inherits that rejection.
+   */
+  apply(mode: PermissionMode, options: PermissionUpdateOptions): Promise<void>;
+}
+
+/**
+ * Serialize permission choices and remember the last host-confirmed mode.
+ * Consecutive failures must roll back to that host value, never to the
+ * optimistic value captured while the previous choice was still in flight.
+ */
+export function createPermissionUpdates(
+  initial: PermissionMode,
+): PermissionUpdates {
+  let confirmed = initial;
+  let pending: Promise<void> = Promise.resolve();
+  return {
+    get confirmed() {
+      return confirmed;
+    },
+    reset(mode) {
+      confirmed = mode;
+    },
+    apply(mode, options) {
+      const update = pending
+        .catch(() => undefined)
+        .then(options.send)
+        .then(() => {
+          if (options.isCurrent()) confirmed = mode;
+        });
+      // The serial queue swallows the rejection: later choices and prompts
+      // wait for a settled request instead of failing on the old one.
+      const queue = update.then(
+        () => undefined,
+        () => undefined,
+      );
+      pending = queue;
+      void update.catch((error) => {
+        // A newer choice owns the visible state and its own request.
+        if (pending !== queue || !options.isCurrent()) return;
+        options.rejected(confirmed, error);
+      });
+      // Handing out the rejectable request lets the caller abort a turn that
+      // would otherwise start with the host's previous mode. The queue above
+      // already handles the rejection, so unused callers stay quiet.
+      return update;
+    },
+  };
+}
+
+export interface PermissionSendGate {
+  /** Track the newest permission write a prompt may depend on. */
+  track(write: Promise<void>): void;
+  /** Wait for it; a failed write rejects and clears itself for the next send. */
+  wait(): Promise<void>;
+  /** Forget the tracked write when another task or mode owns the state. */
+  reset(): void;
+}
+
+/**
+ * The permission write a prompt depends on. A failure must abort that send
+ * instead of starting a turn with the host's old mode, but the failure must
+ * not poison the next send, so the gate settles once the write failed.
+ */
+export function createPermissionSendGate(): PermissionSendGate {
+  let pending: Promise<void> | null = null;
+  const settle = (write: Promise<void>): void => {
+    if (pending === write) pending = null;
+  };
+  return {
+    track(write) {
+      pending = write;
+      // The failure is reported through `rejected`; clearing the tracked write
+      // here lets a send that starts after the failure proceed, while a send
+      // already waiting still observes the rejection and aborts.
+      void write.catch(() => settle(write));
+    },
+    reset() {
+      pending = null;
+    },
+    async wait() {
+      const write = pending;
+      if (!write) return;
+      try {
+        await write;
+      } catch (error) {
+        settle(write);
+        throw error;
+      }
+    },
+  };
+}
+
+export interface ArtifactListState<T> {
+  artifacts: T[];
+  /** Task that owns `artifacts`; a list from another task must not render. */
+  artifactsTaskId: string | null;
+  /** Refresh failure attributed to `artifactsTaskId`. */
+  artifactError: string | null;
+}
+
+export interface ArtifactListOptions<T> {
+  state: ArtifactListState<T>;
+  /** Loads the artifact summaries for one task. */
+  load: (taskId: string) => Promise<T[]>;
+  /** Currently selected task and the selection generation. */
+  selection: () => TaskSelection;
+  /**
+   * Reflect the refresh error in the visible error line. `previous` is the
+   * error being replaced, so the view clears only a message it still owns.
+   */
+  errorChanged?: (error: string | null, previous: string | null) => void;
+}
+
+export interface ArtifactList<T> {
+  /** Forget the visible list; called before selecting another task. */
+  select(taskId: string | null): void;
+  refresh(taskId: string | null): Promise<void>;
+  /** The list only belongs to the task whose id it was loaded for. */
+  visible(taskId?: string | null): T[];
+  needsRefresh(taskId: string | null): boolean;
+}
+
+/** Keep artifact summaries scoped to the task that listed them. */
+export function createArtifactList<T>(
+  options: ArtifactListOptions<T>,
+): ArtifactList<T> {
+  const { state } = options;
+  const sequences = new Map<string, number>();
+
+  const setError = (error: string | null) => {
+    const previous = state.artifactError;
+    if (previous === error) return;
+    state.artifactError = error;
+    options.errorChanged?.(error, previous);
+  };
+
+  const select = (taskId: string | null) => {
+    state.artifacts = [];
+    state.artifactsTaskId = taskId;
+    setError(null);
+  };
+
+  return {
+    select,
+    visible(taskId = options.selection().taskId) {
+      return taskId !== null && state.artifactsTaskId === taskId
+        ? state.artifacts
+        : [];
+    },
+    needsRefresh(taskId) {
+      return (
+        taskId === null ||
+        state.artifactsTaskId !== taskId ||
+        state.artifacts.length === 0 ||
+        state.artifactError !== null
+      );
+    },
+    async refresh(taskId) {
+      if (!taskId) {
+        select(null);
+        return;
+      }
+      const generation = options.selection().generation;
+      // Calls overlap across load, send, clicks and the poll. Only the newest
+      // request for this task may replace the visible list.
+      const request = (sequences.get(taskId) ?? 0) + 1;
+      sequences.set(taskId, request);
+      const current = () => {
+        const selection = options.selection();
+        return (
+          selection.taskId === taskId && selection.generation === generation
+        );
+      };
+      try {
+        const artifacts = await options.load(taskId);
+        if (!current() || sequences.get(taskId) !== request) return;
+        state.artifacts = artifacts;
+        state.artifactsTaskId = taskId;
+        setError(null);
+      } catch (error) {
+        if (!current() || sequences.get(taskId) !== request) return;
+        // A failed read can keep the last list only when it already belongs to
+        // this task; another task's results must never survive the failure.
+        if (state.artifactsTaskId !== taskId) {
+          state.artifacts = [];
+          state.artifactsTaskId = taskId;
+        }
+        setError(error instanceof Error ? error.message : String(error));
+      }
+    },
+  };
+}
+
 export interface ArticleTaskGroup {
   id: string;
   article: LockedItemContext;

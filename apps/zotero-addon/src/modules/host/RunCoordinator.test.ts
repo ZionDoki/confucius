@@ -471,6 +471,49 @@ for (const backend of ["native", "kimi", "codex"] as const) {
     assert.equal(state.budget.iterationsUsed, 2);
   });
 }
+it("ready artifact revision bumps do not count as progress while work remains", async () => {
+  const state = run();
+  state.requiredArtifactKinds = ["report"];
+  let revisions = 0;
+  let executions = 0;
+  const coordinator = new RunCoordinator({
+    run: state,
+    current: () => true,
+    persist: async () => {},
+    progress: () => {},
+    snapshot: async () => ({
+      ...empty(),
+      completed: [
+        {
+          id: "report-1",
+          revision: ++revisions,
+          description: "report",
+        },
+      ],
+      missing: [
+        {
+          id: "artifact:report",
+          kind: "artifact" as const,
+          description: "Save report",
+        },
+      ],
+    }),
+    executor: {
+      run: async () => {
+        executions++;
+        state.budget.iterationsUsed++;
+        return { stopReason: "completed", text: "" };
+      },
+    },
+  });
+  const outcome = await coordinator.execute(
+    "Finish the report",
+    new AbortController().signal,
+  );
+  assert.equal(outcome.stopReason, "stalled");
+  assert.equal(executions, 3);
+});
+
 it("an external executor that ends without tools while work remains is stalled", async () => {
   const state = run();
   state.budget.modelRequestsObservable = false;

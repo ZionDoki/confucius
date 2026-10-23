@@ -1687,9 +1687,17 @@ export class ZoteroToolHost {
       args.parentKey = context.source.key;
       args.libraryID = context.source.libraryID;
     }
-    if (args.libraryID === undefined && (args.key || args.parentKey))
+    // Root and child collection listings must use the same default library.
+    if (
+      args.libraryID === undefined &&
+      (args.key || args.parentKey || name === "get_collections")
+    )
       args.libraryID =
         context.source?.libraryID ?? Zotero.Libraries.userLibraryID;
+    const parentIsCollection = [
+      "create_collection",
+      "get_collections",
+    ].includes(name);
     for (const field of ["key", "parentKey", "relatedKey"]) {
       if (
         !args[field] ||
@@ -1699,7 +1707,7 @@ export class ZoteroToolHost {
             "get_collection_items",
             "run_saved_search",
           ].includes(name)) ||
-        (field === "parentKey" && name === "create_collection")
+        (field === "parentKey" && parentIsCollection)
       )
         continue;
       const item = getItem(defaultLibraryID(args), String(args[field]));
@@ -1776,7 +1784,7 @@ export class ZoteroToolHost {
       args.collectionKey ??
       (["rename_collection", "get_collection_items"].includes(name)
         ? args.key
-        : name === "create_collection"
+        : parentIsCollection
           ? args.parentKey
           : undefined);
     if (collectionKey) {
@@ -2826,7 +2834,9 @@ export class ZoteroToolHost {
     });
   }
 
-  private getCollections(args: Record<string, unknown>): ToolResult {
+  private async getCollections(
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
     const libraryID = defaultLibraryID(args);
     const parentKey = args.parentKey ? String(args.parentKey) : "";
     let collections: Zotero.Collection[];
@@ -2847,6 +2857,11 @@ export class ZoteroToolHost {
       collections = Zotero.Collections.getByLibrary(libraryID).filter(
         (collection) => !collection.parentID,
       );
+    }
+    // getChildItems() resolves item objects even when only counting them.
+    if (collections.length) {
+      const library = Zotero.Libraries.get(libraryID);
+      if (library) await library.waitForDataLoad("item");
     }
     return ok("get_collections", {
       libraryID,

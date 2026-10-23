@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { MemoryEngine } from "./engine";
 import { InMemoryFileSystem } from "./fs";
 import { parseMemoryFile, serializeMemory } from "./markdown";
 import { FileMemoryStore } from "./store";
@@ -61,6 +62,50 @@ describe("markdown round-trip", () => {
       null,
     );
   });
+
+  it("round-trips marker-like bodies and unsafe tags without frontmatter injection", () => {
+    const original = record({
+      content: "User quoted <!-- history and <!-- confucius:history literally.",
+      tags: ["reading", "x\nid: mem_evil", "a,b"],
+      researchTasks: ["task_1", "task_2"],
+      history: [{ at: 900, content: "Old <!-- confucius:history revision." }],
+    });
+    const text = serializeMemory(original);
+    assert.ok(!/^id: mem_evil$/m.test(text));
+    assert.match(text, /^content-encoding: json$/m);
+    const parsed = parseMemoryFile("mem_test01.md", text);
+    assert.ok(parsed);
+    assert.equal(parsed.id, original.id);
+    assert.equal(parsed.content, original.content);
+    assert.deepEqual(parsed.tags, original.tags);
+    assert.deepEqual(parsed.researchTasks, original.researchTasks);
+    assert.deepEqual(parsed.history, original.history);
+  });
+
+  it("still parses the legacy standalone revision marker", () => {
+    const text = [
+      "---",
+      "id: mem_test01",
+      "type: preference",
+      "title: Legacy",
+      "tags: [reading, papers]",
+      "created: 1",
+      "updated: 2",
+      "confidence: 0.9",
+      "---",
+      "",
+      "Current body.",
+      "",
+      "<!-- history",
+      "900 | Old content.",
+      "-->",
+    ].join("\n");
+    const parsed = parseMemoryFile("mem_test01.md", text);
+    assert.ok(parsed);
+    assert.equal(parsed.content, "Current body.");
+    assert.deepEqual(parsed.tags, ["reading", "papers"]);
+    assert.deepEqual(parsed.history, [{ at: 900, content: "Old content." }]);
+  });
 });
 
 describe("FileMemoryStore", () => {
@@ -80,6 +125,165 @@ describe("FileMemoryStore", () => {
     await fs.writeFile("/mem/memories/mem_broken.md", "garbage");
     await assert.rejects(store.recover("mem_broken"), /Cannot reconcile/);
     assert.equal(await store.recover("mem_missing"), undefined);
+  });
+
+  it("never adopts a frontmatter id that disagrees with its filename", async () => {
+    const fs = new InMemoryFileSystem();
+    const injected = [
+      "---",
+      "id: mem_test01",
+      "type: preference",
+      "title: Normal",
+      "tags: [x",
+      "id: mem_evil",
+      "]",
+      "created: 1",
+      "updated: 2",
+      "confidence: 0.9",
+      "---",
+      "",
+      "body",
+    ].join("\n");
+    await fs.writeFile("/mem/memories/mem_test01.md", injected);
+    const warnings: string[] = [];
+    const store = new FileMemoryStore(fs, "/mem", {
+      onWarn: (message) => warnings.push(message),
+    });
+    await store.load();
+    assert.equal(store.get("mem_evil"), undefined);
+    const record = store.get("mem_test01");
+    assert.ok(record);
+    assert.equal(record.id, "mem_test01");
+    assert.deepEqual(record.tags, ["x"]);
+    assert.equal(await store.remove("mem_evil"), false);
+    assert.ok(fs.snapshot()["/mem/memories/mem_test01.md"]);
+    assert.ok(
+      warnings.some(
+        (message) =>
+          message.includes("mem_test01.md") && /does not match/.test(message),
+      ),
+    );
+  });
+
+  it("keeps an undecodable JSON body readable and reports why", async () => {
+    const fs = new InMemoryFileSystem();
+    await fs.writeFile(
+      "/mem/memories/mem_test01.md",
+      [
+        "---",
+        "id: mem_test01",
+        "type: preference",
+        "title: Hand edited",
+        "content-encoding: json",
+        "created: 1",
+        "updated: 2",
+        "confidence: 0.9",
+        "---",
+        "",
+        '{"truncated": ',
+      ].join("\n"),
+    );
+    const warnings: string[] = [];
+    const store = new FileMemoryStore(fs, "/mem", {
+      onWarn: (message) => warnings.push(message),
+    });
+    await store.load();
+    assert.equal(store.get("mem_test01")?.content, '{"truncated":');
+    assert.ok(fs.snapshot()["/mem/memories/mem_test01.md"]);
+    assert.ok(
+      warnings.some(
+        (message) =>
+          message.includes("mem_test01.md") &&
+          /could not be decoded/.test(message),
+      ),
+    );
+  });
+
+  it("copies researchTasks on read so callers cannot mutate the cache", async () => {
+    const fs = new InMemoryFileSystem();
+    const engine = new MemoryEngine({ fs, root: "/mem" });
+    await engine.save({
+      id: "mem_test01",
+      content: "research state",
+      researchTasks: ["task_1", "task_2"],
+    });
+    const read = await engine.read("mem_test01");
+    assert.deepEqual(read?.researchTasks, ["task_1", "task_2"]);
+    read!.researchTasks!.push("task_3");
+    assert.deepEqual(engine.get("mem_test01")?.researchTasks, [
+      "task_1",
+      "task_2",
+    ]);
+  });
+
+  it("skips invalid identities so maintenance cannot fail on their path", async () => {
+    const fs = new InMemoryFileSystem();
+    await fs.writeFile(
+      "/mem/memories/mem_bad].md",
+      "---\nid: mem_bad]\ntype: note\ntitle: bad\n---\n\nbody",
+    );
+    const warnings: string[] = [];
+    const engine = new MemoryEngine({
+      fs,
+      root: "/mem",
+      onWarn: (message) => warnings.push(message),
+    });
+    await engine.ensureLoaded();
+    assert.equal(engine.get("mem_bad]"), undefined);
+    assert.deepEqual(await engine.maintain(), []);
+    assert.ok(fs.snapshot()["/mem/memories/mem_bad].md"]);
+    assert.ok(
+      warnings.some(
+        (message) =>
+          message.includes("mem_bad].md") && /filename/.test(message),
+      ),
+    );
+  });
+
+  it("retries after a transient first-load failure and caches a successful load", async () => {
+    class Fs extends InMemoryFileSystem {
+      lists = 0;
+      failures = 1;
+      override async listFiles(dir: string) {
+        this.lists++;
+        if (this.failures) {
+          this.failures--;
+          throw new Error("directory busy");
+        }
+        return super.listFiles(dir);
+      }
+    }
+    const fs = new Fs();
+    await fs.writeFile(
+      "/mem/memories/mem_good.md",
+      serializeMemory(record({ id: "mem_good" })),
+    );
+    const store = new FileMemoryStore(fs, "/mem");
+    await assert.rejects(store.load(), /directory busy/);
+    await store.load();
+    assert.equal(store.get("mem_good")?.id, "mem_good");
+    const lists = fs.lists;
+    await store.load();
+    assert.equal(fs.lists, lists);
+  });
+
+  it("lets MemoryEngine retry after a transient first load", async () => {
+    class Fs extends InMemoryFileSystem {
+      failures = 1;
+      override async makeDirectory() {
+        if (this.failures) {
+          this.failures--;
+          throw new Error("sync folder unavailable");
+        }
+        return super.makeDirectory();
+      }
+    }
+    const fs = new Fs();
+    const engine = new MemoryEngine({ fs, root: "/mem" });
+    await assert.rejects(engine.ensureLoaded(), /sync folder unavailable/);
+    await engine.ensureLoaded();
+    await engine.save({ id: "mem_after_retry", content: "usable memory" });
+    assert.equal(engine.get("mem_after_retry")?.content, "usable memory");
   });
 
   it("persists, reloads, and deletes memory files", async () => {
@@ -144,6 +348,12 @@ describe("FileMemoryStore", () => {
     await store.load();
     assert.equal(store.all().length, 1);
     assert.equal(store.get("mem_good") !== undefined, true);
+    assert.ok(
+      warnings.some(
+        (message) =>
+          message.includes("mem_broken.md") && /frontmatter/.test(message),
+      ),
+    );
   });
 
   it("refresh preserves pending access and hides unreadable sources without rewriting them", async () => {

@@ -254,6 +254,323 @@ test("archive delivery is independent of verification and never renews retention
   );
 });
 
+test("cleared tasks resume hot retention instead of staying pruned forever", async () => {
+  const { fs, store } = await setup();
+  const windowId = "ctx_task_a_1";
+  const oldBody = "/history/task_a/windows/ctx_task_a_1/old.txt";
+  await store.append({
+    taskId: "task_a",
+    windowId,
+    itemId: "old",
+    role: "tool",
+    content: "old evidence",
+    sourceIds: [],
+  });
+  await store.writeNote("task_a", "progress", "old note");
+  await store.prune("task_a", 500);
+  const cleared = await store.retentionInfo("task_a");
+  assert.equal(cleared.retention.tier, "pruned");
+  assert.equal(cleared.bytes, 0);
+  assert.equal(cleared.items, 0);
+  assert.equal(cleared.cleanupPending, false);
+  assert.equal(fs.snapshot()[oldBody], undefined);
+  await store.append({
+    taskId: "task_a",
+    windowId,
+    itemId: "new",
+    role: "tool",
+    content: "new evidence after clear",
+    sourceIds: [],
+  });
+  const info = await store.retentionInfo("task_a");
+  assert.equal(info.retention.tier, "hot");
+  assert.equal(info.prunedAt, undefined);
+  assert.equal(info.cleanupPending, false);
+  assert.ok(info.rawBytes > 0);
+  assert.ok(info.bytes > info.rawBytes);
+  assert.equal(fs.snapshot()[oldBody], undefined);
+  assert.equal(
+    (await store.search({ query: "new evidence", taskId: "task_a" })).total,
+    1,
+  );
+  // Maintenance only archives hot work, so the renewed task is eligible again.
+  await store.archive("task_a", 2000);
+  const archived = await store.retentionInfo("task_a");
+  assert.equal(archived.retention.tier, "archived");
+  assert.equal(archived.retention.archivedAt, 2000);
+});
+
+test("new work after an interrupted clear deletes the old body before adding evidence", async () => {
+  class Fs extends InMemoryFileSystem {
+    busy = true;
+    override async deleteFile(path: string) {
+      if (this.busy && path.endsWith(".txt")) throw new Error("file busy");
+      return super.deleteFile(path);
+    }
+  }
+  const fs = new Fs();
+  const { store } = await setup(fs);
+  const oldBody = "/history/task_a/windows/ctx_task_a_1/old.txt";
+  const newBody = "/history/task_a/windows/ctx_task_a_1/new.txt";
+  await store.append({
+    taskId: "task_a",
+    windowId: "ctx_task_a_1",
+    itemId: "old",
+    role: "tool",
+    content: "old",
+    sourceIds: [],
+  });
+  await assert.rejects(store.prune("task_a", 700), /busy/);
+  assert.equal((await store.retentionInfo("task_a")).cleanupPending, true);
+  assert.ok(fs.snapshot()[oldBody]);
+  fs.busy = false;
+  await store.append({
+    taskId: "task_a",
+    windowId: "ctx_task_a_1",
+    itemId: "new",
+    role: "tool",
+    content: "new",
+    sourceIds: [],
+  });
+  const info = await store.retentionInfo("task_a");
+  assert.equal(info.retention.tier, "hot");
+  assert.equal(info.cleanupPending, false);
+  // The cleared tombstone's byte total must not be charged to the new content.
+  assert.equal(info.rawBytes, new TextEncoder().encode("new").length);
+  assert.equal(fs.snapshot()[oldBody], undefined);
+  assert.ok(fs.snapshot()[newBody]);
+  assert.equal(
+    (
+      await store.read({
+        taskId: "task_a",
+        windowId: "ctx_task_a_1",
+        itemId: "new",
+      })
+    ).content,
+    "new",
+  );
+});
+
+test("resumeCleanup retries only the tombstone's recorded files", async () => {
+  class Fs extends InMemoryFileSystem {
+    busy = false;
+    override async deleteFile(path: string) {
+      if (
+        this.busy &&
+        (path.endsWith(".txt") || path.endsWith("index.pre-archive.json"))
+      )
+        throw new Error("file busy");
+      return super.deleteFile(path);
+    }
+  }
+  const fs = new Fs();
+  const { store } = await setup(fs);
+  const oldBody = "/history/task_a/windows/ctx_task_a_1/old.txt";
+  const newBody = "/history/task_a/windows/ctx_task_a_1/new.txt";
+  const backup = "/history/task_a/index.pre-archive.json";
+  const indexPath = "/history/task_a/index.json";
+  await store.append({
+    taskId: "task_a",
+    windowId: "ctx_task_a_1",
+    itemId: "old",
+    role: "tool",
+    content: "old",
+    sourceIds: [],
+  });
+  await fs.writeFile(backup, "backup");
+  const manifest = JSON.parse(await fs.readFile(indexPath));
+  await fs.writeFile(
+    indexPath,
+    JSON.stringify({ ...manifest, backupBytes: 6 }),
+  );
+  fs.busy = true;
+  await assert.rejects(store.prune("task_a", 700), /file busy/);
+  // The interrupted tombstone survives a reopen; new evidence lands beside it.
+  await store.append({
+    taskId: "task_a",
+    windowId: "ctx_task_a_1",
+    itemId: "new",
+    role: "tool",
+    content: "new",
+    sourceIds: [],
+  });
+  assert.equal((await store.retentionInfo("task_a")).cleanupPending, true);
+  await assert.rejects(store.resumeCleanup("task_a"), /file busy/);
+  assert.equal((await store.retentionInfo("task_a")).cleanupPending, true);
+  assert.ok(fs.snapshot()[oldBody]);
+  assert.ok(fs.snapshot()[backup]);
+  assert.equal(fs.snapshot()[newBody], "new");
+
+  fs.busy = false;
+  assert.equal(await store.resumeCleanup("task_a"), true);
+  const info = await store.retentionInfo("task_a");
+  assert.equal(info.retention.tier, "hot");
+  assert.equal(info.cleanupPending, false);
+  assert.equal(fs.snapshot()[oldBody], undefined);
+  assert.equal(fs.snapshot()[backup], undefined);
+  assert.equal(fs.snapshot()[newBody], "new");
+  const cleared = JSON.parse(await fs.readFile(indexPath));
+  assert.equal(cleared.cleanupPending, false);
+  assert.equal(cleared.cleanupFiles, undefined);
+  assert.equal(cleared.backupBytes, 0);
+  assert.equal(
+    (
+      await store.read({
+        taskId: "task_a",
+        windowId: "ctx_task_a_1",
+        itemId: "new",
+      })
+    ).content,
+    "new",
+  );
+  // No pending tombstone means no retry, and no work is cleared.
+  assert.equal(await store.resumeCleanup("task_a"), false);
+});
+
+test("a failed cleanup stays pending and retries without deleting new evidence", async () => {
+  class Fs extends InMemoryFileSystem {
+    busy = false;
+    override async deleteFile(path: string) {
+      if (this.busy && path.endsWith(".txt")) throw new Error("file busy");
+      return super.deleteFile(path);
+    }
+  }
+  const fs = new Fs();
+  const { store } = await setup(fs);
+  const oldBody = "/history/task_a/windows/ctx_task_a_1/old.txt";
+  const firstBody = "/history/task_a/windows/ctx_task_a_1/first.txt";
+  const secondBody = "/history/task_a/windows/ctx_task_a_1/second.txt";
+  await store.append({
+    taskId: "task_a",
+    windowId: "ctx_task_a_1",
+    itemId: "old",
+    role: "tool",
+    content: "old",
+    sourceIds: [],
+  });
+  fs.busy = true;
+  await assert.rejects(store.prune("task_a", 700), /busy/);
+  // The retry itself fails: the append must still land, but the delete signal
+  // and the old body must survive for a later attempt.
+  await store.append({
+    taskId: "task_a",
+    windowId: "ctx_task_a_1",
+    itemId: "first",
+    role: "tool",
+    content: "first",
+    sourceIds: [],
+  });
+  assert.equal((await store.retentionInfo("task_a")).cleanupPending, true);
+  assert.ok(fs.snapshot()[oldBody]);
+  assert.ok(fs.snapshot()[firstBody]);
+  fs.busy = false;
+  await store.append({
+    taskId: "task_a",
+    windowId: "ctx_task_a_1",
+    itemId: "second",
+    role: "tool",
+    content: "second",
+    sourceIds: [],
+  });
+  const info = await store.retentionInfo("task_a");
+  assert.equal(info.cleanupPending, false);
+  assert.equal(fs.snapshot()[oldBody], undefined);
+  assert.ok(fs.snapshot()[firstBody]);
+  assert.ok(fs.snapshot()[secondBody]);
+  assert.equal(
+    info.rawBytes,
+    new TextEncoder().encode("first").length +
+      new TextEncoder().encode("second").length,
+  );
+  assert.equal(
+    (
+      await store.read({
+        taskId: "task_a",
+        windowId: "ctx_task_a_1",
+        itemId: "first",
+      })
+    ).content,
+    "first",
+  );
+});
+
+test("an interrupted clear keeps retrying the migration backup until it is gone", async () => {
+  class Fs extends InMemoryFileSystem {
+    busy = true;
+    override async deleteFile(path: string) {
+      if (this.busy && path.endsWith("index.pre-archive.json"))
+        throw new Error("backup busy");
+      return super.deleteFile(path);
+    }
+  }
+  const fs = new Fs();
+  const { store } = await setup(fs);
+  await store.append({
+    taskId: "task_a",
+    windowId: "ctx_task_a_1",
+    itemId: "old",
+    role: "tool",
+    content: "old",
+    sourceIds: [],
+  });
+  const backup = "/history/task_a/index.pre-archive.json";
+  await fs.writeFile(backup, "backup");
+  const index = JSON.parse(await fs.readFile("/history/task_a/index.json"));
+  index.backupBytes = new TextEncoder().encode("backup").length;
+  await fs.writeFile("/history/task_a/index.json", JSON.stringify(index));
+  const restored = new HistoryStore(fs, "/history");
+  restored.register(task());
+  await assert.rejects(restored.prune("task_a", 700), /backup busy/);
+  const pending = await restored.retentionInfo("task_a");
+  assert.equal(pending.cleanupPending, true);
+  assert.ok(fs.snapshot()[backup]);
+  fs.busy = false;
+  await restored.append({
+    taskId: "task_a",
+    windowId: "ctx_task_a_1",
+    itemId: "new",
+    role: "tool",
+    content: "new",
+    sourceIds: [],
+  });
+  const info = await restored.retentionInfo("task_a");
+  assert.equal(info.cleanupPending, false);
+  assert.equal(fs.snapshot()[backup], undefined);
+  assert.equal(info.rawBytes, new TextEncoder().encode("new").length);
+});
+
+test("new note revisions replace pending deletions instead of being deleted later", async () => {
+  class Fs extends InMemoryFileSystem {
+    busy = true;
+    override async deleteFile(path: string) {
+      if (this.busy && path.endsWith(".txt")) throw new Error("file busy");
+      return super.deleteFile(path);
+    }
+  }
+  const fs = new Fs();
+  const { store } = await setup(fs);
+  const first = "/history/task_a/notes/progress_1.txt";
+  const second = "/history/task_a/notes/progress_2.txt";
+  await store.writeNote("task_a", "progress", "old note");
+  await assert.rejects(store.prune("task_a", 700), /busy/);
+  assert.equal((await store.retentionInfo("task_a")).cleanupPending, true);
+  // The retries fail, but the new revisions overwrite the pending path; it no
+  // longer holds pre-prune content and must not be deleted by a later retry.
+  await store.writeNote("task_a", "progress", "new first");
+  assert.equal(fs.snapshot()[first], "new first");
+  await store.writeNote("task_a", "progress", "new second");
+  fs.busy = false;
+  await store.writeNote("task_a", "progress", "new third");
+  const info = await store.retentionInfo("task_a");
+  assert.equal(info.cleanupPending, false);
+  assert.equal(fs.snapshot()[first], "new first");
+  assert.equal(fs.snapshot()[second], "new second");
+  assert.equal(
+    fs.snapshot()["/history/task_a/notes/progress_3.txt"],
+    "new third",
+  );
+});
+
 test("distillation sampling stays bounded and spans early and late windows and sources", async () => {
   const { store } = await setup();
   for (let n = 0; n < 40; n++)

@@ -4,7 +4,10 @@ import {
   registerHttpBridge,
   unregisterHttpBridge,
 } from "./modules/bridge/HttpBridge";
-import { ensurePairingToken } from "./modules/bridge/pairingToken";
+import {
+  ensureMcpToken,
+  ensurePairingToken,
+} from "./modules/bridge/pairingToken";
 import {
   registerToolbarButton,
   unregisterToolbarButton,
@@ -47,6 +50,7 @@ async function onStartup(isUpdate = false, isInstall = false) {
   cleanup(closeWorkspaceWindow, "previous workspace windows");
   initLocale();
   ensurePairingToken();
+  ensureMcpToken();
   await host.start(isUpdate || workspaceReload !== undefined);
   if (!addon.data.alive) return;
   host.startBtwCleanup();
@@ -129,6 +133,22 @@ async function onShutdown(isUpdate = false): Promise<void> {
   delete Zotero[addon.data.config.addonInstance];
 }
 
+/**
+ * Zotero's APP_SHUTDOWN notification bypasses ordinary add-on shutdown. Close
+ * the host so running tasks persist their interruption and runtime clients
+ * receive pluginRuntime.shutdown instead of being abandoned with the process.
+ */
+async function onAppShutdown(): Promise<void> {
+  if (!addon.data.alive) return;
+  addon.data.alive = false;
+  cleanup(unregisterHttpBridge, "HTTP bridge");
+  try {
+    await host.shutdown();
+  } catch (error) {
+    ztoolkit.log("[Confucius] Runtime Host shutdown failed", error);
+  }
+}
+
 function cleanup(dispose: () => void, name: string): void {
   try {
     dispose();
@@ -146,6 +166,7 @@ function onPrefsEvent(type: string, data: { window: Window }): void {
 export default {
   onStartup,
   onShutdown,
+  onAppShutdown,
   onMainWindowLoad,
   onMainWindowUnload,
   onPrefsEvent,

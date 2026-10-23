@@ -1,5 +1,6 @@
 import type { ContextWindowState } from "./history";
 import type { ExecutionBinding, WorkSnapshot } from "./run";
+import type { SourceCoverage } from "./sourceCoverage";
 
 /** A location in an archived original. Optional fields preserve legacy whole-ref calls. */
 export interface EvidenceLocation {
@@ -126,6 +127,53 @@ export function validContextBinding(value: unknown): value is ExecutionBinding {
   );
 }
 
+/** Validate a persisted coverage snapshot before handoff projection reads it. */
+function validSourceCoverage(value: unknown): boolean {
+  const coverage = value as SourceCoverage;
+  return Boolean(
+    coverage &&
+    coverage.version === 1 &&
+    validContextBinding(coverage.binding) &&
+    ["bound-items", "collection-members-unknown"].includes(
+      coverage.enumeration,
+    ) &&
+    Array.isArray(coverage.entries) &&
+    coverage.entries.every((entry) => {
+      const e = entry as SourceCoverage["entries"][number];
+      return (
+        e &&
+        typeof e.sourceId === "string" &&
+        typeof e.title === "string" &&
+        typeof e.bindingVersion === "string" &&
+        (e.fileVersion === undefined || typeof e.fileVersion === "string") &&
+        (e.pageCount === undefined ||
+          (Number.isSafeInteger(e.pageCount) && e.pageCount >= 0)) &&
+        Array.isArray(e.pagesObserved) &&
+        e.pagesObserved.every(
+          (page) => Number.isSafeInteger(page) && page > 0,
+        ) &&
+        Array.isArray(e.truncatedPages) &&
+        e.truncatedPages.every(
+          (page) => Number.isSafeInteger(page) && page >= 0,
+        ) &&
+        ["unread", "partial", "complete-text-observed"].includes(e.read) &&
+        ["unreported", "reported", "stale"].includes(e.analysis) &&
+        e.verification === "unknown" &&
+        (e.failed === undefined || typeof e.failed === "string") &&
+        Array.isArray(e.evidence) &&
+        e.evidence.every(validEvidenceLocation) &&
+        (e.analysisNote === undefined ||
+          (e.analysisNote &&
+            typeof e.analysisNote.ref === "string" &&
+            Number.isSafeInteger(e.analysisNote.revision) &&
+            e.analysisNote.revision > 0 &&
+            (e.analysisNote.detail === undefined ||
+              typeof e.analysisNote.detail === "string")))
+      );
+    }),
+  );
+}
+
 export function restoreContextHandoff(
   value: unknown,
 ): ContextHandoff | undefined {
@@ -185,6 +233,8 @@ export function restoreContextHandoff(
     ) ||
     !Array.isArray(state.work.unknownOperationIds) ||
     !state.work.unknownOperationIds.every((id) => typeof id === "string") ||
+    (state.work.coverage !== undefined &&
+      !validSourceCoverage(state.work.coverage)) ||
     typeof state.supplemented !== "boolean"
   )
     throw new Error(

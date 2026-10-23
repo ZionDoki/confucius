@@ -58,6 +58,53 @@ export function fulltextUrl(value: unknown): string {
   return safe;
 }
 
+/** Fail closed and record why when the actual peer cannot be established. */
+function rejectUnverifiedConnection(reason: string): never {
+  try {
+    if (typeof ztoolkit !== "undefined" && typeof ztoolkit.log === "function")
+      ztoolkit.log(`[Confucius] Fulltext connection refused: ${reason}`);
+  } catch {
+    // Logging must never change the security decision.
+  }
+  throw new LiteratureError(
+    "unsafe_url",
+    "无法验证全文连接的实际地址，已拒绝 / Could not verify the fulltext connection address; refused",
+  );
+}
+
+/** Validate the address a response was actually read from, not just its DNS answer. */
+export function checkPublicConnection(channel: unknown): void {
+  const candidate = channel as
+    { QueryInterface?: (iid: unknown) => unknown } | null | undefined;
+  if (!candidate) rejectUnverifiedConnection("channel unavailable");
+  const query = candidate.QueryInterface;
+  if (typeof query !== "function")
+    rejectUnverifiedConnection("channel has no QueryInterface");
+  let internal: { remoteAddress?: string; isProxyUsed?: boolean } | undefined;
+  try {
+    internal = query.call(candidate, Ci.nsIHttpChannelInternal) as
+      { remoteAddress?: string; isProxyUsed?: boolean } | undefined;
+  } catch {
+    rejectUnverifiedConnection("channel internal interface unavailable");
+  }
+  if (!internal)
+    rejectUnverifiedConnection("channel has no internal interface");
+  // A proxy resolves and owns the outbound connection; its address is not the
+  // model-supplied target, so the actual peer cannot be pinned to a safe address.
+  if (internal.isProxyUsed)
+    rejectUnverifiedConnection(
+      "connection is proxied; the target address cannot be verified",
+    );
+  const address = String(internal.remoteAddress ?? "");
+  if (address && !publicAddress(address))
+    throw new LiteratureError(
+      "unsafe_url",
+      "全文连接实际到达非公网地址 / Fulltext connection reached a non-public address",
+    );
+  // A cached response can legitimately have no live peer address; the DNS and
+  // URL checks above still apply, so an absent address is not treated as hostile.
+}
+
 /** Check DNS before each request/redirect. Never send a model-supplied URL to an internal host. */
 export async function checkPublicHost(
   url: string,
@@ -160,6 +207,18 @@ export async function requestFulltext(
       requestUrl.searchParams.set("api_key", options.cacheKey);
     let xhr: XMLHttpRequest | undefined;
     let tooLarge = false;
+    let connectionError: LiteratureError | undefined;
+    const inspectConnection = (request: XMLHttpRequest) => {
+      // The final response channel is checked as well; an XHR that does not
+      // expose a live channel at headers time cannot be inspected here.
+      if (connectionError || !request.channel) return;
+      try {
+        checkPublicConnection(request.channel);
+      } catch (error) {
+        connectionError = error as LiteratureError;
+        request.abort();
+      }
+    };
     const maxBytes = options.maxBytes ?? MAX_PDF_BYTES;
     const responseLimit = (type: string | null) =>
       /html|text\//i.test(type ?? "")
@@ -201,10 +260,16 @@ export async function requestFulltext(
               }
             };
             if (signal.aborted) abort();
+            // Fail at headers time, before a rebound connection's body is used.
+            request.addEventListener?.("readystatechange", () => {
+              if (request.readyState >= 2) inspectConnection(request);
+            });
           },
         },
       );
       if (signal.aborted) throw new LiteratureError("cancelled", "Cancelled");
+      if (connectionError) throw connectionError;
+      checkPublicConnection(result.channel);
       if (result.status >= 300 && result.status < 400) {
         // Authenticated API requests never forward credentials or bodies to redirects.
         if (options.headers || options.body)
@@ -247,6 +312,7 @@ export async function requestFulltext(
       };
     } catch (error) {
       if (signal.aborted) throw new LiteratureError("cancelled", "Cancelled");
+      if (connectionError) throw connectionError;
       if (tooLarge)
         throw new LiteratureError(
           "invalid_pdf",

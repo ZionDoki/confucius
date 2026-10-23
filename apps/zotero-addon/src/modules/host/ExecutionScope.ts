@@ -1,6 +1,10 @@
 import type { ToolExecutionScope } from "@confucius/protocol";
 import { createAbortController } from "../../utils/webPlatform";
-import { deadline, ToolTimeout } from "../tools/Deadline";
+import {
+  deadline,
+  ToolTimeout,
+  type PausableDeadline,
+} from "../tools/Deadline";
 
 export interface OwnedExecutionScope extends ToolExecutionScope {
   abort(): void;
@@ -8,6 +12,12 @@ export interface OwnedExecutionScope extends ToolExecutionScope {
   pause(): void;
   resume(): void;
 }
+
+interface ScopeControl {
+  paused(): boolean;
+  track(timer: PausableDeadline<unknown>): void;
+}
+const controls = new WeakMap<ToolExecutionScope, ScopeControl>();
 
 /** A child inherits its parent's absolute limit; stages cannot reset it. */
 export function createExecutionScope(
@@ -26,7 +36,10 @@ export function createExecutionScope(
     Date.now() + (options.timeoutMs ?? 120_000),
   );
   let pausedAt: number | undefined;
-  return {
+  // Deadlines armed by runInScope in this scope. A pause must stop the timers
+  // too, not merely move the absolute deadline the timers were derived from.
+  const timers = new Set<PausableDeadline<unknown>>();
+  const scope: OwnedExecutionScope = {
     get deadlineAt() {
       return pausedAt === undefined
         ? deadlineAt
@@ -35,15 +48,28 @@ export function createExecutionScope(
     signal: controller.signal,
     abort,
     pause() {
-      pausedAt ??= Date.now();
+      if (pausedAt !== undefined) return;
+      pausedAt = Date.now();
+      for (const timer of timers) timer.pause();
     },
     resume() {
       if (pausedAt === undefined) return;
       deadlineAt += Date.now() - pausedAt;
       pausedAt = undefined;
+      for (const timer of timers) timer.resume();
     },
     dispose: () => options.signal?.removeEventListener("abort", abort),
   };
+  controls.set(scope, {
+    paused: () => pausedAt !== undefined,
+    track(timer) {
+      timers.add(timer);
+      if (pausedAt !== undefined) timer.pause();
+      const done = () => timers.delete(timer);
+      void timer.then(done, done);
+    },
+  });
+  return scope;
 }
 
 export function remainingMs(scope: ToolExecutionScope): number {
@@ -62,7 +88,7 @@ export function runInScope<T>(
   work: () => Promise<T>,
 ): Promise<T> {
   throwIfScopeExpired(scope);
-  return deadline(
+  const timer = deadline(
     Promise.resolve().then(() => {
       throwIfScopeExpired(scope);
       return work();
@@ -70,4 +96,6 @@ export function runInScope<T>(
     remainingMs(scope),
     scope.signal,
   );
+  controls.get(scope)?.track(timer as PausableDeadline<unknown>);
+  return timer;
 }

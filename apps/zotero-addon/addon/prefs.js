@@ -1,4 +1,5 @@
 pref("pairingToken", "");
+pref("mcpToken", "");
 pref("updateAutoCheck", true);
 pref("updateChannel", "auto");
 pref("workspaceWidth", 1100);

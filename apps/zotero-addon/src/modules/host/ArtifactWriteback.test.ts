@@ -145,6 +145,80 @@ describe("artifact writeback planning", () => {
   });
 });
 
+it("never promotes a planned note key unless the write committed or the note exists", async () => {
+  const { recoverPendingWriteback } = await import("./ArtifactWriteback");
+  const previous = {
+    state: "pending" as const,
+    target: "zotero_note" as const,
+    revision: 1,
+    operationId: "op",
+  };
+  const operation = {
+    id: "op",
+    name: "create_note",
+    args: { libraryID: 1 },
+    context: { plannedKeys: { item: "PLANNED" } },
+    resources: [],
+    startedAt: 1,
+  };
+  const failed = recoverPendingWriteback(previous, {
+    ...operation,
+    result: {
+      ok: false as const,
+      toolName: "create_note",
+      code: "unavailable" as const,
+      effect: "none" as const,
+      message: "Parent was deleted",
+    },
+  });
+  assert.equal(failed.state, "failed");
+  assert.equal(failed.targetRef, undefined);
+  const unknown = recoverPendingWriteback(previous, {
+    ...operation,
+    result: {
+      ok: false as const,
+      toolName: "create_note",
+      code: "unavailable" as const,
+      effect: "unknown" as const,
+      message: "Connection lost",
+    },
+  });
+  assert.equal(unknown.state, "unknown");
+  assert.equal(unknown.targetRef, undefined);
+  const committed = recoverPendingWriteback(previous, {
+    ...operation,
+    result: {
+      ok: true as const,
+      toolName: "create_note",
+      effect: "applied" as const,
+      data: {},
+    },
+  });
+  assert.equal(committed.state, "committed");
+  assert.equal(committed.targetRef, "1:PLANNED");
+  const stale = {
+    state: "failed" as const,
+    target: "zotero_note" as const,
+    revision: 1,
+    operationId: "op",
+    targetRef: "1:PLANNED",
+  };
+  assert.equal(
+    recoverPendingWriteback(stale, {
+      ...operation,
+      result: {
+        ok: false as const,
+        toolName: "create_note",
+        code: "unavailable" as const,
+        effect: "none" as const,
+        message: "Parent was deleted",
+      },
+    }).targetRef,
+    undefined,
+    "an interrupted create must not keep its planned key as an existing note",
+  );
+});
+
 it("restores receipts after interruption without pretending a partial batch is complete", async () => {
   const { recoverPendingWriteback } = await import("./ArtifactWriteback");
   const previous = {

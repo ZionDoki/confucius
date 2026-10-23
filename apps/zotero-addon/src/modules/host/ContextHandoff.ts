@@ -11,7 +11,7 @@ import {
   type WorkSnapshot,
 } from "@confucius/protocol";
 import type { HistoryStore, MemoryEngine } from "@confucius/memory";
-import { isKnowledgeRecord } from "@confucius/memory";
+import { foldedIndex, isKnowledgeRecord } from "@confucius/memory";
 import { coverageSummary } from "@confucius/protocol";
 import { readContextEvidence, memorySourceVersion } from "./ContextEvidence";
 
@@ -170,10 +170,11 @@ export async function prepareContextHandoff(
           await memory.search({ query: query.text, limit: 4 })
         ).entries()) {
           if (isKnowledgeRecord(hit.record)) continue;
+          // Case folding can expand one code point into several UTF-16 units
+          // (U+0130); map the folded match back to the original offset.
           let at = Math.max(
             0,
-            hit.record.content.toLowerCase().indexOf(query.text.toLowerCase()) -
-              80,
+            foldedIndex(hit.record.content, query.text) - 80,
           );
           if (/[\uDC00-\uDFFF]/.test(hit.record.content[at] ?? "")) at--;
           const excerpt = contextTextSlice(hit.record.content, 200, at).content;

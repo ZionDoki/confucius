@@ -7,6 +7,7 @@ import {
 } from "@confucius/zotero-tools";
 
 const PAIRING_TOKEN = "pairing-token-for-test";
+const MCP_TOKEN = "mcp-readonly-token-for-test";
 const TASK_TOKEN = "task-capability-for-test";
 const TASK_LEASE = {
   taskId: "task-bound",
@@ -16,12 +17,20 @@ const TASK_LEASE = {
   namespace: "test-public-namespace",
 };
 const endpoints = {};
+const prefWrites = [];
+let mcpToken = MCP_TOKEN;
 const previousZotero = globalThis.Zotero;
 const previousToolkit = globalThis.ztoolkit;
 globalThis.Zotero = {
   Prefs: {
     get(name) {
-      return name.endsWith(".pairingToken") ? PAIRING_TOKEN : undefined;
+      if (name.endsWith(".pairingToken")) return PAIRING_TOKEN;
+      if (name.endsWith(".mcpToken")) return mcpToken;
+      return undefined;
+    },
+    set(name, value) {
+      prefWrites.push({ name, value });
+      throw new Error("preferences are read-only");
     },
   },
   Server: { Endpoints: endpoints },
@@ -85,20 +94,58 @@ describe("public Zotero MCP bridge", () => {
     globalThis.ztoolkit = previousToolkit;
   });
 
-  const request = (method, body, token = PAIRING_TOKEN) =>
+  const request = (method, body, token = MCP_TOKEN) =>
     endpoint.init({
       method,
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       data: body,
     });
 
-  it("requires the pairing bearer before any MCP operation", async () => {
-    const [status] = await request(
+  it("rejects unauthenticated or wrong bearers before any MCP operation", async () => {
+    const [wrongStatus] = await request(
       "POST",
       { jsonrpc: "2.0", id: 1, method: "initialize" },
       "wrong",
     );
-    assert.equal(status, 401);
+    assert.equal(wrongStatus, 401);
+    const [anonymousStatus] = await request(
+      "POST",
+      { jsonrpc: "2.0", id: 1, method: "initialize" },
+      "",
+    );
+    assert.equal(anonymousStatus, 401);
+  });
+
+  it("accepts only the provisioned read-only token and fails closed without one", async () => {
+    const [pairingStatus] = await request(
+      "POST",
+      { jsonrpc: "2.0", id: 1, method: "initialize" },
+      PAIRING_TOKEN,
+    );
+    assert.equal(pairingStatus, 401);
+    mcpToken = "";
+    try {
+      const writesBefore = prefWrites.length;
+      const [missingStatus] = await request(
+        "POST",
+        { jsonrpc: "2.0", id: 1, method: "initialize" },
+        PAIRING_TOKEN,
+      );
+      assert.equal(missingStatus, 401);
+      assert.equal(
+        prefWrites.length,
+        writesBefore,
+        "authorization must not provision credentials",
+      );
+    } finally {
+      mcpToken = MCP_TOKEN;
+    }
+    const [restoredStatus] = await request("POST", {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+    });
+    assert.equal(restoredStatus, 200);
   });
 
   it("implements stateless initialize, notifications, GET, and DELETE", async () => {

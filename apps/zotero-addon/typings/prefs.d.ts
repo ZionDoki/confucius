@@ -8,6 +8,7 @@ declare namespace _ZoteroTypes {
   interface Prefs {
     PluginPrefsMap: {
       "pairingToken": string;
+      "mcpToken": string;
       "updateAutoCheck": boolean;
       "updateChannel": string;
       "workspaceWidth": number;

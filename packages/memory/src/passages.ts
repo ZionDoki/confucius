@@ -165,17 +165,36 @@ export function rankPassages<
     );
 }
 
+/** `toLowerCase` can expand one code point into several UTF-16 units (U+0130),
+ *  so an index in the folded string is not an index in the original. Map the
+ *  first folded match back to the original offset, or -1 when it is absent. */
+export function foldedIndex(text: string, query: string): number {
+  const needle = query.trim().toLowerCase();
+  // An empty query matches at the start; returning -1 here made recent-note
+  // excerpts start from the end of the passage instead of its first line.
+  if (!needle) return 0;
+  const hit = text.toLowerCase().indexOf(needle);
+  if (hit < 0) return -1;
+  let folded = 0;
+  for (let index = 0; index < text.length;) {
+    const code = text.codePointAt(index)!;
+    folded += String.fromCodePoint(code).toLowerCase().length;
+    if (folded > hit) return index;
+    index += code > 0xffff ? 2 : 1;
+  }
+  return text.length;
+}
+
 export function passageExcerpt(
   content: string,
   passage: Passage,
   query: string,
 ) {
-  const text = content.slice(passage.start, passage.end),
-    lower = text.toLowerCase();
-  let hit = lower.indexOf(query.trim().toLowerCase());
+  const text = content.slice(passage.start, passage.end);
+  let hit = foldedIndex(text, query);
   if (hit < 0)
     hit = tokenize(query).reduce((first, term) => {
-      const at = lower.indexOf(term);
+      const at = foldedIndex(text, term);
       return at < 0 ? first : Math.min(first, at);
     }, text.length);
   let offset = passage.start + Math.max(0, Math.min(hit, text.length) - 32);

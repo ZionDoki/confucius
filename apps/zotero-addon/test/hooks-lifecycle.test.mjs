@@ -49,7 +49,14 @@ function fixture({ failShutdown = false, failToolbar = false } = {}) {
         calls.push("http.dispose");
       },
     },
-    "./modules/bridge/pairingToken": { ensurePairingToken() {} },
+    "./modules/bridge/pairingToken": {
+      ensurePairingToken() {
+        calls.push("pairing.ensure");
+      },
+      ensureMcpToken() {
+        calls.push("mcp.ensure");
+      },
+    },
     "./modules/ui/toolbar": {
       registerToolbarButton(win) {
         registered.get(win).add("toolbar");
@@ -213,6 +220,28 @@ it("real hooks reuse one Addon toolkit and release every main-window surface on 
   assert.equal(f.registered.get(f.windows[0]).size, 0);
 });
 
+it("APP_SHUTDOWN closes the host once even when its shutdown fails", async () => {
+  const f = fixture({ failShutdown: true });
+  await f.hooks.onAppShutdown();
+  assert.equal(f.addon.data.alive, false);
+  assert.ok(f.calls.includes("host.dispose"));
+  assert.ok(f.calls.includes("http.dispose"));
+  await f.hooks.onAppShutdown();
+  assert.equal(f.calls.filter((value) => value === "host.dispose").length, 1);
+});
+
+it("bootstrap routes Zotero APP_SHUTDOWN through the host shutdown hook", async () => {
+  const bootstrap = await readFile(
+    new URL("../addon/bootstrap.js", import.meta.url),
+    "utf8",
+  );
+  assert.match(bootstrap, /hooks\.onAppShutdown\?\.\(\)/);
+  assert.ok(
+    bootstrap.indexOf("onAppShutdown") >
+      bootstrap.indexOf("reason === APP_SHUTDOWN"),
+  );
+});
+
 it("real hooks continue cleanup after window or host disposal fails", async () => {
   const f = fixture({ failShutdown: true, failToolbar: true });
   await f.hooks.onStartup();
@@ -306,4 +335,81 @@ it("an ADDON_INSTALL startup consumes the preceding update handoff too", async (
   assert.equal(updated, true);
   assert.ok(f.calls.includes("workspace.consume.true"));
   assert.ok(f.calls.includes("workspace.restore"));
+});
+
+it("provisions the read-only MCP token at startup before registering the HTTP bridge", async () => {
+  const f = fixture();
+  await f.hooks.onStartup();
+  const provisions = f.calls.filter((value) => value === "mcp.ensure");
+  assert.equal(provisions.length, 1);
+  assert.ok(
+    f.calls.indexOf("mcp.ensure") < f.calls.indexOf("http.register"),
+    "the endpoint must not start before its credential exists",
+  );
+  assert.ok(f.calls.indexOf("pairing.ensure") < f.calls.indexOf("mcp.ensure"));
+});
+
+it("Security settings explain the MCP token migration and provisioning failure", async () => {
+  const [xhtml, prefsPane, english, chinese] = await Promise.all([
+    readFile(
+      new URL("../addon/content/preferences.xhtml", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../src/modules/preferences/prefsPane.ts", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../addon/locale/en-US/preferences.ftl", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../addon/locale/zh-CN/preferences.ftl", import.meta.url),
+      "utf8",
+    ),
+  ]);
+  assert.match(
+    xhtml,
+    /id="confucius-pref-mcpToken-status"[\s\S]*?data-l10n-id="pref-mcp-token-unavailable"/,
+  );
+  assert.match(xhtml, /data-l10n-id="pref-mcp-token-migration"/);
+  assert.match(prefsPane, /status\.hidden = Boolean\(mcpToken\.value\)/);
+  assert.match(english, /^pref-mcp-token-unavailable = .+/m);
+  assert.match(
+    english,
+    /^pref-mcp-token-migration = .*read-only token.*pairing token/m,
+  );
+  assert.match(english, /no longer accepted/);
+  assert.match(chinese, /^pref-mcp-token-unavailable = .+/m);
+  assert.match(
+    chinese,
+    /^pref-mcp-token-migration = .*只读令牌.*pairing 令牌/m,
+  );
+});
+
+it("prefs keep model edits made before the endpoint snapshot and fence stale replies", async () => {
+  const prefsPane = await readFile(
+    new URL("../src/modules/preferences/prefsPane.ts", import.meta.url),
+    "utf8",
+  );
+  // An edit made while config/get is in flight is replayed against the loaded
+  // endpoint instead of being dropped by another refresh.
+  assert.match(prefsPane, /pendingModelEdits\.set\(field\.key, value\)/);
+  assert.match(prefsPane, /flushPendingModelEdits\(\)/);
+  assert.doesNotMatch(
+    prefsPane,
+    /if \(!endpoint\) \{\s*void loadModelFields\(\);\s*return;/,
+  );
+  // Stale load/save replies cannot overwrite newer fields or endpoints.
+  assert.match(prefsPane, /generation !== modelLoadGeneration/);
+  assert.match(prefsPane, /saveGeneration !== modelSaveGeneration/);
+  assert.match(prefsPane, /saveCompletion !== modelSaveCompletion/);
+  assert.match(prefsPane, /generation !== modelSaveGeneration/);
+  // A stale snapshot cannot resurrect a value while its local save is pending.
+  assert.match(prefsPane, /dirtyModelFields\.has\(field\.key\)/);
+  // A committed text edit also persists on blur, not only on change.
+  assert.match(
+    prefsPane,
+    /addEventListener\("blur", \(\) => persistModelField\(field\)\)/,
+  );
 });

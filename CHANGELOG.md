@@ -2,6 +2,93 @@
 
 ## Unreleased
 
+## 0.6.3-beta.1 - 2026-10-23
+
+### Changed
+
+- The local API now separates credentials: the UI RPC and event routes keep the
+  pairing token, while the read-only MCP endpoint uses its own `mcpToken`
+  (Settings → Confucius → Security). MCP clients configured with the pairing
+  token must switch to the new token; the pairing token is rejected on `/mcp`.
+  The read-only token cannot change settings, tasks, approvals or library data.
+
+### Fixed
+
+- Resumed writes whose saved receipt confirms no side effect can be retried,
+  including models that reuse tool-call IDs, instead of replaying the old failure.
+- Interrupted full-text downloads recheck the identity of existing PDFs before
+  reporting success; supplementary files and mismatched papers are not accepted
+  as the requested article.
+- Zotero links with an unavailable explicit library or group scope report failure
+  instead of opening an unrelated personal-library item with the same key.
+- Token-per-minute rate limits use retry backoff, including streamed provider
+  errors, instead of being mistaken for context-window overflow.
+- Agents can traverse nested Zotero collections using `get_collections` with a
+  returned collection key as `parentKey`, with or without an explicit `libraryID`.
+  Valid parent collections are no longer rejected as missing items, and leaf
+  collections return an empty list ([#11](https://github.com/ZionDoki/confucius/issues/11)).
+  Root and child queries without `libraryID` consistently use the task source's
+  library, or the personal library when there is no task source.
+  Collection item counts also work after a restart, before Zotero has loaded
+  the target library's items.
+- Resumed runs settle interrupted tool calls against their saved receipts, so a
+  committed write is replayed instead of being sent again, and context switching
+  no longer blocks. Approval and literature waits pause tool deadlines instead of
+  timing out while the user decides.
+- Late prompts and events from a superseded turn can no longer abort or complete
+  the current run; mid-run source confirmation rebinds the context window, and
+  stall detection no longer counts a revision bump as progress.
+- Retention cleanup, memory Markdown round-trips, forgotten-topic distillation,
+  handoff offsets, artifact citations, note writeback and report revisions keep
+  their documented state instead of silently clearing or duplicating it.
+- MCP HTTP responses are size-capped and no longer echo error bodies into the
+  model context; authenticated OpenAlex requests refuse redirects, and full-text
+  downloads reuse the isolated cookie context.
+- Stale UI selections no longer receive templates, drafts, context updates or
+  artifact refreshes intended for another task; task deletion asks for
+  confirmation, and a failed writeback preview can be retried.
+- MCP calls recover from an expired session by starting a new one; a failed
+  call is reported as unprocessed instead of being retried or left as an
+  unknown write. Resumed receipts are bounded before entering the model context.
+- Codex and Kimi keep their provider configuration and credentials while
+  unrelated secrets stay out of the child environment.
+- Artifact lists stay scoped to their task, and an interrupted retention
+  cleanup resumes only the recorded files instead of pruning new history.
+  Oversized attachments are truncated with a visible note instead of failing
+  the turn.
+
+### Upgrade notes
+
+- This is a Beta release. Enable **Include prereleases** in Confucius Settings →
+  Update to receive it. Explicit channel and automatic-check choices are retained;
+  disabling Betas does not downgrade the installed package.
+- No manual data migration is required. Local MCP clients must replace their
+  pairing token with the separate read-only token in Settings → Confucius →
+  Security. Existing tasks, drafts and library items remain in place.
+- Follow Zotero's restart prompt if installation is staged. The new memory
+  metadata is additive; downgrading is not an automatic migration path and may
+  discard newer provenance metadata when older code rewrites a memory file.
+
+### Validation and known limits
+
+- The four fixes passed focused regression tests, including failure-before-fix
+  checks, on macOS 26.6.2 (ARM64), Node.js 23.10.0.
+- `npm test` passed 1,557 tests with no failures, skips or cancellations.
+  Type checking, lint, the production build, version consistency and skill/catalog
+  synchronization passed. The XPI and Beta update file agree on 0.6.3-beta.1.
+- An ordinary-package upgrade from public 0.6.2 passed 21 checks in isolated
+  Zotero 10.0.6, retaining tasks, drafts, notes, report revisions, history file
+  hashes, memory, budgets and update preferences across restarts. Confirmed writes
+  were not repeated. Settings passed 24 groups covering both entry points,
+  light/dark/high-contrast themes, narrow windows and persisted appearance.
+- Ordinary candidate checks also passed 12 attachment/send groups, 16 SVG
+  geometry cases and eight hot-update checks. Open workspaces retain their
+  selected task, draft and settings page; closed workspaces remain closed.
+- Real provider accounts, live publisher full-text acquisition, and Windows/Linux
+  Zotero behavior have not been retested for this Beta.
+- Exact candidate checks and remaining publication acceptance are recorded in
+  the [Beta acceptance record](https://github.com/ZionDoki/confucius/blob/v0.6.3-beta.1/.github/maintainers/acceptance/release-0.6.3-beta.1.md).
+
 ## 0.6.2 - 2026-10-12
 
 ### Fixed

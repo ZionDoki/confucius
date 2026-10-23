@@ -291,4 +291,76 @@ describe("ExternalBackend", () => {
     );
     assert.equal(eventReads, 3);
   });
+
+  it("skips a replayed buffer when the cursor was trimmed", async () => {
+    const cursors: Array<string | undefined> = [];
+    let eventReads = 0;
+    const seen: ConfuciusEvent[] = [];
+    let currentTerminalSeen!: () => void;
+    const currentTerminal = new Promise<void>((resolve) => {
+      currentTerminalSeen = resolve;
+    });
+    const sidecar = {
+      events: async (
+        _taskId: string,
+        afterId?: string,
+      ): Promise<SidecarEventPage> => {
+        cursors.push(afterId);
+        eventReads += 1;
+        if (eventReads === 1) return { events: [], cursorFound: true };
+        if (eventReads === 2) {
+          return {
+            events: [
+              failedEvent("stale-terminal", "turn-old"),
+              {
+                id: "stale-text",
+                sessionId: "task-1",
+                turnId: "turn-old",
+                type: "text_delta",
+                ts: 3,
+                payload: { text: "already delivered", phase: "final_answer" },
+              },
+            ],
+            cursorFound: false,
+          };
+        }
+        return {
+          events: [failedEvent("current-terminal", "turn-1")],
+          cursorFound: true,
+        };
+      },
+      rpc: async () => ({ externalSessionId: "provider-session" }),
+    } as unknown as SidecarClient;
+    const backend = new ExternalBackend("codex", sidecar);
+
+    await backend.startTurn(
+      {
+        task: task(),
+        turnId: "turn-1",
+        prompt: "Continue",
+        mode: "agent",
+        capabilityProfile: "zotero_only",
+      },
+      {
+        ...callbacks(seen).value,
+        event: (event) => {
+          seen.push(event);
+          if (event.id === "current-terminal") currentTerminalSeen();
+        },
+      },
+    );
+    await currentTerminal;
+    await Promise.resolve();
+
+    assert.deepEqual(
+      seen.map((event) => event.id),
+      ["current-terminal"],
+      "a trimmed buffer must not replay old-turn events into the live turn",
+    );
+    assert.equal(
+      cursors[2],
+      "stale-text",
+      "the cursor should jump to the newest retained event",
+    );
+  });
 });

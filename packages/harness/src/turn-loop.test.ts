@@ -1,10 +1,20 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { ApprovalResolution, TimelineBlock } from "@confucius/protocol";
-import { coalesceTimeline } from "@confucius/protocol";
+import type {
+  ApprovalResolution,
+  TimelineBlock,
+  ToolExecutionContext,
+  ToolExecutionScope,
+  ToolResult,
+} from "@confucius/protocol";
+import { coalesceTimeline, initialContextWindow } from "@confucius/protocol";
 import { createHarness, session } from "./test-kit";
 import { MemoryToolProvider } from "./MemoryToolProvider";
+import type { ModelMessage, ModelRequest } from "./ModelAdapter";
+import type { TurnCheckpoint } from "./CheckpointStore";
+import { WindowContext } from "./WindowContext";
 import { assertParallelSafeInvariant } from "./ConcurrencyScheduler";
+import type { ToolProvider } from "./ToolProvider";
 
 function registerPageInspector(tools: MemoryToolProvider): void {
   tools.register(
@@ -1296,4 +1306,899 @@ describe("tool invariants", () => {
       { items: [{ title: "hit:beta" }] },
     );
   });
+});
+
+describe("TurnLoop provider contract", () => {
+  function provider(inner: MemoryToolProvider): ToolProvider {
+    return {
+      listTools: () => inner.listTools(),
+      getMeta: (name) => inner.getMeta(name),
+      getSchema: (name) => inner.getSchema(name),
+      call: (name, args, signal) => inner.call(name, args, signal),
+    };
+  }
+
+  it("validates raw arguments before asking a provider to prepare", async () => {
+    let prepareCalls = 0;
+    let toolCalls = 0;
+    const inner = new MemoryToolProvider();
+    inner.register(
+      {
+        name: "create_collection",
+        description: "Create",
+        inputSchema: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+        },
+      },
+      {
+        name: "create_collection",
+        catalog: "library.write",
+        concurrency: "serial",
+        mutatesState: true,
+      },
+      () => ({ created: true }),
+    );
+    const base = provider(inner);
+    const tools: ToolProvider = {
+      ...base,
+      prepare: async () => {
+        prepareCalls++;
+        return null;
+      },
+      call: async (name, args, signal) => {
+        toolCalls++;
+        return base.call(name, args, signal);
+      },
+    };
+    const h = createHarness({
+      toolProvider: tools,
+      modeFor: () => "auto_allow",
+      script: [
+        { toolCalls: [{ id: "bad", name: "create_collection", args: {} }] },
+        { text: "done" },
+      ],
+    });
+    const result = await h.loop.run({
+      session: session(),
+      turnId: "invalid_before_prepare",
+      userText: "Create one collection",
+    });
+    assert.equal(result.phase, "done");
+    assert.equal(prepareCalls, 0);
+    assert.equal(toolCalls, 0);
+    const toolResult = h.events.events.find(
+      (event) => event.type === "tool_result",
+    );
+    assert.equal(toolResult?.type, "tool_result");
+    if (toolResult?.type === "tool_result") {
+      assert.equal(toolResult.payload.result.ok, false);
+      assert.equal(toolResult.payload.result.code, "invalid_args");
+    }
+  });
+
+  it("pauses every prepared scope while a later call waits for approval", async () => {
+    const inner = new MemoryToolProvider();
+    inner.register(
+      {
+        name: "search_items",
+        description: "Search",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+        },
+      },
+      {
+        name: "search_items",
+        catalog: "library.read",
+        concurrency: "parallel_safe",
+        mutatesState: false,
+      },
+      () => ({ items: [] }),
+    );
+    inner.register(
+      {
+        name: "create_collection",
+        description: "Create",
+        inputSchema: {
+          type: "object",
+          properties: { name: { type: "string" } },
+        },
+      },
+      {
+        name: "create_collection",
+        catalog: "library.write",
+        concurrency: "serial",
+        mutatesState: true,
+      },
+      () => ({ created: true }),
+    );
+    type ObservedScope = ToolExecutionScope & {
+      paused: boolean;
+      pauses: number;
+      resumes: number;
+    };
+    const scopes: ObservedScope[] = [];
+    const tools: ToolProvider = {
+      ...provider(inner),
+      prepare: async (
+        _name: string,
+        _args: Record<string, unknown>,
+        context?: ToolExecutionContext,
+      ) => {
+        const scope: ObservedScope = {
+          deadlineAt: Number.POSITIVE_INFINITY,
+          signal: new AbortController().signal,
+          paused: false,
+          pauses: 0,
+          resumes: 0,
+          pause() {
+            this.paused = true;
+            this.pauses++;
+          },
+          resume() {
+            this.paused = false;
+            this.resumes++;
+          },
+        };
+        scopes.push(scope);
+        if (context) context.executionScope = scope;
+        return null;
+      },
+    };
+    let pausedDuringApproval: boolean[] = [];
+    const h = createHarness({
+      toolProvider: tools,
+      modeFor: (name) => (name === "create_collection" ? "ask" : "auto_allow"),
+      resolve: (request) => {
+        pausedDuringApproval = scopes.map((scope) => scope.paused);
+        return { id: request.id, verdict: "allow", scope: "once" };
+      },
+      script: [
+        {
+          toolCalls: [
+            { id: "search", name: "search_items", args: { query: "x" } },
+            { id: "create", name: "create_collection", args: { name: "C" } },
+          ],
+        },
+        { text: "done" },
+      ],
+    });
+    const result = await h.loop.run({
+      session: session(),
+      turnId: "approval_scopes",
+      userText: "Search then create",
+    });
+    assert.equal(result.phase, "done");
+    assert.equal(scopes.length, 2);
+    assert.deepEqual(
+      pausedDuringApproval,
+      [true, true],
+      "both prepared scopes must freeze while the user decides",
+    );
+    assert.ok(
+      scopes.every((scope) => !scope.paused && scope.resumes > 0),
+      "every scope resumes after the decision",
+    );
+  });
+});
+
+describe("TurnLoop resume history", () => {
+  async function completedCheckpoint(userText: string, modelUserText?: string) {
+    const h = createHarness({ script: [{ text: "first answer" }] });
+    const result = await h.loop.run({
+      session: session(),
+      turnId: "original",
+      userText,
+      ...(modelUserText ? { modelUserText } : {}),
+    });
+    assert.equal(result.phase, "done");
+    return h.checkpoints.latest("original")!;
+  }
+
+  it("does not append the stored user request again when resuming", async () => {
+    const checkpoint = await completedCheckpoint("Do the thing");
+    const requests: ModelMessage[][] = [];
+    const h = createHarness({
+      model: {
+        async complete(request) {
+          requests.push(structuredClone(request.messages));
+          return { text: "continued" };
+        },
+      },
+    });
+    const result = await h.loop.run({
+      session: session(),
+      turnId: "continued",
+      userText: "Do the thing",
+      resume: checkpoint,
+    });
+    assert.equal(result.phase, "done");
+    const userTurns = requests[0].filter(
+      (message) =>
+        message.role === "user" && message.content === "Do the thing",
+    );
+    assert.equal(userTurns.length, 1);
+    assert.ok(
+      requests[0].some(
+        (message) =>
+          message.role === "system" &&
+          /resumes a saved checkpoint/.test(message.content),
+      ),
+    );
+  });
+
+  it("matches a stored attachment prompt by its visible request prefix", async () => {
+    const checkpoint = await completedCheckpoint(
+      "Summarize this file",
+      "Summarize this file\n\n<confucius_read_only_attachments>ATTACHED BODY",
+    );
+    const requests: ModelMessage[][] = [];
+    const h = createHarness({
+      model: {
+        async complete(request) {
+          requests.push(structuredClone(request.messages));
+          return { text: "continued" };
+        },
+      },
+    });
+    await h.loop.run({
+      session: session(),
+      turnId: "continued",
+      userText: "Summarize this file",
+      resume: checkpoint,
+    });
+    assert.equal(
+      requests[0].filter(
+        (message) =>
+          message.role === "user" && message.content === "Summarize this file",
+      ).length,
+      0,
+      "the plain request must not be appended after the attachment prompt",
+    );
+    assert.ok(
+      requests[0].some((message) => message.content.includes("ATTACHED BODY")),
+    );
+  });
+
+  it("still appends a genuinely new continuation request exactly once", async () => {
+    const checkpoint = await completedCheckpoint("Do the thing");
+    const requests: ModelMessage[][] = [];
+    const h = createHarness({
+      model: {
+        async complete(request) {
+          requests.push(structuredClone(request.messages));
+          return { text: "continued" };
+        },
+      },
+    });
+    await h.loop.run({
+      session: session(),
+      turnId: "continued",
+      userText: "Now verify the citations",
+      resume: checkpoint,
+    });
+    assert.equal(
+      requests[0].filter(
+        (message) => message.content === "Now verify the citations",
+      ).length,
+      1,
+    );
+    assert.equal(
+      requests[0].filter((message) => message.content === "Do the thing")
+        .length,
+      1,
+    );
+  });
+});
+
+describe("TurnLoop resume reconciliation", () => {
+  const createCollection = {
+    name: "create_collection",
+    description: "Create a collection",
+    inputSchema: {
+      type: "object" as const,
+      properties: { name: { type: "string" } },
+      required: ["name"],
+      additionalProperties: false,
+    },
+  };
+  const writeMeta = {
+    name: "create_collection",
+    catalog: "library.write" as const,
+    concurrency: "serial" as const,
+    mutatesState: true,
+  };
+  const receipt: ToolResult = {
+    ok: true,
+    toolName: "create_collection",
+    effect: "applied",
+    data: { created: true, name: "New" },
+  };
+  const startedCheckpoint = (
+    executions: TurnCheckpoint["toolExecutions"],
+    history: ModelMessage[] = [{ role: "assistant", content: "Working on it" }],
+  ): TurnCheckpoint => ({
+    turnId: "turn_resume",
+    iteration: 1,
+    savedAt: 900,
+    messages: [
+      { role: "system", content: "You are Confucius, a research agent." },
+      { role: "user", content: "Create the collection" },
+      ...history,
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          { id: "call_old", name: "create_collection", args: { name: "New" } },
+        ],
+      },
+    ],
+    toolExecutions: executions,
+  });
+  const startedExecution = (result?: ToolResult) => ({
+    callId: "exec_old",
+    modelCallId: "call_old",
+    toolName: "create_collection",
+    args: { name: "New" },
+    requestedArgs: { name: "New" },
+    status: "started" as const,
+    ...(result ? { result } : {}),
+  });
+
+  it("surfaces a reconciled receipt instead of dispatching the write again", async () => {
+    let writes = 0;
+    const requests: ModelRequest[] = [];
+    let modelCalls = 0;
+    const h = createHarness({
+      modeFor: () => "auto_allow",
+      model: {
+        async complete(request) {
+          requests.push(structuredClone(request));
+          modelCalls++;
+          if (modelCalls === 1)
+            return {
+              toolCalls: [
+                {
+                  id: "call_new",
+                  name: "create_collection",
+                  args: { name: "New" },
+                },
+              ],
+            };
+          return { text: "done" };
+        },
+      },
+    });
+    h.tools.register(createCollection, writeMeta, () => {
+      writes++;
+      return { created: true, name: "New" };
+    });
+    const result = await h.loop.run({
+      session: session(),
+      turnId: "turn_new",
+      userText: "Create the collection",
+      resume: startedCheckpoint([startedExecution(receipt)]),
+    });
+    assert.equal(result.phase, "done", result.failureMessage);
+    assert.equal(writes, 0, "a verified receipt must not be dispatched twice");
+    const tool = requests[0].messages.find(
+      (message) => message.role === "tool",
+    );
+    assert.ok(tool);
+    assert.deepEqual(JSON.parse(tool.content), receipt);
+    const execution = h.checkpoints
+      .latest("turn_new")!
+      .toolExecutions.find((entry) => entry.callId === "exec_old");
+    assert.equal(execution?.status, "completed");
+    assert.deepEqual(execution?.result, receipt);
+  });
+
+  it("truncates a large resumed receipt before history but keeps it in the journal", async () => {
+    const largeReceipt: ToolResult = {
+      ok: true,
+      toolName: "create_collection",
+      effect: "applied",
+      data: {
+        created: true,
+        name: "New",
+        body: "RECEIPT_BODY ".repeat(5000),
+      },
+    };
+    const requests: ModelRequest[] = [];
+    const h = createHarness({
+      modeFor: () => "auto_allow",
+      model: {
+        async complete(request) {
+          requests.push(structuredClone(request));
+          return { text: "done" };
+        },
+      },
+    });
+    h.tools.register(createCollection, writeMeta, () => {
+      throw new Error("a reconciled write must not be dispatched");
+    });
+    const result = await h.loop.run({
+      session: session(),
+      turnId: "turn_new",
+      userText: "Create the collection",
+      resume: startedCheckpoint([startedExecution(largeReceipt)]),
+    });
+    assert.equal(result.phase, "done", result.failureMessage);
+    const tool = requests[0].messages.find(
+      (message) => message.role === "tool",
+    );
+    assert.ok(tool);
+    assert.ok(
+      tool.content.length < 21_000,
+      `receipt must be near the 20k cap before the request: ${tool.content.length}`,
+    );
+    assert.match(tool.content, /"truncated":true/);
+    const execution = h.checkpoints
+      .latest("turn_new")!
+      .toolExecutions.find((entry) => entry.callId === "exec_old");
+    assert.equal(execution?.status, "completed");
+    assert.deepEqual(
+      execution?.result,
+      largeReceipt,
+      "the complete receipt remains in the execution journal",
+    );
+  });
+
+  it("truncates a replayed reconciled receipt when the resumed model retries the write", async () => {
+    const largeReceipt: ToolResult = {
+      ok: true,
+      toolName: "create_collection",
+      effect: "applied",
+      data: { created: true, name: "New", body: "REPLAY_BODY ".repeat(5000) },
+    };
+    let writes = 0;
+    let modelCalls = 0;
+    const requests: ModelRequest[] = [];
+    const h = createHarness({
+      modeFor: () => "auto_allow",
+      model: {
+        async complete(request) {
+          requests.push(structuredClone(request));
+          modelCalls++;
+          if (modelCalls === 1)
+            return {
+              toolCalls: [
+                {
+                  id: "call_new",
+                  name: "create_collection",
+                  args: { name: "New" },
+                },
+              ],
+            };
+          return { text: "done" };
+        },
+      },
+    });
+    h.tools.register(createCollection, writeMeta, () => {
+      writes++;
+      return { created: true, name: "New" };
+    });
+    const result = await h.loop.run({
+      session: session(),
+      turnId: "turn_new",
+      userText: "Create the collection",
+      resume: startedCheckpoint([startedExecution(largeReceipt)]),
+    });
+    assert.equal(result.phase, "done", result.failureMessage);
+    assert.equal(writes, 0, "the replayed write must not execute again");
+    const replay = requests[1].messages.find(
+      (message) => message.role === "tool" && message.toolCallId === "call_new",
+    );
+    assert.ok(replay);
+    assert.ok(replay.content.length < 21_000);
+    assert.match(replay.content, /"truncated":true/);
+  });
+
+  for (const contextWindowTokens of [4096, 2400]) {
+    it(`keeps the applied effect of a 70k resumed receipt in a ${contextWindowTokens}-token first window`, async () => {
+      const largeReceipt: ToolResult = {
+        ok: true,
+        toolName: "create_collection",
+        effect: "applied",
+        data: {
+          created: true,
+          name: "New",
+          body: "RECEIPT_BODY ".repeat(5400),
+        },
+      };
+      assert.ok(
+        JSON.stringify(largeReceipt).length > 70_000,
+        "the fixture receipt must be larger than the 20k inline cap",
+      );
+      let switches = 0;
+      const manager = new WindowContext({
+        window: initialContextWindow("task_resume", "native"),
+        contextWindowTokens,
+        maxOutputTokens: 400,
+        nextId: (() => {
+          let id = 0;
+          return () => `ctx_${++id}`;
+        })(),
+        archive: async (input) => ({
+          taskId: "task_resume",
+          windowId: input.windowId,
+          itemId: input.id,
+        }),
+        switchWindow: async () => {
+          switches++;
+        },
+        hint: async () => "Read the progress note.",
+      });
+      const requests: ModelRequest[] = [];
+      const h = createHarness({
+        context: manager,
+        modeFor: () => "auto_allow",
+        model: {
+          async complete(request) {
+            requests.push(structuredClone(request));
+            return { text: "done" };
+          },
+        },
+      });
+      h.tools.register(createCollection, writeMeta, () => {
+        throw new Error("a reconciled write must not be dispatched");
+      });
+      const result = await h.loop.run({
+        session: session(),
+        turnId: "turn_new",
+        userText: "Create the collection",
+        resume: startedCheckpoint(
+          [startedExecution(largeReceipt)],
+          [{ role: "assistant", content: "OLD_CONTEXT ".repeat(3000) }],
+        ),
+      });
+      assert.equal(result.phase, "done", result.failureMessage);
+      assert.equal(switches, 1, "the oversized history must roll over");
+      const tool = requests[0].messages.find(
+        (message) =>
+          message.role === "tool" && message.toolCallId === "call_old",
+      );
+      assert.ok(tool, "the first request still carries the resumed receipt");
+      const compact = JSON.parse(tool.content);
+      assert.equal(compact.ok, true);
+      assert.equal(compact.toolName, "create_collection");
+      assert.equal(
+        compact.effect,
+        "applied",
+        "the landed effect stays visible",
+      );
+      assert.equal(compact.data.truncated, true);
+      assert.ok(
+        compact.data.preview.length <= 1200,
+        `the payload preview is bounded: ${compact.data.preview.length}`,
+      );
+      assert.ok(
+        tool.content.length < 2000,
+        `the compact receipt stays small: ${tool.content.length}`,
+      );
+      const execution = h.checkpoints
+        .latest("turn_new")!
+        .toolExecutions.find((entry) => entry.callId === "exec_old");
+      assert.deepEqual(
+        execution?.result,
+        largeReceipt,
+        "the complete receipt remains in the execution journal",
+      );
+    });
+  }
+
+  it("does not re-dispatch a committed write and can still switch context after resume", async () => {
+    let writes = 0;
+    let switches = 0;
+    const manager = new WindowContext({
+      window: initialContextWindow("task_resume", "native"),
+      contextWindowTokens: 2400,
+      maxOutputTokens: 400,
+      nextId: (() => {
+        let id = 0;
+        return () => `ctx_${++id}`;
+      })(),
+      archive: async (input) => ({
+        taskId: "task_resume",
+        windowId: input.windowId,
+        itemId: input.id,
+      }),
+      switchWindow: async () => {
+        switches++;
+      },
+      hint: async () => "Read the progress note.",
+    });
+    const h = createHarness({
+      context: manager,
+      modeFor: () => "auto_allow",
+      script: [
+        {
+          toolCalls: [
+            {
+              id: "call_new",
+              name: "create_collection",
+              args: { name: "New" },
+            },
+          ],
+        },
+        { text: "done" },
+      ],
+    });
+    h.tools.register(createCollection, writeMeta, () => {
+      writes++;
+      return { created: true, name: "New" };
+    });
+    const result = await h.loop.run({
+      session: session(),
+      turnId: "turn_new",
+      userText: "Create the collection",
+      resume: startedCheckpoint(
+        [startedExecution(receipt)],
+        [{ role: "assistant", content: "OLD_CONTEXT ".repeat(3000) }],
+      ),
+    });
+    assert.equal(result.phase, "done", result.failureMessage);
+    assert.equal(writes, 0, "the committed write must not be dispatched twice");
+    assert.equal(switches, 1, "the resumed turn can still switch context");
+  });
+
+  it("closes a started execution without a receipt as failed and allows rollover", async () => {
+    let switches = 0;
+    const saves: TurnCheckpoint[] = [];
+    const manager = new WindowContext({
+      window: initialContextWindow("task_resume", "native"),
+      contextWindowTokens: 2400,
+      maxOutputTokens: 400,
+      nextId: (() => {
+        let id = 0;
+        return () => `ctx_${++id}`;
+      })(),
+      archive: async (input) => ({
+        taskId: "task_resume",
+        windowId: input.windowId,
+        itemId: input.id,
+      }),
+      switchWindow: async () => {
+        switches++;
+      },
+      hint: async () => "Read the progress note.",
+    });
+    const h = createHarness({
+      context: manager,
+      script: [{ text: "done" }],
+      checkpointStore: {
+        save(checkpoint) {
+          saves.push(structuredClone(checkpoint));
+        },
+      },
+    });
+    const result = await h.loop.run({
+      session: session(),
+      turnId: "turn_new",
+      userText: "Create the collection",
+      resume: startedCheckpoint(
+        [startedExecution()],
+        [
+          {
+            role: "assistant",
+            content: "OLD_CONTEXT ".repeat(3000),
+          },
+        ],
+      ),
+    });
+    assert.equal(result.phase, "done", result.failureMessage);
+    assert.equal(
+      switches,
+      1,
+      "the stale started entry must not block rollover",
+    );
+    assert.equal(
+      saves.some((checkpoint) =>
+        checkpoint.messages.some(
+          (message) =>
+            (message as ModelMessage).role === "tool" &&
+            String((message as ModelMessage).content).includes(
+              '"effect":"unknown"',
+            ),
+        ),
+      ),
+      true,
+      "the unresolved execution is reported to the model as unknown",
+    );
+    const execution = saves
+      .flatMap((checkpoint) => checkpoint.toolExecutions)
+      .find((entry) => entry.callId === "exec_old");
+    assert.equal(execution?.status, "failed");
+  });
+
+  it("gives user-edited retried arguments a new operation identity", async () => {
+    const preparedIds: string[] = [];
+    const calledIds: string[] = [];
+    const executed: Record<string, unknown>[] = [];
+    const base = new MemoryToolProvider();
+    base.register(createCollection, writeMeta, (args) => {
+      executed.push(args);
+      return { created: true, name: args.name };
+    });
+    const provider: ToolProvider = {
+      listTools: () => base.listTools(),
+      getMeta: (name) => base.getMeta(name),
+      getSchema: (name) => base.getSchema(name),
+      prepare: async (
+        _name: string,
+        _args: Record<string, unknown>,
+        context: ToolExecutionContext = {},
+      ) => {
+        preparedIds.push(String(context.operationId));
+        return null;
+      },
+      call: async (name, args, signal, context = {}) => {
+        calledIds.push(String(context.operationId));
+        return base.call(name, args, signal);
+      },
+    };
+    const h = createHarness({
+      toolProvider: provider,
+      resolve: (request) => ({
+        id: request.id,
+        verdict: "allow",
+        scope: "once",
+        editedArgs: { name: "Edited" },
+      }),
+      script: [
+        {
+          toolCalls: [
+            {
+              id: "call_old",
+              name: "create_collection",
+              args: { name: "New" },
+            },
+          ],
+        },
+        { text: "done" },
+      ],
+    });
+    const result = await h.loop.run({
+      session: session(),
+      turnId: "turn_new",
+      userText: "Create the collection",
+      resume: startedCheckpoint([startedExecution()]),
+    });
+    assert.equal(result.phase, "done", result.failureMessage);
+    assert.deepEqual(executed, [{ name: "Edited" }]);
+    assert.equal(preparedIds[0], "sess_1:turn_resume:exec_old");
+    assert.ok(calledIds[0]?.startsWith("sess_1:turn_new:"), calledIds[0]);
+    assert.notEqual(calledIds[0], preparedIds[0]);
+  });
+
+  it("keeps the operation identity stable across resume", async () => {
+    const operationIds: string[] = [];
+    const base = new MemoryToolProvider();
+    base.register(createCollection, writeMeta, () => ({
+      created: true,
+      name: "New",
+    }));
+    const provider = Object.assign(base, {
+      prepare: async (
+        _name: string,
+        _args: Record<string, unknown>,
+        context: ToolExecutionContext = {},
+      ) => {
+        operationIds.push(String(context.operationId));
+        return null;
+      },
+    });
+    const h = createHarness({
+      toolProvider: provider,
+      modeFor: () => "auto_allow",
+      script: [
+        {
+          toolCalls: [
+            {
+              id: "call_old",
+              name: "create_collection",
+              args: { name: "New" },
+            },
+          ],
+        },
+        { text: "done" },
+      ],
+    });
+    const result = await h.loop.run({
+      session: session(),
+      turnId: "turn_new",
+      userText: "Create the collection",
+      resume: startedCheckpoint([startedExecution()]),
+    });
+    assert.equal(result.phase, "done", result.failureMessage);
+    assert.equal(operationIds[0], "sess_1:turn_resume:exec_old");
+  });
+
+  for (const status of ["failed", "started"] as const) {
+    it(`gives a definitely failed ${status} write a fresh operation identity when retried`, async () => {
+      const operationIds: string[] = [];
+      let writes = 0;
+      const base = new MemoryToolProvider();
+      base.register(createCollection, writeMeta, () => {
+        writes++;
+        return { created: true, name: "New" };
+      });
+      const provider: ToolProvider = {
+        listTools: () => base.listTools(),
+        getMeta: (name) => base.getMeta(name),
+        getSchema: (name) => base.getSchema(name),
+        prepare: async (
+          _name: string,
+          _args: Record<string, unknown>,
+          context: ToolExecutionContext = {},
+        ) => {
+          operationIds.push(String(context.operationId));
+          return null;
+        },
+        call: async (
+          name,
+          args,
+          signal,
+          context: ToolExecutionContext = {},
+        ) => {
+          operationIds.push(String(context.operationId));
+          return await base.call(name, args, signal);
+        },
+      };
+      const failedReceipt: ToolResult = {
+        ok: false,
+        toolName: "create_collection",
+        code: "invalid_args",
+        effect: "none",
+        retryable: false,
+        message: "Name was rejected",
+      };
+      const h = createHarness({
+        toolProvider: provider,
+        modeFor: () => "auto_allow",
+        script: [
+          {
+            toolCalls: [
+              {
+                id: "call_old",
+                name: "create_collection",
+                args: { name: "New" },
+              },
+            ],
+          },
+          { text: "done" },
+        ],
+      });
+      const result = await h.loop.run({
+        session: session(),
+        turnId: "turn_new",
+        userText: "Create the collection",
+        resume: startedCheckpoint([
+          {
+            callId: "exec_old",
+            modelCallId: "call_old",
+            toolName: "create_collection",
+            args: { name: "New" },
+            requestedArgs: { name: "New" },
+            // Host reconciliation attaches the definitive receipt while keeping
+            // started until TurnLoop closes the interrupted checkpoint entry.
+            status,
+            result: failedReceipt,
+          },
+        ]),
+      });
+      assert.equal(result.phase, "done", result.failureMessage);
+      assert.equal(writes, 1, "a definitive failure may be retried");
+      assert.equal(operationIds.length, 2);
+      assert.notEqual(
+        operationIds[0],
+        "sess_1:turn_resume:exec_old",
+        "a failed attempt must not reuse its operation identity",
+      );
+      assert.ok(operationIds[0]?.startsWith("sess_1:turn_new:"));
+      assert.equal(operationIds[1], operationIds[0]);
+    });
+  }
 });

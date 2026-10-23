@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { HistoryStore } from "./history";
 import { InMemoryFileSystem } from "./fs";
-import { indexPassages } from "./passages";
+import { foldedIndex, indexPassages, passageExcerpt } from "./passages";
 
 test("page chunks preserve exact escaped JSON offsets and distinguish two hits in one result", async () => {
   const store = new HistoryStore(new InMemoryFileSystem(), "/history");
@@ -83,6 +83,58 @@ test("rare terms outrank a weak related hit and document titles remain searchabl
   assert.equal(
     (await store.search({ query: "Unique study" })).items[0].taskId,
     "task24",
+  );
+});
+
+test("an empty query excerpts from the passage start", () => {
+  const content = "HEAD " + "x".repeat(120) + " TAIL";
+  const passage = indexPassages(content).passages[0];
+  assert.equal(foldedIndex(content, "  "), 0);
+  const excerpt = passageExcerpt(content, passage, "");
+  assert.equal(excerpt.offset, passage.start);
+  assert.ok(excerpt.excerpt.startsWith("HEAD"));
+});
+
+test("excerpt offsets remain in the original when lowercase expands a character", async () => {
+  const content = "İ".repeat(40) + " needle evidence";
+  const hit = content.indexOf("needle");
+  assert.ok(hit > 32);
+  assert.equal(foldedIndex(content, "needle"), hit);
+  assert.equal(foldedIndex(content, "absent"), -1);
+  const passage = indexPassages(content).passages[0];
+  const excerpt = passageExcerpt(content, passage, "needle");
+  assert.ok(excerpt.excerpt.includes("needle"));
+  assert.ok(excerpt.offset <= hit && excerpt.endOffset > hit);
+  assert.equal(
+    excerpt.excerpt,
+    content.slice(excerpt.offset, excerpt.endOffset),
+  );
+
+  const store = new HistoryStore(new InMemoryFileSystem(), "/history");
+  store.register({
+    id: "task",
+    title: "Task",
+    backend: "native",
+    status: "completed",
+    updatedAt: 1,
+  });
+  await store.append({
+    taskId: "task",
+    windowId: "w",
+    itemId: "i",
+    role: "tool",
+    content,
+    sourceIds: [],
+  });
+  const found = await store.search({ query: "needle", taskId: "task" });
+  assert.equal(found.total, 1);
+  const result = found.items[0];
+  assert.ok(result.excerpt.includes("needle"));
+  assert.ok(result.offset! <= hit);
+  assert.ok(result.endOffset! > hit);
+  assert.equal(
+    result.excerpt,
+    content.slice(result.offset!, result.endOffset!),
   );
 });
 

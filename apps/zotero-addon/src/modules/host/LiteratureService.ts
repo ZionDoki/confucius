@@ -9,6 +9,7 @@ import type {
   LockedItemContext,
   LiteratureAcquisitionResult,
   LiteratureAcquisitionStage,
+  ToolResult,
 } from "@confucius/protocol";
 import {
   ResourceLocks,
@@ -66,6 +67,10 @@ export function literatureSummary(pool: LiteraturePool): LiteratureSummary {
 }
 export interface LiteratureAcquirer {
   ensureItem(work: LiteratureWork): Promise<LockedItemContext>;
+  /** Return only an on-disk, identity-verified PDF; throw if inspection is unavailable. */
+  findExisting?(
+    work: LiteratureWork,
+  ): Promise<LiteratureAcquisitionResult | undefined>;
   acquire(
     work: LiteratureWork,
     signal: AbortSignal,
@@ -121,6 +126,8 @@ export class LiteratureService {
     { abort: AbortController; work: Promise<void> }
   >();
   private readonly batches = new Map<string, AbortController>();
+  /** Task-level cancellation fence; confirmations capture it before waiting for the lock. */
+  private readonly cancelFences = new Map<string, number>();
   private readonly listeners = new Map<string, Set<() => void>>();
   private readonly confirmationWaits = new Map<
     string,
@@ -149,6 +156,9 @@ export class LiteratureService {
   private assert(taskId: string) {
     if (this.removed.has(taskId) || !this.options.exists(taskId))
       throw new Error("Research task no longer exists");
+  }
+  private cancelFence(taskId: string) {
+    return this.cancelFences.get(taskId) ?? 0;
   }
   private enrich(works: LiteratureWork[]) {
     if (this.options.ratings) return this.options.ratings.enrich(works);
@@ -703,11 +713,25 @@ export class LiteratureService {
   }
   async confirm(taskId: string, revision: number) {
     this.options.canConfirm(taskId);
-    await this.locks.run([taskId], async () => {
-      const batch = createAbortController();
-      this.batches.set(taskId, batch);
-      try {
+    // Register the fence before waiting for the pool lock so a confirm queued behind
+    // a slow write can still be cancelled instead of importing and binding later.
+    const fence = this.cancelFence(taskId);
+    const batch = createAbortController();
+    this.batches.set(taskId, batch);
+    const active = () =>
+      !batch.signal.aborted && this.cancelFence(taskId) === fence;
+    const ensureActive = () => {
+      if (!active())
+        throw new LiteratureError(
+          "cancelled",
+          "Confirmation batch cancelled; saved items are retained",
+        );
+    };
+    try {
+      await this.locks.run([taskId], async () => {
+        ensureActive();
         const p = await this.load(taskId);
+        ensureActive();
         if (p.candidateRevision !== revision)
           throw new Error(
             "Candidate revision conflict; review the changed selection before confirming",
@@ -718,14 +742,11 @@ export class LiteratureService {
         p.confirmedRevision = revision;
         p.waiting = { candidateRevision: revision, requestedAt: Date.now() };
         delete p.continuation;
+        ensureActive();
         await this.save(p);
         for (const w of selected) {
           this.assert(taskId);
-          if (batch.signal.aborted)
-            throw new LiteratureError(
-              "cancelled",
-              "Confirmation batch cancelled; saved items are retained",
-            );
+          ensureActive();
           if (!w.acquisition.item) {
             try {
               w.acquisition.item = await this.options.acquire.ensureItem(
@@ -739,11 +760,7 @@ export class LiteratureService {
             await this.save(p);
           }
         }
-        if (batch.signal.aborted)
-          throw new LiteratureError(
-            "cancelled",
-            "Confirmation batch cancelled",
-          );
+        ensureActive();
         this.options.canConfirm(taskId);
         const removed = p.works
           .filter((w) => p.confirmedIds.includes(w.id) && !w.decision.selected)
@@ -757,18 +774,35 @@ export class LiteratureService {
         );
         p.confirmedIds = selected.map((w) => w.id);
         delete p.waiting;
-        for (const w of selected)
-          if (
-            w.acquisition.item &&
-            !["available", "downloading"].includes(w.acquisition.status)
-          )
-            w.acquisition.status = "queued";
+        // A cancel during bind keeps the durable receipt but must not queue downloads.
+        if (active())
+          for (const w of selected)
+            if (
+              w.acquisition.item &&
+              !["available", "downloading"].includes(w.acquisition.status)
+            )
+              w.acquisition.status = "queued";
         await this.save(p);
-      } finally {
-        this.batches.delete(taskId);
-      }
-    });
-    this.start(taskId);
+        // A cancel can land during the save above, after cancel() already
+        // scanned for queued work. Persist the stopped state so no entry stays
+        // queued without a download job.
+        if (!active()) {
+          let cleaned = false;
+          for (const w of selected)
+            if (w.acquisition.status === "queued") {
+              w.acquisition.status = "failed";
+              w.acquisition.error = "cancelled";
+              w.acquisition.message =
+                "下载已停止，可重试 / Download stopped; retry available";
+              cleaned = true;
+            }
+          if (cleaned) await this.save(p);
+        }
+      });
+    } finally {
+      if (this.batches.get(taskId) === batch) this.batches.delete(taskId);
+    }
+    if (active()) this.start(taskId);
     return this.list(taskId);
   }
   private start(taskId: string) {
@@ -1086,6 +1120,145 @@ export class LiteratureService {
       return this.get(taskId, work.id);
     });
   }
+  private downloadReceipt(
+    work: LiteratureWork,
+    linkId: string,
+    acquisition: LiteratureWork["acquisition"],
+  ): ToolResult {
+    return {
+      ok: true,
+      toolName: "literature_download_fulltext",
+      effect: "applied",
+      data: {
+        id: work.id,
+        title: work.title,
+        doi: work.doi,
+        decision: work.decision,
+        acquisition: {
+          ...acquisition,
+          attempts: undefined,
+          attemptCount: acquisition.attempts?.length ?? 0,
+        },
+        linkId,
+        reconciled: true,
+      },
+    };
+  }
+  private downloadAbsent(message: string): ToolResult {
+    return {
+      ok: false,
+      toolName: "literature_download_fulltext",
+      effect: "none",
+      code: "unavailable",
+      retryable: false,
+      message,
+    };
+  }
+  /** Persist the native attachment as the missing half of an interrupted write. */
+  private async persistNativeAttachment(
+    taskId: string,
+    workId: string,
+    verified: LiteratureAcquisitionResult,
+  ) {
+    let saved: LiteratureWork | undefined;
+    await this.mutate(taskId, (pool) => {
+      const work = pool.works.find(
+        (w) => w.id === workId || w.openAlexIds.includes(workId),
+      );
+      if (!work) return;
+      const acquisition = work.acquisition;
+      if (acquisition.status !== "available") {
+        Object.assign(acquisition, verified, { status: "available" });
+        acquisition.version ??= "unknown";
+        delete acquisition.error;
+        delete acquisition.message;
+        if (acquisition.item)
+          acquisition.item.attachmentKey = verified.attachmentKey;
+      }
+      saved = clone(work);
+    });
+    return saved;
+  }
+  /**
+   * Rebuild the outcome of an interrupted `literature_download_fulltext` from
+   * the pool's own acquisition state (and the recorded native attachment).
+   * Returning null keeps the operation unknown while a download may still be in
+   * flight or the native attachment cannot be inspected. A native PDF turns
+   * even a failed (recovered) record into an applied receipt.
+   */
+  async reconcileDownload(
+    taskId: string,
+    workId: string,
+    linkId: string,
+  ): Promise<ToolResult | null> {
+    const pool = await this.load(taskId);
+    const work = pool.works.find(
+      (w) => w.id === workId || w.openAlexIds.includes(workId),
+    );
+    if (!work) return null;
+    const acquisition = work.acquisition;
+    if (acquisition.status === "available")
+      return this.downloadReceipt(work, linkId, acquisition);
+    if (
+      acquisition.status !== "failed" &&
+      acquisition.status !== "queued" &&
+      acquisition.status !== "downloading"
+    )
+      return null;
+    // An active job may still attach a PDF; never guess while it runs. After
+    // a host crash no job can continue, so the native attachment decides. A
+    // restart marks interrupted work failed before this reconcile runs.
+    if (
+      this.jobs.has(taskId) ||
+      this.batches.has(taskId) ||
+      this.explorationJobs.get(taskId)?.size
+    )
+      return null;
+    const native = await this.nativeAttachmentState(work);
+    if (native?.state === "present") {
+      // A crash can land between the native attach and the pool save. Persist
+      // the delivered receipt before reporting applied, or list/get/UI keep
+      // showing an interrupted download until the next restart marks it failed.
+      const saved = await this.persistNativeAttachment(
+        taskId,
+        work.id,
+        native.verified,
+      );
+      if (saved) return this.downloadReceipt(saved, linkId, saved.acquisition);
+      return null;
+    }
+    if (acquisition.status === "failed") {
+      // No native evidence and no way to check it: keep the write unknown
+      // instead of claiming that no PDF was saved.
+      if (native === undefined && acquisition.item) return null;
+      return this.downloadAbsent(
+        `Verified that no new PDF attachment was saved (${acquisition.error ?? acquisition.message ?? "failed"}).`,
+      );
+    }
+    if (native?.state === "absent")
+      return this.downloadAbsent(
+        "Verified that the interrupted download left no PDF attachment",
+      );
+    return null;
+  }
+  /** The acquisition adapter must verify identity, not merely find a PDF child. */
+  private async nativeAttachmentState(
+    work: LiteratureWork,
+  ): Promise<
+    | { state: "present"; verified: LiteratureAcquisitionResult }
+    | { state: "absent" }
+    | undefined
+  > {
+    // Without an imported item no attachment can have been saved for this work.
+    if (!work.acquisition.item) return { state: "absent" };
+    if (!this.options.acquire.findExisting) return undefined;
+    try {
+      const verified = await this.options.acquire.findExisting(clone(work));
+      return verified ? { state: "present", verified } : { state: "absent" };
+    } catch {
+      return undefined;
+    }
+  }
   async attach(taskId: string, id: string, path: string) {
     const w = await this.get(taskId, id),
       p = await this.load(taskId);
@@ -1116,6 +1289,7 @@ export class LiteratureService {
     return this.list(taskId);
   }
   async cancel(taskId: string) {
+    this.cancelFences.set(taskId, this.cancelFence(taskId) + 1);
     this.invalidateExplorations(taskId);
     this.batches.get(taskId)?.abort();
     const job = this.jobs.get(taskId);

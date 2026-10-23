@@ -83,8 +83,9 @@ export class ResearchMemory {
       ...priorityIds.flatMap((id) => records.filter((r) => r.id === id)),
       ...records.filter(
         (r) =>
-          r.sourceRefs?.includes(`task:${taskId}`) &&
-          r.tags.includes(RESEARCH_MEMORY_TAG),
+          r.tags.includes(RESEARCH_MEMORY_TAG) &&
+          (r.researchTasks?.includes(taskId) ||
+            r.sourceRefs?.includes(`task:${taskId}`)),
       ),
       ...relevant,
     ];
@@ -124,6 +125,7 @@ export class ResearchMemory {
         content: string;
         tags: string[];
         sourceRefs: string[];
+        researchTasks: string[];
       }> = [];
       const conflicts = new Set<string>();
       // Check the whole batch before writing. A known conflict must not leave
@@ -157,13 +159,26 @@ export class ResearchMemory {
         const sourceRefs = [
           ...new Set([...(existing?.sourceRefs ?? []), `task:${taskId}`]),
         ].slice(-20);
+        // sourceRefs is a display-oriented, 20-entry window. Keep every source
+        // task separately so forget can still exclude old contributors, and
+        // merge both fields so tasks recorded by context_save are not lost.
+        const researchTasks = [
+          ...new Set([
+            ...(existing?.researchTasks ?? []),
+            ...(existing?.sourceRefs ?? [])
+              .filter((ref) => ref.startsWith("task:"))
+              .map((ref) => ref.slice(5)),
+            taskId,
+          ]),
+        ];
         const content = `${update.content.trim()}\n\n> ${update.evidence.trim()}`;
         // Recover writes whose receipt was lost before the batch was recorded.
         // An identical body still needs its status and task provenance saved.
         if (
           existing?.content === content &&
           tags.every((tag) => existing.tags.includes(tag)) &&
-          existing.sourceRefs?.includes(`task:${taskId}`)
+          existing.sourceRefs?.includes(`task:${taskId}`) &&
+          existing.researchTasks?.includes(taskId)
         )
           continue;
         if (
@@ -175,7 +190,15 @@ export class ResearchMemory {
           conflicts.add(existing.id);
           continue;
         }
-        plans.push({ update, existing, before, content, tags, sourceRefs });
+        plans.push({
+          update,
+          existing,
+          before,
+          content,
+          tags,
+          sourceRefs,
+          researchTasks,
+        });
       }
       if (
         conflicts.size ||
@@ -196,6 +219,7 @@ export class ResearchMemory {
         content,
         tags,
         sourceRefs,
+        researchTasks,
       } of plans) {
         if (!current()) return changes;
         const validate = () => {
@@ -214,7 +238,7 @@ export class ResearchMemory {
         };
         if (existing) {
           const revised = await this.memory.update(
-            { id: existing.id, content, tags, sourceRefs },
+            { id: existing.id, content, tags, sourceRefs, researchTasks },
             true,
             validate,
           );
@@ -237,6 +261,7 @@ export class ResearchMemory {
                 content,
                 tags,
                 sourceRefs,
+                researchTasks,
                 sourceSessionId: taskId,
                 protection: "none",
                 confidence: 0.8,
@@ -254,6 +279,14 @@ export class ResearchMemory {
   }
   async ignoresArchive(taskId: string): Promise<boolean> {
     return (await this.ledger()).forgottenTasks?.includes(taskId) ?? false;
+  }
+  /** Archive distillation must also drop ordinary additions whose normalized
+   *  title matches a forgotten research topic. The host calls this before
+   *  applying a distilled add; research updates are filtered in apply(). */
+  async suppressesTitle(title: string): Promise<boolean> {
+    return (await this.ledger()).forgotten.includes(
+      await this.digest(identity(title)),
+    );
   }
   async maintainArchive(
     taskId: string,
@@ -281,6 +314,7 @@ export class ResearchMemory {
         ...new Set([
           ...(ledger.forgottenTasks ?? []),
           ...(record.sourceSessionId ? [record.sourceSessionId] : []),
+          ...(record.researchTasks ?? []),
           ...(record.sourceRefs ?? [])
             .filter((ref) => ref.startsWith("task:"))
             .map((ref) => ref.slice(5)),

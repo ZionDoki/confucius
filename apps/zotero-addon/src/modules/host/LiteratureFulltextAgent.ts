@@ -1,4 +1,4 @@
-import type { LiteratureWork, LiteratureVersion } from "@confucius/protocol";
+import type { LiteratureWork } from "@confucius/protocol";
 import { LiteratureError } from "./OpenAlexClient";
 import { fulltextUrl, requestFulltext } from "./LiteratureNetwork";
 import {
@@ -502,6 +502,9 @@ export class LiteratureFulltextAgent {
     const usefulSession = rendered && !requiresLogin && !isChallengePage(doc);
     if (usefulSession) this.fresh(session, linkId);
     const links = pageLinks(doc, response.url).flatMap((found) => {
+      // A page title or prose cannot label a linked file. Source-record versions
+      // are bound to their own URLs when the session is created; the PDF itself
+      // provides explicit version evidence during verification.
       const added = this.add(
         session,
         { ...found, version: "unknown", sourceUrl: response.url },
@@ -511,19 +514,6 @@ export class LiteratureFulltextAgent {
       return added ? [added] : [];
     });
     const text = visiblePageText(doc).slice(0, 8000);
-    const versionEvidence = `${doc.title} ${text.slice(0, 800)}`;
-    // Version assertions need explicit page evidence; a model cannot promote a preprint to a published article.
-    const version: LiteratureVersion =
-      /accepted (?:author )?manuscript|author accepted|accepted version/i.test(
-        versionEvidence,
-      )
-        ? "acceptedVersion"
-        : /\bpreprint\b|submitted version/i.test(versionEvidence)
-          ? "submittedVersion"
-          : "unknown";
-    for (const candidate of links)
-      if (candidate.kind === "pdf" && candidate.version === "unknown")
-        candidate.version = version;
     const result = {
       linkId,
       url: response.url,

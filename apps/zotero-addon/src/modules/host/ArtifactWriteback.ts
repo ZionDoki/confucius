@@ -168,15 +168,32 @@ export function recoverPendingWriteback(
           : result
             ? "failed"
             : "none";
+  // A planned key is only a real note after Zotero confirmed the write. An
+  // unknown outcome may still report ok, so require effect !== "unknown" to
+  // match AgentHost's committed check.
+  const created = result?.ok === true && result.effect !== "unknown";
+  const plannedKey = operation?.context.plannedKeys?.item;
   const key =
-    data?.attachmentKey ?? data?.key ?? operation?.context.plannedKeys?.item;
+    data?.attachmentKey ?? data?.key ?? (created ? plannedKey : undefined);
   const libraryID = data?.libraryID ?? operation?.args.libraryID;
-  const targetRef =
+  const plannedTargetRef =
+    plannedKey && libraryID ? `${libraryID}:${plannedKey}` : undefined;
+  const generatedTargetRef =
     typeof data?.targetRef === "string"
       ? data.targetRef
       : key && libraryID
         ? `${libraryID}:${key}`
-        : previous.targetRef;
+        : undefined;
+  // Only a committed write may promote its planned key to an existing target.
+  // After a confirmed failure, drop a targetRef that only the old planned-key
+  // fallback could have produced so the next preview creates the note again.
+  const previousTargetRef =
+    (state === "failed" || state === "none") &&
+    previous.targetRef !== undefined &&
+    previous.targetRef === plannedTargetRef
+      ? undefined
+      : previous.targetRef;
+  const targetRef = generatedTargetRef ?? previousTargetRef;
   const legacyReceipts = (
     previous as ArtifactWriteback & {
       receipts?: Array<{ operationId?: string }>;

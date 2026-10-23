@@ -329,9 +329,10 @@ export class RunCoordinator {
         missing: work.missing
           .map((x) => JSON.stringify([x.id, x.description, x.progress]))
           .sort(),
-        completed: work.completed
-          .map((x) => `${x.id}:${x.revision ?? 0}`)
-          .sort(),
+        // Revision bumps are not progress: an identical rewrite of a ready
+        // artifact must not reset repeatedGap. Completed work is identified by
+        // its stable id; content progress for drafts is tracked as a gap above.
+        completed: work.completed.map((x) => x.id).sort(),
       });
       repeatedGap = gap === previousGap ? repeatedGap + 1 : 0;
       if (

@@ -5,6 +5,8 @@ import { BudgetAccountant } from "@confucius/harness";
 import {
   DEFAULT_REPORT_STYLE,
   REPORT_STYLE_OPTIONS,
+  contextInputLimit,
+  contextTextTokens,
   executionBinding,
   restoreRun,
   renderMarkdownHtml,
@@ -463,6 +465,99 @@ test("direct output cannot change target or claim approval, and no-op does not s
   await f.revise();
   assert.equal((await f.store.get("report")).revision, 1);
   assert.equal(f.run.reportRevision.status, "finished");
+});
+
+test("no-op patches create no revision, spend no write budget, and keep a committed writeback", async () => {
+  const identity = "All tasks succeeded. [cite:e1]";
+  for (const response of [
+    { edits: [] },
+    { edits: [{ oldText: identity, newText: identity }] },
+    { edits: [], citations: null },
+  ]) {
+    const f = await fixture();
+    const answer =
+      response.citations === null
+        ? { edits: [], citations: f.artifact.citations }
+        : response;
+    await f.store.update("report", (current) => ({
+      ...current,
+      writeback: {
+        state: "committed",
+        target: "zotero_note",
+        targetRef: "1:NOTE",
+        revision: 1,
+        committedAt: 1,
+      },
+    }));
+    f.setResponse(JSON.stringify(answer));
+    await f.revise();
+    const saved = await f.store.get("report");
+    assert.equal(saved.revision, 1);
+    assert.equal(saved.writeback?.state, "committed");
+    assert.equal(saved.writeback?.targetRef, "1:NOTE");
+    assert.equal(f.run.budget.toolCallsUsed, 0);
+    assert.equal(f.run.reportRevision.status, "finished");
+    assert.equal(f.calls.length, 1);
+  }
+});
+
+test("revision admission uses the shared max(1k, 10%) reserve, not a fixed 1024 tokens", async () => {
+  const f = await fixture();
+  const capacity = 32768;
+  const output = 4096;
+  const shared = contextInputLimit(capacity, output);
+  const fixedReserve = capacity - output - 1024;
+  const languageInstruction = Reflect.get(f.host, "languageInstruction").call(
+    f.host,
+    f.state.record,
+    f.run.request,
+  );
+  const measuredTokens = (artifact) =>
+    contextTextTokens(
+      JSON.stringify(
+        reportRevisionMessages({
+          request: f.run.request,
+          languageInstruction,
+          style: f.state.record.reportStyle,
+          artifact,
+          evidence: reportEvidence(artifact, f.state.events, f.state.messages),
+          maxInputTokens: Number.MAX_SAFE_INTEGER,
+        }),
+      ),
+    );
+  let filler = "x".repeat(90000);
+  let measured = 0;
+  let latest;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    latest = await f.store.upsert(
+      {
+        ...f.artifact,
+        body: { type: "markdown", markdown: filler },
+      },
+      "native",
+      [],
+      undefined,
+      executionBinding(f.run),
+    );
+    measured = measuredTokens(latest);
+    if (measured > shared && measured <= fixedReserve) break;
+    filler = "x".repeat(
+      Math.max(
+        1000,
+        Math.round((filler.length * (shared + fixedReserve)) / (2 * measured)),
+      ),
+    );
+  }
+  assert.ok(
+    measured > shared && measured <= fixedReserve,
+    `expected input between the shared limit ${shared} and the old fixed reserve ${fixedReserve}, got ${measured}`,
+  );
+  await f.revise();
+  const saved = await f.store.get("report");
+  assert.equal(f.calls.length, 0);
+  assert.equal(saved.revision, latest.revision);
+  assert.equal(f.run.reportRevision.status, "skipped");
+  assert.match(f.run.reportRevision.reason, /context allowance/);
 });
 
 test("missing cited pages are fetched once, while evidence failures still permit direct editing", async () => {

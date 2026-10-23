@@ -18,6 +18,7 @@ import { validateArgs, type ToolProvider } from "@confucius/harness";
 import {
   HistoryStore,
   MemoryEngine,
+  foldedIndex,
   isKnowledgeRecord,
   isMemoryType,
   type MemoryOp,
@@ -622,6 +623,11 @@ export class ContextToolProvider implements ToolProvider {
             !sourceIds && !requestedTask
               ? (await memory.list({ limit: 10000 }))
                   .filter((r) => !isKnowledgeRecord(r))
+                  // Usage fields are excluded on purpose: including them would
+                  // invalidate every cursor after one explicit memory read. A
+                  // read between pages can move that entry above the frontier,
+                  // but it is already in context and no unread entry can move
+                  // backwards past the cursor.
                   .map((r) => [
                     r.id,
                     r.updatedAt,
@@ -727,11 +733,9 @@ export class ContextToolProvider implements ToolProvider {
         memories
           .slice(cursor.positions[2], cursor.positions[2] + 16)
           .map(async (r, i) => {
-            let at = Math.max(
-              0,
-              r.content.toLocaleLowerCase().indexOf(query.toLocaleLowerCase()) -
-                80,
-            );
+            // Folded matches must be mapped back: U+0130 lowercases to two
+            // UTF-16 units, so a raw folded index would overshoot the original.
+            let at = Math.max(0, foldedIndex(r.content, query) - 80);
             if (/[\uDC00-\uDFFF]/.test(r.content[at] ?? "")) at--;
             const excerpt = contextTextSlice(r.content, 150, at);
             return {

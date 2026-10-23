@@ -34,6 +34,18 @@ describe("modelsListRequest", () => {
     );
   });
 
+  it("keeps a Base URL query string after the models path", () => {
+    assert.deepEqual(
+      modelsListRequest(
+        "https://gateway.example.test/v1/chat/completions?api-version=2024-02-01",
+      ),
+      {
+        url: "https://gateway.example.test/v1/models?api-version=2024-02-01",
+        style: "openai",
+      },
+    );
+  });
+
   it("maps Ollama /api/chat onto /api/tags", () => {
     assert.deepEqual(modelsListRequest("http://127.0.0.1:11434/api/chat"), {
       url: "http://127.0.0.1:11434/api/tags",

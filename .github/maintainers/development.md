@@ -68,8 +68,10 @@ a real Zotero, platform, model or upgrade check; report what was actually run.
 
 The local read-only MCP endpoint is normally
 `http://127.0.0.1:23119/confucius/v1/mcp`; use Zotero's active HTTP port.
-Authenticated routes require the pairing token in Settings; only `/health` is
-unauthenticated. Do not put tokens in examples or committed files.
+Authenticated routes require the pairing token in Settings; the read-only MCP
+endpoint uses its own `mcpToken`, which cannot change settings, tasks, approvals
+or library data. Only `/health` is unauthenticated. Do not put tokens in
+examples or committed files.
 
 External runtime shell/file tools require an explicitly selected working
 directory. Zotero writes remain governed by host permissions and review.

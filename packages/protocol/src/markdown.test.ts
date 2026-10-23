@@ -70,6 +70,86 @@ describe("renderMarkdownHtml", () => {
     assert.doesNotMatch(html, /%%MATH/);
   });
 
+  it("keeps currency ranges as prose and still parses real inline math", () => {
+    const source =
+      "The API costs $5 per call [cite:e1] and $10 per review, while $x+y$ stays math.";
+    const html = renderMarkdownHtml(source);
+    assert.match(html, /\$5 per call/);
+    assert.match(html, /\$10 per review/);
+    assert.match(html, /data-citation-id="e1"/);
+    assert.equal((html.match(/class="tui-math"/g) ?? []).length, 1);
+    assert.match(html, /data-tex="x\+y"/);
+    const ids: string[] = [];
+    mapMarkdownCitations(source, (id, marker) => {
+      ids.push(id);
+      return marker;
+    });
+    assert.deepEqual(ids, ["e1"]);
+
+    const compact = renderMarkdownHtml(
+      "The cost is $5 [cite:e2]-$10 per item.",
+    );
+    assert.match(compact, /\$5/);
+    assert.match(compact, /\$10 per item/);
+    assert.match(compact, /data-citation-id="e2"/);
+    assert.equal((compact.match(/class="tui-math"/g) ?? []).length, 0);
+
+    const compactIds: string[] = [];
+    const mapped = mapMarkdownCitations(
+      "The cost is $5 [cite:e2]-$10 per item.",
+      (id, marker) => {
+        compactIds.push(id);
+        return marker;
+      },
+    );
+    assert.deepEqual(compactIds, ["e2"]);
+    assert.equal(mapped, "The cost is $5 [cite:e2]-$10 per item.");
+  });
+
+  it("treats bare numeric amounts as formulas while keeping prices as prose", () => {
+    const html = renderMarkdownHtml("Value $1.2$ and Base-$10$ log.");
+    assert.equal((html.match(/class="tui-math"/g) ?? []).length, 2);
+    assert.match(html, /data-tex="1\.2"/);
+    assert.match(html, /data-tex="10"/);
+
+    const price = "The API costs $5 per call [cite:e3] and $10 per review.";
+    const priceHtml = renderMarkdownHtml(price);
+    assert.equal((priceHtml.match(/class="tui-math"/g) ?? []).length, 0);
+    assert.match(priceHtml, /data-citation-id="e3"/);
+    const ids: string[] = [];
+    mapMarkdownCitations(price, (id, marker) => {
+      ids.push(id);
+      return marker;
+    });
+    assert.deepEqual(ids, ["e3"]);
+  });
+
+  it("expands math source in link labels instead of leaking slot tokens", () => {
+    const html = renderMarkdownHtml(
+      "See [formula $x+y$](https://example.com).",
+    );
+    assert.doesNotMatch(html, /[\u0000\u0001]/);
+    assert.match(html, /<a [^>]*>formula \$x\+y\$<\/a>/);
+    assert.doesNotMatch(html, /tui-math/);
+  });
+
+  it("keeps literal internal math-token text from being consumed or replaced", () => {
+    const html = renderMarkdownHtml(
+      "Literal %%MATH0%% stays, and $x+y$ is the only formula.",
+    );
+    assert.match(html, /Literal %%MATH0%% stays/);
+    assert.equal((html.match(/class="tui-math"/g) ?? []).length, 1);
+    assert.match(html, /data-tex="x\+y"/);
+  });
+
+  it("renders math source in a details title without leaking slot tokens", () => {
+    const html = renderMarkdownHtml(
+      ":::details Costs $x+y$\nBackground text.\n:::",
+    );
+    assert.doesNotMatch(html, /\u0000/);
+    assert.match(html, /<summary>Costs \$x\+y\$<\/summary>/);
+  });
+
   it("renders zotero links and blocks dangerous schemes", () => {
     const html = renderMarkdownHtml(
       "Read [paper](zotero://select/library/items/ABC123) and " +

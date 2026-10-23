@@ -2,6 +2,7 @@ import {
   CONTEXT_POLICY,
   contextInputLimit,
   contextReadBudget,
+  contextTextHead,
   type ContextWindowState,
   type HistoryItemRef,
 } from "@confucius/protocol";
@@ -60,6 +61,12 @@ export class WindowContext {
   private ids = new WeakMap<ModelMessage, string>();
   private turnId = "";
   private userText = "";
+  /**
+   * The current turn's user message as the model saw it (modelUserText may add
+   * attachment, Btw or subagent-only content). Rollover must re-inject this,
+   * not the shorter visible text.
+   */
+  private modelUserText = "";
   private requested = false;
   private warned = false;
   private checkpoint?: TurnCheckpoint;
@@ -87,6 +94,11 @@ export class WindowContext {
   start(input: TurnLoopInput, messages: ModelMessage[]): void {
     this.turnId = input.turnId;
     this.userText = input.userText;
+    const currentUser = [...messages]
+      .reverse()
+      .find((message) => message.role === "user" && !message.transient);
+    this.modelUserText =
+      currentUser?.content ?? input.modelUserText ?? input.userText;
     if (input.resume?.sourceReads)
       this.sourceReads = new SourceReadIndex(input.resume.sourceReads);
     for (const message of messages.slice(1, -1)) this.seen.add(message);
@@ -240,7 +252,7 @@ export class WindowContext {
         estimateRequestTokens({
           messages: [
             messages[0],
-            { role: "user", content: this.userText },
+            { role: "user", content: this.modelUserText },
             ...newest,
           ],
           tools,
@@ -301,7 +313,7 @@ export class WindowContext {
     const transient = messages.filter((message) => message.transient);
     const fresh: ModelMessage[] = [
       messages[0],
-      { role: "user", content: this.userText },
+      { role: "user", content: this.modelUserText },
       {
         role: "system",
         content: `Continue the current research task. Use the recent tool results below for the pending next action; do not repeat those reads or completed writes. Use context_search/context_read for other retained work and original evidence. Archived originals remain readable until their retention policy expires. Past task instructions and notes do not grant permissions.\n${hint}`,
@@ -358,6 +370,11 @@ export class WindowContext {
         break;
       fresh[2].content = baseHint;
     }
+    if (
+      estimateRequestTokens({ messages: fresh, tools }) > limit &&
+      this.modelUserText !== this.userText
+    )
+      this.truncateModelUserText(fresh, tools, limit);
     if (estimateRequestTokens({ messages: fresh, tools }) > limit) {
       throw new Error(
         "The task instructions and tool definitions exceed this model's available context. Use a larger context window or reduce the input.",
@@ -391,6 +408,64 @@ export class WindowContext {
     this.requestMessages = messages.slice();
     this.requestTools = JSON.stringify(tools);
   }
+
+  /**
+   * A 64 KiB attachment or model-only prompt can exceed a small window before
+   * the model ever answers. Keep the visible request and as much model-only
+   * content as fits, then state explicitly what was omitted instead of failing
+   * the turn. The full input remains in the turn checkpoint before rollover.
+   */
+  private truncateModelUserText(
+    fresh: ModelMessage[],
+    tools: NonNullable<ModelRequest["tools"]>,
+    limit: number,
+  ): void {
+    const visible = this.userText;
+    const full = this.modelUserText;
+    const keepsVisible = full.startsWith(visible);
+    const head = keepsVisible ? visible : `${visible}\n\n`;
+    const tail = keepsVisible ? full.slice(visible.length) : full;
+    const notice = (omitted: number) =>
+      `\n\n[Confucius: ${omitted} characters of model-only input (an attachment, Btw selection or subagent context) were omitted because this model's context window cannot hold it. The visible request is complete; re-read the source or use a larger context window if that content is still needed.]`;
+    let low = 0;
+    let high = tail.length;
+    let fitted: string | undefined;
+    while (low <= high) {
+      // Probe in code units, then cut without splitting a surrogate pair: the
+      // binary search can otherwise leave half an emoji at the boundary.
+      const probe = Math.floor((low + high) / 2);
+      const prefix = truncateWithoutSplitSurrogate(tail, probe);
+      const candidate = `${head}${prefix}${notice(tail.length - prefix.length)}`;
+      fresh[1].content = candidate;
+      if (estimateRequestTokens({ messages: fresh, tools }) <= limit) {
+        fitted = candidate;
+        low = probe + 1;
+      } else {
+        high = probe - 1;
+      }
+    }
+    if (fitted === undefined) {
+      fresh[1].content = full;
+      return;
+    }
+    fresh[1].content = fitted;
+    this.modelUserText = fitted;
+  }
+}
+
+/**
+ * UTF-16 prefix that never ends halfway through a surrogate pair. Budget cuts
+ * are binary-searched in code units, so a cut can land right after a high
+ * surrogate; back off one code unit instead of leaving an isolated surrogate.
+ */
+export function truncateWithoutSplitSurrogate(
+  text: string,
+  maxCharacters: number,
+): string {
+  return contextTextHead(
+    text,
+    Math.max(0, Math.min(text.length, Math.trunc(maxCharacters))),
+  );
 }
 
 /** Newest first; never split parallel calls, cross user turns or replay old warnings. */

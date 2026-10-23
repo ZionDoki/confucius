@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   OpenAICompatibleAdapter,
+  joinEndpointUrl,
   normalizeOpenAICompatibleBaseUrl,
 } from "./OpenAICompatibleAdapter";
+import { ModelError } from "./ModelAdapter";
 import { FilteredToolProvider } from "./ToolProvider";
 import { MemoryToolProvider, jsonObjectSchema } from "./MemoryToolProvider";
 import { truncateToolResult } from "./truncate";
@@ -31,6 +33,35 @@ describe("normalizeOpenAICompatibleBaseUrl", () => {
     assert.equal(
       normalizeOpenAICompatibleBaseUrl("http://127.0.0.1:11434/api/chat"),
       "http://127.0.0.1:11434/api/chat",
+    );
+    assert.equal(
+      normalizeOpenAICompatibleBaseUrl(
+        "https://gateway.example.test/v1?upstream=https://up.example/",
+      ),
+      "https://gateway.example.test/v1?upstream=https://up.example/",
+      "a trailing slash in a query value is not a path separator",
+    );
+  });
+
+  it("joins endpoint paths without putting a query string in the path", () => {
+    assert.equal(
+      joinEndpointUrl(
+        "https://gw.example/v1?api-version=2024-02-01",
+        "/chat/completions",
+      ),
+      "https://gw.example/v1/chat/completions?api-version=2024-02-01",
+    );
+    assert.equal(
+      joinEndpointUrl("https://gw.example/v1", "/models"),
+      "https://gw.example/v1/models",
+    );
+    assert.equal(
+      joinEndpointUrl(
+        "https://gw.example/v1?upstream=https://up.example/",
+        "/chat/completions",
+      ),
+      "https://gw.example/v1/chat/completions?upstream=https://up.example/",
+      "only the pathname loses its trailing slash",
     );
   });
 });
@@ -96,6 +127,202 @@ describe("OpenAICompatibleAdapter", () => {
     assert.equal(requested, "https://gateway.example.test/v1/chat/completions");
     assert.equal(turn.text, "pong");
   });
+
+  it("keeps a Base URL query string after the endpoint path", async () => {
+    const requested: string[] = [];
+    const adapter = new OpenAICompatibleAdapter({
+      apiKey: "sk-test",
+      baseUrl:
+        "https://gateway.example.test/v1/chat/completions?api-version=2024-02-01",
+      model: "MiniMax-M3",
+      stream: false,
+      fetchImpl: (async (input: RequestInfo | URL) => {
+        requested.push(String(input));
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: "pong" } }] }),
+        );
+      }) as unknown as typeof fetch,
+    });
+    await adapter.complete({ messages: [{ role: "user", content: "ping" }] });
+    assert.deepEqual(requested, [
+      "https://gateway.example.test/v1/chat/completions?api-version=2024-02-01",
+    ]);
+  });
+
+  it("fails fast on non-retryable HTTP 200 error envelopes", async () => {
+    const cases = [
+      {
+        message: "You exceeded your current quota",
+        code: "insufficient_quota",
+        expected: "rate_limit",
+      },
+      {
+        message: "Invalid API key provided",
+        code: "invalid_api_key",
+        expected: "auth",
+      },
+      {
+        message: "Your request was malformed",
+        code: "invalid_request_error",
+        expected: "invalid_request",
+      },
+      {
+        message: "This model's maximum context length is 8192 tokens",
+        code: "context_length_exceeded",
+        expected: "context_overflow",
+      },
+    ] as const;
+    for (const entry of cases) {
+      let attempts = 0;
+      const adapter = new OpenAICompatibleAdapter({
+        apiKey: "sk-test",
+        baseUrl: "https://api.example.test/v1",
+        model: "demo",
+        stream: false,
+        fetchImpl: (async () => {
+          attempts++;
+          return new Response(
+            JSON.stringify({
+              error: { message: entry.message, code: entry.code },
+            }),
+            { status: 200 },
+          );
+        }) as unknown as typeof fetch,
+      });
+      await assert.rejects(
+        adapter.complete({
+          messages: [{ role: "user", content: "hi" }],
+          maxAttempts: 3,
+        }),
+        (error: unknown) => {
+          assert.ok(error instanceof ModelError);
+          assert.equal(error.code, entry.expected);
+          assert.equal(error.options.retryable, false);
+          assert.match(error.message, /quota|API key|malformed|context/s);
+          return true;
+        },
+      );
+      assert.equal(attempts, 1, `${entry.code} must not be retried`);
+    }
+  });
+
+  it("retries overloaded and upstream HTTP 200 error envelopes", async () => {
+    for (const envelope of [
+      { message: "server overloaded", code: "overloaded_error" },
+      { message: "bad gateway", code: "upstream_error" },
+    ]) {
+      let attempts = 0;
+      const adapter = new OpenAICompatibleAdapter({
+        apiKey: "sk-test",
+        baseUrl: "https://api.example.test/v1",
+        model: "demo",
+        stream: false,
+        // Back off immediately; only the much longer model deadlines need
+        // real timers, and those are disposed after each attempt.
+        scheduleTimeout: (callback: () => void, delayMs: number) => {
+          if (delayMs <= 2_000) {
+            callback();
+            return 0;
+          }
+          return setTimeout(callback, delayMs);
+        },
+        cancelTimeout: (handle: unknown) => {
+          if (typeof handle === "object" && handle !== null)
+            clearTimeout(handle as ReturnType<typeof setTimeout>);
+        },
+        fetchImpl: (async () => {
+          attempts++;
+          return new Response(JSON.stringify({ error: envelope }), {
+            status: 200,
+          });
+        }) as unknown as typeof fetch,
+      });
+      await assert.rejects(
+        adapter.complete({
+          messages: [{ role: "user", content: "hi" }],
+          maxAttempts: 3,
+        }),
+        (error: unknown) => {
+          assert.ok(error instanceof ModelError);
+          assert.equal(error.code, "server");
+          assert.equal(error.options.retryable, true);
+          assert.equal(error.options.exhausted, true);
+          assert.equal(error.options.attempts, 3);
+          return true;
+        },
+      );
+      assert.equal(attempts, 3, `${envelope.code} should be retried`);
+    }
+  });
+
+  for (const stream of [false, true]) {
+    it(`backs off and retries token rate limits with stream=${stream}`, async () => {
+      for (const code of ["rate_limit_exceeded", undefined]) {
+        let attempts = 0;
+        const delays: number[] = [];
+        const adapter = new OpenAICompatibleAdapter({
+          apiKey: "sk-test",
+          baseUrl: "https://api.example.test/v1",
+          model: "demo",
+          stream,
+          scheduleTimeout: (callback: () => void, delayMs: number) => {
+            if (delayMs <= 2_000) {
+              delays.push(delayMs);
+              callback();
+              return 0;
+            }
+            return setTimeout(callback, delayMs);
+          },
+          cancelTimeout: (handle: unknown) => {
+            if (typeof handle === "object" && handle !== null)
+              clearTimeout(handle as ReturnType<typeof setTimeout>);
+          },
+          fetchImpl: (async () => {
+            attempts++;
+            const error = {
+              code,
+              message:
+                "Rate limit reached on tokens per min (TPM): Limit 10000, Used 10000. Please try again.",
+            };
+            if (!stream)
+              return new Response(
+                JSON.stringify(
+                  attempts === 1
+                    ? { error }
+                    : { choices: [{ message: { content: "recovered" } }] },
+                ),
+              );
+            const payload =
+              attempts === 1
+                ? { error }
+                : {
+                    choices: [
+                      {
+                        delta: { content: "recovered" },
+                        finish_reason: "stop",
+                      },
+                    ],
+                  };
+            return new Response(
+              `data: ${JSON.stringify(payload)}\n\ndata: [DONE]\n\n`,
+              { headers: { "content-type": "text/event-stream" } },
+            );
+          }) as typeof fetch,
+        });
+        const result = await adapter.complete({
+          messages: [{ role: "user", content: "hi" }],
+          maxAttempts: 3,
+        });
+        assert.equal(result.text, "recovered");
+        assert.equal(attempts, 2);
+        assert.deepEqual(
+          delays,
+          [1000],
+          "rate limits must use retry backoff, not context rollover",
+        );
+      }
+    });
+  }
 
   it("explains HTML bodies instead of throwing a JSON SyntaxError", async () => {
     const adapter = new OpenAICompatibleAdapter({

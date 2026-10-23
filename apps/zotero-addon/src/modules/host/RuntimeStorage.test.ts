@@ -804,6 +804,91 @@ describe("recoverable migration", () => {
     }
   });
 
+  it("releases old copies when retention legally pruned the migrated destination", async () => {
+    const f = migrationFixture();
+    await migrateRuntimeStorage(f.source, f.destination, f.fs);
+    const taskRoot = f.paths.join(f.destination, "history", "task");
+    const indexPath = f.paths.join(taskRoot, "index.json");
+    const index = JSON.parse(f.files.get(indexPath)!);
+    f.files.set(
+      indexPath,
+      JSON.stringify({
+        ...index,
+        items: [],
+        notes: [],
+        windows: [],
+        prunedAt: 10,
+        retention: { version: 1, tier: "pruned", prunedAt: 10 },
+      }),
+    );
+    f.files.delete(f.paths.join(taskRoot, "notes", "working_1.txt"));
+    const report: string[] = [];
+
+    await clearMigratedContextCopies(f.destination, f.fs);
+    assert.equal(
+      f.files.has(
+        f.paths.join(f.source, "history", "task", "notes", "working_1.txt"),
+      ),
+      false,
+    );
+    report.push(
+      ...(JSON.parse(
+        f.files.get(f.paths.join(f.destination, "migration.json"))!,
+      ).issues ?? []),
+    );
+    assert.ok(
+      report.some((issue) => issue.includes("working_1.txt")),
+      "the deferred cleanup should record an issue instead of failing",
+    );
+    // A retried cleanup (and the taskDelete that follows it) must not block.
+    await clearMigratedContextCopies(f.destination, f.fs);
+  });
+  it("releases an old transcript only when retention rebuilt the migrated log index", async () => {
+    const f = migrationFixture();
+    const sourceLogs = f.paths.join(f.source, "logs");
+    const sourceSession = f.paths.join(sourceLogs, "sessions", "task.md");
+    const sourceIndex = f.paths.join(sourceLogs, "LOGS.md");
+    const sourceHits = f.paths.join(sourceLogs, "hits.json");
+    await f.fs.write(
+      sourceIndex,
+      "# Confucius conversation logs\n\n- **Lifecycle** `task` — 1 turns\n",
+    );
+    await f.fs.write(
+      sourceHits,
+      JSON.stringify({ excerpts: { hash: { sessionId: "task" } } }),
+    );
+    await f.fs.write(sourceSession, "## turn\n\nsaved transcript");
+    await migrateRuntimeStorage(f.source, f.destination, f.fs);
+    const destLogs = f.paths.join(f.destination, "logs");
+    const destSession = f.paths.join(destLogs, "sessions", "task.md");
+    f.files.delete(destSession);
+    // An index that still names the missing transcript is not proof of a
+    // retention delete: keep the old copy for recovery.
+    await assert.rejects(
+      clearMigratedContextCopies(f.destination, f.fs),
+      /originals retained/,
+    );
+    assert.equal(f.files.get(sourceSession), "## turn\n\nsaved transcript");
+
+    // deleteSession rebuilds the derived index and drops the session's excerpts.
+    f.files.set(
+      f.paths.join(destLogs, "LOGS.md"),
+      "# Confucius conversation logs\n\n0 sessions.\n_No conversation logs yet._\n",
+    );
+    f.files.set(f.paths.join(destLogs, "hits.json"), '{"excerpts":{}}');
+    await clearMigratedContextCopies(f.destination, f.fs);
+    assert.equal(f.files.has(sourceSession), false);
+    const manifest = JSON.parse(
+      f.files.get(f.paths.join(f.destination, "migration.json"))!,
+    );
+    assert.ok(
+      (manifest.issues ?? []).some((issue: string) =>
+        issue.includes("logs/sessions/task.md"),
+      ),
+      "the legal transcript delete should be reported, not block task deletion",
+    );
+  });
+
   it("keeps all originals when a migrated body is missing or damaged", async () => {
     for (const damaged of [false, true]) {
       const f = migrationFixture();

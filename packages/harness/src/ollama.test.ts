@@ -4,6 +4,7 @@ import {
   detectApiStyle,
   OpenAICompatibleAdapter,
 } from "./OpenAICompatibleAdapter";
+import { ModelError } from "./ModelAdapter";
 
 function ndjsonResponse(chunks: object[]): Response {
   const body = chunks.map((chunk) => JSON.stringify(chunk)).join("\n") + "\n";
@@ -114,6 +115,31 @@ describe("OpenAICompatibleAdapter ollama native style", () => {
       completionTokens: 8,
       totalTokens: 20,
     });
+  });
+
+  it("treats a non-streaming error field as a retryable server failure", async () => {
+    const adapter = new OpenAICompatibleAdapter({
+      apiKey: "ollama",
+      baseUrl: nativeUrl,
+      model: "qwen3.8-27b:latest",
+      stream: false,
+      fetchImpl: (async () =>
+        new Response(JSON.stringify({ error: "model overloaded" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })) as unknown as typeof fetch,
+    });
+    await assert.rejects(
+      adapter.complete({
+        messages: [{ role: "user", content: "find papers" }],
+        maxAttempts: 1,
+      }),
+      (error: unknown) =>
+        error instanceof ModelError &&
+        error.code === "server" &&
+        error.options.retryable === true &&
+        /model overloaded/.test(error.message),
+    );
   });
 
   it("streams NDJSON chunks with incremental content, thinking, and tool calls", async () => {

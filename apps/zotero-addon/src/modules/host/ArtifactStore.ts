@@ -5,6 +5,7 @@ import {
   isCitation,
   isArtifactKind,
   isArtifactRecord,
+  normalizeArtifactTitle,
   type AgentBackendKind,
   type ArtifactRecord,
   type ArtifactUpsertInput,
@@ -19,6 +20,12 @@ export interface ArtifactFileSystem {
 
 /** A pre-write fence failed; no atomic write has been dispatched. */
 export class ArtifactWriteCancelled extends Error {}
+
+/**
+ * A pre-write check rejected the request (invalid fields or a stale/foreign
+ * revision); no atomic write has been dispatched.
+ */
+export class ArtifactWriteRejected extends Error {}
 
 class ZoteroArtifactFileSystem implements ArtifactFileSystem {
   async read(path: string): Promise<string> {
@@ -130,24 +137,26 @@ export class ArtifactStore {
     beforeWrite?: () => void,
   ): Promise<ArtifactRecord> {
     if (!isArtifactKind(input.kind)) {
-      throw new Error("Unknown artifact kind");
+      throw new ArtifactWriteRejected("Unknown artifact kind");
     }
     if (!artifactBodyMatchesKind(input.kind, input.body)) {
-      throw new Error(`Artifact body does not match kind ${input.kind}`);
+      throw new ArtifactWriteRejected(
+        `Artifact body does not match kind ${input.kind}`,
+      );
     }
-    const title = String(input.title ?? "").trim();
-    if (!title) throw new Error("Artifact title is required");
+    const title = storedTitle(input.title);
+    if (!title) throw new ArtifactWriteRejected("Artifact title is required");
     const taskId = String(input.taskId ?? "").trim();
-    if (!taskId) throw new Error("Artifact taskId is required");
+    if (!taskId) throw new ArtifactWriteRejected("Artifact taskId is required");
     if (
       input.status !== undefined &&
       input.status !== "draft" &&
       input.status !== "ready"
     ) {
-      throw new Error("Artifact status must be draft or ready");
+      throw new ArtifactWriteRejected("Artifact status must be draft or ready");
     }
     if (input.citations && !input.citations.every(isCitation)) {
-      throw new Error("Artifact citations are invalid");
+      throw new ArtifactWriteRejected("Artifact citations are invalid");
     }
     if (
       input.sourceContextIds &&
@@ -155,7 +164,9 @@ export class ArtifactStore {
         (value) => typeof value === "string" && value.trim().length > 0,
       )
     ) {
-      throw new Error("Artifact source context ids are invalid");
+      throw new ArtifactWriteRejected(
+        "Artifact source context ids are invalid",
+      );
     }
 
     const id = input.id ? safeId(input.id) : safeId(this.createId());
@@ -167,14 +178,16 @@ export class ArtifactStore {
         expectedRevision !== undefined &&
         (existing?.revision ?? 0) !== expectedRevision
       )
-        throw new Error(
+        throw new ArtifactWriteRejected(
           "Artifact changed after preflight; reload the latest draft before editing it",
         );
       if (existing && existing.taskId !== taskId) {
-        throw new Error("Artifact belongs to another task");
+        throw new ArtifactWriteRejected("Artifact belongs to another task");
       }
       if (existing && existing.kind !== input.kind) {
-        throw new Error("Artifact kind cannot change across revisions");
+        throw new ArtifactWriteRejected(
+          "Artifact kind cannot change across revisions",
+        );
       }
       const at = this.now();
       const revision = (existing?.revision ?? 0) + 1;
@@ -310,6 +323,11 @@ export class ArtifactStore {
     const separator = this.root.includes("\\") ? "\\" : "/";
     return `${this.root.replace(/[\\/]$/, "")}${separator}${safeId(id)}.json`;
   }
+}
+
+/** Persisted titles feed the system prompt, so storage and prompts share one normalizer. */
+function storedTitle(value: unknown): string {
+  return normalizeArtifactTitle(value).text;
 }
 
 function safeId(value: string): string {

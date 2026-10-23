@@ -45,6 +45,11 @@ export interface JsonRpcError {
 
 export type JsonRpcResponse<T = unknown> = JsonRpcSuccess<T> | JsonRpcError;
 
+/**
+ * Canonical names for the host RPC surface. `AgentHost.rpc` dispatches these
+ * methods, and rpc.test.ts derives its expectations from that dispatch, so new
+ * host cases must compare against these constants rather than copy literals.
+ */
 export const RPC_METHODS = {
   btwOpen: "btw/open",
   btwPrompt: "btw/prompt",
@@ -66,6 +71,10 @@ export const RPC_METHODS = {
   literatureCancel: "literature/cancel",
   literatureAttach: "literature/attach",
   literatureBrowser: "literature/browser",
+  literatureRatingsList: "literature/ratings/list",
+  literatureRatingsImport: "literature/ratings/import",
+  literatureRatingsRemove: "literature/ratings/remove",
+  literatureReviewList: "literature/review/list",
   subagentList: "subagent/list",
   subagentRead: "subagent/read",
   subagentCancel: "subagent/cancel",
@@ -96,6 +105,10 @@ export const RPC_METHODS = {
   knowledgeDelete: "knowledge/delete",
   knowledgeSaveEntry: "knowledge/saveEntry",
   knowledgeDeleteEntry: "knowledge/deleteEntry",
+  knowledgeIndex: "knowledge/index",
+  knowledgeRead: "knowledge/read",
+  knowledgeCorrect: "knowledge/correct",
+  knowledgeForget: "knowledge/forget",
   configGet: "config/get",
   configSet: "config/set",
   configListModels: "config/listModels",
@@ -144,6 +157,7 @@ export const RPC_METHODS = {
   artifactList: "artifact/list",
   artifactGet: "artifact/get",
   artifactUpsert: "artifact/upsert",
+  artifactExport: "artifact/export",
   artifactWritebackPreview: "artifact/writebackPreview",
   artifactWritebackCommit: "artifact/writebackCommit",
   runtimeList: "runtime/list",

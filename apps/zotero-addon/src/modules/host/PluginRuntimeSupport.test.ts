@@ -6,7 +6,10 @@ import {
   PluginRuntimeEventBuffer,
 } from "./PluginRuntimeSupport";
 import { PluginRuntimeHost } from "./PluginRuntimeHost";
+import { PluginKimiAdapter } from "./PluginKimiAdapter";
+import { RuntimeJsonLineProcess } from "./RuntimeProcess";
 import type {
+  PluginApprovalBrokerLike,
   PluginRuntimeEventSink,
   PluginRuntimeTurnInput,
 } from "./PluginRuntimeTypes";
@@ -287,6 +290,81 @@ describe("recoverable runtime session handoff", () => {
     } finally {
       await host.shutdown();
       Reflect.set(globalThis, "Zotero", previous);
+    }
+  });
+});
+
+describe("in-plugin Kimi ACP lifecycle", () => {
+  it("closes the spawned ACP child when session setup fails before registration", async () => {
+    const original = RuntimeJsonLineProcess.open;
+    const module = RuntimeJsonLineProcess as unknown as {
+      open: typeof RuntimeJsonLineProcess.open;
+    };
+    const closed: string[] = [];
+    let connections = 0;
+    module.open = (async () => {
+      connections++;
+      return {
+        onNotification() {},
+        onRequest() {},
+        onFailure() {},
+        request: async (method: string) => {
+          if (method === "initialize") return { protocolVersion: 1 };
+          if (method === "session/new")
+            throw new Error("Kimi session creation failed");
+          return {};
+        },
+        notify() {},
+        respond() {},
+        respondError() {},
+        close() {
+          closed.push("close");
+        },
+        closeAndWait: async () => {
+          closed.push("closeAndWait");
+        },
+      } as unknown as RuntimeJsonLineProcess;
+    }) as typeof RuntimeJsonLineProcess.open;
+    try {
+      const adapter = new PluginKimiAdapter("/fake/kimi");
+      const input: PluginRuntimeTurnInput = {
+        taskId: "task",
+        turnId: "turn",
+        prompt: "Read",
+        mode: "agent",
+        capabilityProfile: "zotero_only",
+        cwd: "/tmp",
+        mcp: { url: "http://127.0.0.1/mcp", token: "lease-token" },
+        developerInstructions: "instructions",
+      };
+      const sink: PluginRuntimeEventSink = { emit() {} };
+      const approvals: PluginApprovalBrokerLike = {
+        request: async () => ({
+          id: "approval",
+          verdict: "deny",
+          scope: "once",
+        }),
+      };
+      await assert.rejects(
+        adapter.startTurn(input, sink, approvals),
+        /session creation failed/,
+      );
+      assert.equal(connections, 1);
+      assert.deepEqual(closed, ["closeAndWait"]);
+      assert.equal(
+        (adapter as unknown as { sessions: Map<string, unknown> }).sessions
+          .size,
+        0,
+        "a failed setup must not register a session that dispose could reach",
+      );
+      await assert.rejects(
+        adapter.startTurn(input, sink, approvals),
+        /session creation failed/,
+      );
+      assert.equal(connections, 2, "the next attempt must open a fresh child");
+      assert.deepEqual(closed, ["closeAndWait", "closeAndWait"]);
+    } finally {
+      module.open = original;
     }
   });
 });

@@ -11,6 +11,11 @@ export interface ToolProvider {
   listTools(): ToolDefinition[];
   getMeta(name: string): ToolRuntimeMeta | null;
   getSchema(name: string): JsonSchemaObject | undefined;
+  /**
+   * Host-side preparation after schema validation and before approval. It may
+   * expand or normalize `args`; TurnLoop validates the expanded arguments again
+   * before dispatch. Returning a failure skips approval and execution.
+   */
   prepare?(
     name: string,
     args: Record<string, unknown>,

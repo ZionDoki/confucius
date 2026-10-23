@@ -239,6 +239,69 @@ interface MigrationManifest {
   state: "copying" | "active";
   files: Record<string, string>;
   recovery?: { kind: "missing-task-index"; startedAt: number };
+  /** Deferred non-fatal cleanup findings, e.g. retention already pruned a copy. */
+  issues?: string[];
+}
+/** Retention prunes history bodies, so a migrated copy may be legitimately gone. */
+async function retainedCopyWasPruned(
+  destination: string,
+  relative: string,
+  fs: MigrationFs,
+): Promise<boolean> {
+  const parts = relative.split("/");
+  if (parts[0] !== "history" || parts.length < 3) return false;
+  const indexPath = fs.join(destination, "history", parts[1], "index.json");
+  if (!(await fs.exists(indexPath))) return false;
+  try {
+    const index = JSON.parse(await fs.read(indexPath)) as {
+      prunedAt?: unknown;
+      deleted?: unknown;
+      retention?: { tier?: unknown };
+    };
+    return Boolean(
+      index?.prunedAt ||
+      index?.deleted === true ||
+      index?.retention?.tier === "pruned",
+    );
+  } catch {
+    // A damaged index is not proof of retention; keep the conservative failure.
+    return false;
+  }
+}
+/** Retention also deletes a task's legacy transcript. Its regenerated LOGS.md
+ *  index is the tombstone: the session body is gone only if the index no longer
+ *  names it. A stale or unreadable index keeps the old copy. */
+async function retainedLogSessionWasDeleted(
+  destination: string,
+  relative: string,
+  fs: MigrationFs,
+): Promise<boolean> {
+  const match = /^logs\/sessions\/([\w-]+)\.md$/.exec(relative);
+  if (!match) return false;
+  const sessionId = match[1];
+  const logs = fs.join(destination, "logs");
+  const indexPath = fs.join(logs, "LOGS.md");
+  if (!(await fs.exists(indexPath))) return false;
+  try {
+    const index = await fs.read(indexPath);
+    if (index.includes(`\`${sessionId}\``)) return false;
+    const hitsPath = fs.join(logs, "hits.json");
+    if (await fs.exists(hitsPath)) {
+      const hits = JSON.parse(await fs.read(hitsPath)) as {
+        excerpts?: Record<string, { sessionId?: unknown }>;
+      };
+      if (
+        Object.values(hits?.excerpts ?? {}).some(
+          (entry) => entry?.sessionId === sessionId,
+        )
+      )
+        return false;
+    }
+    return true;
+  } catch {
+    // A damaged or unreadable index is not proof of deletion.
+    return false;
+  }
 }
 export async function migrateRuntimeStorage(
   source = PathUtils.join(Zotero.DataDirectory.dir, "confucius"),
@@ -415,6 +478,7 @@ export async function clearMigratedContextCopies(
   // task index. Keep their source and recovery backup even after a task is deleted.
   if (manifest.recovery) return;
   const copies: Array<{ relative: string; original: string }> = [];
+  const issues: string[] = [];
   for (const [relative, digest] of Object.entries(manifest.files)) {
     if (!(
       relative === "state.json" ||
@@ -438,11 +502,26 @@ export async function clearMigratedContextCopies(
           "An old context copy changed after migration; cleanup was deferred",
         );
       const replacement = fs.join(destination, ...relative.split("/"));
-      if (!(await fs.exists(replacement)))
-        throw new Error("Migrated context copy is missing; originals retained");
-      // History bodies are immutable. Mutable indexes/state may have advanced,
-      // but must still parse before their old copies can be removed.
-      if (relative.startsWith("history/") && relative.endsWith(".txt")) {
+      if (!(await fs.exists(replacement))) {
+        // Retention may have already pruned this history body or deleted this
+        // legacy transcript from the destination. Its own index proves that
+        // deletion; the old source copy is then redundant and cleanup can
+        // continue (taskDelete included).
+        if (
+          (await retainedCopyWasPruned(destination, relative, fs)) ||
+          (await retainedLogSessionWasDeleted(destination, relative, fs))
+        ) {
+          issues.push(
+            `Retention already removed ${relative}; the old migrated copy was released`,
+          );
+        } else {
+          throw new Error(
+            "Migrated context copy is missing; originals retained",
+          );
+        }
+      } else if (relative.startsWith("history/") && relative.endsWith(".txt")) {
+        // History bodies are immutable. Mutable indexes/state may have advanced,
+        // but must still parse before their old copies can be removed.
         if ((await fs.digest(replacement)) !== digest)
           throw new Error("Migrated context body changed; originals retained");
       } else if (relative.endsWith(".json")) {
@@ -469,6 +548,10 @@ export async function clearMigratedContextCopies(
   for (const { relative, original } of copies) {
     await fs.remove(original);
     delete manifest.files[relative];
+    await fs.write(path, JSON.stringify(manifest));
+  }
+  if (issues.length) {
+    manifest.issues = [...new Set([...(manifest.issues ?? []), ...issues])];
     await fs.write(path, JSON.stringify(manifest));
   }
 }

@@ -45,7 +45,15 @@ import {
   ensureScrollbarStyles,
   markScrollContainer,
 } from "./workspaceScrollbars";
-import { createTaskList } from "./workspaceTasks";
+import {
+  createArtifactList,
+  createPermissionSendGate,
+  createPermissionUpdates,
+  createTaskList,
+  taskDeleteConfirmation,
+  taskScopedFailure,
+  taskSelectionCurrent,
+} from "./workspaceTasks";
 import { contextArticles, readerAttachmentIdentity } from "../host/TaskSources";
 import { exportTaskTrace } from "./taskTraceExport";
 import {
@@ -115,7 +123,7 @@ import {
 } from "@confucius/protocol";
 import { slashMenuToken, type ConfuciusSkill } from "@confucius/skill-format";
 import { renderToString as katexRender } from "katex";
-import { getString } from "../../utils/locale";
+import { configuredUiLanguage, getString } from "../../utils/locale";
 import { hrefFromEvent } from "./anchorFromEvent";
 import { droppedFilePaths, droppedFilename, hasDroppedFiles } from "./fileDrop";
 import {
@@ -1076,6 +1084,8 @@ function bindWorkspace(
     contextStats: null as SessionContextStats | null,
     live: null as LiveContextResult | null,
     artifacts: [] as ArtifactRecord[],
+    artifactsTaskId: null as string | null,
+    artifactError: null as string | null,
     memoryProposals: [] as MemoryProposal[],
     runtimes: [] as RuntimeStatus[],
     runtimeHostEnabled: true,
@@ -1104,7 +1114,8 @@ function bindWorkspace(
   const reviewWindowOpenedAt = Date.now();
   let pendingTaskId: string | null = null;
   let sessionListGeneration = 0;
-  let pendingPermissionUpdate: Promise<void> = Promise.resolve();
+  const permissionUpdates = createPermissionUpdates("ask");
+  const pendingPermissionGate = createPermissionSendGate();
   let pendingReaderUpdate: Promise<void> = Promise.resolve();
   let presetUpdatePending = false;
   let reportStyleDialog: ReturnType<typeof openReportStyleDialog> | undefined;
@@ -1926,6 +1937,29 @@ function bindWorkspace(
     return host.rpc(method, params);
   }
 
+  const artifactList = createArtifactList<ArtifactRecord>({
+    state,
+    load: async (taskId) => {
+      const listed = (await rpc("artifact/list", { taskId })) as {
+        artifacts?: ArtifactRecord[];
+      };
+      return listed.artifacts ?? [];
+    },
+    selection: () => ({
+      taskId: state.sessionId,
+      generation: taskLoadGeneration,
+    }),
+    errorChanged: (error, previous) => {
+      if (previous && state.sendError === previous) state.sendError = "";
+      if (error && !state.sendError) state.sendError = error;
+    },
+  });
+
+  /** Artifact summaries only render for the task whose list loaded them. */
+  function visibleArtifacts(): ArtifactRecord[] {
+    return artifactList.visible(state.sessionId);
+  }
+
   function attachmentMeta(item: PendingAttachment): string {
     if (item.status === "preparing") {
       return getString("workspace-attachment-reading");
@@ -2366,7 +2400,7 @@ function bindWorkspace(
     targetDoc: Document,
     summary: Extract<TimelineBlock, { kind: "artifact" }>["artifact"],
   ): HTMLElement {
-    const record = state.artifacts.find((item) => item.id === summary.id);
+    const record = visibleArtifacts().find((item) => item.id === summary.id);
     const revision =
       record?.revisions.find((item) => item.revision === summary.revision) ??
       record?.revisions.at(-1);
@@ -2420,13 +2454,13 @@ function bindWorkspace(
     file.appendChild(open);
 
     file.addEventListener("click", () => {
-      if (state.artifacts.some((item) => item.id === summary.id)) {
+      if (visibleArtifacts().some((item) => item.id === summary.id)) {
         openArtifactViewer(summary.id, summary.revision, file);
         return;
       }
       void refreshArtifacts(summary.taskId)
         .then(() => {
-          if (state.artifacts.some((item) => item.id === summary.id)) {
+          if (visibleArtifacts().some((item) => item.id === summary.id)) {
             openArtifactViewer(summary.id, summary.revision, file);
           }
         })
@@ -2567,15 +2601,26 @@ function bindWorkspace(
     deny.style.background = "var(--confucius-elevated)";
     deny.style.border = "1px solid var(--confucius-danger)";
     deny.style.color = "var(--confucius-danger)";
-    allow.addEventListener("click", () => {
-      void resolveApproval(item.id, "allow", "once");
-    });
-    always.addEventListener("click", () => {
-      void resolveApproval(item.id, "allow", "session");
-    });
-    deny.addEventListener("click", () => {
-      void resolveApproval(item.id, "deny", "once");
-    });
+    const decisions = [allow, always, deny];
+    let resolving = false;
+    const decide = (
+      verdict: "allow" | "deny",
+      scope: "once" | "session",
+    ): void => {
+      if (resolving) return;
+      resolving = true;
+      for (const control of decisions) control.disabled = true;
+      // A stale or repeated decision rejects; resolveApproval reports it and
+      // refreshes the list instead of leaving an unhandled rejection.
+      void resolveApproval(item.id, verdict, scope).catch(() => {
+        resolving = false;
+        if (!card.isConnected) return;
+        for (const control of decisions) control.disabled = false;
+      });
+    };
+    allow.addEventListener("click", () => decide("allow", "once"));
+    always.addEventListener("click", () => decide("allow", "session"));
+    deny.addEventListener("click", () => decide("deny", "once"));
     actions.appendChild(allow);
     actions.appendChild(always);
     actions.appendChild(deny);
@@ -2630,22 +2675,7 @@ function bindWorkspace(
   }
 
   async function refreshArtifacts(taskId = state.sessionId): Promise<void> {
-    const selection = taskLoadGeneration;
-    if (!taskId) {
-      state.artifacts = [];
-      return;
-    }
-    try {
-      const listed = (await rpc("artifact/list", { taskId })) as {
-        artifacts?: ArtifactRecord[];
-      };
-      if (state.sessionId !== taskId || selection !== taskLoadGeneration)
-        return;
-      state.artifacts = listed.artifacts ?? [];
-    } catch {
-      if (state.sessionId === taskId && selection === taskLoadGeneration)
-        state.artifacts = [];
-    }
+    await artifactList.refresh(taskId);
   }
 
   async function refreshRuntimes(force = false): Promise<void> {
@@ -2723,6 +2753,9 @@ function bindWorkspace(
       const previousTaskId = state.sessionId;
       const switching = previousTaskId !== taskId;
       if (switching) {
+        // Clear before the load finishes: the previous task's files must never
+        // render (or open) under the task that is about to be selected.
+        artifactList.select(taskId);
         reportStyleDialog?.close();
         if (!preserveModelMenu) closeEndpointMenu();
         closePlusMenu();
@@ -2769,6 +2802,9 @@ function bindWorkspace(
           : loaded.permissionMode === "deny"
             ? "deny"
             : "ask";
+      permissionUpdates.reset(state.permission);
+      // The gate tracked an update for the task that is no longer selected.
+      pendingPermissionGate.reset();
       state.events = mergeEvents([], bundle.events ?? [], true);
       state.lastEventId = state.events.at(-1)?.id ?? null;
       state.running =
@@ -3028,6 +3064,9 @@ function bindWorkspace(
     if (presetUpdatePending || modeUpdatePending || state.sending) return;
     presetUpdatePending = true;
     updateRunningUI();
+    const ownerTaskId = state.sessionId;
+    let selection = taskLoadGeneration;
+    let stagedTaskId: string | null = null;
     state.sendError = "";
     try {
       const selectedTaskId = state.sessionId;
@@ -3056,27 +3095,51 @@ function bindWorkspace(
         const index = state.sessions.findIndex((row) => row.id === task.id);
         if (index >= 0) state.sessions[index] = task;
       } else {
-        task = await createTask({
-          title: localizedTemplateTitle(template),
-          context: stagedContext,
-          templateId: template.id,
-          skillSlug: template.skillSlug,
-        });
+        try {
+          task = await createTask({
+            title: localizedTemplateTitle(template),
+            context: stagedContext,
+            templateId: template.id,
+            skillSlug: template.skillSlug,
+          });
+        } catch (error) {
+          // createTask consumes a selection generation before its first
+          // request; a failure before it selects must stay reportable.
+          selection = taskLoadGeneration;
+          throw error;
+        }
+        // createTask selects its result; fence later writes against that state.
+        selection = taskLoadGeneration;
       }
+      stagedTaskId = task.id;
       const draft = String(
         promptOverride ?? localizedTemplatePrompt(template),
       ).trim();
-      prompt.value = draft;
+      // The preset belongs to the staged task even if the user has moved on;
+      // never write its draft into another task's composer or host draft.
       composerDrafts.set(task.id, draft);
+      if (state.sessionId !== task.id || selection !== taskLoadGeneration) {
+        renderLists();
+        return;
+      }
+      prompt.value = draft;
       rememberComposerDraft();
       closeSlashMenu();
       closeMentionMenu();
       prompt.focus();
       prompt.setSelectionRange(prompt.value.length, prompt.value.length);
-      await refreshArtifacts();
+      await refreshArtifacts(task.id);
       renderLists();
     } catch (error) {
-      state.sendError = error instanceof Error ? error.message : String(error);
+      // A staging failure belongs to the task that started it; never show it
+      // on a task the user selected while the request was in flight.
+      const failure = taskScopedFailure(
+        { taskId: stagedTaskId ?? ownerTaskId, generation: selection },
+        { taskId: state.sessionId, generation: taskLoadGeneration },
+        error,
+      );
+      if (!failure) return;
+      state.sendError = failure.message;
       renderLists();
     } finally {
       presetUpdatePending = false;
@@ -3099,10 +3162,20 @@ function bindWorkspace(
       });
       const draft =
         promptText || (intent.skillSlug ? `/${intent.skillSlug} ` : "");
-      prompt.value = draft;
       composerDrafts.set(created.id, draft);
-      rememberComposerDraft();
-      prompt.focus();
+      // createTask normally selects the new task, but a slower launch must not
+      // overwrite the composer or host draft after the user moved on.
+      const selection = taskLoadGeneration;
+      if (
+        taskSelectionCurrent(
+          { taskId: created.id, generation: selection },
+          { taskId: state.sessionId, generation: taskLoadGeneration },
+        )
+      ) {
+        prompt.value = draft;
+        rememberComposerDraft();
+        prompt.focus();
+      }
     }
     await refreshSessions();
     await refreshArtifacts();
@@ -3357,6 +3430,7 @@ function bindWorkspace(
   async function updateTaskContext(mode: "add" | "replace"): Promise<void> {
     const task = currentTask();
     if (!task) return;
+    const selection = taskLoadGeneration;
     closePlusMenu();
     try {
       await mentionSources.flush(task.id);
@@ -3374,11 +3448,17 @@ function bindWorkspace(
         context: current,
       });
       await refreshSessions();
+      // The context still belongs to the captured task, but a late reload must
+      // not reselect it after the user moved to another conversation.
+      if (state.sessionId !== task.id || selection !== taskLoadGeneration)
+        return;
       await loadTask(task.id);
       state.sendError = "";
       renderLists();
       flashContextUpdated();
     } catch (error) {
+      if (state.sessionId !== task.id || selection !== taskLoadGeneration)
+        return;
       state.sendError = error instanceof Error ? error.message : String(error);
       renderLists();
     }
@@ -3568,14 +3648,15 @@ function bindWorkspace(
     exportButton.setAttribute("aria-busy", String(exportButton.disabled));
     exportButton.addEventListener("click", () => void saveTaskTrace(task.id));
     header.appendChild(exportButton);
-    if (state.artifacts.length) {
+    const artifacts = visibleArtifacts();
+    if (artifacts.length) {
       const files = button(
         doc,
         "confucius-task-files",
-        `${getString("workspace-artifacts")} · ${state.artifacts.length}`,
+        `${getString("workspace-artifacts")} · ${artifacts.length}`,
       );
       files.addEventListener("click", () =>
-        openArtifactViewer(state.artifacts[0].id, undefined, files),
+        openArtifactViewer(artifacts[0].id, undefined, files),
       );
       header.append(files);
     }
@@ -3596,7 +3677,11 @@ function bindWorkspace(
         getString("workspace-task-continue"),
         "primary",
       );
+      resume.disabled = state.sending;
       resume.addEventListener("click", () => {
+        // A submission already in flight can still supersede this continuation;
+        // do not let both compete for the same task's next turn.
+        if (state.sending) return;
         void (async () => {
           try {
             await rpc("task/continue", { taskId: task.id });
@@ -3616,7 +3701,7 @@ function bindWorkspace(
     overview.appendChild(header);
 
     if (
-      !state.artifacts.length &&
+      !visibleArtifacts().length &&
       !state.events.some((event) => event.type === "turn_started")
     ) {
       const guide = el(doc, "p", {
@@ -3636,7 +3721,7 @@ function bindWorkspace(
     revision?: number,
     returnFocus?: HTMLElement,
   ): void {
-    const artifact = state.artifacts.find((item) => item.id === artifactId);
+    const artifact = visibleArtifacts().find((item) => item.id === artifactId);
     if (!artifact || !host) return;
     const generation = ++artifactOpenGeneration;
     const fail = (error: unknown) => {
@@ -3750,6 +3835,11 @@ function bindWorkspace(
         });
     },
     remove: (taskId) => {
+      const task = state.sessions.find((row) => row.id === taskId);
+      const title = task?.title || getString("workspace-untitled-task");
+      // Deletion drops history, logs and session state with no undo.
+      if (!win?.confirm(taskDeleteConfirmation(title, configuredUiLanguage())))
+        return;
       void (async () => {
         await rpc("task/delete", { taskId: taskId });
         artifactWindows.closeTask(taskId);
@@ -3770,7 +3860,7 @@ function bindWorkspace(
           state.lastEventId = null;
           state.running = false;
           state.pendingUserMessage = null;
-          state.artifacts = [];
+          artifactList.select(null);
           prompt.value = "";
           renderedTimelineTaskId = null;
         }
@@ -3812,7 +3902,7 @@ function bindWorkspace(
             `${item.id}:${item.title ?? ""}:${item.status}:${item.backend}:${item.templateId ?? ""}:${item.lockedContext.fingerprint}:${item.updatedAt}:${JSON.stringify(item.createdFrom ?? item.articleSources)}:${item.literature?.id ?? ""}`,
         )
         .join("|"),
-      state.artifacts
+      visibleArtifacts()
         .map((item) => `${item.id}:${item.revision}:${item.status}`)
         .join("|"),
       state.runtimes.map((item) => `${item.backend}:${item.state}`).join("|"),
@@ -3947,7 +4037,7 @@ function bindWorkspace(
     const timelineBlocks = keyedBlocks.map((entry) => entry.block);
     if (
       !state.events.length &&
-      !state.artifacts.length &&
+      !visibleArtifacts().length &&
       !state.pendingUserMessage &&
       !state.sendError
     ) {
@@ -4023,7 +4113,7 @@ function bindWorkspace(
         )
         .map((block) => `${block.artifact.id}:${block.artifact.revision}`),
     );
-    for (const artifact of state.artifacts) {
+    for (const artifact of visibleArtifacts()) {
       if (
         !representedArtifactRevisions.has(`${artifact.id}:${artifact.revision}`)
       ) {
@@ -4340,8 +4430,10 @@ function bindWorkspace(
       !pendingTaskId &&
       state.sessionId &&
       !state.sessions.some((task) => task.id === state.sessionId)
-    )
+    ) {
       state.sessionId = null;
+      artifactList.select(null);
+    }
     if (!state.sessionId && !state.sessions.length)
       prompt.value = composerDrafts.get("new") ?? "";
     if (
@@ -4351,6 +4443,9 @@ function bindWorkspace(
       state.sessions[0]
     ) {
       state.sessionId = state.sessions[0].id;
+      // The first poll restores the selected task without calling loadTask;
+      // never carry another task's artifact list into it.
+      artifactList.select(state.sessionId);
     }
     // The first poll restores the selected task without calling loadTask.
     // Hydrate its composer too, including a cached task retained across layouts.
@@ -4479,6 +4574,7 @@ function bindWorkspace(
         // independently during task creation or context/permission updates.
         if (!disposed && selection === taskLoadGeneration) {
           state.sessionId = created.id;
+          artifactList.select(created.id);
           loadedComposerTaskId = created.id;
           composerDrafts.set(created.id, prompt.value);
           state.events = [];
@@ -4499,6 +4595,11 @@ function bindWorkspace(
             : null,
       };
       pendingMessage.afterEventId = promptAttempt.afterEventId;
+      // A permission choice the user can see must be saved before the turn
+      // starts. A rejected write aborts this send instead of quietly running
+      // the prompt with the host's previous mode; the gate settles afterwards
+      // so the next send is not blocked by the same failure.
+      const pendingPermissionUpdate = pendingPermissionGate.wait();
       await Promise.all([
         pendingPermissionUpdate,
         mentionSources.flush(promptSessionId),
@@ -4512,6 +4613,21 @@ function bindWorkspace(
         attachmentIds,
         references: submittedReferences,
       })) as { superseded?: boolean };
+      if (started.superseded) {
+        // The turn never started. Keep the submitted text and attachments so
+        // the user can retry instead of silently losing the prompt.
+        if (state.sessionId === promptSessionId) {
+          state.running = false;
+          status.style.color = "var(--confucius-muted)";
+          status.textContent =
+            configuredUiLanguage() === "en-US"
+              ? "Prompt not submitted"
+              : "提示词未提交";
+        }
+        updateRunningUI();
+        renderLists();
+        return;
+      }
       for (let index = pendingAttachments.length - 1; index >= 0; index -= 1) {
         if (submittedUiIds.has(pendingAttachments[index].uiId)) {
           pendingAttachments.splice(index, 1);
@@ -4596,9 +4712,15 @@ function bindWorkspace(
     verdict: "allow" | "deny",
     scope: "once" | "session",
   ) {
-    await rpc("approval/resolve", { id, verdict, scope });
-    collectApprovals();
-    renderLists();
+    try {
+      await rpc("approval/resolve", { id, verdict, scope });
+    } catch (error) {
+      state.sendError = error instanceof Error ? error.message : String(error);
+      throw error;
+    } finally {
+      collectApprovals();
+      renderLists();
+    }
   }
 
   async function refreshConfig(): Promise<void> {
@@ -6184,28 +6306,37 @@ function bindWorkspace(
   }
 
   function applyPermission(mode: "ask" | "auto_allow" | "deny"): void {
+    const sessionId = state.sessionId;
+    const generation = taskLoadGeneration;
     state.permission = mode;
-    if (state.sessionId) {
-      const sessionId = state.sessionId;
-      const update = pendingPermissionUpdate
-        .catch(() => undefined)
-        .then(() =>
+    if (!sessionId) {
+      // Nothing to persist yet; the loaded task resets the confirmed value.
+      permissionUpdates.reset(mode);
+      pendingPermissionGate.reset();
+      return;
+    }
+    // The gate handed to `sendPrompt` rejects when this write fails, so a send
+    // that races the choice aborts; the queue keeps serializing later choices.
+    pendingPermissionGate.track(
+      permissionUpdates.apply(mode, {
+        send: () =>
           rpc("task/setPermissions", {
             taskId: sessionId,
             permissionMode: mode,
           }),
-        )
-        .then(() => undefined);
-      pendingPermissionUpdate = update;
-      void update.catch((error) => {
-        if (state.sessionId !== sessionId) {
-          return;
-        }
-        state.sendError =
-          error instanceof Error ? error.message : String(error);
-        renderLists();
-      });
-    }
+        // A different task now owns the visible permission mode.
+        isCurrent: () =>
+          state.sessionId === sessionId && taskLoadGeneration === generation,
+        rejected: (confirmed, error) => {
+          // Roll back to the last mode the host confirmed, not to an optimistic
+          // value staged while the previous choice was still pending.
+          state.permission = confirmed;
+          state.sendError =
+            error instanceof Error ? error.message : String(error);
+          renderLists();
+        },
+      }),
+    );
   }
 
   async function compactNow(): Promise<void> {
@@ -7355,7 +7486,7 @@ function bindWorkspace(
           renderKnowledgeWindow();
         }
         if (
-          !state.artifacts.length ||
+          artifactList.needsRefresh(polledSessionId) ||
           incoming.some((event) => event.type === "artifact_upserted")
         ) {
           await refreshArtifacts(polledSessionId);

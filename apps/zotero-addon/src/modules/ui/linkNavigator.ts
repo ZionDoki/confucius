@@ -45,11 +45,42 @@ export function pdfLocationForUri(
   return uri.page ? { pageIndex: uri.page - 1 } : null;
 }
 
-function resolveLibraryID(uri: ZoteroUri): number | null {
-  if (uri.groupID) {
-    return Zotero.Groups.getLibraryIDFromGroupID(uri.groupID) || null;
+function existingLibraryID(value: unknown): number | null {
+  const libraryID = Number(value);
+  if (!Number.isInteger(libraryID) || libraryID <= 0) return null;
+  try {
+    return Zotero.Libraries.get(libraryID) ? libraryID : null;
+  } catch {
+    return null;
   }
-  return Zotero.Libraries.userLibraryID;
+}
+
+function groupLibraryID(groupID: unknown): number | null {
+  try {
+    return existingLibraryID(
+      Zotero.Groups.getLibraryIDFromGroupID(Number(groupID)),
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve the library scope carried by a URI. Legacy ZotFile links encode a
+ * numeric prefix; it is a library ID when that library exists and otherwise a
+ * group ID to map. Never drop a parsed scope and open the user library instead.
+ */
+export function resolveLibraryID(uri: ZoteroUri): number | null {
+  if (uri.libraryID !== undefined) {
+    const direct = existingLibraryID(uri.libraryID);
+    if (direct !== null) return direct;
+    const mapped = groupLibraryID(uri.libraryID);
+    return mapped;
+  }
+  if (uri.groupID !== undefined) {
+    return groupLibraryID(uri.groupID);
+  }
+  return existingLibraryID(Zotero.Libraries.userLibraryID);
 }
 
 function asItem(value: unknown): Zotero.Item | null {

@@ -190,6 +190,39 @@ export class LiteratureToolProvider implements ToolProvider {
         }
       : null;
   }
+  /**
+   * Candidate downloads are durable native writes. Give them a precise paper
+   * resource and a reconcilable intent so an interrupted dispatch can be
+   * verified against the pool/native attachment instead of blocking every
+   * later download behind `catalog:agent`.
+   */
+  async prepare(
+    name: string,
+    args: Record<string, unknown>,
+    context: ToolExecutionContext = {},
+  ): Promise<null> {
+    if (name !== "literature_download_fulltext") return null;
+    const taskId = String(context.taskId ?? this.taskId);
+    const workId = String(args.id ?? "");
+    const linkId = String(args.linkId ?? "");
+    const resources = [`literature:${taskId}:${workId}`];
+    context.resources = resources;
+    context.preparedOperation = {
+      schemaVersion: 1,
+      domain: "literature",
+      name,
+      args: { id: workId, linkId },
+      resources,
+      recovery: {
+        taskId,
+        workId,
+        linkId,
+        runId: context.runId,
+        turnId: context.turnId,
+      },
+    };
+    return null;
+  }
   // Candidate downloads reuse the exact user-confirmed batch authorization.
   // The service rejects draft candidates and any later continue-with-current choice.
   async call(

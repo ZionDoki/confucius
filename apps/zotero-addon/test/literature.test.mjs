@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
+import { TextDecoder, TextEncoder } from "node:util";
 import {
   OpenAlexClient,
   openAlexWork,
   normalizeDoi,
   openAlexFailure,
+  zoteroOpenAlexTransport,
 } from "../src/modules/host/OpenAlexClient.ts";
 import { LiteratureService } from "../src/modules/host/LiteratureService.ts";
 import { LiteratureToolProvider } from "../src/modules/host/LiteratureToolProvider.ts";
@@ -98,6 +100,85 @@ async function selectOne(f) {
     [{ id: "W1000", selected: true }],
     "agent",
   );
+}
+/** Native Zotero items for a parent with PDF children, and file existence. */
+function nativeItems(attachments, files, textByPath = new Map()) {
+  const originalZotero = globalThis.Zotero,
+    originalIOUtils = globalThis.IOUtils;
+  globalThis.IOUtils = {
+    exists: async (path) => files.has(path),
+    stat: async () => ({ size: 1024 }),
+    read: async (path) =>
+      new TextEncoder().encode(
+        `%PDF-1.7\n${textByPath.get(path) ?? "Accepted manuscript\nPaper 0\nA\nhttps://doi.org/10.1234/p0\nAbstract\nStudy text"}\n%%EOF`,
+      ),
+  };
+  globalThis.Zotero = {
+    PDFWorker: {
+      _enqueue: (work) => work(),
+      _query: async (_action, { buf }) => ({
+        totalPages: 2,
+        text: new TextDecoder().decode(buf),
+      }),
+    },
+    Items: {
+      getByLibraryAndKey: (_libraryID, key) =>
+        key === "PARENT"
+          ? { id: 1, getAttachments: () => attachments.map(({ id }) => id) }
+          : false,
+      get: (id) =>
+        attachments.find((attachment) => attachment.id === id) ?? false,
+      getAsync: async (id) =>
+        attachments.find((attachment) => attachment.id === id) ?? false,
+    },
+  };
+  return () => {
+    globalThis.Zotero = originalZotero;
+    globalThis.IOUtils = originalIOUtils;
+  };
+}
+function pdfAttachment(key, path) {
+  return {
+    id: 9,
+    key,
+    isAttachment: () => true,
+    isPDFAttachment: () => true,
+    attachmentContentType: "application/pdf",
+    getField: (name) =>
+      name === "url" ? "https://repo.example.org/a.pdf" : "",
+    getFilePathAsync: async () => path,
+  };
+}
+function interruptedPool(acquisition) {
+  return {
+    version: 1,
+    taskId: "task",
+    revision: 1,
+    candidateRevision: 1,
+    confirmedIds: ["W1000"],
+    works: [
+      {
+        id: "W1000",
+        openAlexIds: [],
+        doi: "10.1234/p0",
+        title: "Paper 0",
+        authors: ["A"],
+        citedBy: 0,
+        openAccess: true,
+        pdfUrls: [],
+        queryIds: [],
+        decision: {
+          selected: true,
+          evaluated: true,
+          actor: "user",
+          revision: 1,
+        },
+        acquisition,
+      },
+    ],
+    queries: [],
+    updatedAt: 1,
+  };
 }
 test("malformed OpenAlex records preserve usable results and report invalid response envelopes", async () => {
   const client = new OpenAlexClient(
@@ -630,6 +711,35 @@ test("concurrent candidate edits reject stale revisions rather than overwrite a 
   assert.equal(results[1].status, "rejected");
   assert.equal((await service.get("task", "W1000")).decision.selected, true);
 });
+test("authenticated OpenAlex requests refuse redirects instead of trusting redirected JSON", async () => {
+  const original = globalThis.Zotero;
+  const calls = [];
+  globalThis.Zotero = {
+    HTTP: {
+      request: async (method, url, options) => {
+        calls.push({ method, url, options });
+        return {
+          status: 302,
+          response: {
+            results: [{ id: "https://openalex.org/W1", title: "Injected" }],
+          },
+          getResponseHeader: () => null,
+        };
+      },
+    },
+  };
+  try {
+    const client = new OpenAlexClient(() => "secret", zoteroOpenAlexTransport);
+    await assert.rejects(client.search({ query: "paper" }, "q"), {
+      code: "network",
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].options.followRedirects, false);
+    assert.equal(calls[0].options.headers.Authorization, "Bearer secret");
+  } finally {
+    globalThis.Zotero = original;
+  }
+});
 test("one batch confirmation is required, versioned, repeatable, and removal only unbinds", async () => {
   const f = fixture();
   await f.service.search("task", { query: "x" });
@@ -664,6 +774,52 @@ test("one batch confirmation is required, versioned, repeatable, and removal onl
   assert.equal(f.bindings.at(-1).removed[0].key, "W1000");
   assert.equal(f.items.length, 2);
 });
+test("cancel fences a confirmation still waiting for the pool lock", async () => {
+  const memory = memoryJsonStorage();
+  let blocked = false;
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  let markStarted;
+  const writeStarted = new Promise((resolve) => {
+    markStarted = resolve;
+  });
+  const f = fixture({
+    storage: {
+      ...memory,
+      write: async (key, value) => {
+        if (blocked && key === "task") {
+          markStarted();
+          await gate;
+        }
+        return memory.write(key, value);
+      },
+    },
+  });
+  await selectOne(f);
+  blocked = true;
+  const editing = f.service.updateCandidates(
+    "task",
+    1,
+    [{ id: "W1001", selected: true }],
+    "user",
+  );
+  await writeStarted;
+  const confirming = f.service.confirm("task", 2);
+  await setImmediate();
+  await f.service.cancel("task");
+  release();
+  await editing;
+  await assert.rejects(confirming, { code: "cancelled" });
+  const pool = await f.service.load("task");
+  assert.equal(pool.confirmedRevision, undefined);
+  assert.equal(pool.waiting, undefined);
+  assert.deepEqual(f.items, []);
+  assert.deepEqual(f.bindings, []);
+  assert.deepEqual(f.downloads, []);
+});
+
 test("missing DOI remains valid, equal titles do not merge, equivalent DOIs do", async () => {
   const f = fixture({
     client: new OpenAlexClient(
@@ -1149,4 +1305,198 @@ test("provides one complete review snapshot and signals only newly discovered pa
     true,
     "The UI cannot mutate service records through its snapshot",
   );
+});
+
+test("a restart reconciles a PDF attached before the pool save instead of reporting none", async () => {
+  const f = fixture({ acquire: new ZoteroLiteratureAcquirer(() => "") });
+  const item = { id: "item:1:PARENT", libraryID: 1, key: "PARENT" };
+  await f.storage.write(
+    "task",
+    interruptedPool({
+      status: "downloading",
+      item,
+      stage: "open_access",
+      attempts: [
+        { stage: "open_access", url: "https://repo.example.org/a.pdf", at: 1 },
+      ],
+    }),
+  );
+  // Startup recovery marks interrupted work failed before operations reconcile.
+  await f.service.recover("task");
+  assert.equal(
+    (await f.service.get("task", "W1000")).acquisition.status,
+    "failed",
+  );
+  const attachment = pdfAttachment("NATIVE", "/storage/NATIVE/a.pdf");
+  const restore = nativeItems([attachment], new Set(["/storage/NATIVE/a.pdf"]));
+  try {
+    const receipt = await f.service.reconcileDownload(
+      "task",
+      "W1000",
+      "link-1",
+    );
+    assert.equal(receipt.ok, true);
+    assert.equal(receipt.effect, "applied");
+    assert.equal(receipt.data.reconciled, true);
+    assert.equal(receipt.data.acquisition.attachmentKey, "NATIVE");
+    const acquisition = (await f.service.get("task", "W1000")).acquisition;
+    assert.equal(acquisition.status, "available");
+    assert.equal(acquisition.attachmentKey, "NATIVE");
+    assert.equal(acquisition.item.attachmentKey, "NATIVE");
+    assert.equal(acquisition.error, undefined);
+    assert.equal(acquisition.message, undefined);
+    assert.equal(acquisition.attempts.length, 1);
+  } finally {
+    restore();
+  }
+});
+
+test("native success is written back to the pool before reconcile returns applied", async () => {
+  const f = fixture({ acquire: new ZoteroLiteratureAcquirer(() => "") });
+  const item = { id: "item:1:PARENT", libraryID: 1, key: "PARENT" };
+  await f.storage.write(
+    "task",
+    interruptedPool({
+      status: "downloading",
+      item,
+      stage: "existing",
+      version: "acceptedVersion",
+      sourceUrl: "https://repo.example.org/a.pdf",
+      discoveredFrom: "OpenAlex location",
+      attempts: [
+        { stage: "existing", url: "https://repo.example.org/a.pdf", at: 1 },
+      ],
+    }),
+  );
+  const attachment = pdfAttachment("NATIVE", "/storage/NATIVE/a.pdf");
+  const restore = nativeItems([attachment], new Set(["/storage/NATIVE/a.pdf"]));
+  try {
+    const receipt = await f.service.reconcileDownload(
+      "task",
+      "W1000",
+      "link-1",
+    );
+    assert.equal(receipt.effect, "applied");
+    // The pool, not only the returned receipt, must record the delivered PDF.
+    const acquisition = (await f.service.get("task", "W1000")).acquisition;
+    assert.equal(acquisition.status, "available");
+    assert.equal(acquisition.attachmentKey, "NATIVE");
+    assert.equal(acquisition.version, "acceptedVersion");
+    assert.equal(acquisition.sourceUrl, "https://repo.example.org/a.pdf");
+    assert.equal(acquisition.discoveredFrom, "OpenAlex location");
+    const summary = (await f.service.list("task")).summary;
+    assert.equal(summary.available, 1);
+    assert.equal(summary.acquiring, 0);
+    // A later restart must not turn the persisted success back into a failure.
+    await f.service.recover("task");
+    assert.equal(
+      (await f.service.get("task", "W1000")).acquisition.status,
+      "available",
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("a native attachment record without its file is not a saved PDF", async () => {
+  const f = fixture({ acquire: new ZoteroLiteratureAcquirer(() => "") });
+  const item = { id: "item:1:PARENT", libraryID: 1, key: "PARENT" };
+  await f.storage.write(
+    "task",
+    interruptedPool({ status: "downloading", item }),
+  );
+  const attachment = pdfAttachment("NATIVE", "/storage/NATIVE/missing.pdf");
+  const restore = nativeItems([attachment], new Set());
+  try {
+    const interrupted = await f.service.reconcileDownload(
+      "task",
+      "W1000",
+      "link-1",
+    );
+    assert.equal(interrupted.effect, "none");
+    assert.equal(
+      (await f.service.get("task", "W1000")).acquisition.status,
+      "downloading",
+    );
+    await f.service.recover("task");
+    const failed = await f.service.reconcileDownload("task", "W1000", "link-1");
+    assert.equal(failed.effect, "none");
+    assert.equal(
+      (await f.service.get("task", "W1000")).acquisition.status,
+      "failed",
+    );
+  } finally {
+    restore();
+  }
+});
+
+for (const [kind, text] of [
+  [
+    "supplement",
+    "Supplementary information\nPaper 0\nA\nhttps://doi.org/10.1234/p0\nAbstract",
+  ],
+  [
+    "different paper",
+    "An unrelated paper\nAnother Author\nhttps://doi.org/10.1234/other\nAbstract",
+  ],
+]) {
+  test(`recovery does not promote an existing ${kind} to available fulltext`, async () => {
+    const f = fixture({ acquire: new ZoteroLiteratureAcquirer(() => "") });
+    const path = "/storage/UNRELATED/a.pdf";
+    const restore = nativeItems(
+      [pdfAttachment("UNRELATED", path)],
+      new Set([path]),
+      new Map([[path, text]]),
+    );
+    try {
+      for (const attachmentKey of [undefined, "UNRELATED"]) {
+        await f.storage.write(
+          "task",
+          interruptedPool({
+            status: "downloading",
+            item: { libraryID: 1, key: "PARENT" },
+            attachmentKey,
+          }),
+        );
+        await f.service.recover("task");
+        const receipt = await f.service.reconcileDownload(
+          "task",
+          "W1000",
+          "link-1",
+        );
+        assert.notEqual(receipt?.effect, "applied");
+        assert.equal(
+          (await f.service.get("task", "W1000")).acquisition.status,
+          "failed",
+        );
+      }
+    } finally {
+      restore();
+    }
+  });
+}
+
+test("recovery keeps a native download unknown when no identity inspector is available", async () => {
+  const f = fixture();
+  await f.storage.write(
+    "task",
+    interruptedPool({
+      status: "downloading",
+      item: { libraryID: 1, key: "PARENT" },
+    }),
+  );
+  const path = "/storage/NATIVE/a.pdf";
+  const restore = nativeItems([pdfAttachment("NATIVE", path)], new Set([path]));
+  try {
+    assert.equal(
+      await f.service.reconcileDownload("task", "W1000", "link-1"),
+      null,
+    );
+    assert.equal(
+      (await f.service.get("task", "W1000")).acquisition.status,
+      "downloading",
+    );
+  } finally {
+    restore();
+  }
 });

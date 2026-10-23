@@ -139,6 +139,9 @@ export class MemoryEngine {
         ...record,
         tags: [...record.tags],
         sourceRefs: [...(record.sourceRefs ?? [])],
+        researchTasks: record.researchTasks
+          ? [...record.researchTasks]
+          : undefined,
       };
     });
   }
@@ -316,6 +319,7 @@ export class MemoryEngine {
       sourceSessionId?: string;
       protection?: "user" | "none";
       sourceRefs?: string[];
+      researchTasks?: string[];
     },
     validate?: () => void,
   ): Promise<MemoryRecord> {
@@ -337,6 +341,7 @@ export class MemoryEngine {
       sourceRefs:
         input.sourceRefs ??
         (input.sourceSessionId ? [`task:${input.sourceSessionId}`] : []),
+      researchTasks: input.researchTasks,
       retentionVersion: 1,
       accessCount: 0,
       confidence: clamp01(input.confidence ?? 0.9),
@@ -368,6 +373,7 @@ export class MemoryEngine {
       confidence?: number;
       protection?: "user" | "none";
       sourceRefs?: string[];
+      researchTasks?: string[];
     },
     ordinaryOnly = false,
     validate?: () => void,
@@ -399,6 +405,7 @@ export class MemoryEngine {
         confidence: clamp01(input.confidence ?? existing.confidence),
         protection: input.protection ?? existing.protection,
         sourceRefs: input.sourceRefs ?? existing.sourceRefs,
+        researchTasks: input.researchTasks ?? existing.researchTasks,
         updatedAt: this.now(),
         history:
           (input.protection ?? existing.protection) === "none"

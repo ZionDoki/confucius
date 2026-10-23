@@ -6,11 +6,21 @@ import {
   HistoryStore,
   InMemoryFileSystem,
   MemoryEngine,
+  type MemoryOp,
 } from "@confucius/memory";
-import type { ModelMessage, TurnCheckpoint } from "@confucius/harness";
+import { prepareContextHandoff } from "./ContextHandoff";
+import { McpToolProvider } from "./McpToolProvider";
+import type {
+  ModelMessage,
+  TurnCheckpoint,
+  TurnLoopInput,
+  WindowContext,
+} from "@confucius/harness";
 import { BudgetAccountant } from "@confucius/harness";
 import {
   coalesceTimeline,
+  CONFUCIUS_MCP_PATH,
+  CONFUCIUS_RPC_PATH,
   initialContextWindow,
   TASK_TEMPLATES,
   type ApprovalResolution,
@@ -174,6 +184,7 @@ interface TestState {
   externalToolNames?: Set<string>;
   externalSourceScope?: { itemRefs: Set<string> };
   externalVisualInspectionActive?: boolean;
+  contextCleanup?: Promise<void>;
 }
 
 // Expose private entry points only for exercising their real implementation.
@@ -213,6 +224,15 @@ interface LifecycleHost {
     args: Record<string, unknown>,
   ): Promise<ApprovalResolution>;
   approvalResolve(resolution: ApprovalResolution): { ok: boolean };
+  nativeWindowContext(state: TestState, outputTokens?: number): WindowContext;
+  clearRetiredContext(state: TestState): Promise<void>;
+  reconcileResumedCheckpoint(
+    state: TestState,
+    checkpoint: TurnCheckpoint,
+  ): Promise<TurnCheckpoint>;
+  history: HistoryStore;
+  memory: MemoryEngine;
+  sessions: Map<string, TestState>;
 }
 
 function run(record: ResearchTaskRecord, generation = 1): RunState {
@@ -354,7 +374,7 @@ function fixture() {
     maintenanceQueue: Promise.resolve(),
     historyCleanupEnabled: () => false,
   });
-  return { host, state, backend, starts, execution };
+  return { host, state, backend, starts, execution, fs };
 }
 
 async function waitFor(predicate: () => boolean) {
@@ -364,6 +384,444 @@ async function waitFor(predicate: () => boolean) {
   }
   assert.fail("Lifecycle did not reach the expected state");
 }
+
+it("requires a host-issued lease for the task tool gateway", async () => {
+  const { host, state } = fixture();
+  state.record.run = run(state.record);
+  state.activeTurnId = "lease-turn";
+  const before = state.events.length;
+  await assert.rejects(
+    host.taskToolCall({
+      taskId: state.record.id,
+      name: "artifact_read",
+      arguments: { id: "report" },
+    }),
+    /host-issued execution lease/,
+  );
+  await assert.rejects(
+    host.rpc("task/toolList", { taskId: state.record.id }),
+    /host-issued execution lease/,
+  );
+  assert.equal(state.events.length, before);
+});
+
+it("mints a server-side approval nonce instead of trusting the caller call id", async () => {
+  const { host, state } = fixture();
+  state.record.permissionMode = "ask";
+  Object.assign(host, { describeApprovalCall: () => "Note" });
+  const pending = host.requestToolApproval(
+    state,
+    "approval-turn",
+    "caller-chosen-call",
+    "create_note",
+    { libraryID: 1, content: "Reviewed note" },
+  );
+  const required = state.events.find(
+    (event) => event.type === "approval_required",
+  );
+  assert.ok(required?.type === "approval_required");
+  const id = required.payload.request.id;
+  assert.match(id, /^approval_[a-f0-9]{32}$/);
+  assert.notEqual(id, "approval_caller-chosen-call");
+  assert.throws(
+    () =>
+      host.approvalResolve({
+        id: "approval_caller-chosen-call",
+        verdict: "allow",
+        scope: "once",
+      }),
+    /Unknown approval id/,
+  );
+  host.approvalResolve({ id, verdict: "allow", scope: "once" });
+  assert.equal((await pending).verdict, "allow");
+});
+
+it("separates the read-only MCP capability from the full RPC pairing token", async () => {
+  const previousZotero = Reflect.get(globalThis, "Zotero");
+  const endpoints: Record<string, new () => unknown> = {};
+  const prefs: Record<string, string> = {
+    "extensions.zotero.confucius.pairingToken": "pairing-secret",
+    "extensions.zotero.confucius.mcpToken": "mcp-readonly-secret",
+  };
+  Reflect.set(globalThis, "Zotero", {
+    Prefs: {
+      get: (name: string) => prefs[name],
+      set: (name: string, value: string) => {
+        prefs[name] = value;
+      },
+    },
+    Server: { Endpoints: endpoints },
+  });
+  const bridge = await import("../bridge/HttpBridge");
+  const rpcCalls: string[] = [];
+  try {
+    bridge.registerHttpBridge({
+      health: () => ({ ok: true }),
+      rpc: async (method: string) => {
+        rpcCalls.push(method);
+        return { ok: true };
+      },
+      resolveRuntimeCapability: () => null,
+      executeReadOnlyTool: async () => ({ ok: true, data: {} }),
+    } as unknown as AgentHost);
+    const Endpoint = (path: string) =>
+      new (
+        endpoints[path] as new () => {
+          init(options: {
+            method: string;
+            headers?: Record<string, string>;
+            data?: unknown;
+          }): Promise<[number, string, string]>;
+        }
+      )();
+    const mcp = Endpoint(CONFUCIUS_MCP_PATH);
+    const rpc = Endpoint(CONFUCIUS_RPC_PATH);
+    const initialize = (token: string) =>
+      mcp.init({
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        data: { jsonrpc: "2.0", id: 1, method: "initialize" },
+      });
+    const call = (token: string) =>
+      rpc.init({
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        data: { jsonrpc: "2.0", id: 1, method: "config/get", params: {} },
+      });
+
+    assert.equal((await initialize("pairing-secret"))[0], 401);
+    assert.equal((await initialize("mcp-readonly-secret"))[0], 200);
+    assert.equal((await call("pairing-secret"))[0], 200);
+    assert.equal((await call("mcp-readonly-secret"))[0], 401);
+    assert.deepEqual(rpcCalls, ["config/get"]);
+  } finally {
+    bridge.unregisterHttpBridge();
+    Reflect.set(globalThis, "Zotero", previousZotero);
+  }
+});
+
+it("does not fall back to the pairing token when the read-only MCP token cannot be provisioned", async () => {
+  const previousZotero = Reflect.get(globalThis, "Zotero");
+  const endpoints: Record<string, new () => unknown> = {};
+  const prefs: Record<string, string> = {
+    "extensions.zotero.confucius.pairingToken": "pairing-secret",
+  };
+  const writes: string[] = [];
+  Reflect.set(globalThis, "Zotero", {
+    Prefs: {
+      get: (name: string) => prefs[name],
+      set: (name: string) => {
+        writes.push(name);
+        throw new Error("preferences are read-only");
+      },
+    },
+    Server: { Endpoints: endpoints },
+  });
+  const bridge = await import("../bridge/HttpBridge");
+  try {
+    bridge.registerHttpBridge({
+      health: () => ({ ok: true }),
+      rpc: async () => ({ ok: true }),
+      resolveRuntimeCapability: (token: string) =>
+        token === "task-token"
+          ? {
+              taskId: "task-bound",
+              turnId: "turn-bound",
+              runId: "run-bound",
+              generation: 1,
+              namespace: "test-namespace",
+            }
+          : null,
+      executeReadOnlyTool: async () => ({ ok: true, data: {} }),
+    } as unknown as AgentHost);
+    const Endpoint = (path: string) =>
+      new (
+        endpoints[path] as new () => {
+          init(options: {
+            method: string;
+            headers?: Record<string, string>;
+            data?: unknown;
+          }): Promise<[number, string, string]>;
+        }
+      )();
+    const mcp = Endpoint(CONFUCIUS_MCP_PATH);
+    const initialize = (token: string) =>
+      mcp.init({
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        data: { jsonrpc: "2.0", id: 1, method: "initialize" },
+      });
+
+    assert.equal((await initialize("pairing-secret"))[0], 401);
+    assert.deepEqual(
+      writes,
+      [],
+      "authorization must not provision credentials",
+    );
+    // Task leases still authenticate the task gateway while no read-only
+    // credential exists.
+    assert.equal((await initialize("task-token"))[0], 200);
+    // A token provisioned elsewhere (startup or the Security pane) works even
+    // when this session cannot write preferences.
+    prefs["extensions.zotero.confucius.mcpToken"] = "mcp-readonly-secret";
+    assert.equal((await initialize("mcp-readonly-secret"))[0], 200);
+    assert.equal((await initialize("pairing-secret"))[0], 401);
+    assert.deepEqual(writes, []);
+  } finally {
+    bridge.unregisterHttpBridge();
+    Reflect.set(globalThis, "Zotero", previousZotero);
+  }
+});
+
+it("does not let a delayed older prompt abort the newer run", async (test) => {
+  const previousZotero = Reflect.get(globalThis, "Zotero");
+  test.after(() => Reflect.set(globalThis, "Zotero", previousZotero));
+  Reflect.set(globalThis, "Zotero", {
+    locale: "en-US",
+    Prefs: { get: () => "en-US" },
+  });
+  const { host, state, backend } = fixture();
+  const cleanup = deferred<void>();
+  state.contextCleanup = cleanup.promise;
+  let interrupts = 0;
+  backend.interrupt = async () => {
+    interrupts++;
+  };
+  const releaseExecution = deferred<void>();
+  Object.assign(host, {
+    executeBackend: async () => {
+      await releaseExecution.promise;
+      return { stopReason: "completed", text: "Done" };
+    },
+  });
+  const older = host.sessionPrompt(state.record.id, "Older request");
+  await setImmediate();
+  assert.equal(interrupts, 0);
+  state.contextCleanup = undefined;
+  const newer = host.sessionPrompt(state.record.id, "Newer request");
+  await waitFor(() => state.activeTurnId !== null);
+  const newerTurn = state.activeTurnId;
+  const newerAbort = state.abort!;
+  const interruptsWhenStarted = interrupts;
+  cleanup.resolve();
+  assert.equal((await older).superseded, true);
+  assert.equal(newerAbort.signal.aborted, false);
+  assert.equal(state.activeTurnId, newerTurn);
+  assert.equal(state.record.run?.request, "Newer request");
+  assert.equal(
+    interrupts,
+    interruptsWhenStarted,
+    "the delayed prompt must not interrupt the newer run",
+  );
+  releaseExecution.resolve();
+  await newer;
+  await waitFor(() => state.activeTurnId === null);
+});
+
+it("does not let an invalid prompt cancel a valid prompt waiting for context cleanup", async () => {
+  const previousZotero = Reflect.get(globalThis, "Zotero");
+  Reflect.set(globalThis, "Zotero", {
+    locale: "en-US",
+    Prefs: { get: () => "en-US" },
+  });
+  try {
+    const { host, state } = fixture();
+    const cleanup = deferred<void>();
+    state.contextCleanup = cleanup.promise;
+    Object.assign(host, {
+      executeBackend: async () => ({ stopReason: "completed", text: "Done" }),
+    });
+    const valid = host.sessionPrompt(state.record.id, "Valid request");
+    await setImmediate();
+    const submission = Reflect.get(state, "promptSubmission") as number;
+    await assert.rejects(
+      host.sessionPrompt(state.record.id, "   "),
+      /Empty prompt/,
+    );
+    assert.equal(
+      Reflect.get(state, "promptSubmission"),
+      submission,
+      "an invalid prompt must not claim the waiting submission",
+    );
+    cleanup.resolve();
+    const result = await valid;
+    assert.equal(result.superseded, undefined);
+    assert.equal(state.record.run?.request, "Valid request");
+    await waitFor(() => state.activeTurnId === null);
+  } finally {
+    Reflect.set(globalThis, "Zotero", previousZotero);
+  }
+});
+
+it("does not let an invalid template prompt preempt a waiting prompt", async () => {
+  const previousZotero = Reflect.get(globalThis, "Zotero");
+  const previousAddon = Reflect.get(globalThis, "addon");
+  Reflect.set(globalThis, "Zotero", {
+    locale: "en-US",
+    Prefs: { get: () => "en-US" },
+  });
+  Reflect.set(globalThis, "addon", { data: {} });
+  try {
+    const { host, state } = fixture();
+    state.record.templateId = "freeform";
+    const cleanup = deferred<void>();
+    state.contextCleanup = cleanup.promise;
+    Object.assign(host, {
+      executeBackend: async () => ({ stopReason: "completed", text: "Done" }),
+    });
+    const valid = host.sessionPrompt(state.record.id, "Valid request");
+    await setImmediate();
+    state.record.templateId = "deep-read";
+    await assert.rejects(
+      host.sessionPrompt(state.record.id, "Another request"),
+      /workspace-template-context-single_required/,
+    );
+    cleanup.resolve();
+    const result = await valid;
+    assert.equal(result.superseded, undefined);
+    assert.equal(state.record.run?.request, "Valid request");
+    await waitFor(() => state.activeTurnId === null);
+  } finally {
+    Reflect.set(globalThis, "addon", previousAddon);
+    Reflect.set(globalThis, "Zotero", previousZotero);
+  }
+});
+
+it("rebinds the native window when a confirmed source changes the run fingerprint", async () => {
+  const { host, state } = fixture();
+  const archived: Array<Record<string, any>> = [];
+  Object.assign(host, {
+    prepareHandoff: async () => "handoff hint",
+    maxOutputTokens: () => 512,
+    contextWindowTokens: () => 3_000,
+    persistNow: async () => undefined,
+    queueHistory: async (entry: { items?: Array<Record<string, any>> }) => {
+      archived.push(...(entry.items ?? []));
+    },
+  });
+  state.record.run = run(state.record);
+  state.activeTurnId = "window-turn";
+  state.abort = new AbortController();
+  state.record.contextHandoff = { id: "handoff-1" } as never;
+  const window = host.nativeWindowContext(state, 512);
+  const firstWindow = state.record.contextWindow;
+  const messages: ModelMessage[] = [
+    { role: "system", content: "System" },
+    { role: "user", content: "Prompt" },
+    ...Array.from({ length: 8 }, (_, index) => ({
+      role: "assistant" as const,
+      content: `Analysis ${index} `.repeat(100),
+    })),
+  ];
+  window.start(
+    { turnId: "window-turn", userText: "Prompt" } as unknown as TurnLoopInput,
+    messages,
+  );
+  await window.record({
+    turnId: "window-turn",
+    iteration: 1,
+    savedAt: 1,
+    messages: [],
+    toolExecutions: [],
+  });
+  // The live confirmation point adds a source to the same run.
+  state.record.run.sources = {
+    ...state.record.run.sources,
+    fingerprint: "sources-expanded",
+  };
+  const ref = await window.toolResult(
+    "call-1",
+    "get_pages",
+    JSON.stringify({ ok: true, data: { content: "page" } }),
+  );
+  assert.equal(ref.itemId, "tool_window-turn_call-1");
+  const toolItem = archived.at(-1);
+  assert.equal(toolItem?.binding?.sourceFingerprint, "sources-expanded");
+  assert.deepEqual(toolItem?.sourceVersions, {});
+  await window.prepare(messages, []);
+  assert.equal(
+    state.record.contextSwitch?.binding.sourceFingerprint,
+    "sources-expanded",
+  );
+  assert.notEqual(state.record.contextWindow, firstWindow);
+});
+
+it("ignores buffered events from a superseded external turn", async (test) => {
+  const previousZotero = Reflect.get(globalThis, "Zotero");
+  test.after(() => Reflect.set(globalThis, "Zotero", previousZotero));
+  Reflect.set(globalThis, "Zotero", {
+    locale: "en-US",
+    Prefs: { get: () => "en-US" },
+  });
+  const { host, state, backend } = fixture();
+  state.record.run = run(state.record);
+  state.activeTurnId = "live-turn";
+  state.abort = new AbortController();
+  let callbacks: BackendCallbacks | undefined;
+  backend.startTurn = async (_input, received) => {
+    callbacks = received;
+    return {};
+  };
+  const pending = host.executeBackend(
+    state,
+    {
+      task: state.record,
+      turnId: "live-turn",
+      prompt: "Continue",
+      mode: "agent",
+      capabilityProfile: "zotero_only",
+    },
+    new AbortController().signal,
+  );
+  await waitFor(() => !!callbacks);
+  const event = (
+    id: string,
+    turnId: string,
+    type: ConfuciusEvent["type"],
+    payload: unknown,
+  ) =>
+    ({
+      id,
+      sessionId: state.record.id,
+      turnId,
+      type,
+      payload,
+      ts: 1,
+    }) as unknown as ConfuciusEvent;
+  const before = state.events.length;
+  callbacks!.event(
+    event("stale-text", "old-turn", "text_delta", {
+      text: "Already shown",
+      phase: "final_answer",
+    }),
+  );
+  callbacks!.event(
+    event("stale-usage", "old-turn", "model_usage_updated", {
+      inputTokens: 90,
+      outputTokens: 90,
+      totalTokens: 180,
+    }),
+  );
+  callbacks!.event(
+    event("stale-failed", "old-turn", "turn_failed", {
+      message: "Old runtime failure",
+    }),
+  );
+  assert.equal(state.events.length, before);
+  assert.equal(state.record.run.budget.totalTokens, 0);
+  let settled = false;
+  void pending.then(() => {
+    settled = true;
+  });
+  await setImmediate();
+  assert.equal(settled, false, "the live run must still be running");
+  callbacks!.event(
+    event("live-completed", "live-turn", "turn_completed", {
+      phase: "final_answer",
+    }),
+  );
+  assert.equal((await pending).stopReason, "completed");
+});
 
 it("persists attachment summaries before consuming files without exposing paths or extracted content", async (test) => {
   const previousZotero = Reflect.get(globalThis, "Zotero");
@@ -469,10 +927,10 @@ it("prepared MCP sessions may discover a directory but cannot execute before act
     },
   });
   const validate = Reflect.get(host, "validatedRuntimeLease").bind(host);
-  assert.equal(validate(state, lease, true, true), lease);
-  assert.throws(() => validate(state, lease, true), /expired/);
+  assert.equal(validate(state, lease, true), lease);
+  assert.throws(() => validate(state, lease), /expired/);
   state.record.run.generation++;
-  assert.throws(() => validate(state, lease, true, true), /expired/);
+  assert.throws(() => validate(state, lease, true), /expired/);
 });
 
 it("CLI save echoes and text fragments do not invalidate a complete handoff or add model calls", async () => {
@@ -816,6 +1274,10 @@ describe("skills in subsequent user messages", () => {
     const empty = () => ({ listTools: () => [] });
     Object.assign(host, {
       validatedRuntimeLease: () => undefined,
+      pluginRuntime: {
+        leaseSignal: () => undefined,
+        isCurrentLease: () => true,
+      },
       literatureTools: empty,
       subagentTools: empty,
       reviewTools: empty,
@@ -1441,6 +1903,15 @@ describe("AgentHost lifecycle ownership", () => {
         name: "artifact_upsert",
         arguments: { kind: "report", title: "Report", body, ...args },
       });
+    // This test exercises artifact dispatch, not the lease boundary, which has
+    // its own regression test below.
+    Object.assign(host, {
+      validatedRuntimeLease: () => undefined,
+      pluginRuntime: {
+        leaseSignal: () => undefined,
+        isCurrentLease: () => true,
+      },
+    });
     const invalid = toolResult(
       await save({ id: foreign.id, taskId: state.record.id }),
     );
@@ -1514,7 +1985,12 @@ describe("AgentHost lifecycle ownership", () => {
         return resolution;
       });
     const valid = {
-      id: "approval_invalid-reply",
+      id: (
+        state.events.find((event) => event.type === "approval_required")!
+          .payload as {
+          request: { id: string };
+        }
+      ).request.id,
       verdict: "allow",
       scope: "session",
     };
@@ -1554,8 +2030,13 @@ describe("AgentHost lifecycle ownership", () => {
       state.events.filter((e) => e.type === "approval_required").length,
       1,
     );
+    const approvalId = () =>
+      (
+        state.events.filter((e) => e.type === "approval_required").at(-1)!
+          .payload as { request: { id: string } }
+      ).request.id;
     host.approvalResolve({
-      id: "approval_first",
+      id: approvalId(),
       verdict: "allow",
       scope: "session",
     });
@@ -1585,7 +2066,7 @@ describe("AgentHost lifecycle ownership", () => {
       2,
     );
     host.approvalResolve({
-      id: "approval_third",
+      id: approvalId(),
       verdict: "deny",
       scope: "once",
     });
@@ -2818,4 +3299,723 @@ it("submitted annotation suggestions satisfy the Agent obligation without claimi
     snapshot.completed[0].description,
     /review pool.*require individual acceptance/,
   );
+});
+
+it("resolves a resumed started execution from the operation receipt", async () => {
+  const { host, state, execution } = fixture();
+  const receipt: ToolResult = {
+    ok: true,
+    toolName: "create_note",
+    effect: "applied",
+    data: { key: "NOTE" },
+  };
+  await execution.importLegacyOperation({
+    id: `${state.record.id}:old-turn:call-1`,
+    name: "create_note",
+    args: { libraryID: 1, content: "Reviewed note" },
+    context: { taskId: state.record.id },
+    resources: ["item:NOTE"],
+    startedAt: 1,
+    finishedAt: 2,
+    result: receipt,
+  });
+  const checkpoint: TurnCheckpoint = {
+    turnId: "old-turn",
+    iteration: 1,
+    savedAt: 10,
+    messages: [],
+    toolExecutions: [
+      {
+        callId: "call-1",
+        modelCallId: "model-1",
+        toolName: "create_note",
+        args: { libraryID: 1, content: "Reviewed note" },
+        status: "started",
+      },
+      {
+        callId: "call-2",
+        modelCallId: "model-2",
+        toolName: "create_note",
+        args: { libraryID: 1, content: "Never confirmed" },
+        status: "started",
+      },
+    ],
+  };
+  const reconciled = await host.reconcileResumedCheckpoint(state, checkpoint);
+  // TurnLoop owns closing the journal, so the host attaches the verified
+  // receipt but leaves the status for the loop to finalize.
+  assert.equal(reconciled.toolExecutions[0].status, "started");
+  assert.deepEqual(reconciled.toolExecutions[0].result, receipt);
+  assert.equal(reconciled.toolExecutions[1].result, undefined);
+  // The input checkpoint was not mutated in place.
+  assert.equal(checkpoint.toolExecutions[0].result, undefined);
+});
+
+it("does not clear a new turn's state when retention cleanup loses the race", async () => {
+  const { host, state } = fixture();
+  state.record.status = "completed";
+  state.record.run = run(state.record);
+  state.messages = [{ role: "user", content: "Old prompt" }];
+  const oldDraft = { prompt: "Old draft" } as never;
+  const oldHandoff = { id: "old-handoff" } as never;
+  state.record.draft = oldDraft;
+  state.record.contextHandoff = oldHandoff;
+  let entered!: () => void;
+  const persisting = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const release = deferred<void>();
+  let blocked = true;
+  host.persistNow = async () => {
+    if (!blocked) return;
+    blocked = false;
+    entered();
+    await release.promise;
+  };
+  let prunes = 0;
+  const prune = host.history.prune.bind(host.history);
+  host.history.prune = async (taskId: string) => {
+    prunes++;
+    return prune(taskId);
+  };
+
+  const clearing = host.clearRetiredContext(state);
+  await persisting;
+  // A user prompt claims the task while cleanup is between its awaits.
+  const newRun = run(state.record, 2);
+  state.record.run = newRun;
+  state.record.status = "running";
+  state.activeTurnId = "new-turn";
+  state.abort = new AbortController();
+  state.messages = [{ role: "user", content: "New prompt" }];
+  const newDraft = { prompt: "New draft" } as never;
+  const newHandoff = { id: "new-handoff" } as never;
+  state.record.draft = newDraft;
+  state.record.contextHandoff = newHandoff;
+  release.resolve();
+  await clearing;
+
+  assert.equal(state.record.run, newRun);
+  assert.equal(state.record.status, "running");
+  assert.equal(state.activeTurnId, "new-turn");
+  assert.deepEqual(state.messages, [{ role: "user", content: "New prompt" }]);
+  assert.equal(state.record.draft, newDraft);
+  assert.equal(state.record.contextHandoff, newHandoff);
+  assert.equal(state.record.run?.request, "Inspect the paper");
+  assert.equal(
+    prunes,
+    0,
+    "history must not be pruned for a superseded decision",
+  );
+});
+
+it("rechecks the run generation after eligibility before pruning", async () => {
+  const { host, state } = fixture();
+  state.record.status = "completed";
+  state.record.run = run(state.record);
+  state.messages = [{ role: "user", content: "Old prompt" }];
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  Object.assign(host, {
+    canRetireContext: async () => {
+      entered.resolve();
+      await release.promise;
+      return true;
+    },
+  });
+  let prunes = 0;
+  const prune = host.history.prune.bind(host.history);
+  host.history.prune = async (taskId: string) => {
+    prunes++;
+    return prune(taskId);
+  };
+  const clearing = host.clearRetiredContext(state);
+  await entered.promise;
+  // A user prompt claims and completes exactly while eligibility is awaiting.
+  const newRun = run(state.record, 2);
+  state.record.run = newRun;
+  state.record.status = "completed";
+  state.messages = [{ role: "user", content: "New prompt" }];
+  release.resolve();
+  await clearing;
+  assert.equal(
+    prunes,
+    0,
+    "a generation change during the eligibility await must stop before prune",
+  );
+  assert.deepEqual(state.messages, [{ role: "user", content: "New prompt" }]);
+  assert.equal(state.record.run, newRun);
+});
+
+it("retries pending cleanup under contextCleanup without clearing new evidence", async () => {
+  const { host, state, fs } = fixture();
+  state.record.status = "completed";
+  state.record.updatedAt = Date.now();
+  const windowId = state.record.contextWindow!.id;
+  await host.history.append({
+    taskId: state.record.id,
+    windowId,
+    itemId: "old",
+    role: "user",
+    content: "Old work",
+    sourceIds: [],
+  });
+  let busy = true;
+  const remove = fs.deleteFile.bind(fs);
+  fs.deleteFile = async (path: string) => {
+    if (busy && path.endsWith(".txt")) throw new Error("file busy");
+    return remove(path);
+  };
+  await assert.rejects(host.history.prune(state.record.id), /file busy/);
+  // The retry itself fails, so the reopened task keeps the tombstone and the
+  // new append proceeds beside it.
+  await host.history.append({
+    taskId: state.record.id,
+    windowId,
+    itemId: "new",
+    role: "user",
+    content: "New work",
+    sourceIds: [],
+  });
+  assert.equal(
+    (await host.history.retentionInfo(state.record.id)).cleanupPending,
+    true,
+  );
+  busy = false;
+  const gate = deferred<void>();
+  let resumes = 0;
+  const resume = host.history.resumeCleanup.bind(host.history);
+  host.history.resumeCleanup = async (taskId: string) => {
+    resumes++;
+    await gate.promise;
+    return resume(taskId);
+  };
+  const maintain = Reflect.get(host, "scheduleContextMaintenanceNow") as (
+    owner: TestState,
+    turnId: string,
+  ) => Promise<void>;
+  const work = maintain.call(host, state, "turn");
+  await waitFor(() => resumes === 1);
+  assert.ok(state.contextCleanup, "pending cleanup must block new prompts");
+  gate.resolve();
+  await work;
+  assert.equal(state.contextCleanup, undefined);
+  const info = await host.history.retentionInfo(state.record.id);
+  assert.equal(info.cleanupPending, false);
+  assert.equal(info.items, 1, "only the post-prune evidence remains");
+  assert.equal(
+    (
+      await host.history.read({
+        taskId: state.record.id,
+        windowId,
+        itemId: "new",
+      })
+    ).content,
+    "New work",
+  );
+});
+
+it("finalizes a run when a setup await fails before the backend starts", async (test) => {
+  const previousZotero = Reflect.get(globalThis, "Zotero");
+  test.after(() => Reflect.set(globalThis, "Zotero", previousZotero));
+  Reflect.set(globalThis, "Zotero", {
+    locale: "en-US",
+    Prefs: { get: () => "en-US" },
+  });
+  const { host, state, starts } = fixture();
+  const touch = host.history.touch.bind(host.history);
+  host.history.touch = async () => {
+    throw new Error("History volume unavailable");
+  };
+  await assert.rejects(
+    host.sessionPrompt(state.record.id, "Inspect the paper"),
+    /History volume unavailable/,
+  );
+  assert.equal(state.record.run?.status, "failed");
+  assert.equal(state.record.run?.stopReason, "error");
+  assert.equal(state.record.status, "failed");
+  assert.equal(state.activeTurnId, null);
+  assert.equal(state.abort, null);
+  assert.equal(starts.length, 0);
+  assert.equal(
+    state.events.filter((event) => event.type === "turn_failed").length,
+    1,
+  );
+  const oldRun = state.record.run!;
+
+  host.history.touch = touch;
+  const resumed = await host.taskContinue(state.record.id);
+  assert.ok(resumed.turnId);
+  await waitFor(() => starts.length === 1 && state.activeTurnId === null);
+  assert.equal(state.record.run?.id, oldRun.id);
+  assert.equal(state.record.run?.generation, oldRun.generation + 1);
+});
+
+it("a handoff supplement job does not suppress a completed turn's title and research tracking", async () => {
+  const { host, state } = fixture();
+  state.record.backend = "codex";
+  state.record.templateId = undefined;
+  state.record.titleState = "pending";
+  state.record.run = run(state.record);
+  state.activeTurnId = "turn-final";
+  state.abort = new AbortController();
+  state.record.postProcessing = [
+    {
+      turnId: "turn-final",
+      runId: state.record.run.id,
+      userText: "",
+      assistantText: "",
+      pending: [],
+    },
+  ];
+  state.record.maintenanceBudget = {
+    turnId: "turn-final",
+    attempts: 2,
+    handoffAttempts: 1,
+  };
+  Object.assign(host, {
+    memoryConsent: () => "review",
+    retryPostProcessing: async () => state.record,
+    scheduleContextMaintenance: async () => undefined,
+  });
+  await host.finalizeRun(
+    state,
+    state.record.run,
+    "turn-final",
+    {
+      stopReason: "completed",
+      text: "Answer",
+      work: { completed: [], missing: [], unknownOperationIds: [] },
+    },
+    () => true,
+  );
+  const job = state.record.postProcessing?.find(
+    (entry) => entry.pending.length > 0,
+  );
+  assert.deepEqual(job?.pending, ["title", "memory"]);
+  assert.equal(job?.assistantText, "Answer");
+  assert.equal(job?.researchTracking, true);
+  assert.deepEqual(
+    state.record.maintenanceBudget,
+    { turnId: "turn-final", attempts: 2, handoffAttempts: 1 },
+    "the shared maintenance allowance is not refilled",
+  );
+});
+
+it("clears the cleared-history banner only after history storage reopens the task", async () => {
+  const { host, state } = fixture();
+  state.record.status = "completed";
+  state.record.updatedAt = Date.now();
+  state.record.run = run(state.record);
+  await host.history.append({
+    taskId: state.record.id,
+    windowId: state.record.contextWindow!.id,
+    itemId: "old",
+    role: "user",
+    content: "Old work",
+    sourceIds: [],
+  });
+  await host.history.prune(state.record.id);
+  state.record.historyClearedAt = 1;
+  state.record.historyRetention = {
+    version: 1,
+    tier: "pruned",
+    prunedAt: 1,
+  };
+  Object.assign(host, {
+    canRetireContext: async () => true,
+    clearRetiredContext: async () => undefined,
+  });
+  const maintain = Reflect.get(host, "scheduleContextMaintenanceNow") as (
+    owner: TestState,
+    turnId: string,
+  ) => Promise<void>;
+  await maintain.call(host, state, "turn");
+  assert.equal(
+    state.record.historyClearedAt,
+    1,
+    "a tombstone without new work stays visible",
+  );
+  assert.equal(state.record.historyRetention?.tier, "pruned");
+  await host.history.append({
+    taskId: state.record.id,
+    windowId: state.record.contextWindow!.id,
+    itemId: "new",
+    role: "user",
+    content: "New work",
+    sourceIds: [],
+  });
+  assert.equal(
+    (await host.history.retentionInfo(state.record.id)).retention.tier,
+    "hot",
+  );
+  await maintain.call(host, state, "turn");
+  assert.equal(state.record.historyClearedAt, undefined);
+  assert.equal(state.record.historyRetention?.tier, "hot");
+});
+
+it("archive distillation drops ordinary additions for a forgotten topic", async () => {
+  const { host, state } = fixture();
+  const target: TestState = {
+    record: {
+      ...state.record,
+      id: "old",
+      title: "Archived task",
+      updatedAt: 2,
+    },
+    events: [],
+    messages: [],
+    loadedSkills: new Set(),
+    sessionGrants: new Set(),
+    abort: null,
+    activeTurnId: null,
+  };
+  host.sessions.set("old", target);
+  type MaintenanceJob = NonNullable<
+    ResearchTaskRecord["postProcessing"]
+  >[number];
+  const job: MaintenanceJob = {
+    turnId: "turn",
+    userText: "",
+    assistantText: "",
+    pending: ["memory"],
+    maintenanceTarget: "old",
+    maintenanceSourceUpdatedAt: 2,
+    maintenanceBatchId: "batch",
+    maintenanceOps: [
+      {
+        op: "add",
+        type: "note",
+        title: "Forgotten topic",
+        content: "Must not return",
+      },
+      {
+        op: "add",
+        type: "note",
+        title: "Kept topic",
+        content: "Reusable conclusion",
+      },
+    ],
+    maintenanceAllowedIds: [],
+  };
+  state.record.postProcessing = [job];
+  state.record.maintenanceBudget = { turnId: "turn", attempts: 0 };
+  const applied: MemoryOp[][] = [];
+  Object.assign(host, {
+    memoryConsent: () => "review",
+    canRetireContext: async () => true,
+    memory: {
+      applyOrdinaryOps: async (ops: MemoryOp[]) => {
+        applied.push(ops);
+        return [];
+      },
+      flush: async () => undefined,
+    },
+    researchMemory: () => ({
+      ignoresArchive: async () => false,
+      suppressesTitle: async (title: string) => title === "Forgotten topic",
+      maintainArchive: async (_taskId: string, apply: () => Promise<void>) => {
+        await apply();
+        return true;
+      },
+    }),
+  });
+  const maintenance = Reflect.get(host, "runContextMaintenance") as (
+    owner: TestState,
+    job: MaintenanceJob,
+    current: () => boolean,
+  ) => Promise<void>;
+  await maintenance.call(host, state, job, () => true);
+  assert.equal(applied.length, 1);
+  assert.deepEqual(
+    applied[0].map((op) => (op.op === "add" ? op.title : op.op)),
+    ["Kept topic"],
+  );
+  assert.equal(job.maintenanceApplied, true);
+  assert.equal(target.record.historyDistilledAt, 2);
+});
+
+it("maps folded memory search offsets back to original text in handoff excerpts", async () => {
+  const { host, state } = fixture();
+  state.record.run = run(state.record);
+  state.record.run.request = "needle";
+  const content = `${"İ".repeat(100)} needle evidence ${"x".repeat(400)}`;
+  const record = await host.memory.save({
+    content,
+    title: "Turkish memory",
+    type: "note",
+  });
+  const handoff = await prepareContextHandoff({
+    taskId: state.record.id,
+    run: state.record.run,
+    work: {
+      completed: [],
+      missing: [{ id: "gap", description: "needle", kind: "operation" }],
+      unknownOperationIds: [],
+    },
+    history: host.history,
+    memory: host.memory,
+    references: [],
+    id: "handoff",
+    current: () => true,
+    supplement: async () => {
+      assert.fail("a pending gap supplies the next action");
+    },
+  });
+  const evidence = handoff.evidence.find(
+    (entry) => entry.ref === `m:${record.id}`,
+  );
+  assert.ok(evidence);
+  assert.equal(evidence.offset, 21);
+  assert.match(evidence.excerpt, /needle/);
+});
+
+it("keeps optional MCP load failures out of task timelines and exposes them in config/get", async () => {
+  const previous = Reflect.get(globalThis, "Zotero");
+  const previousToolkit = Reflect.get(globalThis, "ztoolkit");
+  const previousPathUtils = Reflect.get(globalThis, "PathUtils");
+  Reflect.set(globalThis, "Zotero", {
+    Prefs: {
+      get: () => JSON.stringify([{ id: "broken", url: "http://broken.test" }]),
+    },
+  });
+  Reflect.set(globalThis, "ztoolkit", { log: () => undefined });
+  Reflect.set(globalThis, "PathUtils", {
+    localProfileDir: "/profile",
+    join: (...parts: string[]) => parts.join("/"),
+  });
+  const connect = McpToolProvider.connect;
+  McpToolProvider.connect = async () => {
+    throw new Error("initialize rejected");
+  };
+  try {
+    const { host, state } = fixture();
+    state.record.updatedAt = 4242;
+    const before = state.events.length;
+    const reload = Reflect.get(host, "reloadMcp") as () => Promise<void>;
+    await reload.call(host);
+    assert.equal(
+      state.events.length,
+      before,
+      "an optional integration failure is not a task event",
+    );
+    assert.equal(
+      state.record.updatedAt,
+      4242,
+      "an optional integration failure must not refresh task time",
+    );
+    assert.deepEqual(Reflect.get(host, "mcpProviders"), []);
+    Object.assign(host, {
+      readEndpointStore: () => ({ store: {}, dirty: false }),
+      viewFromStore: () => ({}),
+    });
+    const config = (await host.rpc("config/get", {})) as {
+      mcpLoadErrors?: string[];
+    };
+    assert.equal(config.mcpLoadErrors?.length, 1);
+    assert.match(config.mcpLoadErrors![0], /broken/);
+    assert.match(config.mcpLoadErrors![0], /initialize rejected/);
+  } finally {
+    McpToolProvider.connect = connect;
+    Reflect.set(globalThis, "Zotero", previous);
+    Reflect.set(globalThis, "ztoolkit", previousToolkit);
+    Reflect.set(globalThis, "PathUtils", previousPathUtils);
+  }
+});
+
+it("treats a missing note target as new and an existing note as an update", async () => {
+  const previous = Reflect.get(globalThis, "Zotero");
+  const { host, state } = fixture();
+  const files = new Map<string, string>();
+  const store = new ArtifactStore(
+    "artifacts",
+    {
+      read: async (path: string) => {
+        const value = files.get(path);
+        if (value === undefined) throw new Error("missing");
+        return value;
+      },
+      writeAtomic: async (path: string, content: string) => {
+        files.set(path, content);
+      },
+      exists: async (path: string) => files.has(path),
+      makeDirectory: async () => undefined,
+    },
+    () => 1,
+    () => "art_note",
+  );
+  const artifact = await store.upsert(
+    {
+      taskId: state.record.id,
+      kind: "report",
+      title: "Report",
+      body: { type: "markdown", markdown: "Evidence" },
+    },
+    "native",
+  );
+  await store.update(artifact.id, (current) => ({
+    ...current,
+    writeback: {
+      state: "failed",
+      target: "zotero_note",
+      targetRef: "1:PLANNED",
+      revision: 1,
+    },
+  }));
+  let prepared = "";
+  Object.assign(host, {
+    artifacts: store,
+    preparedWritebacks: new Map(),
+    writebackSnapshots: new Map(),
+    writebackBefore: async () => "",
+    execution: {
+      wrap: () => ({
+        prepare: async (name: string) => {
+          prepared = name;
+          return null;
+        },
+      }),
+    },
+  });
+  try {
+    Reflect.set(globalThis, "Zotero", {
+      Items: { getByLibraryAndKey: () => undefined },
+    });
+    await Reflect.get(host, "artifactWritebackPreview").call(host, {
+      id: artifact.id,
+      target: "zotero_note",
+      revision: 1,
+    });
+    assert.equal(prepared, "create_note");
+    Reflect.set(globalThis, "Zotero", {
+      Items: {
+        getByLibraryAndKey: () => ({ isNote: () => true }),
+      },
+    });
+    await Reflect.get(host, "artifactWritebackPreview").call(host, {
+      id: artifact.id,
+      target: "zotero_note",
+      revision: 1,
+    });
+    assert.equal(prepared, "update_note");
+  } finally {
+    Reflect.set(globalThis, "Zotero", previous);
+  }
+});
+
+it("does not persist a planned note key after an unknown write outcome", async () => {
+  const previous = Reflect.get(globalThis, "Zotero");
+  Reflect.set(globalThis, "Zotero", {
+    Items: { getByLibraryAndKey: () => undefined },
+  });
+  const { host, state } = fixture();
+  const files = new Map<string, string>();
+  const store = new ArtifactStore(
+    "artifacts",
+    {
+      read: async (path: string) => {
+        const value = files.get(path);
+        if (value === undefined) throw new Error("missing");
+        return value;
+      },
+      writeAtomic: async (path: string, content: string) => {
+        files.set(path, content);
+      },
+      exists: async (path: string) => files.has(path),
+      makeDirectory: async () => undefined,
+    },
+    () => 1,
+    () => "art_note",
+  );
+  const artifact = await store.upsert(
+    {
+      taskId: state.record.id,
+      kind: "report",
+      title: "Report",
+      body: { type: "markdown", markdown: "Evidence" },
+    },
+    "native",
+  );
+  await store.update(artifact.id, (current) => ({
+    ...current,
+    writeback: {
+      state: "pending",
+      target: "zotero_note",
+      revision: 1,
+      operationId: "op",
+    },
+  }));
+  let outcome: ToolResult = {
+    ok: false,
+    toolName: "create_note",
+    code: "unavailable",
+    effect: "unknown",
+    message: "Connection lost",
+  };
+  Object.assign(host, {
+    artifacts: store,
+    execution: {
+      wrap: () => ({
+        call: async () => outcome,
+      }),
+    },
+  });
+  const perform = Reflect.get(host, "performArtifactWriteback") as (
+    currentArtifact: typeof artifact,
+    revision: number,
+    target: "zotero_note",
+    params: Record<string, unknown>,
+    turnId: string,
+  ) => Promise<void>;
+  const prepared = {
+    name: "create_note",
+    args: {
+      libraryID: 1,
+      parentKey: "PAPER",
+      content: "Evidence",
+      format: "markdown",
+    },
+    context: { plannedKeys: { item: "PLANNED" } },
+  };
+  try {
+    await perform.call(
+      host,
+      artifact,
+      1,
+      "zotero_note",
+      { preparedWriteback: prepared },
+      "writeback",
+    );
+    const unknown = await store.get(artifact.id);
+    assert.equal(unknown?.writeback?.state, "unknown");
+    assert.equal(unknown?.writeback?.targetRef, undefined);
+    await store.update(artifact.id, (current) => ({
+      ...current,
+      writeback: {
+        state: "pending",
+        target: "zotero_note",
+        revision: 1,
+        operationId: "op-2",
+      },
+    }));
+    outcome = {
+      ok: true,
+      toolName: "create_note",
+      effect: "applied",
+      data: {},
+    };
+    await perform.call(
+      host,
+      artifact,
+      1,
+      "zotero_note",
+      { preparedWriteback: prepared },
+      "writeback",
+    );
+    const committed = await store.get(artifact.id);
+    assert.equal(committed?.writeback?.state, "committed");
+    assert.equal(committed?.writeback?.targetRef, "1:PLANNED");
+  } finally {
+    Reflect.set(globalThis, "Zotero", previous);
+  }
 });

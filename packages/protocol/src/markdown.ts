@@ -21,12 +21,76 @@ export function mapMarkdownCitations(
         return line;
       }
       if (fenced) return line;
-      return line.replace(
-        /`[^`]*`|\[[^\]]+\]\([^)]+\)|\$\$.*?\$\$|\$[^$]*\$|\[cite:([a-zA-Z0-9_-]{1,80})\]/g,
-        (marker, id: string | undefined) => (id ? replace(id, marker) : marker),
-      );
+      return mapLineCitations(line, replace);
     })
     .join("\n");
+}
+
+const STICKY_LINK = /\[([^\]]+)\]\(([^)\s]+)\)/y;
+const STICKY_CITATION = /\[cite:([a-zA-Z0-9_-]{1,80})\]/y;
+
+/**
+ * Replace citations in one visible line. The protected constructs mirror the
+ * renderer, and math uses the same `inlineMathClose` rule, so a price range
+ * cannot swallow a citation here while staying prose in `renderMarkdownHtml`.
+ */
+function mapLineCitations(
+  line: string,
+  replace: (id: string, marker: string) => string,
+): string {
+  let out = "";
+  let index = 0;
+  let mathDisabled = false;
+  while (index < line.length) {
+    const char = line[index];
+    if (char === "`") {
+      const close = line.indexOf("`", index + 1);
+      if (close > index) {
+        out += line.slice(index, close + 1);
+        index = close + 1;
+        continue;
+      }
+    }
+    if (!mathDisabled && char === "$") {
+      if (line.startsWith("$$", index)) {
+        const close = line.indexOf("$$", index + 2);
+        if (close >= 0) {
+          out += line.slice(index, close + 2);
+          index = close + 2;
+          continue;
+        }
+        // An unmatched display opener stops math extraction for the rest of
+        // the line; visible citations after it still need mapping.
+        mathDisabled = true;
+      } else {
+        const close = inlineMathClose(line, index);
+        if (close >= 0) {
+          out += line.slice(index, close + 1);
+          index = close + 1;
+          continue;
+        }
+      }
+    }
+    if (char === "[") {
+      STICKY_LINK.lastIndex = index;
+      const link = STICKY_LINK.exec(line);
+      if (link && link.index === index) {
+        out += link[0];
+        index += link[0].length;
+        continue;
+      }
+      STICKY_CITATION.lastIndex = index;
+      const citation = STICKY_CITATION.exec(line);
+      if (citation && citation.index === index) {
+        out += replace(citation[1], citation[0]);
+        index += citation[0].length;
+        continue;
+      }
+    }
+    out += char;
+    index += 1;
+  }
+  return out;
 }
 
 function isSafeHref(href: string): boolean {
@@ -34,6 +98,17 @@ function isSafeHref(href: string): boolean {
 }
 
 type MathSlot = { tex: string; display: boolean };
+
+/**
+ * Internal math slots use a delimiter that cannot come from authored Markdown,
+ * so a literal `%%MATH0%%` in prose can never be consumed as a formula.
+ */
+const MATH_TOKEN_OPEN = "\u0000\u0001";
+const MATH_TOKEN_CLOSE = "\u0001\u0000";
+
+function mathToken(index: number): string {
+  return `${MATH_TOKEN_OPEN}${index}${MATH_TOKEN_CLOSE}`;
+}
 
 function extractMath(source: string): { text: string; slots: MathSlot[] } {
   const slots: MathSlot[] = [];
@@ -95,19 +170,19 @@ function extractMath(source: string): { text: string; slots: MathSlot[] } {
           break;
         }
         const tex = rest.slice(2, close);
-        const token = `%%MATH${slots.length}%%`;
+        const token = mathToken(slots.length);
         slots.push({ tex, display: true });
         built += token;
         rest = rest.slice(close + 2);
       } else {
-        const close = rest.indexOf("$", 1);
+        const close = inlineMathClose(rest, 0);
         if (close < 0) {
           built += rest;
           rest = "";
           break;
         }
         const tex = rest.slice(1, close);
-        const token = `%%MATH${slots.length}%%`;
+        const token = mathToken(slots.length);
         slots.push({ tex, display: false });
         built += token;
         rest = rest.slice(close + 1);
@@ -126,12 +201,36 @@ function findInlineDollar(text: string): number {
     if (text[index] !== "$") {
       continue;
     }
-    if (text[index + 1] === "$") {
+    if (inlineMathClose(text, index) >= 0) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Currency text such as `$5 per call ... and $10` must stay prose. Inline math
+ * cannot open or close on whitespace and cannot cross another `$`, so the first
+ * invalid candidate abandons the opener instead of swallowing later text.
+ */
+function inlineMathClose(text: string, open: number): number {
+  if (open > 0 && text[open - 1] === "\\") return -1;
+  const first = text[open + 1];
+  if (!first || first === "$" || /\s/.test(first)) return -1;
+  for (let index = open + 1; index < text.length; index += 1) {
+    if (text[index] !== "$") {
       continue;
     }
-    if (index > 0 && text[index - 1] === "\\") {
+    if (text[index - 1] === "\\") {
       continue;
     }
+    const tex = text.slice(open + 1, index);
+    if (!tex || /\s$/.test(tex)) return -1;
+    // A price range such as "$5-$10" or "$5 [cite:e1]-$10" would
+    // otherwise swallow the prose and its citation between the amounts.
+    // Plain amounts such as `$1.2$` or `Base-$10$` stay formulas.
+    const after = text[index + 1];
+    if (/\d/.test(first) && after !== undefined && /\d/.test(after)) return -1;
     return index;
   }
   return -1;
@@ -141,12 +240,16 @@ function renderInline(source: string, slots: MathSlot[]): string {
   let html = "";
   let rest = source;
   while (rest.length) {
-    const math = rest.match(/^%%MATH(\d+)%%/);
+    const math = rest.match(/^\u0000\u0001(\d+)\u0001\u0000/);
     if (math) {
       const slot = slots[Number(math[1])];
       if (slot) {
         const display = slot.display ? "1" : "0";
         html += `<span class="tui-math" data-display="${display}" data-tex="${escapeHtml(slot.tex)}">${escapeHtml(slot.tex)}</span>`;
+      } else {
+        // A missing slot is internal corruption; keep a visible marker instead
+        // of silently deleting the surrounding text.
+        html += escapeHtml(`%%MATH${math[1]}%%`);
       }
       rest = rest.slice(math[0].length);
       continue;
@@ -162,9 +265,12 @@ function renderInline(source: string, slots: MathSlot[]): string {
     const link = rest.match(/^\[([^\]]+)\]\(([^)\s]+)\)/);
     if (link && isSafeHref(link[2])) {
       const href = escapeHtml(link[2]);
+      // Labels are plain text: expand math slots back to source so an internal
+      // token cannot leak into the HTML.
+      const label = escapeHtml(plainMathText(link[1], slots));
       // data-href survives chrome innerHTML even if href with a custom
       // scheme is dropped; the workspace hydrates real <a href> from it.
-      html += `<a href="${href}" data-href="${href}" rel="noreferrer">${escapeHtml(link[1])}</a>`;
+      html += `<a href="${href}" data-href="${href}" rel="noreferrer">${label}</a>`;
       rest = rest.slice(link[0].length);
       continue;
     }
@@ -196,6 +302,21 @@ function renderInline(source: string, slots: MathSlot[]): string {
     rest = rest.slice(1);
   }
   return html;
+}
+
+/**
+ * Sinks rendered as plain text (for example a details title) still need the
+ * original math source instead of leaking an internal slot token.
+ */
+function plainMathText(source: string, slots: MathSlot[]): string {
+  return source.replace(
+    /\u0000\u0001(\d+)\u0001\u0000/g,
+    (_match, index: string) => {
+      const slot = slots[Number(index)];
+      if (!slot) return "";
+      return slot.display ? `$$${slot.tex}$$` : `$${slot.tex}$`;
+    },
+  );
 }
 
 function splitTableRow(line: string): string[] {
@@ -322,7 +443,9 @@ function renderBlocks(
         const render = (content: string[]) =>
           renderBlocks(content, slots, options, false);
         if (readingBlock[2]) {
-          const title = escapeHtml(readingBlock[2].trim());
+          const title = escapeHtml(
+            plainMathText(readingBlock[2].trim(), slots),
+          );
           blocks.push(
             options.expandReadingBlocks
               ? `<div><p><strong>${title}</strong></p>${render(body)}</div>`

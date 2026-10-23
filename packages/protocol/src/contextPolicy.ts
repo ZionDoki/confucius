@@ -49,16 +49,21 @@ export function contextTextSlice(text: string, maxTokens: number, offset = 0) {
     start--;
   let end = start;
   let weight = 0;
+  // Infinity means "no budget limit" (callers pass it after bounding the slice);
+  // only NaN is treated as an empty budget.
+  const budget = Number.isNaN(maxTokens) ? 0 : Math.max(0, maxTokens);
   for (const char of text.slice(start)) {
     const next = char.charCodeAt(0) < 128 ? 1 / 3.5 : 1.5;
-    if (weight + next > Math.max(0, maxTokens)) break;
+    if (weight + next > budget) break;
     weight += next;
     end += char.length;
   }
   return {
     content: text.slice(start, end),
     tokens: Math.ceil(weight),
-    nextOffset: end < text.length ? end : null,
+    // Paging must advance or terminate: a budget too small for one character
+    // returns an empty terminal page instead of the requested offset again.
+    nextOffset: end > start && end < text.length ? end : null,
   };
 }
 

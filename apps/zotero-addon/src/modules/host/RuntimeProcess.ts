@@ -81,7 +81,10 @@ export async function runRuntimeCommand(
     command: executable,
     arguments: args,
     environment: runtimeEnvironment(environment),
-    environmentAppend: true,
+    // External runtimes get an explicit allowlist, never Zotero's full
+    // launcher environment (unrelated API keys, SSH agent sockets, proxy
+    // credentials).
+    environmentAppend: false,
     stderr: "pipe",
   });
   const stdoutPromise = readAll(process.stdout);
@@ -178,7 +181,8 @@ export class RuntimeJsonLineProcess {
         ...environment,
         ...environmentOverrides,
       }),
-      environmentAppend: true,
+      // Same allowlist policy for JSON-RPC sessions and version probes.
+      environmentAppend: false,
       stderr: "pipe",
       workdir: cwd,
     });
@@ -359,15 +363,86 @@ function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
+// External runtimes need to find themselves, their own config/home, locale,
+// proxies and TLS roots. They also read runtime-owned configuration paths and
+// credentials from the launcher environment; withholding those makes a
+// signed-in CLI fall back to a default home or signed-out state. Unrelated
+// launcher secrets (AWS_*, SSH_AUTH_SOCK, NODE_OPTIONS, ...) stay out.
+const RUNTIME_ENVIRONMENT_ALLOWLIST = new Set([
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "LANG",
+  "LANGUAGE",
+  "LC_ALL",
+  "LC_CTYPE",
+  "LC_MESSAGES",
+  "TZ",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "XDG_CACHE_HOME",
+  "XDG_STATE_HOME",
+  "CODEX_HOME",
+  "KIMI_CODE_HOME",
+  "KIMI_SHARE_DIR",
+  "OPENAI_API_KEY",
+  "CODEX_API_KEY",
+  "KIMI_API_KEY",
+  "MOONSHOT_API_KEY",
+  "OPENAI_BASE_URL",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NO_PROXY",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "NODE_EXTRA_CA_CERTS",
+  "REQUESTS_CA_BUNDLE",
+  "CURL_CA_BUNDLE",
+  "SYSTEMROOT",
+  "WINDIR",
+  "COMSPEC",
+  "PATHEXT",
+  "USERPROFILE",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "PROGRAMDATA",
+]);
+
 function runtimeEnvironment(
-  environment: Record<string, string | null>,
+  overrides: Record<string, string | null>,
 ): Record<string, string | null> {
-  if (Services.appinfo.OS !== "WINNT") return environment;
-  const merged = { ...environment };
-  // Windows variables are case-insensitive; Gecko's environment object is not.
-  // Remove inherited Path/path variants before appending our canonical PATH.
-  for (const key of Object.keys(subprocess().getEnvironment())) {
-    if (key.toLowerCase() === "path" && key !== "PATH") merged[key] = null;
+  const inherited = subprocess().getEnvironment();
+  const environment: Record<string, string | null> = {};
+  for (const [key, value] of Object.entries(inherited)) {
+    if (RUNTIME_ENVIRONMENT_ALLOWLIST.has(key.toUpperCase()))
+      environment[key] = value;
   }
-  return merged;
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === null) {
+      for (const existing of Object.keys(environment))
+        if (existing.toLowerCase() === key.toLowerCase())
+          delete environment[existing];
+      environment[key] = null;
+      continue;
+    }
+    for (const existing of Object.keys(environment))
+      if (existing.toLowerCase() === key.toLowerCase() && existing !== key)
+        delete environment[existing];
+    environment[key] = value;
+  }
+  if (Services.appinfo.OS !== "WINNT") return environment;
+  // Windows variables are case-insensitive; Gecko's environment object is not.
+  // Null out inherited Path/path aliases so only our canonical PATH remains.
+  for (const key of Object.keys(inherited)) {
+    if (key.toLowerCase() === "path" && key !== "PATH") environment[key] = null;
+  }
+  return environment;
 }

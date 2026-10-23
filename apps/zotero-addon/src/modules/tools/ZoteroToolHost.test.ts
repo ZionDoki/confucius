@@ -682,6 +682,11 @@ function installLibrary() {
     getChildItems() {
       return [];
     }
+    getChildCollections() {
+      return [...createdCollections.values()].filter(
+        (child) => child.parentID === this.id,
+      );
+    }
     async save() {
       if (++saves === failAt) throw new Error("Injected transaction failure");
       createdCollections.set(this.key, this);
@@ -735,14 +740,22 @@ function installLibrary() {
     key: "COLLECT1",
     libraryID: 1,
     name: "Research",
+    parentID: undefined as number | undefined,
     toJSON: () => ({ name: collection.name }),
     getChildItems: () => collectionMembers,
+    getChildCollections: () =>
+      [...createdCollections.values()].filter(
+        (child) => child.parentID === collection.id,
+      ),
   };
   const zotero = {
     Item: MockItem,
     Collection: MockCollection,
     Search: MockSearch,
-    Libraries: { userLibraryID: 1, get: () => ({ editable: true }) },
+    Libraries: {
+      userLibraryID: 1,
+      get: () => ({ editable: true, waitForDataLoad: async () => {} }),
+    },
     Groups: { getGroupIDFromLibraryID: () => 0 },
     DataObjectUtilities: {
       generateKey: () => `NEW${String(++sequence).padStart(5, "0")}`,
@@ -754,10 +767,15 @@ function installLibrary() {
       getAll: async () => [...native.values()].map((item) => item.id),
     },
     Collections: {
-      getByLibraryAndKey: (_library: number, key: string) =>
-        key === collection.key
-          ? collection
-          : (createdCollections.get(key) ?? false),
+      getByLibrary: (libraryID: number) =>
+        [collection, ...createdCollections.values()].filter(
+          (entry) => entry.libraryID === libraryID && !entry.parentID,
+        ),
+      getByLibraryAndKey: (libraryID: number, key: string) => {
+        const entry =
+          key === collection.key ? collection : createdCollections.get(key);
+        return entry?.libraryID === libraryID ? entry : false;
+      },
     },
     Searches: {
       getByLibraryAndKey: (_library: number, key: string) =>
@@ -834,6 +852,180 @@ function installLibrary() {
     saveCount: () => saves,
   };
 }
+
+describe("collection traversal", () => {
+  async function installCollections() {
+    const env = installLibrary();
+    async function create(name: string, libraryID: number, parentKey?: string) {
+      const result = await env.provider.call("create_collection", {
+        name,
+        libraryID,
+        ...(parentKey ? { parentKey } : {}),
+      });
+      assert.ok(result.ok, JSON.stringify(result));
+      return result.data as { libraryID: number; key: string; name: string };
+    }
+    const child = await create("Child", 1, env.collection.key);
+    const sibling = await create("Sibling", 1, env.collection.key);
+    const grandchild = await create("Grandchild", 1, child.key);
+    const group = await create("Group collection", 2);
+    const groupChild = await create("Group child", 2, group.key);
+    async function list(
+      args: Record<string, unknown> = {},
+      context?: ToolExecutionContext,
+    ) {
+      const result = await env.provider.call(
+        "get_collections",
+        args,
+        undefined,
+        context,
+      );
+      assert.ok(result.ok, JSON.stringify(result));
+      return result.data as {
+        libraryID: number;
+        collections: Array<{
+          libraryID: number;
+          key: string;
+          name: string;
+          itemCount: number;
+        }>;
+      };
+    }
+    return { ...env, child, sibling, grandchild, group, groupChild, list };
+  }
+
+  for (const explicitLibrary of [false, true]) {
+    it(`traverses returned collection keys with ${explicitLibrary ? "explicit" : "implicit"} libraryID`, async () => {
+      const env = await installCollections();
+      const libraryArgs = explicitLibrary ? { libraryID: 1 } : {};
+      const roots = await env.list(libraryArgs);
+      assert.deepEqual(roots, {
+        libraryID: 1,
+        collections: [
+          {
+            libraryID: 1,
+            key: env.collection.key,
+            name: "Research",
+            itemCount: 1,
+          },
+        ],
+      });
+      const children = await env.list({
+        ...libraryArgs,
+        parentKey: roots.collections[0].key,
+      });
+      assert.deepEqual(children.collections, [
+        { ...env.child, itemCount: 0 },
+        { ...env.sibling, itemCount: 0 },
+      ]);
+      const grandchildren = await env.list({
+        ...libraryArgs,
+        parentKey: children.collections[0].key,
+      });
+      assert.deepEqual(grandchildren.collections, [
+        { ...env.grandchild, itemCount: 0 },
+      ]);
+      assert.deepEqual(
+        await env.list({
+          ...libraryArgs,
+          parentKey: grandchildren.collections[0].key,
+        }),
+        { libraryID: 1, collections: [] },
+      );
+    });
+  }
+
+  it("keeps the implicit library consistent from roots to children in a group task", async () => {
+    const env = await installCollections();
+    const context = { source: { libraryID: 2, key: "SOURCE01" } };
+    const roots = await env.list({}, context);
+    const children = await env.list(
+      { parentKey: roots.collections[0].key },
+      context,
+    );
+    assert.equal(roots.libraryID, 2);
+    assert.deepEqual(roots.collections, [{ ...env.group, itemCount: 0 }]);
+    assert.deepEqual(children, {
+      libraryID: roots.libraryID,
+      collections: [{ ...env.groupChild, itemCount: 0 }],
+    });
+  });
+
+  it("resolves parents in the explicit or task-source library", async () => {
+    const env = await installCollections();
+    const roots = await env.list({ libraryID: 2 });
+    assert.deepEqual(roots.collections, [{ ...env.group, itemCount: 0 }]);
+    const source = { libraryID: 2, key: "SOURCE01" };
+    for (const args of [
+      { parentKey: roots.collections[0].key },
+      { libraryID: 2, parentKey: roots.collections[0].key },
+    ]) {
+      assert.deepEqual(await env.list(args, { source }), {
+        libraryID: 2,
+        collections: [{ ...env.groupChild, itemCount: 0 }],
+      });
+    }
+    assert.deepEqual(
+      (
+        await env.list(
+          { libraryID: 1, parentKey: env.collection.key },
+          { source },
+        )
+      ).collections,
+      [
+        { ...env.child, itemCount: 0 },
+        { ...env.sibling, itemCount: 0 },
+      ],
+    );
+  });
+
+  it("lists collections with uncached items after startup", async () => {
+    const env = await installCollections();
+    const loaded = new Set<number>();
+    Reflect.set(env.zotero.Libraries, "get", (libraryID: number) => ({
+      editable: false,
+      waitForDataLoad: async (type: string) => {
+        await Promise.resolve();
+        if (type === "item") loaded.add(libraryID);
+      },
+    }));
+    for (const collection of [
+      env.collection,
+      ...env.createdCollections.values(),
+    ]) {
+      Reflect.set(collection, "getChildItems", () => {
+        if (!loaded.has(collection.libraryID))
+          throw new Error("UnloadedDataException: Item not yet loaded");
+        return [env.a];
+      });
+    }
+    for (const args of [
+      { libraryID: 1 },
+      { libraryID: 1, parentKey: env.collection.key },
+      { libraryID: 2, parentKey: env.group.key },
+    ]) {
+      loaded.clear();
+      const result = await env.list(args);
+      assert.ok(result.collections.length);
+      assert.ok(result.collections.every((entry) => entry.itemCount === 1));
+      assert.deepEqual([...loaded], [args.libraryID]);
+    }
+  });
+
+  it("rejects missing parents, item keys and collections from another library", async () => {
+    const env = await installCollections();
+    for (const parentKey of ["MISSING1", env.a.key, env.group.key]) {
+      const args = { libraryID: 1, parentKey };
+      const invalid = await env.provider.prepare!("get_collections", args);
+      assert.equal(invalid?.code, "not_found");
+      assert.equal(invalid?.effect, "none");
+      const result = await env.provider.call("get_collections", args);
+      assert.equal(result.ok, false);
+      assert.equal(!result.ok && result.code, "not_found");
+      assert.equal(result.effect, "none");
+    }
+  });
+});
 
 describe("native write contracts", () => {
   it("rejects both invalid planned-key initialization orders in the native fixture", () => {

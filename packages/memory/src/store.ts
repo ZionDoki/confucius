@@ -39,7 +39,17 @@ export class FileMemoryStore {
 
   async load(): Promise<void> {
     if (!this.loadPromise) {
-      this.loadPromise = this.loadNow();
+      const pending = this.loadNow();
+      this.loadPromise = pending;
+      try {
+        await pending;
+      } catch (error) {
+        // A transient directory/listing failure must not poison every later
+        // memory operation; only successful loads stay cached.
+        if (this.loadPromise === pending) this.loadPromise = null;
+        throw error;
+      }
+      return;
     }
     return this.loadPromise;
   }
@@ -63,7 +73,9 @@ export class FileMemoryStore {
       }
       try {
         const text = await this.fs.readFile(path);
-        const record = parseMemoryFile(fileName(path), text);
+        const record = parseMemoryFile(fileName(path), text, (reason) =>
+          this.events.onWarn?.(`memory ${path}: ${reason}`),
+        );
         if (record) {
           await this.restoreAccess(record);
           loaded.set(record.id, record);

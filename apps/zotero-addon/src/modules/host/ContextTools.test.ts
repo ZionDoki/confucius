@@ -915,3 +915,81 @@ test("coverage enumerates every source within a budget, reports the next unread 
     ["1:P3"],
   );
 });
+
+test("memory excerpts map expanded lowercase characters back to original offsets", async () => {
+  const f = fixture();
+  const content = "İ".repeat(90) + " needle evidence";
+  await f.memory.save({
+    id: "mem_expanded",
+    type: "fact",
+    content,
+    protection: "none",
+  });
+  const hit = content.indexOf("needle");
+  const page = data<{
+    results: Array<{
+      ref: string;
+      excerpt: string;
+      offset: number;
+      endOffset: number;
+    }>;
+  }>(
+    await f.provider.call("context_search", {
+      query: "needle",
+      maxTokens: 4000,
+    }),
+  );
+  const row = page.results.find((entry) => entry.ref === "m:mem_expanded");
+  assert.ok(row);
+  assert.ok(row.excerpt.includes("needle"));
+  assert.ok(row.offset <= hit && row.endOffset > hit);
+  assert.equal(row.excerpt, content.slice(row.offset, row.endOffset));
+});
+
+test("memory cursors retain the documented read-only pagination semantics", async () => {
+  const f = fixture();
+  for (let i = 0; i < 12; i++)
+    await f.memory.save({
+      id: `mem_page_${i}`,
+      type: "fact",
+      content: `topic fact ${i}`,
+      protection: "none",
+    });
+  type Page = {
+    results: Array<{ ref: string }>;
+    nextCursor: string | null;
+  };
+  const first = data<Page>(
+    await f.provider.call("context_search", {
+      query: "topic",
+      maxTokens: 6000,
+    }),
+  );
+  const allMemory = Array.from({ length: 12 }, (_, i) => `m:mem_page_${i}`);
+  const firstMemory = first.results
+    .map((row) => row.ref)
+    .filter((ref) => ref.startsWith("m:"));
+  assert.equal(firstMemory.length, 8);
+  assert.ok(first.nextCursor);
+  const unread = allMemory.find((ref) => !firstMemory.includes(ref));
+  assert.ok(unread);
+  // Reading an entry that was not returned yet changes only its usage rank.
+  await f.memory.read(unread.slice(2));
+  const second = data<Page>(
+    await f.provider.call("context_search", {
+      query: "topic",
+      maxTokens: 6000,
+      cursor: first.nextCursor,
+    }),
+  );
+  const secondMemory = second.results
+    .map((row) => row.ref)
+    .filter((ref) => ref.startsWith("m:"));
+  // It crossed the frontier, so it is absent from later pages; its content was
+  // already returned by the explicit read, and no unread entry is skipped.
+  assert.equal(secondMemory.includes(unread), false);
+  assert.deepEqual(
+    new Set([...firstMemory, ...secondMemory]),
+    new Set(allMemory.filter((ref) => ref !== unread)),
+  );
+});

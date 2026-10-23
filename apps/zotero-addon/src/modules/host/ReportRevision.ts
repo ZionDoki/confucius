@@ -220,7 +220,7 @@ export function reportRevisionMessages(input: {
 export function reportRevisionPatch(
   text: string,
   artifact: ArtifactRecord,
-): Record<string, unknown> | undefined {
+): Record<string, unknown> | null {
   const parsed = JSON.parse(
     text.trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/, "$1"),
   );
@@ -262,7 +262,7 @@ export function reportRevisionPatch(
     throw new Error("Invalid report edits");
   if (parsed.citations !== undefined && !Array.isArray(parsed.citations))
     throw new Error("Invalid revised citations");
-  if (!edits.length && parsed.citations === undefined) return;
+  if (!edits.length && parsed.citations === undefined) return null;
   const patch = {
     id: artifact.id,
     expectedRevision: artifact.revision,
@@ -272,5 +272,12 @@ export function reportRevisionPatch(
   const next = patchArtifactInput(artifact, patch);
   if (next.body.type !== "markdown" || !next.body.markdown.trim())
     throw new Error("Revision would erase the report");
+  // An identity edit, an empty edit list, or a citation list identical to the
+  // current one must not create a revision or reset an existing writeback.
+  if (
+    JSON.stringify(next.body) === JSON.stringify(artifact.body) &&
+    JSON.stringify(next.citations) === JSON.stringify(artifact.citations)
+  )
+    return null;
   return patch;
 }
