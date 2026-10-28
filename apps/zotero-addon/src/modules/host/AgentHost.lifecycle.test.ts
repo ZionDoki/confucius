@@ -4018,4 +4018,163 @@ it("does not persist a planned note key after an unknown write outcome", async (
   } finally {
     Reflect.set(globalThis, "Zotero", previous);
   }
+
+it("requestToolApproval builds async organizer review with outline numbering and item metadata", async (t) => {
+  const previousZotero = Reflect.get(globalThis, "Zotero");
+  t.after(() => Reflect.set(globalThis, "Zotero", previousZotero));
+
+  const noteItem = {
+    id: 10,
+    key: "NOTE_OUTLINE",
+    isNote: () => true,
+    deleted: false,
+    getTags: () => [
+      { tag: "★outline" },
+      { tag: "#flexannotate-outline-COL_1" },
+    ],
+    getNote: () => "<h1>1 Einleitung</h1><h2>1.1 Relevanz</h2><h1>2 Methode</h1>",
+  };
+
+  const annotationItem = {
+    id: 20,
+    key: "ANN_KEY",
+    annotationText: "Zitate sind wichtig.",
+    annotationPageLabel: "42",
+    annotationColor: "#ffd400",
+    parentItemID: 30,
+  };
+
+  const parentAttachment = {
+    id: 30,
+    parentItemID: 40,
+  };
+
+  const parentWork = {
+    id: 40,
+    getField: (name: string) =>
+      name === "title" ? "Grundlagen" : name === "year" ? "2023" : "",
+    getDisplayTitle: () => "Grundlagen des Zitierens",
+    getCreators: () => [{ lastName: "Müller" }],
+  };
+
+  Reflect.set(globalThis, "Zotero", {
+    locale: "de",
+    Prefs: { get: () => "de" },
+    Libraries: { userLibraryID: 1 },
+    Collections: {
+      getByLibraryAndKey: (_lib: number, key: string) =>
+        key === "COL_1" ? { id: 1, key: "COL_1", name: "Dissertation" } : null,
+    },
+    Items: {
+      getByLibraryAndKeyAsync: async (_lib: number, key: string) =>
+        key === "ANN_KEY" ? annotationItem : null,
+      getByLibraryAndKey: (_lib: number, key: string) =>
+        key === "ANN_KEY" ? annotationItem : null,
+      getAsync: async (id: number) => {
+        if (id === 10) return noteItem;
+        if (id === 30) return parentAttachment;
+        if (id === 40) return parentWork;
+        return null;
+      },
+      get: (id: number) => {
+        if (id === 10) return noteItem;
+        if (id === 30) return parentAttachment;
+        if (id === 40) return parentWork;
+        return null;
+      },
+    },
+  });
+
+  const { host, state } = fixture();
+  state.record.backend = "codex";
+  state.record.permissionMode = "ask";
+  (host as any).describeApprovalCall = () => "Assign to outline";
+
+  (host as any).tools = {
+    resolveOutline: async () => ({
+      roots: [
+        {
+          id: "1",
+          title: "Einleitung",
+          children: [{ id: "1.1", title: "Relevanz", children: [] }],
+        },
+        { id: "2", title: "Methode", children: [] },
+      ],
+      headings: [
+        {
+          id: "1",
+          title: "Einleitung",
+          num: "1",
+          path: "Einleitung",
+          tag: "§Einleitung",
+          depth: 0,
+        },
+        {
+          id: "1.1",
+          title: "Relevanz",
+          num: "1.1",
+          path: "Einleitung > Relevanz",
+          tag: "§Relevanz",
+          depth: 1,
+        },
+        {
+          id: "2",
+          title: "Methode",
+          num: "2",
+          path: "Methode",
+          tag: "§Methode",
+          depth: 0,
+        },
+      ],
+    }),
+    getOutlineCache: () => undefined,
+  };
+
+  const approvalPromise = (host as any).requestToolApproval(
+    state,
+    "turn-1",
+    "call-1",
+    "organizer_assign_annotations",
+    {
+      collection: "Dissertation",
+      collectionKey: "COL_1",
+      assignments: [
+        {
+          key: "ANN_KEY",
+          headings: ["Relevanz"],
+          reason: "Passt zur Relevanz.",
+        },
+      ],
+    },
+  );
+
+  await (host as any).approvalResolve;
+  // Let the microtasks run to complete requestToolApproval
+  await new Promise((r) => setTimeout(r, 10));
+
+  const approvalEvent = state.events.find(
+    (e) => e.type === "approval_required",
+  );
+  assert.ok(approvalEvent, "approval_required event emitted");
+  const req = (approvalEvent as any).payload.request;
+  assert.ok(req.organizerReview, "organizerReview attached");
+  assert.equal(req.organizerReview.totalAssignments, 1);
+  assert.equal(req.organizerReview.items[0].headings[0].num, "1.1");
+  assert.equal(req.organizerReview.items[0].headings[0].title, "Relevanz");
+  assert.equal(
+    req.organizerReview.items[0].headings[0].path,
+    "Einleitung > Relevanz",
+  );
+  assert.equal(req.organizerReview.items[0].quote, "Zitate sind wichtig.");
+  assert.equal(req.organizerReview.items[0].sourceCitation, "Müller (2023)");
+  assert.equal(req.organizerReview.items[0].page, "42");
+  assert.equal(req.organizerReview.items[0].reason, "Passt zur Relevanz.");
+
+  (host as any).approvalResolve({
+    id: "approval_call-1",
+    verdict: "allow",
+    scope: "once",
+  });
+  const resolution = await approvalPromise;
+  assert.equal(resolution.verdict, "allow");
 });

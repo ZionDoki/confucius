@@ -79,12 +79,25 @@ export const MEMORY_WRITE_TOOLS = [
   "knowledge_base_save_entry",
 ] as const;
 
+export const ORGANIZER_READ_TOOLS = [
+  "organizer_get_outline",
+  "organizer_list_annotations",
+  "organizer_get_annotation_context",
+] as const;
+
+export const ORGANIZER_WRITE_TOOLS = [
+  "organizer_assign_annotations",
+  "organizer_unassign_annotations",
+] as const;
+
 export type LibraryReadTool = (typeof LIBRARY_READ_TOOLS)[number];
 export type LibraryWriteTool = (typeof LIBRARY_WRITE_TOOLS)[number];
 export type PaperReadTool = (typeof PAPER_READ_TOOLS)[number];
 export type PaperWriteTool = (typeof PAPER_WRITE_TOOLS)[number];
 export type MemoryReadTool = (typeof MEMORY_READ_TOOLS)[number];
 export type MemoryWriteTool = (typeof MEMORY_WRITE_TOOLS)[number];
+export type OrganizerReadTool = (typeof ORGANIZER_READ_TOOLS)[number];
+export type OrganizerWriteTool = (typeof ORGANIZER_WRITE_TOOLS)[number];
 
 export type BuiltinToolName =
   | LibraryReadTool
@@ -92,7 +105,9 @@ export type BuiltinToolName =
   | PaperReadTool
   | PaperWriteTool
   | MemoryReadTool
-  | MemoryWriteTool;
+  | MemoryWriteTool
+  | OrganizerReadTool
+  | OrganizerWriteTool;
 
 export type ToolCatalog =
   | "library.read"

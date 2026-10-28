@@ -3318,3 +3318,764 @@ it("legacy creation receipts grant edit permission without inventing a batch, ag
   assert.equal(mark?.agent, undefined);
   assert.ok(mark?.proofOperationId);
 });
+
+describe("organizer integration tools", () => {
+  function installOrganizerFixture() {
+    const storage = memoryJsonStorage();
+    let nextId = 1000;
+
+    class FakeItem {
+      id: number;
+      key: string;
+      libraryID = 1;
+      itemType: string;
+      parentItemID?: number;
+      parentID?: number;
+      tags: string[] = [];
+      fields: Record<string, string> = {};
+      creators: Array<{ firstName: string; lastName: string }> = [];
+      collections: number[] = [];
+      attachments: number[] = [];
+      annotations: FakeItem[] = [];
+      attachmentFilename = "";
+      attachmentContentType = "";
+      attachmentText = "";
+      note = "";
+      annotationType = "highlight";
+      annotationText = "";
+      annotationComment = "";
+      annotationPageLabel = "";
+      annotationColor = "#ffd400";
+      editable = true;
+      dateModified?: string;
+      dateAdded?: string;
+
+      constructor(type: string, key?: string) {
+        this.id = ++nextId;
+        this.itemType = type;
+        this.key = key || `KEY_${this.id}`;
+      }
+
+      isNote() {
+        return this.itemType === "note";
+      }
+      isAttachment() {
+        return this.itemType === "attachment";
+      }
+      isFileAttachment() {
+        return this.itemType === "attachment";
+      }
+      isAnnotation() {
+        return this.itemType === "annotation";
+      }
+      isEditable() {
+        return this.editable;
+      }
+      getNote() {
+        return this.note;
+      }
+      getTags() {
+        return this.tags.map((tag) => ({ tag }));
+      }
+      addTag(tag: string) {
+        if (!this.tags.includes(tag)) this.tags.push(tag);
+      }
+      removeTag(tag: string) {
+        this.tags = this.tags.filter((t) => t !== tag);
+      }
+      getCollections() {
+        return [...this.collections];
+      }
+      getAttachments() {
+        return [...this.attachments];
+      }
+      getAnnotations() {
+        return [...this.annotations];
+      }
+      getField(field: string) {
+        return this.fields[field] ?? "";
+      }
+      getCreators() {
+        return [...this.creators];
+      }
+      async save() {
+        return this.id;
+      }
+      async saveTx() {
+        return this.save();
+      }
+    }
+
+    class FakeCollection {
+      id: number;
+      key: string;
+      libraryID = 1;
+      name: string;
+      parentID?: number;
+      childCollections: number[] = [];
+      childItems: FakeItem[] = [];
+
+      constructor(name: string, key?: string, parentID?: number) {
+        this.id = ++nextId;
+        this.name = name;
+        this.key = key || `COL_${this.id}`;
+        this.parentID = parentID;
+      }
+
+      getChildCollections() {
+        return [...this.childCollections];
+      }
+      getChildItems() {
+        return [...this.childItems];
+      }
+    }
+
+    const collections = new Map<string, FakeCollection>();
+    const collectionsById = new Map<number, FakeCollection>();
+    const items = new Map<string, FakeItem>();
+    const itemsById = new Map<number, FakeItem>();
+
+    function registerCollection(col: FakeCollection) {
+      collections.set(col.key, col);
+      collectionsById.set(col.id, col);
+    }
+
+    function registerItem(item: FakeItem) {
+      items.set(item.key, item);
+      itemsById.set(item.id, item);
+    }
+
+    const colRoot = new FakeCollection("Master Thesis", "COL_ROOT");
+    const colSub = new FakeCollection("Chapter 1", "COL_SUB", colRoot.id);
+    colRoot.childCollections.push(colSub.id);
+    const colSubSub = new FakeCollection(
+      "Section 1.1",
+      "COL_SUB_SUB",
+      colSub.id,
+    );
+    colSub.childCollections.push(colSubSub.id);
+    const colUnrelated = new FakeCollection("Unrelated", "COL_UNRELATED");
+
+    registerCollection(colRoot);
+    registerCollection(colSub);
+    registerCollection(colSubSub);
+    registerCollection(colUnrelated);
+
+    const outlineHtml = [
+      "<p>Flex Annotations Outline</p>",
+      "<pre><code>LATTICE-OUTLINE-V1",
+      JSON.stringify({
+        v: 1,
+        roots: [
+          {
+            id: "node_1",
+            title: "Introduction",
+            children: [
+              { id: "node_1_1", title: "Background", children: [] },
+              { id: "node_1_2", title: "Research Questions", children: [] },
+            ],
+          },
+          {
+            id: "node_2",
+            title: "Methods",
+            children: [],
+          },
+        ],
+      }),
+      "</code></pre>",
+    ].join("\n");
+
+    const outlineNote = new FakeItem("note", "NOTE_OUTLINE");
+    outlineNote.note = outlineHtml;
+    outlineNote.tags = ["★outline", "#flexannotate-outline-COL_ROOT"];
+    outlineNote.dateModified = "2026-10-14 12:00:00";
+    registerItem(outlineNote);
+
+    // Conflicting older outline note for COL_ROOT to test newest-wins selection
+    const oldOutlineNote = new FakeItem("note", "NOTE_OUTLINE_OLD");
+    oldOutlineNote.note = `<pre><code>LATTICE-OUTLINE-V1\n${JSON.stringify({ v: 1, roots: [] })}</code></pre>`;
+    oldOutlineNote.tags = ["★outline", "#flexannotate-outline-COL_ROOT"];
+    oldOutlineNote.dateModified = "2020-01-01 00:00:00";
+    registerItem(oldOutlineNote);
+
+    // Library-wide outline note (no #flexannotate-outline- tag)
+    const libOutlineHtml = [
+      "<p>Library Outline</p>",
+      "<pre><code>LATTICE-OUTLINE-V1",
+      JSON.stringify({
+        v: 1,
+        roots: [{ id: "lib_1", title: "General", children: [] }],
+      }),
+      "</code></pre>",
+    ].join("\n");
+    const libOutlineNote = new FakeItem("note", "NOTE_LIB_OUTLINE");
+    libOutlineNote.note = libOutlineHtml;
+    libOutlineNote.tags = ["★outline"];
+    registerItem(libOutlineNote);
+
+    const work1 = new FakeItem("journalArticle", "WORK_1");
+    work1.fields = { title: "Foundations of AI Law" };
+    work1.creators = [{ firstName: "Alice", lastName: "Smith" }];
+    work1.collections = [colRoot.id];
+    colRoot.childItems.push(work1);
+    registerItem(work1);
+
+    const att1 = new FakeItem("attachment", "ATT_1");
+    att1.parentItemID = work1.id;
+    att1.attachmentFilename = "ai-law.pdf";
+    att1.attachmentContentType = "application/pdf";
+    att1.attachmentText =
+      "Overview of the field. Legal rules require explicit definitions. The implications are broad.";
+    work1.attachments.push(att1.id);
+    registerItem(att1);
+
+    const ann1 = new FakeItem("annotation", "ANN_1");
+    ann1.parentItemID = att1.id;
+    ann1.annotationText = "Legal rules require explicit definitions.";
+    ann1.annotationComment = "Core thesis";
+    ann1.annotationPageLabel = "10";
+    ann1.tags = [];
+    att1.annotations.push(ann1);
+    registerItem(ann1);
+
+    const ann2 = new FakeItem("annotation", "ANN_2");
+    ann2.parentItemID = att1.id;
+    ann2.annotationText = "The implications are broad.";
+    ann2.tags = ["§Introduction"];
+    att1.annotations.push(ann2);
+    registerItem(ann2);
+
+    const ann3 = new FakeItem("annotation", "ANN_3");
+    ann3.parentItemID = att1.id;
+    ann3.annotationText = "Overview of the field.";
+    ann3.tags = ["to-read"];
+    att1.annotations.push(ann3);
+    registerItem(ann3);
+
+    const work2 = new FakeItem("journalArticle", "WORK_2");
+    work2.fields = { title: "Empirical Studies in Legal Tech" };
+    work2.creators = [{ firstName: "Bob", lastName: "Jones" }];
+    work2.collections = [colSub.id];
+    colSub.childItems.push(work2);
+    registerItem(work2);
+
+    const att2 = new FakeItem("attachment", "ATT_2");
+    att2.parentItemID = work2.id;
+    att2.attachmentFilename = "empirical.pdf";
+    att2.attachmentContentType = "application/pdf";
+    att2.attachmentText =
+      "Empirical sampling methodology was rigorously applied across jurisdictions.";
+    work2.attachments.push(att2.id);
+    registerItem(att2);
+
+    const annReadOnly = new FakeItem("annotation", "ANN_RO");
+    annReadOnly.parentItemID = att2.id;
+    annReadOnly.annotationText =
+      "Empirical sampling methodology was rigorously applied";
+    annReadOnly.editable = false;
+    att2.annotations.push(annReadOnly);
+    registerItem(annReadOnly);
+
+    // Standalone PDF attachment directly in 3rd level subcollection COL_SUB_SUB
+    const attStandalone = new FakeItem("attachment", "ATT_STANDALONE");
+    attStandalone.attachmentFilename = "standalone-paper.pdf";
+    attStandalone.attachmentContentType = "application/pdf";
+    attStandalone.attachmentText = "Standalone paper findings.";
+    attStandalone.collections = [colSubSub.id];
+    colSubSub.childItems.push(attStandalone);
+    registerItem(attStandalone);
+
+    const annStandalone = new FakeItem("annotation", "ANN_STANDALONE");
+    annStandalone.parentItemID = attStandalone.id;
+    annStandalone.annotationText = "Standalone paper findings.";
+    annStandalone.tags = [];
+    attStandalone.annotations.push(annStandalone);
+    registerItem(annStandalone);
+
+    const workUnrelated = new FakeItem("journalArticle", "WORK_UNRELATED");
+    workUnrelated.collections = [colUnrelated.id];
+    colUnrelated.childItems.push(workUnrelated);
+    registerItem(workUnrelated);
+
+    const attUnrelated = new FakeItem("attachment", "ATT_UNRELATED");
+    attUnrelated.parentItemID = workUnrelated.id;
+    attUnrelated.attachmentText = "Unrelated content about chemistry.";
+    workUnrelated.attachments.push(attUnrelated.id);
+    registerItem(attUnrelated);
+
+    const annUnrelated = new FakeItem("annotation", "ANN_UNRELATED");
+    annUnrelated.parentItemID = attUnrelated.id;
+    annUnrelated.annotationText = "Chemistry reactions";
+    attUnrelated.annotations.push(annUnrelated);
+    registerItem(annUnrelated);
+
+    class FakeSearch {
+      conditions: Array<{
+        condition: string;
+        operator: string;
+        value: string;
+      }> = [];
+      constructor(_params: { libraryID?: number } = {}) {}
+      addCondition(condition: string, operator: string, value: string) {
+        this.conditions.push({ condition, operator, value });
+      }
+      async search(): Promise<number[]> {
+        let result = [...itemsById.values()];
+        for (const cond of this.conditions) {
+          if (cond.condition === "tag") {
+            result = result.filter(
+              (item) =>
+                item.tags?.includes(cond.value) ||
+                item.getTags?.()?.some((t: any) => t.tag === cond.value),
+            );
+          }
+        }
+        return result.map((item) => item.id);
+      }
+    }
+
+    const zotero = {
+      Search: FakeSearch,
+      Libraries: { userLibraryID: 1, get: () => ({ editable: true }) },
+      Groups: { getGroupIDFromLibraryID: () => 0 },
+      Collections: {
+        getByLibraryAndKey: (_lib: number, key: string) =>
+          collections.get(key) ?? null,
+        getByLibrary: (_lib: number) => [...new Set(collections.values())],
+        get: (id: number) => collectionsById.get(id) ?? null,
+      },
+      Items: {
+        getByLibraryAndKey: (_lib: number, key: string) =>
+          items.get(key) ?? null,
+        get: (id: number) => itemsById.get(id) ?? null,
+        getAll: async (_lib: number) => [...itemsById.keys()],
+        getAsync: async (ids: number[]) =>
+          ids.map((id) => itemsById.get(id)).filter(Boolean),
+      },
+    };
+
+    (globalThis as unknown as { Zotero: unknown }).Zotero = zotero;
+    const host = new ZoteroToolHost(storage);
+    const service = new ToolExecutionService(memoryJsonStorage(), (op) =>
+      host.reconcile(op),
+    );
+    host.setOperationReader(service);
+    const provider = service.wrap(new ZoteroToolProvider(host));
+
+    return {
+      host,
+      execute: (
+        name: string,
+        args: Record<string, unknown>,
+        signal?: AbortSignal,
+        context?: ToolExecutionContext,
+      ) => provider.call(name, args, signal, context),
+      ann1,
+      ann2,
+      ann3,
+      annReadOnly,
+      annUnrelated,
+      annStandalone,
+      attStandalone,
+    };
+  }
+
+  it("organizer_get_outline reads and flattens the outline tree and supports the outline_get alias", async () => {
+    const env = installOrganizerFixture();
+
+    const rootRes = await env.execute("organizer_get_outline", {
+      collection: "COL_ROOT",
+    });
+    assert.equal(rootRes.ok, true);
+    const data = rootRes.data as {
+      collectionKey: string;
+      topmostCollectionKey: string;
+      noteKey: string;
+      outline: Array<{
+        title: string;
+        tag: string;
+        level: number;
+        path: string;
+      }>;
+    };
+    assert.equal(data.collectionKey, "COL_ROOT");
+    assert.equal(data.topmostCollectionKey, "COL_ROOT");
+    assert.equal(data.noteKey, "NOTE_OUTLINE");
+    assert.equal(data.outline.length, 4);
+    assert.deepEqual(data.outline[0], {
+      id: "node_1",
+      num: "1",
+      title: "Introduction",
+      tag: "§Introduction",
+      depth: 0,
+      path: "Introduction",
+    });
+    assert.deepEqual(data.outline[1], {
+      id: "node_1_1",
+      num: "1.1",
+      title: "Background",
+      tag: "§Background",
+      depth: 1,
+      path: "Introduction > Background",
+    });
+    assert.deepEqual(data.outline[2], {
+      id: "node_1_2",
+      num: "1.2",
+      title: "Research Questions",
+      tag: "§Research Questions",
+      depth: 1,
+      path: "Introduction > Research Questions",
+    });
+    assert.deepEqual(data.outline[3], {
+      id: "node_2",
+      num: "2",
+      title: "Methods",
+      tag: "§Methods",
+      depth: 0,
+      path: "Methods",
+    });
+
+    // Subcollection walking (Level 2: COL_SUB -> COL_ROOT)
+    const subRes = await env.execute("organizer_get_outline", {
+      collection: "COL_SUB",
+    });
+    assert.equal(subRes.ok, true);
+    assert.equal(
+      (subRes.data as { topmostCollectionKey: string }).topmostCollectionKey,
+      "COL_ROOT",
+    );
+    assert.equal((subRes.data as { outline: unknown[] }).outline.length, 4);
+
+    // Deep subcollection walking (Level 3: COL_SUB_SUB -> COL_SUB -> COL_ROOT)
+    const deepSubRes = await env.execute("organizer_get_outline", {
+      collection: "COL_SUB_SUB",
+    });
+    assert.equal(deepSubRes.ok, true);
+    assert.equal(
+      (deepSubRes.data as { topmostCollectionKey: string })
+        .topmostCollectionKey,
+      "COL_ROOT",
+    );
+
+    // Lookup by collection name (Master Thesis) and compatibility alias (collectionKey)
+    const byNameRes = await env.execute("organizer_get_outline", {
+      collectionKey: "Master Thesis",
+    });
+    assert.equal(byNameRes.ok, true);
+    assert.equal(
+      (byNameRes.data as { collectionKey: string }).collectionKey,
+      "COL_ROOT",
+    );
+
+    // Library-wide outline note when collection is omitted
+    const libRes = await env.execute("organizer_get_outline", {});
+    assert.equal(libRes.ok, true);
+    const libData = libRes.data as { outline: Array<{ title: string }> };
+    assert.equal(libData.outline.length, 1);
+    assert.equal(libData.outline[0].title, "General");
+
+    // Alias outline_get
+    const aliasRes = await env.execute("outline_get", {
+      collection: "COL_ROOT",
+    });
+    assert.equal(aliasRes.ok, true);
+    assert.equal((aliasRes.data as { outline: unknown[] }).outline.length, 4);
+
+    // Collection with no outline note reports not_found
+    const emptyRes = await env.execute("organizer_get_outline", {
+      collection: "COL_UNRELATED",
+    });
+    assert.equal(emptyRes.ok, false);
+    assert.equal((emptyRes as any).code, "not_found");
+
+    // Nonexistent collection
+    const notFound = await env.execute("organizer_get_outline", {
+      collection: "DOES_NOT_EXIST",
+    });
+    assert.equal(notFound.ok, false);
+    assert.equal((notFound as any).code, "not_found");
+  });
+
+  it("organizer_list_annotations filters by collection scope and assignment status, supporting annotations_list alias", async () => {
+    const env = installOrganizerFixture();
+
+    // Default: unassignedOnly = true
+    const unassigned = await env.execute("organizer_list_annotations", {
+      collection: "COL_ROOT",
+    });
+    assert.equal(unassigned.ok, true);
+    const unassignedData = unassigned.data as {
+      total: number;
+      annotations: Array<{
+        key: string;
+        headings: string[];
+        work: { title: string; creators: string };
+      }>;
+    };
+    const keys = unassignedData.annotations.map((a) => a.key);
+    assert.ok(keys.includes("ANN_1"));
+    assert.ok(keys.includes("ANN_3"));
+    assert.ok(keys.includes("ANN_RO"));
+    assert.ok(keys.includes("ANN_STANDALONE")); // Standalone attachment in 3rd level subcollection
+    assert.equal(keys.includes("ANN_2"), false); // already assigned to §Introduction
+    assert.equal(keys.includes("ANN_UNRELATED"), false); // out of collection scope
+
+    // Check work metadata extraction
+    const ann1Item = unassignedData.annotations.find((a) => a.key === "ANN_1");
+    assert.equal(ann1Item?.work.title, "Foundations of AI Law");
+    assert.equal(ann1Item?.work.creators, "Alice Smith");
+
+    // Lookup by collection name
+    const byName = await env.execute("organizer_list_annotations", {
+      collection: "Master Thesis",
+    });
+    assert.equal(byName.ok, true);
+
+    // unassignedOnly = false
+    const all = await env.execute("organizer_list_annotations", {
+      collection: "COL_ROOT",
+      unassignedOnly: false,
+    });
+    assert.equal(all.ok, true);
+    const allData = all.data as {
+      total: number;
+      annotations: Array<{ key: string; headings: string[] }>;
+    };
+    const allKeys = allData.annotations.map((a) => a.key);
+    assert.ok(allKeys.includes("ANN_2"));
+    assert.ok(allKeys.includes("ANN_STANDALONE"));
+    const ann2Item = allData.annotations.find((a) => a.key === "ANN_2");
+    assert.deepEqual(ann2Item?.headings, ["Introduction"]);
+
+    // Alias annotations_list
+    const aliasRes = await env.execute("annotations_list", {
+      collection: "COL_ROOT",
+    });
+    assert.equal(aliasRes.ok, true);
+    assert.equal((aliasRes.data as { total: number }).total, 4);
+  });
+
+  it("organizer_get_annotation_context returns surrounding fulltext and supports annotation_context alias", async () => {
+    const env = installOrganizerFixture();
+
+    const ctxRes = await env.execute("organizer_get_annotation_context", {
+      key: "ANN_1",
+      chars: 200,
+    });
+    assert.equal(ctxRes.ok, true);
+    const data = ctxRes.data as {
+      key: string;
+      quote: string;
+      context: string;
+      contextFound: boolean;
+      attachmentKey: string;
+    };
+    assert.equal(data.key, "ANN_1");
+    assert.equal(data.quote, "Legal rules require explicit definitions.");
+    assert.equal(data.contextFound, true);
+    assert.equal(data.attachmentKey, "ATT_1");
+    assert.ok(data.context.includes("Overview of the field."));
+    assert.ok(data.context.includes("The implications are broad."));
+
+    // Alias annotation_context
+    const aliasRes = await env.execute("annotation_context", { key: "ANN_1" });
+    assert.equal(aliasRes.ok, true);
+    assert.equal((aliasRes.data as { key: string }).key, "ANN_1");
+
+    // Missing annotation
+    const notFound = await env.execute("organizer_get_annotation_context", {
+      key: "MISSING_KEY",
+    });
+    assert.equal(notFound.ok, false);
+    assert.equal((notFound as any).code, "not_found");
+  });
+
+  it("organizer_assign_annotations validates headings, respects dryRun, handles out-of-scope and read-only, and supports annotations_assign alias", async () => {
+    const env = installOrganizerFixture();
+
+    // Verify prepare resource locking
+    const prepCtx: ToolExecutionContext = {};
+    const prepFail = await env.host.prepare(
+      "organizer_assign_annotations",
+      {
+        collection: "COL_ROOT",
+        assignments: [{ key: "ANN_1", headings: ["Background"] }],
+      },
+      prepCtx,
+    );
+    assert.equal(prepFail, null);
+    assert.ok(prepCtx.resources?.includes("zotero-collection:1:COL_ROOT"));
+    assert.ok(prepCtx.resources?.includes("zotero:1:ANN_1"));
+
+    // 1. dryRun: true does not mutate annotation tags
+    const dryRunRes = await env.execute("organizer_assign_annotations", {
+      collection: "COL_ROOT",
+      assignments: [{ key: "ANN_1", headings: ["Background"] }],
+      dryRun: true,
+    });
+    assert.equal(dryRunRes.ok, true);
+    const dryData = dryRunRes.data as {
+      assigned: Array<{ key: string; added: string[] }>;
+      skipped: Array<{ key: string; reason: string }>;
+      unknownHeadings: string[];
+    };
+    assert.deepEqual(dryData.assigned, [
+      { key: "ANN_1", added: ["§Background"] },
+    ]);
+    assert.deepEqual(env.ann1.tags, []);
+
+    // 2. dryRun: false mutates annotation and writes §Background
+    const realRes = await env.execute("organizer_assign_annotations", {
+      collection: "COL_ROOT",
+      assignments: [{ key: "ANN_1", headings: ["Background"] }],
+    });
+    assert.equal(realRes.ok, true);
+    assert.deepEqual(env.ann1.tags, ["§Background"]);
+
+    // 3. Assignment supporting leading § prefix and hierarchical path
+    const pathRes = await env.execute("organizer_assign_annotations", {
+      collection: "COL_ROOT",
+      assignments: [
+        { key: "ANN_3", headings: ["§Research Questions"] }, // Leading § in heading
+      ],
+    });
+    assert.equal(pathRes.ok, true);
+    assert.ok(env.ann3.tags.includes("§Research Questions"));
+
+    // 4. Assignment to standalone PDF attachment in subcollection
+    const standaloneRes = await env.execute("organizer_assign_annotations", {
+      collection: "COL_ROOT",
+      assignments: [{ key: "ANN_STANDALONE", headings: ["Methods"] }],
+    });
+    assert.equal(standaloneRes.ok, true);
+    assert.deepEqual(env.annStandalone.tags, ["§Methods"]);
+
+    // 5. Repeated assignment reports already assigned
+    const dupRes = await env.execute("organizer_assign_annotations", {
+      collection: "COL_ROOT",
+      assignments: [{ key: "ANN_1", headings: ["Background"] }],
+    });
+    assert.equal(dupRes.ok, true);
+    assert.deepEqual((dupRes.data as typeof dryData).skipped, [
+      { key: "ANN_1", reason: "already assigned" },
+    ]);
+
+    // 6. Unknown heading title is recorded and skipped
+    const unknownRes = await env.execute("organizer_assign_annotations", {
+      collection: "COL_ROOT",
+      assignments: [{ key: "ANN_3", headings: ["Nonexistent Chapter"] }],
+    });
+    assert.equal(unknownRes.ok, true);
+    assert.deepEqual((unknownRes.data as typeof dryData).unknownHeadings, [
+      "Nonexistent Chapter",
+    ]);
+    assert.deepEqual((unknownRes.data as typeof dryData).skipped, [
+      { key: "ANN_3", reason: "no valid heading" },
+    ]);
+
+    // 7. Work not in collection is skipped
+    const scopeRes = await env.execute("organizer_assign_annotations", {
+      collection: "COL_ROOT",
+      assignments: [{ key: "ANN_UNRELATED", headings: ["Background"] }],
+    });
+    assert.equal(scopeRes.ok, true);
+    assert.deepEqual((scopeRes.data as typeof dryData).skipped, [
+      { key: "ANN_UNRELATED", reason: "work not in collection" },
+    ]);
+
+    // 8. Read-only annotation is skipped
+    const roRes = await env.execute("organizer_assign_annotations", {
+      collection: "COL_ROOT",
+      assignments: [{ key: "ANN_RO", headings: ["Methods"] }],
+    });
+    assert.equal(roRes.ok, true);
+    assert.deepEqual((roRes.data as typeof dryData).skipped, [
+      { key: "ANN_RO", reason: "item not editable" },
+    ]);
+
+    // 9. Alias annotations_assign
+    const aliasRes = await env.execute("annotations_assign", {
+      collection: "COL_ROOT",
+      assignments: [{ key: "ANN_3", headings: ["Methods"] }],
+    });
+    assert.equal(aliasRes.ok, true);
+    assert.ok(env.ann3.tags.includes("§Methods"));
+  });
+
+  it("organizer_unassign_annotations removes § tags and supports annotations_unassign alias", async () => {
+    const env = installOrganizerFixture();
+
+    // First assign §Methods and §Background to ANN_3
+    env.ann3.addTag("§Methods");
+    env.ann3.addTag("§Background");
+    assert.deepEqual(env.ann3.tags, ["to-read", "§Methods", "§Background"]);
+
+    // Unassign specific heading with leading § prefix
+    const unassignOne = await env.execute("organizer_unassign_annotations", {
+      collection: "Master Thesis",
+      assignments: [{ key: "ANN_3", headings: ["§Methods"] }],
+    });
+    assert.equal(unassignOne.ok, true);
+    assert.deepEqual(
+      (unassignOne.data as { unassigned: unknown[] }).unassigned,
+      [{ key: "ANN_3", removed: ["§Methods"] }],
+    );
+    assert.deepEqual(env.ann3.tags, ["to-read", "§Background"]);
+
+    // Alias annotations_unassign removing all outline tags from ANN_3
+    const aliasUnassign = await env.execute("annotations_unassign", {
+      collection: "COL_ROOT",
+      assignments: [{ key: "ANN_3" }],
+    });
+    assert.equal(aliasUnassign.ok, true);
+    assert.deepEqual(
+      (aliasUnassign.data as { unassigned: unknown[] }).unassigned,
+      [{ key: "ANN_3", removed: ["§Background"] }],
+    );
+    assert.deepEqual(env.ann3.tags, ["to-read"]);
+  });
+
+  // Regressionsschutz: Die Organizer-Preflight muss auch unter Alias-Namen
+  // laufen. Vorher wurde in prepareOrganizerRead/Write gegen den rohen
+  // `name` statt des kanonischen Namens verglichen, wodurch der not_found-
+  // Preflight unter `annotation_context`/`annotations_list` übersprungen wurde.
+  it("organizer read preflight runs under aliases (canonical-name resolution)", async () => {
+    const env = installOrganizerFixture();
+
+    // annotation_context-Alias: fehlende Annotation muss not_found liefern,
+    // nicht stillschweigend durchlaufen.
+    const missing = await env.host.prepare("annotation_context", {
+      key: "MISSING",
+    });
+    assert.ok(missing);
+    assert.equal((missing as { code: string }).code, "not_found");
+
+    // Vorhandene Annotation unter dem Alias passiert die Preflight.
+    const hit = await env.host.prepare("annotation_context", {
+      key: "ANN_1",
+    });
+    assert.equal(hit, null);
+
+    // annotations_list-Alias: fehlende Collection wird abgewiesen.
+    const noCol = await env.host.prepare("annotations_list", {});
+    assert.ok(noCol);
+    assert.equal((noCol as { code: string }).code, "invalid_args");
+  });
+
+  it("organizer write prepare under alias resolves canonical domain and resources", async () => {
+    const env = installOrganizerFixture();
+    const ctx: ToolExecutionContext = {};
+    const res = await env.host.prepare(
+      "annotations_assign",
+      {
+        collection: "COL_ROOT",
+        assignments: [{ key: "ANN_1", headings: ["Background"] }],
+      },
+      ctx,
+    );
+    assert.equal(res, null);
+    assert.equal(ctx.preparedOperation?.domain, "library.write");
+    assert.ok(ctx.resources?.includes("zotero-collection:1:COL_ROOT"));
+    assert.ok(ctx.resources?.includes("zotero:1:ANN_1"));
+  });
+});

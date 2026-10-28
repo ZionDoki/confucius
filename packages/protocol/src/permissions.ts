@@ -33,6 +33,34 @@ export interface ApprovalRequest {
   before?: string;
   after?: string;
   providerRequestId?: string | number;
+  organizerReview?: OrganizerAssignmentReview;
+}
+
+export interface OrganizerAssignmentHeading {
+  title: string;
+  num?: string;
+  path?: string;
+  tag?: string;
+}
+
+export interface OrganizerAssignmentItemReview {
+  key: string;
+  headings: OrganizerAssignmentHeading[];
+  reason?: string;
+  quote?: string;
+  comment?: string;
+  page?: string;
+  color?: string;
+  sourceTitle?: string;
+  sourceCitation?: string;
+}
+
+export interface OrganizerAssignmentReview {
+  collectionKey?: string;
+  collectionTitle?: string;
+  totalAssignments: number;
+  items: OrganizerAssignmentItemReview[];
+  outlineHeadings?: OrganizerAssignmentHeading[];
 }
 
 export interface ApprovalResolution {

@@ -22,6 +22,16 @@ import {
   annotationSchema,
 } from "@confucius/zotero-tools";
 import {
+  OrganizerTools,
+  ORGANIZER_TOOL_ALIASES,
+  isOrganizerReadTool,
+  isOrganizerWriteTool,
+  normalizeOrganizerToolArgs,
+  prepareOrganizerRead,
+  prepareOrganizerWrite,
+  type OrganizerRejection,
+} from "./organizerTools";
+import {
   ResourceLocks,
   runtimeDigest,
   runtimeJsonStorage,
@@ -106,6 +116,14 @@ function defaultLibraryID(args: Record<string, unknown>): number {
 
 function getItem(libraryID: number, key: string): Zotero.Item | null {
   return asItem(Zotero.Items.getByLibraryAndKey(libraryID, key));
+}
+
+/** Organizer-Rejection unter dem Namen behalten, mit dem das Modell sie aufrief. */
+function withRejectionName(
+  rejection: OrganizerRejection,
+  name: string,
+): OrganizerRejection {
+  return { ...rejection, toolName: name };
 }
 
 export function groupIDForLibrary(libraryID: number): number | undefined {
@@ -1479,6 +1497,8 @@ export class ZoteroToolHost {
   readonly ownership: AnnotationOwnership;
   private operations?: OperationRepository;
   private readonly pendingDownloads = new Set<string>();
+  /** Flex-Annotations-Organizer: eigener Zustand, damit das Feature entfernbar bleibt. */
+  readonly organizer = new OrganizerTools();
   constructor(
     private readonly storage: JsonStorage = runtimeJsonStorage(
       "annotation-records",
@@ -1654,9 +1674,11 @@ export class ZoteroToolHost {
     args: Record<string, unknown>,
     context: ToolExecutionContext = {},
   ): Promise<ToolFailure | null> {
+    const canonicalName = ORGANIZER_TOOL_ALIASES[name] ?? name;
+    normalizeOrganizerToolArgs(args);
     const invalid = validateArgs(
       name,
-      TOOL_DEFINITIONS.find((tool) => tool.name === name)?.inputSchema,
+      TOOL_DEFINITIONS.find((tool) => tool.name === canonicalName)?.inputSchema,
       args,
     );
     if (invalid) return invalid;
@@ -1678,6 +1700,23 @@ export class ZoteroToolHost {
       effect: "none" as const,
       message,
     });
+    if (isOrganizerWriteTool(canonicalName)) {
+      const organizerFailure = await prepareOrganizerWrite(
+        this.organizer,
+        name,
+        args,
+        context,
+      );
+      return organizerFailure
+        ? withRejectionName(organizerFailure, name)
+        : null;
+    }
+    if (isOrganizerReadTool(canonicalName)) {
+      const organizerFailure = prepareOrganizerRead(this.organizer, name, args);
+      return organizerFailure
+        ? withRejectionName(organizerFailure, name)
+        : null;
+    }
     if (name === "propose_note" && args.parentKey === undefined) {
       if (!context.source)
         return reject(
@@ -2610,6 +2649,17 @@ export class ZoteroToolHost {
         return this.updateAnnotation(name, args, context);
       case "delete_annotation":
         return this.deleteAnnotation(args, context);
+      case "organizer_get_outline":
+      case "organizer_list_annotations":
+      case "organizer_get_annotation_context":
+      case "organizer_assign_annotations":
+      case "organizer_unassign_annotations":
+      case "outline_get":
+      case "annotations_list":
+      case "annotation_context":
+      case "annotations_assign":
+      case "annotations_unassign":
+        return this.organizer.run(name, args, context);
       default:
         return fail(name, "not_found", `Unknown Zotero tool: ${name}`);
     }

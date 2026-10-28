@@ -21,14 +21,17 @@ export class ZoteroToolProvider implements ToolProvider {
     if (MEMORY_TOOL_NAMES.has(name)) {
       return null;
     }
-    return TOOL_META[name] ?? null;
+    const canonicalName = ORGANIZER_TOOL_ALIASES[name] ?? name;
+    return TOOL_META[canonicalName] ?? null;
   }
 
   getSchema(name: string): JsonSchemaObject | undefined {
     if (MEMORY_TOOL_NAMES.has(name)) {
       return undefined;
     }
-    return TOOL_DEFINITIONS.find((tool) => tool.name === name)?.inputSchema;
+    const canonicalName = ORGANIZER_TOOL_ALIASES[name] ?? name;
+    return TOOL_DEFINITIONS.find((tool) => tool.name === canonicalName)
+      ?.inputSchema;
   }
 
   async prepare(
@@ -53,3 +56,11 @@ const MEMORY_TOOL_NAMES = new Set<string>([
   ...MEMORY_READ_TOOLS,
   ...MEMORY_WRITE_TOOLS,
 ]);
+
+const ORGANIZER_TOOL_ALIASES: Record<string, string> = {
+  outline_get: "organizer_get_outline",
+  annotations_list: "organizer_list_annotations",
+  annotation_context: "organizer_get_annotation_context",
+  annotations_assign: "organizer_assign_annotations",
+  annotations_unassign: "organizer_unassign_annotations",
+};

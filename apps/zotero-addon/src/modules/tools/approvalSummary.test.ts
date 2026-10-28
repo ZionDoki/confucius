@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { describeCallForApproval, type TitleResolver } from "./approvalSummary";
+import { describeOrganizerApproval } from "./organizerApprovalSummary";
 
 const resolve: TitleResolver = (libraryID, key) =>
   key === "KNOWN" ? { title: `Item ${libraryID}:${key}` } : null;
@@ -137,6 +138,93 @@ describe("describeCallForApproval", () => {
       ),
       undefined,
     );
+    assert.equal(describeCallForApproval("noop", {}, resolve), undefined);
+  });
+});
+
+describe("describeCallForApproval — Flex Annotations organizer delegation", () => {
+  it("summarizes assign via canonical name and alias", () => {
+    const args = {
+      collection: "COL",
+      assignments: [{ key: "A1", headings: ["Background"] }],
+    };
+    assert.equal(
+      describeCallForApproval("organizer_assign_annotations", args),
+      "Assign 1 annotation to Flex Annotations outline",
+    );
+    assert.equal(
+      describeCallForApproval("annotations_assign", args),
+      "Assign 1 annotation to Flex Annotations outline",
+    );
+  });
+
+  it("counts multiple assignments without repeating quote text", () => {
+    const args = {
+      collection: "COL",
+      assignments: [{ key: "A1" }, { key: "A2" }, { key: "A3" }],
+    };
+    assert.equal(
+      describeCallForApproval("annotations_assign", args),
+      "Assign 3 annotations to Flex Annotations outline",
+    );
+  });
+
+  it("summarizes unassign from keys and singular key", () => {
+    assert.equal(
+      describeCallForApproval("organizer_unassign_annotations", {
+        collection: "COL",
+        keys: ["A1", "A2"],
+      }),
+      "Unassign 2 annotations from Flex Annotations outline",
+    );
+    assert.equal(
+      describeCallForApproval("annotations_unassign", {
+        collection: "COL",
+        key: "A1",
+      }),
+      "Unassign 1 annotation from Flex Annotations outline",
+    );
+  });
+
+  it("localizes organizer summaries (zh-CN via delegation, de directly)", () => {
+    const args = {
+      collection: "COL",
+      assignments: [{ key: "A1", headings: ["Background"] }],
+    };
+    assert.equal(
+      describeCallForApproval("annotations_assign", args, resolve, "zh-CN"),
+      "分配 1 条标注至 Flex Annotations 大纲",
+    );
+    assert.equal(
+      describeCallForApproval("annotations_unassign", args, resolve, "zh-CN"),
+      "移除 1 条标注的大纲归类",
+    );
+    // Die deutsche Verzweigung ist an der describeCallForApproval-Grenze nicht
+    // getyppt; daher direkt an der reinen Funktion prüfen.
+    assert.equal(
+      describeOrganizerApproval("annotations_assign", args, "de" as any),
+      "1 Annotation der Flex-Annotations-Gliederung zuweisen",
+    );
+    assert.equal(
+      describeOrganizerApproval("annotations_unassign", args, "de" as any),
+      "Gliederungszuweisung von 1 Annotation entfernen",
+    );
+    // Nicht-Organizer-Tool liefert undefined, damit describeCallForApproval
+    // auf den gewohnten Pfad zurückfällt.
+    assert.equal(
+      describeOrganizerApproval("add_to_collection", args),
+      undefined,
+    );
+  });
+
+  it("delegates only organizer tools and stays undefined otherwise", () => {
+    assert.equal(
+      describeCallForApproval("organizer_assign_annotations", {
+        collection: "COL",
+      }),
+      "Assign 0 annotations to Flex Annotations outline",
+    );
+    // Kein Organizer-Tool: fällt auf den bisherigen Pfad und liefert undefined
     assert.equal(describeCallForApproval("noop", {}, resolve), undefined);
   });
 });

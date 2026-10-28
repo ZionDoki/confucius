@@ -15,3 +15,29 @@ export { collectMatches, compileSafeRegex } from "./safeRegex";
 export type { SafeRegexResult } from "./safeRegex";
 
 export { annotationSchema } from "./catalog";
+export {
+  COLLECTION_TAG_PREFIX,
+  HEADING_PREFIX,
+  OUTLINE_TAG,
+  SENTINEL,
+  buildHeadingLookup,
+  cleanHeadingTitle,
+  collectionKeyFromTag,
+  extractSurroundingContext,
+  flattenOutline,
+  headingTag,
+  headingTitleFromTag,
+  isOutlineCollectionTag,
+  normalizeHeadingKey,
+  numbering,
+  outlineCollectionTag,
+  parseOutline,
+  planAssignments,
+} from "./organizerLogic";
+export type {
+  AssignmentItem,
+  FlatHeading,
+  ItemStateForAssignment,
+  OutlineNode,
+  PlanAssignmentsResult,
+} from "./organizerLogic";

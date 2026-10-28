@@ -17,6 +17,7 @@ import { createLiteraturePanel } from "./literaturePanel";
 import { reviewArrivals } from "./reviewArrivals";
 import { renderMemoryProposal } from "./memoryProposalCards";
 import { createAnnotationReviewPanel } from "./annotationReviewPanel";
+import { renderOrganizerReviewCard } from "./organizerReviewCard";
 import { bindBtwSelection } from "./btwPopup";
 import { artifactWindows } from "./artifactWindow";
 import { mountWorkspaceArtifact } from "./artifactWorkspace";
@@ -100,6 +101,7 @@ import type {
   ModelEndpoint,
   ModelReasoningOverride,
   ModelReasoningOverrides,
+  OrganizerAssignmentReview,
 } from "@confucius/protocol";
 import {
   modelReasoning,
@@ -251,6 +253,7 @@ type ApprovalRow = {
   after?: string;
   kind?: string;
   origin?: string;
+  organizerReview?: OrganizerAssignmentReview;
 };
 
 type ModelConfig = {
@@ -2532,6 +2535,38 @@ function bindWorkspace(
     targetDoc: Document,
     item: ApprovalRow,
   ): HTMLElement {
+    if (
+      (item.toolName === "organizer_assign_annotations" ||
+        item.toolName === "annotations_assign" ||
+        item.toolName === "organizer_unassign_annotations" ||
+        item.toolName === "annotations_unassign") &&
+      (item.organizerReview ||
+        Array.isArray(item.args.assignments) ||
+        Array.isArray(item.args.keys) ||
+        typeof item.args.key === "string")
+    ) {
+      return renderOrganizerReviewCard(targetDoc, item, {
+        resolve: (verdict, scope, editedArgs) => {
+          void resolveApproval(item.id, verdict, scope, editedArgs);
+        },
+        locate: (key, libraryID) => {
+          void rpc("reader/open", {
+            libraryID:
+              libraryID ??
+              (typeof item.args.libraryID === "number"
+                ? item.args.libraryID
+                : undefined),
+            key,
+            annotationKey: key,
+            selectItem: true,
+          }).catch(() => {
+            /* locate is cosmetic */
+          });
+        },
+        language: configuredUiLanguage(),
+      });
+    }
+
     const card = el(targetDoc, "section", undefined, {
       "aria-label": getString("workspace-awaiting-approval"),
     });
@@ -4375,6 +4410,7 @@ function bindWorkspace(
           after: request.after,
           kind: request.kind,
           origin: request.origin,
+          organizerReview: request.organizerReview,
         });
       }
       if (event.type === "approval_resolved") {
@@ -4711,9 +4747,10 @@ function bindWorkspace(
     id: string,
     verdict: "allow" | "deny",
     scope: "once" | "session",
+    editedArgs?: Record<string, unknown>,
   ) {
     try {
-      await rpc("approval/resolve", { id, verdict, scope });
+      await rpc("approval/resolve", { id, verdict, scope, editedArgs });
     } catch (error) {
       state.sendError = error instanceof Error ? error.message : String(error);
       throw error;
