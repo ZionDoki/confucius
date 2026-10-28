@@ -3939,6 +3939,7 @@ describe("organizer integration tools", () => {
     // The API result wins, not the fixture's library-wide outline note.
     assert.equal(data.outline.length, 1);
     assert.equal(data.outline[0].title, "From API");
+    assert.equal((data.outline[0] as any).num, "1");
     // Both read methods were invoked with the library-wide key (null).
     assert.ok(apiCalls.includes("headings:1:null"));
     assert.ok(apiCalls.includes("outline:1:null"));
@@ -3948,7 +3949,7 @@ describe("organizer integration tools", () => {
       .FlexAnnotate;
   });
 
-  it("organizer_get_outline falls back to the storage note (names, no numbers) without the FlexAnnotate API", async () => {
+  it("organizer_get_outline falls back to the storage note with computed decimal numbers without the FlexAnnotate API", async () => {
     const env = installOrganizerFixture();
 
     // Remove the fake plugin interface to force the note fallback path.
@@ -3969,15 +3970,17 @@ describe("organizer integration tools", () => {
         tag: string;
       }>;
     };
-    // Headings come from the outline note with their names/paths/tags...
+    // Headings come from the outline note with names, paths, tags, and computed numbering
     assert.equal(data.outline.length, 4);
     assert.equal(data.outline[0].title, "Introduction");
     assert.equal(data.outline[0].tag, "§Introduction");
+    assert.equal(data.outline[0].num, "1");
     assert.equal(data.outline[1].path, "Introduction > Background");
-    // ...but WITHOUT decimal numbers (no reimplemented numbering).
-    for (const h of data.outline) {
-      assert.equal(h.num, "");
-    }
+    assert.equal(data.outline[1].num, "1.1");
+    assert.equal(data.outline[2].title, "Research Questions");
+    assert.equal(data.outline[2].num, "1.2");
+    assert.equal(data.outline[3].title, "Methods");
+    assert.equal(data.outline[3].num, "2");
   });
 
   it("organizer_list_annotations filters by collection scope and assignment status, supporting annotations_list alias", async () => {
@@ -4030,6 +4033,7 @@ describe("organizer integration tools", () => {
     assert.ok(allKeys.includes("ANN_STANDALONE"));
     const ann2Item = allData.annotations.find((a) => a.key === "ANN_2");
     assert.deepEqual(ann2Item?.headings, ["Introduction"]);
+    assert.deepEqual((ann2Item as any)?.numberedHeadings, ["1 Introduction"]);
 
     // Alias annotations_list
     const aliasRes = await env.execute("annotations_list", {
