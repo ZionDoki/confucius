@@ -19,6 +19,7 @@ import {
   OUTLINE_TAG,
   TOOL_META,
   buildHeadingLookup,
+  cleanHeadingTitle,
   extractSurroundingContext,
   flattenOutline,
   headingTag,
@@ -285,7 +286,7 @@ export class OrganizerTools {
 
   private outlineCache = new Map<
     string,
-    { roots: OutlineNode[]; headings: FlatHeading[] }
+    { roots: OutlineNode[]; headings: FlatHeading[]; cachedAt: number }
   >();
 
   public cacheOutline(
@@ -295,7 +296,7 @@ export class OrganizerTools {
     headings: FlatHeading[],
   ): void {
     const key = `${libraryID}:${colRef ?? ""}`;
-    this.outlineCache.set(key, { roots, headings });
+    this.outlineCache.set(key, { roots, headings, cachedAt: Date.now() });
   }
 
   public getOutlineCache(
@@ -303,7 +304,13 @@ export class OrganizerTools {
     colRef?: string | null,
   ): { roots: OutlineNode[]; headings: FlatHeading[] } | undefined {
     const key = `${libraryID}:${colRef ?? ""}`;
-    return this.outlineCache.get(key);
+    const entry = this.outlineCache.get(key);
+    if (!entry) return undefined;
+    if (Date.now() - entry.cachedAt > 30_000) {
+      this.outlineCache.delete(key);
+      return undefined;
+    }
+    return entry;
   }
 
   private annotationCache = new Map<
@@ -333,6 +340,10 @@ export class OrganizerTools {
       libraryID: number;
     },
   ): void {
+    if (this.annotationCache.size >= 500) {
+      const oldestKey = this.annotationCache.keys().next().value;
+      if (oldestKey) this.annotationCache.delete(oldestKey);
+    }
     this.annotationCache.set(key, data);
   }
 
@@ -1089,6 +1100,10 @@ export class OrganizerTools {
       assigned.push({ key, added: toAdd });
     }
 
+    if (!dryRun && assigned.length > 0) {
+      this.outlineCache.clear();
+    }
+
     return ok("organizer_assign_annotations", {
       assigned,
       skipped,
@@ -1146,6 +1161,7 @@ export class OrganizerTools {
     const dryRun = Boolean(args.dryRun);
     const resolved = await this.resolveOutline(libraryID, colRef);
     const outlineTags = new Set((resolved?.headings ?? []).map((h) => h.tag));
+    const headingLookup = buildHeadingLookup(resolved?.headings ?? []);
 
     const unassigned: Array<{ key: string; removed: string[] }> = [];
     const skipped: Array<{ key: string; reason: string }> = [];
@@ -1171,9 +1187,21 @@ export class OrganizerTools {
       const currentTags = new Set(item.getTags().map((t) => t.tag));
       let toRemove: string[];
       if (entry.headings && entry.headings.length) {
-        toRemove = entry.headings
-          .map((h) => headingTag(h))
-          .filter((t) => currentTags.has(t));
+        const tagsToRemove = new Set<string>();
+        for (const h of entry.headings) {
+          const normKey = h.trim().toLowerCase().replace(/^§\s*/, "");
+          const match =
+            headingLookup.get(normKey) ||
+            headingLookup.get(h.toLowerCase()) ||
+            headingLookup.get(`§${normKey}`);
+          if (match && currentTags.has(match.tag)) {
+            tagsToRemove.add(match.tag);
+          } else {
+            const fallback = headingTag(cleanHeadingTitle(h).title || h);
+            if (currentTags.has(fallback)) tagsToRemove.add(fallback);
+          }
+        }
+        toRemove = Array.from(tagsToRemove);
       } else {
         toRemove = Array.from(currentTags).filter((t) => outlineTags.has(t));
       }
@@ -1194,6 +1222,10 @@ export class OrganizerTools {
         }
       }
       unassigned.push({ key, removed: toRemove });
+    }
+
+    if (!dryRun && unassigned.length > 0) {
+      this.outlineCache.clear();
     }
 
     return ok("organizer_unassign_annotations", {

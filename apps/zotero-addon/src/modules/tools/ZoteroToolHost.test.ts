@@ -4234,6 +4234,36 @@ describe("organizer integration tools", () => {
     assert.deepEqual(env.ann3.tags, ["to-read"]);
   });
 
+  it("organizer_unassign_annotations resolves numbered and path-based headings", async () => {
+    const env = installOrganizerFixture();
+    env.ann3.addTag("§Background");
+
+    // Unassign using numbered heading "1.1 Background"
+    const res = await env.execute("organizer_unassign_annotations", {
+      collection: "Master Thesis",
+      assignments: [{ key: "ANN_3", headings: ["1.1 Background"] }],
+    });
+    assert.equal(res.ok, true);
+    assert.deepEqual(
+      (res.data as { unassigned: unknown[] }).unassigned,
+      [{ key: "ANN_3", removed: ["§Background"] }],
+    );
+    assert.deepEqual(env.ann3.tags, ["to-read"]);
+
+    // Re-add tag and unassign using path "Introduction > Background"
+    env.ann3.addTag("§Background");
+    const resPath = await env.execute("organizer_unassign_annotations", {
+      collection: "Master Thesis",
+      assignments: [{ key: "ANN_3", headings: ["Introduction > Background"] }],
+    });
+    assert.equal(resPath.ok, true);
+    assert.deepEqual(
+      (resPath.data as { unassigned: unknown[] }).unassigned,
+      [{ key: "ANN_3", removed: ["§Background"] }],
+    );
+    assert.deepEqual(env.ann3.tags, ["to-read"]);
+  });
+
   // Regressionsschutz: Die Organizer-Preflight muss auch unter Alias-Namen
   // laufen. Vorher wurde in prepareOrganizerRead/Write gegen den rohen
   // `name` statt des kanonischen Namens verglichen, wodurch der not_found-

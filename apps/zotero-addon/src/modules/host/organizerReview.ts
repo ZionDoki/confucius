@@ -238,8 +238,9 @@ export async function buildOrganizerReview(
         sourceCitation = cachedAnn.workCitation;
     }
 
-    try {
-      if (typeof Zotero !== "undefined" && Zotero.Items) {
+    if (!((sourceTitle || sourceCitation) && quote)) {
+      try {
+        if (typeof Zotero !== "undefined" && Zotero.Items) {
         let item: any =
           (await (Zotero.Items as any).getByLibraryAndKeyAsync?.(
             libraryID,
@@ -327,9 +328,10 @@ export async function buildOrganizerReview(
             sourceCitation = citation;
           }
         }
+        }
+      } catch {
+        // Fallback
       }
-    } catch {
-      // Fallback
     }
 
     const rawHeadings = Array.isArray(entry.headings)

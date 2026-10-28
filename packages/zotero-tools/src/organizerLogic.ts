@@ -171,7 +171,6 @@ export function numbering(roots: OutlineNode[]): Map<string, string> {
 /** Flatten outline tree nodes depth-first into an array with path, depth, and decimal number. */
 export function flattenOutline(roots: OutlineNode[]): FlatHeading[] {
   const out: FlatHeading[] = [];
-  const nums = numbering(roots);
   const walk = (
     nodes: OutlineNode[],
     depth: number,
@@ -187,7 +186,7 @@ export function flattenOutline(roots: OutlineNode[]): FlatHeading[] {
       out.push({
         id: node.id || computedNum,
         title: node.title,
-        num: (node.id && nums.get(node.id)) || computedNum,
+        num: computedNum,
         path: currentPath,
         depth,
         tag: headingTag(node.title),

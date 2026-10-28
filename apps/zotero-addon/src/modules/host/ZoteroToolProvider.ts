@@ -9,6 +9,7 @@ import type { ToolProvider } from "@confucius/harness";
 import { MEMORY_READ_TOOLS, MEMORY_WRITE_TOOLS } from "@confucius/protocol";
 import { TOOL_DEFINITIONS, TOOL_META } from "@confucius/zotero-tools";
 import type { ZoteroToolHost } from "../tools/ZoteroToolHost";
+import { ORGANIZER_TOOL_ALIASES } from "../tools/organizerTools";
 
 export class ZoteroToolProvider implements ToolProvider {
   constructor(private readonly host: ZoteroToolHost) {}
@@ -56,11 +57,3 @@ const MEMORY_TOOL_NAMES = new Set<string>([
   ...MEMORY_READ_TOOLS,
   ...MEMORY_WRITE_TOOLS,
 ]);
-
-const ORGANIZER_TOOL_ALIASES: Record<string, string> = {
-  outline_get: "organizer_get_outline",
-  annotations_list: "organizer_list_annotations",
-  annotation_context: "organizer_get_annotation_context",
-  annotations_assign: "organizer_assign_annotations",
-  annotations_unassign: "organizer_unassign_annotations",
-};
