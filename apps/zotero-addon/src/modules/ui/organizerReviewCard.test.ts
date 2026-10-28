@@ -283,7 +283,7 @@ describe("renderOrganizerReviewCard", () => {
     assert.match(text, /Dissertation/);
     assert.match(text, /2 Vorschläge/);
     assert.match(text, /1\.1 Funktionen des Nachweises/);
-    assert.match(text, /2 Methode/);
+    assert.match(text, /2\.?\s*Methode/);
 
     // Check quote and citation text
     assert.match(text, /Quellenbelege dienen der Nachvollziehbarkeit/);
@@ -708,8 +708,8 @@ describe("renderOrganizerReviewCard", () => {
     const sections = card.querySelectorAll("section");
     assert.equal(sections.length, 2);
     // First section in DOM should be Chapter 1 Grundlagen
-    assert.match(sections[0].textContent, /1 Grundlagen/);
-    assert.match(sections[1].textContent, /2 Spezialprobleme/);
+    assert.match(sections[0].textContent, /1\.?\s*Grundlagen/);
+    assert.match(sections[1].textContent, /2\.?\s*Spezialprobleme/);
   });
 
   it("shows multi-assignment badge (+ § Heading) in grouped view when annotation has multiple headings", () => {

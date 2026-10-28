@@ -1290,21 +1290,16 @@ export function renderOrganizerReviewCard(
       headingTitleRow.appendChild(arrow);
 
       if (group.num) {
-        const numPill = el(doc, "span", {
-          fontSize: "11px",
+        const numLabel = el(doc, "span", {
           fontWeight: "700",
-          fontFamily: "ui-monospace, Consolas, monospace",
-          padding: "2px 8px",
-          borderRadius: "12px",
-          background: "var(--confucius-accent, #805f38)",
-          color: "var(--confucius-primary-ink, #ffffff)",
-          letterSpacing: "0.03em",
-          lineHeight: "1.2",
+          fontSize: "13px",
+          lineHeight: "1.35",
+          color: "var(--confucius-ink, currentColor)",
           flexShrink: "0",
-          boxShadow: "0 1px 2px rgba(0, 0, 0, 0.15)",
         });
-        numPill.textContent = group.num;
-        headingTitleRow.appendChild(numPill);
+        const numText = group.num.includes(".") ? group.num : `${group.num}.`;
+        numLabel.textContent = numText;
+        headingTitleRow.appendChild(numLabel);
         headingTitleRow.append(" ");
       }
 
