@@ -9,6 +9,7 @@ import type { ToolProvider } from "@confucius/harness";
 import { MEMORY_READ_TOOLS, MEMORY_WRITE_TOOLS } from "@confucius/protocol";
 import { TOOL_DEFINITIONS, TOOL_META } from "@confucius/zotero-tools";
 import type { ZoteroToolHost } from "../tools/ZoteroToolHost";
+import { ORGANIZER_TOOL_ALIASES } from "../tools/organizerTools";
 
 export class ZoteroToolProvider implements ToolProvider {
   constructor(private readonly host: ZoteroToolHost) {}
@@ -21,14 +22,17 @@ export class ZoteroToolProvider implements ToolProvider {
     if (MEMORY_TOOL_NAMES.has(name)) {
       return null;
     }
-    return TOOL_META[name] ?? null;
+    const canonicalName = ORGANIZER_TOOL_ALIASES[name] ?? name;
+    return TOOL_META[canonicalName] ?? null;
   }
 
   getSchema(name: string): JsonSchemaObject | undefined {
     if (MEMORY_TOOL_NAMES.has(name)) {
       return undefined;
     }
-    return TOOL_DEFINITIONS.find((tool) => tool.name === name)?.inputSchema;
+    const canonicalName = ORGANIZER_TOOL_ALIASES[name] ?? name;
+    return TOOL_DEFINITIONS.find((tool) => tool.name === canonicalName)
+      ?.inputSchema;
   }
 
   async prepare(

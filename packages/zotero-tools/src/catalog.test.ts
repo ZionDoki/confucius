@@ -106,3 +106,49 @@ test("annotation tools expose native anchors alongside the compatible draft cont
   assert.ok(!entries.items.required.includes("page"));
   assert.ok(!entries.items.required.includes("type"));
 });
+
+test("organizer tools are defined, typed, and correctly classified for reading/writing", () => {
+  const readTools = [
+    "organizer_get_outline",
+    "organizer_list_annotations",
+    "organizer_get_annotation_context",
+  ];
+  const writeTools = [
+    "organizer_assign_annotations",
+    "organizer_unassign_annotations",
+  ];
+
+  for (const name of readTools) {
+    assert.ok(
+      TOOL_DEFINITIONS.some((t) => t.name === name),
+      `Missing tool definition: ${name}`,
+    );
+    assert.equal(READ_ONLY_TOOL_NAMES.has(name), true);
+    assert.equal(WRITE_TOOL_NAMES.has(name), false);
+    assert.equal(TOOL_META[name]?.mutatesState, false);
+    assert.equal(TOOL_META[name]?.concurrency, "parallel_safe");
+  }
+
+  for (const name of writeTools) {
+    assert.ok(
+      TOOL_DEFINITIONS.some((t) => t.name === name),
+      `Missing tool definition: ${name}`,
+    );
+    assert.equal(WRITE_TOOL_NAMES.has(name), true);
+    assert.equal(READ_ONLY_TOOL_NAMES.has(name), false);
+    assert.equal(TOOL_META[name]?.mutatesState, true);
+    assert.equal(TOOL_META[name]?.concurrency, "serial");
+  }
+
+  const assign = TOOL_DEFINITIONS.find(
+    (t) => t.name === "organizer_assign_annotations",
+  )!;
+  assert.ok(assign);
+  assert.deepEqual(assign.inputSchema.required, ["collection", "assignments"]);
+
+  const list = TOOL_DEFINITIONS.find(
+    (t) => t.name === "organizer_list_annotations",
+  )!;
+  assert.ok(list);
+  assert.deepEqual(list.inputSchema.required, ["collection"]);
+});

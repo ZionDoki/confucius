@@ -4,6 +4,8 @@
  * Pure; the caller injects a title resolver backed by Zotero.
  */
 
+import { describeOrganizerApproval } from "./organizerApprovalSummary";
+
 export interface SummaryItemLike {
   /** Resolved display title for the referenced item. */
   title: string;
@@ -90,6 +92,9 @@ export function describeCallForApproval(
     ref && resolveItem
       ? (resolveItem(ref.libraryID, ref.key)?.title ?? "")
       : "";
+
+  const organizerSummary = describeOrganizerApproval(toolName, args, language);
+  if (organizerSummary) return organizerSummary;
 
   if (
     [

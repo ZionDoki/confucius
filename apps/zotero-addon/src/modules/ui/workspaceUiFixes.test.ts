@@ -6,6 +6,7 @@ import {
   createModelSaveScheduler,
   endpointModelPatch,
 } from "../preferences/prefsPane";
+import { fileURLToPath } from "node:url";
 import {
   createArtifactList,
   createPermissionSendGate,
@@ -16,9 +17,9 @@ import {
   type PermissionMode,
 } from "./workspaceTasks";
 
-const uiDirectory = decodeURIComponent(new URL("./", import.meta.url).pathname);
-const preferencesDirectory = decodeURIComponent(
-  new URL("../preferences/", import.meta.url).pathname,
+const uiDirectory = fileURLToPath(new URL("./", import.meta.url).href);
+const preferencesDirectory = fileURLToPath(
+  new URL("../preferences/", import.meta.url).href,
 );
 
 function source(name: string): string {

@@ -267,6 +267,11 @@ import {
 import type { McpServerConfig } from "@confucius/mcp-client";
 import pkg from "../../../package.json";
 import {
+  buildOrganizerReview,
+  isOrganizerReviewTool,
+  type OrganizerReviewSource,
+} from "./organizerReview";
+import {
   configuredUiLanguage,
   getString,
   initLocale,
@@ -853,6 +858,17 @@ export class AgentHost {
   readonly skills = new SkillStore();
   private readonly modelCatalog = new ModelCatalog(hostFetch);
   readonly tools = new ZoteroToolHost();
+
+  /**
+   * Quelle für die Organizer-Review-Karte: `ZoteroToolHost.organizer` in
+   * Produktion, in Tests ein Mock-Objekt mit denselben optionalen Methoden.
+   */
+  private organizerSource(): OrganizerReviewSource | undefined {
+    const tools = this.tools as unknown as {
+      organizer?: OrganizerReviewSource;
+    } & OrganizerReviewSource;
+    return tools.organizer ?? tools;
+  }
   private readonly openAlex = new OpenAlexClient(() =>
     String(getPref("openAlexApiKey") || ""),
   );
@@ -5106,7 +5122,7 @@ export class AgentHost {
     );
   }
 
-  private requestToolApproval(
+  private async requestToolApproval(
     state: SessionState,
     turnId: string,
     callId: string,
@@ -5114,14 +5130,17 @@ export class AgentHost {
     args: Record<string, unknown>,
   ): Promise<ApprovalResolution> {
     if (state.record.permissionMode === "deny") {
-      return Promise.resolve({ id: callId, verdict: "deny", scope: "once" });
+      return { id: callId, verdict: "deny", scope: "once" };
     }
     if (
       state.record.permissionMode === "auto_allow" ||
       state.sessionGrants.has(toolName) ||
       this.alwaysAllowedTools().has(toolName)
     )
-      return Promise.resolve({ id: callId, verdict: "allow", scope: "once" });
+      return { id: callId, verdict: "allow", scope: "once" };
+    const organizerReview = isOrganizerReviewTool(toolName)
+      ? await buildOrganizerReview(this.organizerSource(), toolName, args)
+      : undefined;
     const id = newApprovalId();
     const request: ApprovalRequest = {
       id,
@@ -5136,6 +5155,7 @@ export class AgentHost {
       kind: "tool",
       before: "No Zotero changes applied",
       after: formatChangePreview(toolName, args),
+      organizerReview,
     };
     state.record.status = "awaiting_approval";
     this.emitSessionEvent(state, turnId, "approval_required", { request });
@@ -5671,10 +5691,19 @@ export class AgentHost {
     }
     if (target === "zotero_annotations") {
       const attachment = Zotero.Items.getByLibraryAndKey(libraryID, right);
-      const annotations: Zotero.Item[] =
-        attachment && attachment.isAttachment()
-          ? attachment.getAnnotations(false)
-          : [];
+      let annotations: Zotero.Item[] = [];
+      if (
+        attachment &&
+        attachment.isAttachment() &&
+        (typeof attachment.isFileAttachment !== "function" ||
+          attachment.isFileAttachment())
+      ) {
+        try {
+          annotations = attachment.getAnnotations?.(false) ?? [];
+        } catch {
+          annotations = [];
+        }
+      }
       return annotations.length
         ? annotations
             .map(
@@ -8282,6 +8311,23 @@ export class AgentHost {
             : name.startsWith("mcp.")
               ? "mcp"
               : "read",
+      enrichRequest: async (request) => {
+        request.summary = this.describeApprovalCall(
+          request.toolName,
+          request.args,
+        );
+        request.origin = state.record.backend;
+        request.kind = "tool";
+        request.before = "No Zotero changes applied";
+        request.after = formatChangePreview(request.toolName, request.args);
+        if (isOrganizerReviewTool(request.toolName)) {
+          request.organizerReview = await buildOrganizerReview(
+            this.organizerSource(),
+            request.toolName,
+            request.args,
+          );
+        }
+      },
       resolve: (request) =>
         new Promise((resolve) =>
           this.pendingApprovals.set(request.id, {

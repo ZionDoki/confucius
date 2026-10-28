@@ -13,6 +13,7 @@ export interface PermissionGateOptions {
   resolve?: (
     request: ApprovalRequest,
   ) => Promise<ApprovalResolution> | ApprovalResolution;
+  enrichRequest?: (request: ApprovalRequest) => Promise<void> | void;
   ids: IdFactory;
   now: () => number;
 }
@@ -55,6 +56,14 @@ export class PermissionGate {
       riskLevel: this.options.riskFor(input.toolName),
       createdAt: this.options.now(),
     };
+
+    if (this.options.enrichRequest) {
+      try {
+        await this.options.enrichRequest(request);
+      } catch {
+        // Enrichment failures must not block the approval request
+      }
+    }
 
     // Surface the request before waiting for the UI to resolve it. Emitting
     // only after `resolve` completes deadlocks interactive approval flows:
