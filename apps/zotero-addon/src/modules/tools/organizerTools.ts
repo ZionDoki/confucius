@@ -20,7 +20,6 @@ import {
   TOOL_META,
   buildHeadingLookup,
   extractSurroundingContext,
-  flattenOutline,
   headingTag,
   outlineCollectionTag,
   parseOutline,
@@ -58,6 +57,55 @@ function asCollection(value: unknown): Zotero.Collection | null {
   }
   return value as Zotero.Collection;
 }
+
+/**
+ * Flatten outline tree nodes depth-first without computing decimal numbers.
+ * Fallback when the FlexAnnotate plugin interface is absent: we do not
+ * reimplement canonical numbering, so `num` is left empty.
+ */
+function flattenTreeWithoutNumbers(roots: OutlineNode[]): FlatHeading[] {
+  const out: FlatHeading[] = [];
+  const walk = (nodes: OutlineNode[], depth: number, parentPath: string) => {
+    for (const node of nodes) {
+      const path = parentPath ? `${parentPath} > ${node.title}` : node.title;
+      out.push({
+        id: node.id,
+        title: node.title,
+        num: "",
+        path,
+        depth,
+        tag: headingTag(node.title),
+      });
+      walk(node.children || [], depth + 1, path);
+    }
+  };
+  walk(roots, 0, "");
+  return out;
+}
+
+function isFlatHeadingShape(value: unknown): value is FlatHeading {
+  if (!value || typeof value !== "object") return false;
+  const h = value as FlatHeading;
+  return (
+    typeof h.id === "string" &&
+    typeof h.title === "string" &&
+    typeof h.num === "string" &&
+    typeof h.path === "string" &&
+    typeof h.depth === "number" &&
+    typeof h.tag === "string"
+  );
+}
+
+function isOutlineRootShape(value: unknown): value is OutlineNode {
+  if (!value || typeof value !== "object") return false;
+  const n = value as OutlineNode;
+  return (
+    typeof n.id === "string" &&
+    typeof n.title === "string" &&
+    Array.isArray(n.children)
+  );
+}
+
 
 function defaultLibraryID(args: Record<string, unknown>): number {
   if (typeof args.libraryID === "number" && Number.isInteger(args.libraryID)) {
@@ -200,21 +248,9 @@ export async function prepareOrganizerWrite(
     return reject("assignments must be an array");
 
   try {
-    const topmost = organizer.getTopmostCollection(col);
-    const note = await organizer.findOutlineNote(libraryID, topmost.key);
-    if (note) {
-      const roots = parseOutline(note.getNote?.() || "");
-      const headings = flattenOutline(roots);
-      organizer.cacheOutline(libraryID, topmost.key, roots, headings);
-      if (col.key !== topmost.key) {
-        organizer.cacheOutline(libraryID, col.key, roots, headings);
-      }
-      if (colRef) {
-        organizer.cacheOutline(libraryID, colRef, roots, headings);
-      }
-    }
+    await organizer.resolveOutline(libraryID, colRef);
   } catch {
-    // Outline caching during prepare is best-effort
+    // Outline resolution during prepare is best-effort
   }
 
   const resources = [`zotero-collection:${col.libraryID}:${col.key}`];
@@ -281,10 +317,6 @@ export function prepareOrganizerRead(
  * Annotation-Cache und implementiert die fünf Tools gegen die Zotero-API.
  */
 export class OrganizerTools {
-  private outlineCache = new Map<
-    string,
-    { roots: OutlineNode[]; headings: FlatHeading[] }
-  >();
 
   private annotationCache = new Map<
     string,
@@ -320,68 +352,80 @@ export class OrganizerTools {
     return this.annotationCache.get(key);
   }
 
-  public cacheOutline(
+  /**
+   * Read the outline from the Flex Annotate public plugin interface
+   * (Zotero.FlexAnnotate.api) when it is installed. Returns null when the plugin
+   * is absent or the call fails, so the caller falls back to its own parsing.
+   */
+  private async flexAnnotateOutlineAsync(
     libraryID: number,
-    keyOrRef: string | null | undefined,
-    roots: OutlineNode[],
-    headings: FlatHeading[],
-  ): void {
-    const norm = (keyOrRef ?? "").trim().toLowerCase();
-    this.outlineCache.set(`${libraryID}:${norm}`, { roots, headings });
-  }
-
-  public getOutlineCache(
-    libraryID: number,
-    colRef?: string | null,
-  ): { roots: OutlineNode[]; headings: FlatHeading[] } | undefined {
-    const ref = (colRef ?? "").trim();
-    if (ref) {
-      const direct = this.outlineCache.get(`${libraryID}:${ref.toLowerCase()}`);
-      if (direct) return direct;
-      const col = this.getCollectionByRef(libraryID, ref);
-      if (col) {
-        const byKey = this.outlineCache.get(
-          `${libraryID}:${col.key.toLowerCase()}`,
-        );
-        if (byKey) return byKey;
-        const topmost = this.getTopmostCollection(col);
-        const byTop = this.outlineCache.get(
-          `${libraryID}:${topmost.key.toLowerCase()}`,
-        );
-        if (byTop) return byTop;
-        const colItems = (col as any).getChildItems?.() ?? [];
-        const topItems = (topmost as any).getChildItems?.() ?? [];
-        const note = [...colItems, ...topItems].find(
-          (it: any) =>
-            it &&
-            typeof it.isNote === "function" &&
-            it.isNote() &&
-            it.getTags?.().some((t: any) => t.tag === OUTLINE_TAG),
-        );
-        if (note) {
-          const roots = parseOutline(note.getNote?.() || "");
-          const headings = flattenOutline(roots);
-          this.cacheOutline(libraryID, col.key, roots, headings);
-          this.cacheOutline(libraryID, topmost.key, roots, headings);
-          return { roots, headings };
-        }
+    collectionKey: string | null,
+  ): Promise<{ roots: OutlineNode[]; headings: FlatHeading[] } | null> {
+    try {
+      const api = (Zotero as any).FlexAnnotate?.api;
+      // Only trust the shared contract when the plugin declares the version we
+      // were written against; anything else falls back to the storage note.
+      if (
+        !api ||
+        typeof api.getHeadings !== "function" ||
+        (typeof api.apiVersion === "number" && api.apiVersion !== 1)
+      ) {
+        return null;
       }
+      const [headings, outline] = await Promise.all([
+        api.getHeadings(libraryID, collectionKey),
+        api.getOutline(libraryID, collectionKey),
+      ]);
+      if (!Array.isArray(headings) || !Array.isArray(outline?.roots)) {
+        return null;
+      }
+      // The FlexAnnotate plugin returns its own heading/outline objects, which
+      // declare a 1:1 shape match. We still validate the fields we consume so
+      // a contract drift degrades to the note fallback instead of a misread.
+      if (!headings.every(isFlatHeadingShape)) return null;
+      const roots = outline.roots as unknown[];
+      if (!roots.every(isOutlineRootShape)) return null;
+      return { roots: roots as OutlineNode[], headings };
+    } catch {
+      return null;
     }
-    return (
-      this.outlineCache.get(`${libraryID}:`) ??
-      this.outlineCache.get(`${libraryID}:all`)
-    );
   }
 
   /**
-   * Asynchronously resolve outline hierarchy from cache or by finding the outline note.
+   * Fallback that reads the outline from the storage note when the FlexAnnotate
+   * plugin interface is unavailable. We only flatten the headings (title, path,
+   * depth, tag) and leave `num` empty: without the plugin we deliberately do not
+   * reimplement the canonical decimal numbering, so numbers are simply absent.
+   */
+  private async outlineFromNote(
+    libraryID: number,
+    topmostKey: string | null,
+    colKey: string | null,
+  ): Promise<{ roots: OutlineNode[]; headings: FlatHeading[] } | null> {
+    let note = await this.findOutlineNote(libraryID, topmostKey);
+    if (!note && colKey && colKey !== topmostKey) {
+      note = await this.findOutlineNote(libraryID, colKey);
+    }
+    if (!note) {
+      note = await this.findOutlineNote(libraryID, null);
+    }
+    if (!note) return null;
+    const roots = parseOutline(note.getNote?.() || "");
+    return { roots, headings: flattenTreeWithoutNumbers(roots) };
+  }
+
+  /**
+   * Resolve the organizer outline by reading it fresh from the Flex Annotate
+   * plugin interface, or falling back to the storage note. The note fallback
+   * yields heading names/paths/tags but never numbers. No caching: the plugin
+   * interface is an in-process source and each organizer tool resolves the
+   * outline once per call (batch assignment resolves it once for the whole
+   * batch), so each call reads the current state.
    */
   public async resolveOutline(
     libraryID: number,
     colRef?: string | null,
   ): Promise<{ roots: OutlineNode[]; headings: FlatHeading[] } | undefined> {
-    const cached = this.getOutlineCache(libraryID, colRef);
-    if (cached) return cached;
     let col: Zotero.Collection | null = null;
     let topmostKey: string | null = null;
     const ref = (colRef ?? "").trim();
@@ -392,48 +436,26 @@ export class OrganizerTools {
         topmostKey = topmost.key;
       }
     }
-    let note = await this.findOutlineNote(libraryID, topmostKey);
-    if (!note && col?.key && col.key !== topmostKey) {
-      note = await this.findOutlineNote(libraryID, col.key);
-    }
-    if (!note && col) {
-      const colItems = (col as any).getChildItems?.() ?? [];
-      const topItems =
-        topmostKey && topmostKey !== col.key
-          ? ((
-              this.getCollectionByRef(libraryID, topmostKey) as any
-            )?.getChildItems?.() ?? [])
-          : [];
-      note =
-        [...colItems, ...topItems].find(
-          (it: any) =>
-            it &&
-            typeof it.isNote === "function" &&
-            it.isNote() &&
-            it.getTags?.().some((t: any) => t.tag === OUTLINE_TAG),
-        ) ?? null;
-    }
-    if (!note) {
-      note = await this.findOutlineNote(libraryID, null);
-    }
-    if (!note) {
-      return undefined;
-    }
-    const roots = parseOutline(note.getNote?.() || "");
-    const headings = flattenOutline(roots);
+    // The Flex Annotate public interface is the preferred source: it gives us
+    // the canonical numbers, paths and tags without reimplementing parse/number.
+    const fromApi = await this.flexAnnotateOutlineAsync(
+      libraryID,
+      topmostKey ?? null,
+    );
+    // A concrete collection without an outline of its own falls back to the
+    // library-wide outline instead of reporting an empty result.
+    if (fromApi?.roots.length) return fromApi;
     if (topmostKey) {
-      this.cacheOutline(libraryID, topmostKey, roots, headings);
+      const libraryWide = await this.flexAnnotateOutlineAsync(libraryID, null);
+      if (libraryWide?.roots.length) return libraryWide;
     }
-    if (col?.key) {
-      this.cacheOutline(libraryID, col.key, roots, headings);
-    }
-    if (ref) {
-      this.cacheOutline(libraryID, ref, roots, headings);
-    }
-    if (!topmostKey && !col?.key) {
-      this.cacheOutline(libraryID, "", roots, headings);
-    }
-    return { roots, headings };
+    // Fallback: read the storage note without reimplementing numbering.
+    const fromNote = await this.outlineFromNote(
+      libraryID,
+      topmostKey,
+      col?.key ?? null,
+    );
+    return fromNote ?? undefined;
   }
 
   /** Look up a collection by key, or by name or id if key lookup fails. */
@@ -616,41 +638,31 @@ export class OrganizerTools {
       topmostKey = topmost.key;
     }
 
-    const note = await this.findOutlineNote(libraryID, topmostKey);
-    if (!note) {
+    // Read the outline from the FlexAnnotate plugin API when present, falling
+    // back to the storage note (heading names/paths/tags, no numbers) when the
+    // plugin is unavailable.
+    const resolved = await this.resolveOutline(libraryID, colRef || null);
+    if (!resolved) {
       if (topmostKey) {
         return fail(
           "organizer_get_outline",
           "not_found",
-          `No Flex Annotations outline found for collection "${colRef}" (topmost: ${topmostKey}). Please create an outline in Organizer first.`,
+          `No Flex Annotations outline found for collection "${colRef}" (topmost: ${topmostKey}). Create an outline in FlexAnnotate first.`,
         );
       }
       return fail(
         "organizer_get_outline",
         "not_found",
-        "No library-wide Flex Annotations outline found.",
+        "No library-wide Flex Annotations outline found. Create an outline in FlexAnnotate first.",
       );
     }
 
-    const roots = parseOutline(note.getNote?.() || "");
-    const headings = flattenOutline(roots);
-
-    this.cacheOutline(libraryID, topmostKey, roots, headings);
-    if (col?.key) {
-      this.cacheOutline(libraryID, col.key, roots, headings);
-    }
-    if (colRef) {
-      this.cacheOutline(libraryID, colRef, roots, headings);
-    }
-    if (!topmostKey) {
-      this.cacheOutline(libraryID, "", roots, headings);
-    }
+    const { roots, headings } = resolved;
 
     return ok("organizer_get_outline", {
       libraryID,
       collectionKey: col?.key ?? null,
       topmostCollectionKey: topmostKey,
-      noteKey: note.key,
       headings,
       outline: headings,
       roots,
@@ -683,17 +695,9 @@ export class OrganizerTools {
     const topmost = this.getTopmostCollection(col);
     const scopeColIDs = this.getCollectionScopeIDs(libraryID, topmost);
 
-    const note = await this.findOutlineNote(libraryID, topmost.key);
-    const roots = note ? parseOutline(note.getNote?.() || "") : [];
-    const outlineHeadings = flattenOutline(roots);
+    const resolved = await this.resolveOutline(libraryID, colRef);
+    const outlineHeadings = resolved?.headings ?? [];
     const outlineTags = new Set(outlineHeadings.map((h) => h.tag));
-    this.cacheOutline(libraryID, topmost.key, roots, outlineHeadings);
-    if (col.key !== topmost.key) {
-      this.cacheOutline(libraryID, col.key, roots, outlineHeadings);
-    }
-    if (colRef) {
-      this.cacheOutline(libraryID, colRef, roots, outlineHeadings);
-    }
 
     const unassignedOnly = args.unassignedOnly !== false;
 
@@ -912,17 +916,15 @@ export class OrganizerTools {
     const topmost = this.getTopmostCollection(col);
     const scopeColIDs = this.getCollectionScopeIDs(libraryID, topmost);
 
-    const note = await this.findOutlineNote(libraryID, topmost.key);
-    if (!note) {
+    const resolved = await this.resolveOutline(libraryID, colRef);
+    if (!resolved) {
       return fail(
         "organizer_assign_annotations",
         "not_found",
-        `No organizer outline found for collection "${colRef}". Create an outline first.`,
+        `No organizer outline found for collection "${colRef}". Create an outline in FlexAnnotate first.`,
       );
     }
-
-    const roots = parseOutline(note.getNote?.() || "");
-    const headingLookup = buildHeadingLookup(roots);
+    const headingLookup = buildHeadingLookup(resolved.headings);
 
     const assigned: Array<{ key: string; added: string[] }> = [];
     const skipped: Array<{ key: string; reason: string }> = [];
@@ -1059,10 +1061,8 @@ export class OrganizerTools {
     }
 
     const dryRun = Boolean(args.dryRun);
-    const topmost = this.getTopmostCollection(col);
-    const note = await this.findOutlineNote(libraryID, topmost.key);
-    const roots = note ? parseOutline(note.getNote?.() || "") : [];
-    const outlineTags = new Set(flattenOutline(roots).map((h) => h.tag));
+    const resolved = await this.resolveOutline(libraryID, colRef);
+    const outlineTags = new Set((resolved?.headings ?? []).map((h) => h.tag));
 
     const unassigned: Array<{ key: string; removed: string[] }> = [];
     const skipped: Array<{ key: string; reason: string }> = [];

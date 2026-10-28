@@ -5137,6 +5137,7 @@ export class AgentHost {
       state.sessionGrants.has(toolName) ||
       this.alwaysAllowedTools().has(toolName)
     )
+      return { id: callId, verdict: "allow", scope: "once" };
     const organizerReview = isOrganizerReviewTool(toolName)
       ? await buildOrganizerReview(this.organizerSource(), toolName, args)
       : undefined;

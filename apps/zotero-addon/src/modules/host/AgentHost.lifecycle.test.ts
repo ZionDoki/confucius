@@ -4018,6 +4018,8 @@ it("does not persist a planned note key after an unknown write outcome", async (
   } finally {
     Reflect.set(globalThis, "Zotero", previous);
   }
+});
+
 
 it("requestToolApproval builds async organizer review with outline numbering and item metadata", async (t) => {
   const previousZotero = Reflect.get(globalThis, "Zotero");
@@ -4171,7 +4173,7 @@ it("requestToolApproval builds async organizer review with outline numbering and
   assert.equal(req.organizerReview.items[0].reason, "Passt zur Relevanz.");
 
   (host as any).approvalResolve({
-    id: "approval_call-1",
+    id: req.id,
     verdict: "allow",
     scope: "once",
   });

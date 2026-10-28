@@ -3655,6 +3655,92 @@ describe("organizer integration tools", () => {
     };
 
     (globalThis as unknown as { Zotero: unknown }).Zotero = zotero;
+
+    // ZoteroToolHost reads the organizer outline through the FlexAnnotate
+    // plugin interface. Provide a fake Zotero.FlexAnnotate.api mirroring the
+    // fixture's outline notes (COL_ROOT + subcollections -> 4 headings,
+    // library-wide -> General). This keeps the organizer tool tests running
+    // against the API-backed path.
+    const colRootHeadings = [
+      {
+        id: "node_1",
+        num: "1",
+        title: "Introduction",
+        path: "Introduction",
+        depth: 0,
+        tag: "§Introduction",
+      },
+      {
+        id: "node_1_1",
+        num: "1.1",
+        title: "Background",
+        path: "Introduction > Background",
+        depth: 1,
+        tag: "§Background",
+      },
+      {
+        id: "node_1_2",
+        num: "1.2",
+        title: "Research Questions",
+        path: "Introduction > Research Questions",
+        depth: 1,
+        tag: "§Research Questions",
+      },
+      {
+        id: "node_2",
+        num: "2",
+        title: "Methods",
+        path: "Methods",
+        depth: 0,
+        tag: "§Methods",
+      },
+    ];
+    const colRootOutline = {
+      roots: [
+        {
+          id: "node_1",
+          title: "Introduction",
+          children: [
+            { id: "node_1_1", title: "Background", children: [] },
+            { id: "node_1_2", title: "Research Questions", children: [] },
+          ],
+        },
+        { id: "node_2", title: "Methods", children: [] },
+      ],
+    };
+    const libOutline = {
+      roots: [{ id: "lib_1", title: "General", children: [] }],
+    };
+    const empty = { roots: [] };
+    (
+      globalThis as unknown as { Zotero: Record<string, unknown> }
+    ).Zotero.FlexAnnotate = {
+      api: {
+        apiVersion: 1,
+        pluginID: "flexannotate@justanotherjurastudent.github.io",
+        async getHeadings(_lib: number, colKey: string | null) {
+          if (colKey === "COL_ROOT") return colRootHeadings;
+          if (colKey === null || colKey === undefined)
+            return [
+              {
+                id: "lib_1",
+                num: "1",
+                title: "General",
+                path: "General",
+                depth: 0,
+                tag: "§General",
+              },
+            ];
+          // Any other collection key has no outline -> empty.
+          return [];
+        },
+        async getOutline(_lib: number, colKey: string | null) {
+          if (colKey === "COL_ROOT") return colRootOutline;
+          if (colKey === null || colKey === undefined) return libOutline;
+          return empty;
+        },
+      },
+    };
     const host = new ZoteroToolHost(storage);
     const service = new ToolExecutionService(memoryJsonStorage(), (op) =>
       host.reconcile(op),
@@ -3700,7 +3786,6 @@ describe("organizer integration tools", () => {
     };
     assert.equal(data.collectionKey, "COL_ROOT");
     assert.equal(data.topmostCollectionKey, "COL_ROOT");
-    assert.equal(data.noteKey, "NOTE_OUTLINE");
     assert.equal(data.outline.length, 4);
     assert.deepEqual(data.outline[0], {
       id: "node_1",
@@ -3781,12 +3866,17 @@ describe("organizer integration tools", () => {
     assert.equal(aliasRes.ok, true);
     assert.equal((aliasRes.data as { outline: unknown[] }).outline.length, 4);
 
-    // Collection with no outline note reports not_found
+    // Collection without its own outline falls back to the library-wide
+    // outline (heading names without numbers when only the note is available).
     const emptyRes = await env.execute("organizer_get_outline", {
       collection: "COL_UNRELATED",
     });
-    assert.equal(emptyRes.ok, false);
-    assert.equal((emptyRes as any).code, "not_found");
+    assert.equal(emptyRes.ok, true);
+    assert.equal((emptyRes.data as { outline: unknown[] }).outline.length, 1);
+    assert.equal(
+      (emptyRes.data as { outline: Array<{ title: string }> }).outline[0].title,
+      "General",
+    );
 
     // Nonexistent collection
     const notFound = await env.execute("organizer_get_outline", {
@@ -3794,6 +3884,90 @@ describe("organizer integration tools", () => {
     });
     assert.equal(notFound.ok, false);
     assert.equal((notFound as any).code, "not_found");
+  });
+
+  it("organizer_get_outline prefers the FlexAnnotate plugin API when installed", async () => {
+    const env = installOrganizerFixture();
+
+    // Inject a fake FlexAnnotate plugin interface (what flexAnnotations exposes
+    // as Zotero.FlexAnnotate.api) and give it outline data that differs from
+    // the fixture's note, so we can tell which source won.
+    const apiHeadings = [
+      {
+        id: "api-heading-1",
+        num: "1",
+        title: "From API",
+        path: "From API",
+        depth: 0,
+        tag: "§From API",
+      },
+    ];
+    const apiOutline = {
+      roots: [{ id: "api-heading-1", title: "From API", children: [] }],
+    };
+    const apiCalls: string[] = [];
+    (
+      globalThis as unknown as { Zotero: Record<string, unknown> }
+    ).Zotero.FlexAnnotate = {
+      api: {
+        apiVersion: 1,
+        pluginID: "flexannotate@example",
+        async getHeadings(lib: number, colKey: string | null) {
+          apiCalls.push(`headings:${lib}:${colKey}`);
+          return apiHeadings;
+        },
+        async getOutline(lib: number, colKey: string | null) {
+          apiCalls.push(`outline:${lib}:${colKey}`);
+          return apiOutline;
+        },
+      },
+    };
+
+    const res = await env.execute("organizer_get_outline", {});
+    assert.equal(res.ok, true);
+    const data = res.data as { outline: Array<{ title: string }> };
+    // The API result wins, not the fixture's library-wide outline note.
+    assert.equal(data.outline.length, 1);
+    assert.equal(data.outline[0].title, "From API");
+    // Both read methods were invoked with the library-wide key (null).
+    assert.ok(apiCalls.includes("headings:1:null"));
+    assert.ok(apiCalls.includes("outline:1:null"));
+
+    // Tear down so the next test does not inherit the fake.
+    delete (globalThis as unknown as { Zotero: Record<string, unknown> }).Zotero
+      .FlexAnnotate;
+  });
+
+  it("organizer_get_outline falls back to the storage note (names, no numbers) without the FlexAnnotate API", async () => {
+    const env = installOrganizerFixture();
+
+    // Remove the fake plugin interface to force the note fallback path.
+    delete (globalThis as unknown as { Zotero: Record<string, unknown> }).Zotero
+      .FlexAnnotate;
+
+    const res = await env.execute("organizer_get_outline", {
+      collection: "COL_ROOT",
+    });
+    assert.equal(res.ok, true);
+    const data = res.data as {
+      outline: Array<{
+        id: string;
+        title: string;
+        num: string;
+        path: string;
+        depth: number;
+        tag: string;
+      }>;
+    };
+    // Headings come from the outline note with their names/paths/tags...
+    assert.equal(data.outline.length, 4);
+    assert.equal(data.outline[0].title, "Introduction");
+    assert.equal(data.outline[0].tag, "§Introduction");
+    assert.equal(data.outline[1].path, "Introduction > Background");
+    // ...but WITHOUT decimal numbers (no reimplemented numbering).
+    for (const h of data.outline) {
+      assert.equal(h.num, "");
+    }
   });
 
   it("organizer_list_annotations filters by collection scope and assignment status, supporting annotations_list alias", async () => {

@@ -477,7 +477,7 @@ test("long model rounds expose their real stage after tool results", () => {
   const tools = readFileSync(
     join(root, "src/modules/tools/ZoteroToolHost.ts"),
     "utf8",
-  );
+  ).replace(/\r\n/g, "\n");
   assert.match(tools, /renderingLocks/);
   assert.match(tools, /renderingAllowed/);
   assert.match(view, /tool_progress/);
@@ -689,7 +689,7 @@ test("tasks preserve their sources and expose context controls", () => {
   const tools = readFileSync(
     join(root, "src/modules/tools/ZoteroToolHost.ts"),
     "utf8",
-  );
+  ).replace(/\r\n/g, "\n");
   const rpc = readFileSync(
     join(root, "../../packages/protocol/src/rpc.ts"),
     "utf8",
@@ -777,7 +777,7 @@ test("reading loop: selection menu, locate links and write-back navigation", () 
   const tools = readFileSync(
     join(root, "src/modules/tools/ZoteroToolHost.ts"),
     "utf8",
-  );
+  ).replace(/\r\n/g, "\n");
   const host = readFileSync(
     join(root, "src/modules/host/AgentHost.ts"),
     "utf8",
@@ -856,7 +856,7 @@ test("triage entry and knowledge output: item menu, launch queue, propose_note",
   const tools = readFileSync(
     join(root, "src/modules/tools/ZoteroToolHost.ts"),
     "utf8",
-  );
+  ).replace(/\r\n/g, "\n");
   const catalog = readFileSync(
     join(root, "../../packages/zotero-tools/src/catalog.ts"),
     "utf8",
@@ -979,7 +979,7 @@ test("zotero uri links render as underlined anchors and navigate on click", () =
   const tools = readFileSync(
     join(root, "src/modules/tools/ZoteroToolHost.ts"),
     "utf8",
-  );
+  ).replace(/\r\n/g, "\n");
   const catalog = readFileSync(
     join(root, "../../packages/zotero-tools/src/catalog.ts"),
     "utf8",
