@@ -3529,6 +3529,16 @@ describe("organizer integration tools", () => {
     work1.attachments.push(att1.id);
     registerItem(att1);
 
+    // Non-file attachment (e.g. linked URL / snapshot link) where getAnnotations throws in Zotero
+    const linkedUrlAtt = new FakeItem("attachment", "ATT_LINKED_URL");
+    linkedUrlAtt.parentItemID = work1.id;
+    linkedUrlAtt.isFileAttachment = () => false;
+    linkedUrlAtt.getAnnotations = () => {
+      throw new Error("getAnnotations() can only be called on file attachments");
+    };
+    work1.attachments.push(linkedUrlAtt.id);
+    registerItem(linkedUrlAtt);
+
     const ann1 = new FakeItem("annotation", "ANN_1");
     ann1.parentItemID = att1.id;
     ann1.annotationText = "Legal rules require explicit definitions.";
@@ -4027,6 +4037,17 @@ describe("organizer integration tools", () => {
     });
     assert.equal(aliasRes.ok, true);
     assert.equal((aliasRes.data as { total: number }).total, 4);
+  });
+
+  it("organizer_list_annotations safely skips non-file attachments (linked URLs) without throwing", async () => {
+    const env = installOrganizerFixture();
+    const res = await env.execute("organizer_list_annotations", {
+      collection: "COL_ROOT",
+    });
+    assert.equal(res.ok, true);
+    const data = res.data as { total: number };
+    // Still lists all annotations from file attachments while ignoring ATT_LINKED_URL
+    assert.equal(data.total, 4);
   });
 
   it("organizer_get_annotation_context returns surrounding fulltext and supports annotation_context alias", async () => {

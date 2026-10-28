@@ -5691,10 +5691,19 @@ export class AgentHost {
     }
     if (target === "zotero_annotations") {
       const attachment = Zotero.Items.getByLibraryAndKey(libraryID, right);
-      const annotations: Zotero.Item[] =
-        attachment && attachment.isAttachment()
-          ? attachment.getAnnotations(false)
-          : [];
+      let annotations: Zotero.Item[] = [];
+      if (
+        attachment &&
+        attachment.isAttachment() &&
+        (typeof attachment.isFileAttachment !== "function" ||
+          attachment.isFileAttachment())
+      ) {
+        try {
+          annotations = attachment.getAnnotations?.(false) ?? [];
+        } catch {
+          annotations = [];
+        }
+      }
       return annotations.length
         ? annotations
             .map(

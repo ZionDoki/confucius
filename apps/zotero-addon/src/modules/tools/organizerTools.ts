@@ -725,16 +725,32 @@ export class OrganizerTools {
 
     for (const work of works) {
       if (!work || work.isNote?.() || work.isAnnotation?.()) continue;
-      const attachments = work.isAttachment?.()
+      const isAtt = Boolean(work.isAttachment?.());
+      const effectiveWork =
+        isAtt && work.parentItemID
+          ? asItem(Zotero.Items.get(work.parentItemID)) ?? work
+          : work;
+      const attachments = isAtt
         ? [work]
         : ((await Zotero.Items.getAsync(
             (work.getAttachments?.() ?? []) as number[],
           )) as Zotero.Item[]);
       for (const attachment of attachments) {
         if (!attachment || !attachment.isAttachment?.()) continue;
-        const annIDs = (attachment.getAnnotations?.(false) ?? []) as Array<
-          number | Zotero.Item
-        >;
+        if (
+          typeof attachment.isFileAttachment === "function" &&
+          !attachment.isFileAttachment()
+        ) {
+          continue;
+        }
+        let annIDs: Array<number | Zotero.Item> = [];
+        try {
+          annIDs = (attachment.getAnnotations?.(false) ?? []) as Array<
+            number | Zotero.Item
+          >;
+        } catch {
+          continue;
+        }
         const rawAnnotations = annIDs.map((entry) =>
           typeof entry === "object" && entry
             ? entry
@@ -745,7 +761,7 @@ export class OrganizerTools {
           candidateAnnotations.push({
             annotation: ann,
             attachment,
-            work,
+            work: effectiveWork,
           });
         }
       }
