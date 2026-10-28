@@ -803,7 +803,7 @@ export class OrganizerTools {
         ) {
           continue;
         }
-        let annIDs: Array<number | Zotero.Item> = [];
+        let annIDs: Array<number | Zotero.Item>;
         try {
           annIDs = (attachment.getAnnotations?.(false) ?? []) as Array<
             number | Zotero.Item
