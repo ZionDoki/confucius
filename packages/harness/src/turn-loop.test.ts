@@ -565,6 +565,56 @@ describe("TurnLoop", () => {
     );
   });
 
+  it("enriches approval request via enrichRequest before emitting approval_required", async () => {
+    const { loop, events } = createHarness({
+      script: [
+        {
+          toolCalls: [
+            {
+              id: "call_enrich_test",
+              name: "create_collection",
+              args: { name: "Test" },
+            },
+          ],
+        },
+        { text: "Done" },
+      ],
+      enrichRequest: async (req) => {
+        req.organizerReview = {
+          collectionTitle: "Test DB",
+          totalAssignments: 1,
+          items: [{ key: "k1", headings: [{ num: "1", title: "Intro" }] }],
+          outlineHeadings: [{ num: "1", title: "Intro", path: "Intro" }],
+        };
+        req.kind = "tool";
+      },
+      resolve: (req) => ({
+        id: req.id,
+        verdict: "allow",
+        scope: "once",
+      }),
+    });
+
+    await loop.run({
+      session: session(),
+      turnId: "turn_enrich_test",
+      userText: "Create it",
+    });
+
+    const approvalEvent = events.events.find(
+      (e) => e.type === "approval_required",
+    );
+    assert.ok(approvalEvent, "approval_required event should be emitted");
+    if (approvalEvent && approvalEvent.type === "approval_required") {
+      assert.equal(approvalEvent.payload.request.kind, "tool");
+      assert.ok(approvalEvent.payload.request.organizerReview);
+      assert.equal(
+        approvalEvent.payload.request.organizerReview.outlineHeadings?.[0]?.num,
+        "1",
+      );
+    }
+  });
+
   it("stops when the iteration budget is exhausted", async () => {
     const { loop, events, budget } = createHarness({
       maxIterations: 2,

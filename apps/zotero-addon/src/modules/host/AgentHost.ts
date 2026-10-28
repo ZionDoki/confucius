@@ -8311,6 +8311,23 @@ export class AgentHost {
             : name.startsWith("mcp.")
               ? "mcp"
               : "read",
+      enrichRequest: async (request) => {
+        request.summary = this.describeApprovalCall(
+          request.toolName,
+          request.args,
+        );
+        request.origin = state.record.backend;
+        request.kind = "tool";
+        request.before = "No Zotero changes applied";
+        request.after = formatChangePreview(request.toolName, request.args);
+        if (isOrganizerReviewTool(request.toolName)) {
+          request.organizerReview = await buildOrganizerReview(
+            this.organizerSource(),
+            request.toolName,
+            request.args,
+          );
+        }
+      },
       resolve: (request) =>
         new Promise((resolve) =>
           this.pendingApprovals.set(request.id, {

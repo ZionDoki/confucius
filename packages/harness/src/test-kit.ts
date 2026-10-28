@@ -41,6 +41,7 @@ export function createHarness(options: {
   maxToolCalls?: number;
   modeFor?: (toolName: string) => PermissionMode;
   resolve?: ConstructorParameters<typeof PermissionGate>[0]["resolve"];
+  enrichRequest?: ConstructorParameters<typeof PermissionGate>[0]["enrichRequest"];
   describeCall?: ConstructorParameters<typeof TurnLoop>[0]["describeCall"];
   context?: ConstructorParameters<typeof TurnLoop>[0]["context"];
   checkpointStore?: ConstructorParameters<typeof TurnLoop>[0]["checkpoints"];
@@ -73,6 +74,7 @@ export function createHarness(options: {
     riskFor: (name): ToolRiskLevel =>
       name.startsWith("create_") ? "write" : "read",
     resolve: options.resolve,
+    enrichRequest: options.enrichRequest,
   });
 
   tools.register(

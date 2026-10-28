@@ -16,7 +16,7 @@ import type {
   TurnLoopInput,
   WindowContext,
 } from "@confucius/harness";
-import { BudgetAccountant } from "@confucius/harness";
+import { BudgetAccountant, PermissionGate } from "@confucius/harness";
 import {
   coalesceTimeline,
   CONFUCIUS_MCP_PATH,
@@ -48,6 +48,7 @@ import {
   responseLanguageInstruction,
 } from "./ResponseLanguage";
 import { SkillStore } from "./SkillStore";
+import { buildOrganizerReview, isOrganizerReviewTool } from "./organizerReview";
 import { setTaskReportStyle } from "./TaskReportStyle";
 import { ArtifactStore } from "./ArtifactStore";
 import { LibraryMentionSources } from "../ui/libraryMention";
@@ -4179,4 +4180,67 @@ it("requestToolApproval builds async organizer review with outline numbering and
   });
   const resolution = await approvalPromise;
   assert.equal(resolution.verdict, "allow");
+});
+
+it("AgentHost PermissionGate enrichRequest enriches organizer approvals with outline numbering", async () => {
+  const { host, state } = fixture();
+  state.record.backend = "native";
+  state.record.permissionMode = "ask";
+  (host as any).describeApprovalCall = () => "Assign to outline";
+  (host as any).tools = {
+    getCollectionByRef: () => ({ id: 1, key: "COL_1", name: "Test Datenbank", libraryID: 1 }),
+    getTopmostCollection: (c: any) => c,
+    resolveOutline: async () => ({
+      roots: [],
+      headings: [
+        { id: "h1", title: "Öffnet den Download-Link", num: "1", path: "Öffnet den Download-Link", depth: 0, tag: "§Öffnet den Download-Link" }
+      ],
+    }),
+    getOutlineCache: () => undefined,
+  };
+
+  let capturedRequest: any;
+  const gate = new PermissionGate({
+    ids: () => "id",
+    now: () => Date.now(),
+    modeFor: () => "ask",
+    riskFor: () => "write",
+    enrichRequest: async (req) => {
+      req.summary = (host as any).describeApprovalCall(req.toolName, req.args);
+      req.origin = state.record.backend;
+      req.kind = "tool";
+      req.before = "No Zotero changes applied";
+      if (isOrganizerReviewTool(req.toolName)) {
+        req.organizerReview = await buildOrganizerReview(
+          (host as any).organizerSource(),
+          req.toolName,
+          req.args,
+        );
+      }
+    },
+    resolve: (req) => ({ id: req.id, verdict: "allow", scope: "once" }),
+  });
+
+  await gate.decide({
+    sessionId: state.record.id,
+    turnId: "turn-1",
+    toolName: "organizer_assign_annotations",
+    args: {
+      collection: "Test Datenbank",
+      assignments: [
+        {
+          key: "ANN_1",
+          headings: ["Öffnet den Download-Link"],
+        },
+      ],
+    },
+    onRequest: (req) => {
+      capturedRequest = req;
+    },
+  });
+
+  assert.ok(capturedRequest, "request captured in onRequest");
+  assert.ok(capturedRequest.organizerReview, "organizerReview attached");
+  assert.equal(capturedRequest.organizerReview.items[0].headings[0].num, "1");
+  assert.equal(capturedRequest.organizerReview.outlineHeadings[0].num, "1");
 });
