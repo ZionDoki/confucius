@@ -29,7 +29,6 @@ export {
   headingTitleFromTag,
   isOutlineCollectionTag,
   normalizeHeadingKey,
-  numbering,
   outlineCollectionTag,
   parseOutline,
   planAssignments,

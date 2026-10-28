@@ -152,22 +152,6 @@ export function parseOutline(noteHtml: string): OutlineNode[] {
   }
 }
 
-/** Decimal outline numbers ("1", "1.1", "1.2.3"), computed from the tree. */
-export function numbering(roots: OutlineNode[]): Map<string, string> {
-  const out = new Map<string, string>();
-  const walk = (nodes: OutlineNode[], prefix: string) => {
-    (nodes || []).forEach((n, i) => {
-      const num = prefix ? `${prefix}.${i + 1}` : String(i + 1);
-      if (n.id) {
-        out.set(n.id, num);
-      }
-      walk(n.children || [], num);
-    });
-  };
-  walk(roots, "");
-  return out;
-}
-
 /** Flatten outline tree nodes depth-first into an array with path, depth, and decimal number. */
 export function flattenOutline(roots: OutlineNode[]): FlatHeading[] {
   const out: FlatHeading[] = [];
