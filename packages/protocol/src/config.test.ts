@@ -93,6 +93,36 @@ describe("budget clamps", () => {
 });
 
 describe("workspace appearance presets", () => {
+  it("validates independent annotation typography and explicit inheritance resets", () => {
+    assert.equal(
+      validateConfigPatch({
+        annotationFontSize: 18.5,
+        annotationLineHeight: 1.85,
+        annotationParagraphSpacing: 0,
+      }).ok,
+      true,
+    );
+    assert.equal(
+      validateConfigPatch({
+        annotationFontSize: null,
+        annotationLineHeight: null,
+        annotationParagraphSpacing: null,
+      }).ok,
+      true,
+    );
+    for (const patch of [
+      { annotationFontSize: 11 },
+      { annotationFontSize: 18.2 },
+      { annotationLineHeight: 2.5 },
+      { annotationLineHeight: 1.83 },
+      { annotationParagraphSpacing: -1 },
+      { annotationParagraphSpacing: 33 },
+      { annotationParagraphSpacing: 1.5 },
+      { annotationFontSize: "18" },
+      { annotationLineHeight: NaN },
+    ])
+      assert.equal(validateConfigPatch(patch).ok, false, JSON.stringify(patch));
+  });
   it("preserves legacy values and supports decimal size and line height ranges", () => {
     assert.equal(clampUiFontSize(undefined), 13);
     assert.equal(clampUiFontSize(15.5), 15.5);

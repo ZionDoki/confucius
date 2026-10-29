@@ -3,6 +3,11 @@
 /* eslint-disable */
 // @ts-nocheck
 export type FluentMessageId =
+  | 'confucius-annotation-edit-comment'
+  | 'confucius-annotation-resize-ne'
+  | 'confucius-annotation-resize-nw'
+  | 'confucius-annotation-resize-se'
+  | 'confucius-annotation-resize-sw'
   | 'confucius-itemmenu-compare'
   | 'confucius-itemmenu-deep-read'
   | 'confucius-itemmenu-evidence-audit'
@@ -19,7 +24,14 @@ export type FluentMessageId =
   | 'confucius-toolbar-tooltip'
   | 'confucius-workspace-activity'
   | 'confucius-workspace-activity-plan'
+  | 'confucius-workspace-annotation-font-size'
+  | 'confucius-workspace-annotation-line-height'
+  | 'confucius-workspace-annotation-paragraph-spacing'
+  | 'confucius-workspace-annotation-typography-custom'
+  | 'confucius-workspace-annotation-typography-global'
+  | 'confucius-workspace-annotation-typography-help'
   | 'confucius-workspace-api-key'
+  | 'confucius-workspace-appearance-annotations'
   | 'confucius-workspace-appearance-colors'
   | 'confucius-workspace-appearance-invalid-color'
   | 'confucius-workspace-appearance-invalid-number'

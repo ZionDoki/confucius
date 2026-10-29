@@ -113,6 +113,35 @@ Width means the available workspace or reader-window width.
 - Suppress the full outline on the focused body scroll container to avoid Gecko drawing a line under the toolbar. Keep keyboard scrolling and visible focus on buttons, links, and menus.
 - Titles wrap with zero letter spacing. Body text follows the user's font, size, and line height.
 
+## Native PDF annotations
+
+- Native annotation cards and comment popups share the saved Confucius font,
+  font size, reading line height and palette by default. Appearance settings can
+  override annotation font size, line height and paragraph spacing independently
+  of chat and reports. Scope these tokens to annotation
+  surfaces; PDF pages and the rest of Zotero retain their own appearance.
+- Comment popups use the shared elevated background, shadow and 14px overlay
+  radius, with a 420px preferred width and at least 8px of space inside each
+  reader pane. Keep the native header and tags reachable while long comments
+  scroll; code, tables and display formulas scroll horizontally within the body.
+  Place Edit comment in the popup header immediately before the native three-dot
+  menu. Keep both actions on one row; the header can wrap above them in narrow
+  panes. Hide the edit action while the native editor is focused.
+- Each popup corner has a 24px resize target with a small shared-color corner
+  mark and a directional cursor. Dragging keeps the opposite corner anchored;
+  arrow keys resize by 8px (24px with Shift). Double-click or Enter restores the
+  automatic size. Escape retains native popup dismissal. Keep the chosen size for the
+  current reader session, bound it to the pane and retain reachable header,
+  editing and tag controls. Remove handles and drag listeners on unload.
+- Cards use the paper background, 8px radius, whitespace and a quiet selected
+  state. Preserve actual annotation colors and native dates, locators and tags.
+  Do not replace native header, context-menu or Flex Annotations nodes.
+- Render Markdown and math in an owned preview beside the native comment
+  editor. Edit comment restores native editing; blur returns to reading.
+  Preserve native Escape handling, IME composition, selectable
+  preview text, links, read-only behavior and source contents. Unloading the
+  plugin removes its previews and styling.
+
 ## Report style picker
 
 - Show the composer entry only for the Paper review preset. Hide it without leaving space when the preset is cleared or changed. Match composer controls: 36px high normally, 32px in very narrow layouts. Keep the label on one line; wrap the whole left control group when needed without overlapping the model or Send button.

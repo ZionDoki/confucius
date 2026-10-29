@@ -348,8 +348,9 @@ export function createAppearanceSettings(
     max: number,
     step: number,
     unit: string,
+    parent = typography,
   ) => {
-    const wrap = field(typography, label, id);
+    const wrap = field(parent, label, id);
     const controls = node("div", "confucius-range-controls");
     const range = node("input") as HTMLInputElement;
     range.type = "range";
@@ -428,6 +429,74 @@ export function createAppearanceSettings(
     (value) => {
       language = value;
     },
+  );
+
+  typography.append(
+    node("h3", "", getString("workspace-appearance-annotations")),
+  );
+  typography.append(
+    node(
+      "p",
+      "confucius-settings-help",
+      getString("workspace-annotation-typography-help"),
+    ),
+  );
+  let annotationMode =
+    initial.annotationFontSize != null ||
+    initial.annotationLineHeight != null ||
+    initial.annotationParagraphSpacing != null
+      ? "custom"
+      : "global";
+  let annotationDraftInitialized = annotationMode === "custom";
+  const annotationControls = node("div");
+  const paintAnnotationMode = radioGroup(
+    typography,
+    "confucius-cfg-annotation-mode",
+    getString("workspace-appearance-annotations"),
+    ["global", "custom"] as const,
+    (value) => getString(`workspace-annotation-typography-${value}`),
+    annotationMode as "global" | "custom",
+    (value) => {
+      annotationMode = value;
+      annotationControls.hidden = value === "global";
+      if (value === "custom" && !annotationDraftInitialized) {
+        annotationSize.set(clampUiFontSize(size.number.value));
+        annotationLine.set(clampUiLineHeight(line.number.value));
+        annotationDraftInitialized = true;
+      }
+    },
+  );
+  annotationControls.hidden = annotationMode === "global";
+  typography.append(annotationControls);
+  const annotationSize = numericField(
+    getString("workspace-annotation-font-size"),
+    "confucius-cfg-annotation-font-size",
+    clampUiFontSize(initial.annotationFontSize ?? initial.uiFontSize),
+    MIN_UI_FONT_SIZE,
+    MAX_UI_FONT_SIZE,
+    UI_FONT_SIZE_STEP,
+    "px",
+    annotationControls,
+  );
+  const annotationLine = numericField(
+    getString("workspace-annotation-line-height"),
+    "confucius-cfg-annotation-line-height",
+    clampUiLineHeight(initial.annotationLineHeight ?? initial.uiLineHeight),
+    MIN_UI_LINE_HEIGHT,
+    MAX_UI_LINE_HEIGHT,
+    UI_LINE_HEIGHT_STEP,
+    "",
+    annotationControls,
+  );
+  const annotationParagraph = numericField(
+    getString("workspace-annotation-paragraph-spacing"),
+    "confucius-cfg-annotation-paragraph-spacing",
+    initial.annotationParagraphSpacing ?? 12,
+    0,
+    32,
+    1,
+    "px",
+    annotationControls,
   );
 
   const modeWrap = field(
@@ -582,6 +651,13 @@ export function createAppearanceSettings(
     presets.light = presets.dark = "default";
     size.set(DEFAULT_UI_FONT_SIZE);
     line.set(clampUiLineHeight("standard"));
+    annotationMode = "global";
+    annotationDraftInitialized = false;
+    paintAnnotationMode("global");
+    annotationControls.hidden = true;
+    annotationSize.set(DEFAULT_UI_FONT_SIZE);
+    annotationLine.set(clampUiLineHeight("standard"));
+    annotationParagraph.set(12);
     source = "preset";
     search.value = "";
     paintSource(source);
@@ -594,7 +670,17 @@ export function createAppearanceSettings(
   return {
     element: root,
     getPatch(): ConfigSetParams {
-      for (const input of [size.number, line.number]) {
+      for (const input of [
+        size.number,
+        line.number,
+        ...(annotationMode === "custom"
+          ? [
+              annotationSize.number,
+              annotationLine.number,
+              annotationParagraph.number,
+            ]
+          : []),
+      ]) {
         if (!input.value || !input.reportValidity()) {
           input.focus();
           throw new Error(getString("workspace-appearance-invalid-number"));
@@ -618,6 +704,18 @@ export function createAppearanceSettings(
         uiFontFamily: family,
         uiFontSize: Number(size.number.value),
         uiLineHeight: Number(line.number.value),
+        annotationFontSize:
+          annotationMode === "custom"
+            ? Number(annotationSize.number.value)
+            : null,
+        annotationLineHeight:
+          annotationMode === "custom"
+            ? Number(annotationLine.number.value)
+            : null,
+        annotationParagraphSpacing:
+          annotationMode === "custom"
+            ? Number(annotationParagraph.number.value)
+            : null,
         uiLanguage: language,
         uiTheme: theme,
         uiThemeColors: JSON.parse(JSON.stringify(colors)),

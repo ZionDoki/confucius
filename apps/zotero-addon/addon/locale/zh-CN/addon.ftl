@@ -805,11 +805,23 @@ confucius-workspace-knowledge-more = 加载更多
 confucius-workspace-knowledge-index-hint = 选择条目读取来源。笔记在 Zotero 中编辑；研究记忆可在这里纠正或忘记。
 
 # Appearance and Runtime settings
-confucius-workspace-appearance-save-help = 修改在保存设置后生效。
+confucius-workspace-appearance-save-help = 保存后应用到所有界面，包括 PDF 批注卡片和评论弹窗。
+confucius-annotation-edit-comment = 编辑评论
+confucius-annotation-resize-nw = 从左上角调整大小。拖动或用方向键微调；双击或按回车恢复默认。
+confucius-annotation-resize-ne = 从右上角调整大小。拖动或用方向键微调；双击或按回车恢复默认。
+confucius-annotation-resize-sw = 从左下角调整大小。拖动或用方向键微调；双击或按回车恢复默认。
+confucius-annotation-resize-se = 从右下角调整大小。拖动或用方向键微调；双击或按回车恢复默认。
+confucius-workspace-appearance-annotations = PDF 批注
+confucius-workspace-annotation-typography-help = 用于原生批注卡片和评论弹窗；字体和配色仍跟随全局外观。
+confucius-workspace-annotation-typography-global = 跟随全局设置
+confucius-workspace-annotation-typography-custom = 单独设置批注
+confucius-workspace-annotation-font-size = 批注字号
+confucius-workspace-annotation-line-height = 批注行距
+confucius-workspace-annotation-paragraph-spacing = 段落间距
 confucius-workspace-appearance-typography = 字体与排版
 confucius-workspace-appearance-colors = 主题与配色
 confucius-workspace-appearance-reset = 恢复外观默认值
-confucius-workspace-appearance-invalid-number = 请输入范围内的字号和行距，并使用对应的步进值。
+confucius-workspace-appearance-invalid-number = 请输入范围内的字号和间距，并使用对应的步进值。
 confucius-workspace-appearance-invalid-color = 请输入有效的颜色值，例如 #805f38。
 confucius-workspace-font-modern = 现代无衬线
 confucius-workspace-font-cjk-sans = 中文黑体

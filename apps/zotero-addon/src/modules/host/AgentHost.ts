@@ -2811,6 +2811,14 @@ export class AgentHost {
     if (isUiLineHeight(params.uiLineHeight)) {
       setPref("uiLineHeight", String(clampUiLineHeight(params.uiLineHeight)));
     }
+    for (const key of [
+      "annotationFontSize",
+      "annotationLineHeight",
+      "annotationParagraphSpacing",
+    ] as const) {
+      if (params[key] !== undefined)
+        setPref(key, params[key] === null ? "" : String(params[key]));
+    }
     return this.viewFromStore(patched.store);
   }
 

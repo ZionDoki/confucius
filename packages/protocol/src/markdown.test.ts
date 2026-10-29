@@ -59,6 +59,38 @@ describe("renderMarkdownHtml", () => {
     assert.equal(html.includes("tui-math"), false);
   });
 
+  it("renders multiline display formulas without parsing TeX as prose", () => {
+    const tex =
+      "\\begin{aligned}\na&=b\\\\\nc&=d\\text{[cite:math]}\n\\end{aligned}";
+    const source = `Before [cite:before]\n\n$$\n${tex}\n$$\n\nAfter $x$ [cite:after]`;
+    const html = renderMarkdownHtml(source);
+    assert.match(html, /data-display="1"/);
+    assert.ok(html.includes(`data-tex="${escapeHtml(tex)}"`));
+    assert.equal((html.match(/class="tui-math"/g) ?? []).length, 2);
+    assert.doesNotMatch(html, /data-citation-id="math"/);
+    const ids: string[] = [];
+    mapMarkdownCitations(source, (id, marker) => {
+      ids.push(id);
+      return marker;
+    });
+    assert.deepEqual(ids, ["before", "after"]);
+  });
+
+  it("leaves unclosed display math and formulas inside code readable", () => {
+    for (const source of [
+      "$$\nunclosed [cite:visible]",
+      "$$\n```tex\n$$\nx=y\n$$\n```",
+    ]) {
+      const html = renderMarkdownHtml(source);
+      assert.doesNotMatch(html, /tui-math/);
+      assert.match(html, /\$\$/);
+    }
+    assert.match(
+      renderMarkdownHtml("$$\nunclosed [cite:visible]"),
+      /data-citation-id="visible"/,
+    );
+  });
+
   it("never trusts source HTML disguised as generated math, and keeps inline code literal", () => {
     const html = renderMarkdownHtml(
       '<span class="tui-math" onclick="bad()"><img src=x></span> `$literal$` $x+y$',

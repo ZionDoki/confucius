@@ -90,6 +90,14 @@ function fixture({ failShutdown = false, failToolbar = false } = {}) {
         calls.push("btw.dispose");
       },
     },
+    "./modules/ui/nativeAnnotations": {
+      registerNativeAnnotations() {
+        calls.push("annotations.register");
+      },
+      unregisterNativeAnnotations() {
+        calls.push("annotations.dispose");
+      },
+    },
     "./modules/ui/workspaceWindow": {
       consumeWorkspaceReload(isUpdate) {
         calls.push(`workspace.consume.${isUpdate}`);
@@ -206,6 +214,14 @@ it("real hooks reuse one Addon toolkit and release every main-window surface on 
   );
   assert.ok(f.calls.indexOf("http.dispose") < f.calls.indexOf("host.dispose"));
   assert.ok(f.calls.indexOf("btw.dispose") < f.calls.indexOf("host.dispose"));
+  assert.equal(
+    f.calls.filter((value) => value === "annotations.dispose").length,
+    1,
+  );
+  assert.ok(
+    f.calls.indexOf("annotations.dispose") <
+      f.calls.indexOf("appearance.dispose"),
+  );
   assert.equal(f.calls.filter((value) => value === "focus.dispose").length, 1);
   assert.equal(
     f.calls.filter((value) => value === "artifacts.dispose").length,
@@ -319,6 +335,10 @@ it("an update captures the workspace before disposal and restores it after the n
 it("ordinary plugin enable and disable do not restore an update workspace", async () => {
   const f = fixture();
   await f.hooks.onStartup();
+  assert.equal(
+    f.calls.filter((value) => value === "annotations.register").length,
+    1,
+  );
   await f.hooks.onShutdown();
   assert.ok(f.calls.includes("workspace.consume.false"));
   assert.ok(f.calls.includes("workspace.remember.false"));

@@ -26,6 +26,10 @@ import {
 } from "./modules/ui/workspaceWindow";
 import { AgentHost } from "./modules/host/AgentHost";
 import { registerBtwReader, unregisterBtwReader } from "./modules/ui/btwReader";
+import {
+  registerNativeAnnotations,
+  unregisterNativeAnnotations,
+} from "./modules/ui/nativeAnnotations";
 import { disposeAppearanceBindings } from "./modules/ui/workspaceAppearance";
 import { disposeFocusBindings } from "./modules/ui/workspaceSurface";
 import { artifactWindows } from "./modules/ui/artifactWindow";
@@ -60,6 +64,11 @@ async function onStartup(isUpdate = false, isInstall = false) {
     registerBtwReader(host);
   } catch (error) {
     ztoolkit.log("[Confucius] reader context-menu registration failed", error);
+  }
+  try {
+    registerNativeAnnotations();
+  } catch (error) {
+    ztoolkit.log("[Confucius] annotation view registration failed", error);
   }
   try {
     await registerPreferencePane();
@@ -119,6 +128,7 @@ async function onShutdown(isUpdate = false): Promise<void> {
   for (const win of Zotero.getMainWindows()) await onMainWindowUnload(win);
   cleanup(closeWorkspaceWindow, "workspace window");
   cleanup(() => artifactWindows.closeAll(), "artifact windows");
+  cleanup(unregisterNativeAnnotations, "native annotation views");
   cleanup(disposeAppearanceBindings, "appearance bindings");
   cleanup(disposeFocusBindings, "focus bindings");
   cleanup(unregisterReaderContextMenu, "reader context menu");

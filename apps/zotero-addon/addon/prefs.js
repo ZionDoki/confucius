@@ -33,6 +33,10 @@ pref("uiFontSize", 13);
 pref("uiFontSizeExact", "");
 pref("uiLanguage", "");
 pref("uiLineHeight", "standard");
+// Empty values follow the shared typography; decimals use Gecko string prefs.
+pref("annotationFontSize", "");
+pref("annotationLineHeight", "");
+pref("annotationParagraphSpacing", "");
 // External Agent runtimes are hosted directly by the privileged add-on.
 // Empty executable preferences mean "detect automatically".
 pref("pluginRuntimeHost", true);

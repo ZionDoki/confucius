@@ -33,6 +33,12 @@ export function bindAppearance(doc: Document): void {
       --confucius-font-size: ${appearance.uiFontSize}px;
       --confucius-markdown-font-size: ${appearance.uiFontSize}px;
       --confucius-reading-line-height: ${appearance.uiLineHeight};
+    }
+    [data-confucius-annotation] {
+      --confucius-font-size: ${appearance.annotationFontSize ?? appearance.uiFontSize}px;
+      --confucius-markdown-font-size: ${appearance.annotationFontSize ?? appearance.uiFontSize}px;
+      --confucius-reading-line-height: ${appearance.annotationLineHeight ?? appearance.uiLineHeight};
+      --confucius-annotation-paragraph-spacing: ${appearance.annotationParagraphSpacing ?? 12}px;
     }\n${customPaletteCss(appearance.uiThemeColors)}`;
   };
   let pending: number | undefined;
@@ -44,6 +50,9 @@ export function bindAppearance(doc: Document): void {
     "uiFontSize",
     "uiFontSizeExact",
     "uiLineHeight",
+    "annotationFontSize",
+    "annotationLineHeight",
+    "annotationParagraphSpacing",
   ].map((key) =>
     Zotero.Prefs.registerObserver(
       `${config.prefsPrefix}.${key}`,

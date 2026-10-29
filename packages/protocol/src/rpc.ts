@@ -762,7 +762,14 @@ export function clampUiLineHeight(value: unknown): number {
   );
 }
 
-export interface ModelConfigView {
+/** Null keeps native PDF annotations on the shared typography defaults. */
+export interface AnnotationTypography {
+  annotationFontSize?: number | null;
+  annotationLineHeight?: number | null;
+  annotationParagraphSpacing?: number | null;
+}
+
+export interface ModelConfigView extends AnnotationTypography {
   runtimeStoragePath?: string;
   storageStatus?: "ready" | "unsaved";
   baseUrl: string;
@@ -805,7 +812,7 @@ export interface ModelConfigView {
   uiLineHeight?: UiLineHeight;
 }
 
-export interface ConfigSetParams {
+export interface ConfigSetParams extends AnnotationTypography {
   baseUrl?: string;
   apiKey?: string;
   model?: string;
@@ -927,6 +934,34 @@ export function validateConfigPatch(
     errors.push(
       `Line height must be from ${MIN_UI_LINE_HEIGHT} to ${MAX_UI_LINE_HEIGHT}`,
     );
+  for (const [key, min, max, step] of [
+    [
+      "annotationFontSize",
+      MIN_UI_FONT_SIZE,
+      MAX_UI_FONT_SIZE,
+      UI_FONT_SIZE_STEP,
+    ],
+    [
+      "annotationLineHeight",
+      MIN_UI_LINE_HEIGHT,
+      MAX_UI_LINE_HEIGHT,
+      UI_LINE_HEIGHT_STEP,
+    ],
+    ["annotationParagraphSpacing", 0, 32, 1],
+  ] as const) {
+    const value = patch[key];
+    if (value === undefined || value === null) continue;
+    if (
+      typeof value !== "number" ||
+      !Number.isFinite(value) ||
+      value < min ||
+      value > max ||
+      Math.abs(value / step - Math.round(value / step)) > 1e-6
+    )
+      errors.push(
+        `${key} must be null or from ${min} to ${max} in steps of ${step}`,
+      );
+  }
   if (patch.uiLanguage !== undefined && !isUiLanguage(patch.uiLanguage))
     errors.push("Interface language must be en-US or zh-CN");
   if (patch.uiTheme !== undefined && !isUiTheme(patch.uiTheme)) {

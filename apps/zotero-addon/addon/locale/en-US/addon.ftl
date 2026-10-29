@@ -805,11 +805,23 @@ confucius-workspace-knowledge-more = Load more
 confucius-workspace-knowledge-index-hint = Select an item to read its source. Edit notes in Zotero; correct or forget research memory here.
 
 # Appearance and Runtime settings
-confucius-workspace-appearance-save-help = Changes take effect when you save settings.
+confucius-workspace-appearance-save-help = Changes take effect when you save settings, including PDF annotation cards and comment popups.
+confucius-annotation-edit-comment = Edit comment
+confucius-annotation-resize-nw = Resize from top left. Drag or use arrow keys; double-click or press Enter to reset.
+confucius-annotation-resize-ne = Resize from top right. Drag or use arrow keys; double-click or press Enter to reset.
+confucius-annotation-resize-sw = Resize from bottom left. Drag or use arrow keys; double-click or press Enter to reset.
+confucius-annotation-resize-se = Resize from bottom right. Drag or use arrow keys; double-click or press Enter to reset.
+confucius-workspace-appearance-annotations = PDF annotations
+confucius-workspace-annotation-typography-help = Applies to native annotation cards and comment popups. The font family and colors follow the shared appearance.
+confucius-workspace-annotation-typography-global = Follow global settings
+confucius-workspace-annotation-typography-custom = Customize annotations
+confucius-workspace-annotation-font-size = Annotation font size
+confucius-workspace-annotation-line-height = Annotation line height
+confucius-workspace-annotation-paragraph-spacing = Paragraph spacing
 confucius-workspace-appearance-typography = Typography
 confucius-workspace-appearance-colors = Theme colors
 confucius-workspace-appearance-reset = Restore appearance defaults
-confucius-workspace-appearance-invalid-number = Enter a font size or line height within the displayed range and step.
+confucius-workspace-appearance-invalid-number = Enter a font size or spacing within the displayed range and step.
 confucius-workspace-appearance-invalid-color = Enter a valid color such as #805f38.
 confucius-workspace-font-modern = Modern sans
 confucius-workspace-font-cjk-sans = Chinese sans

@@ -41,6 +41,9 @@ declare namespace _ZoteroTypes {
       "uiFontSizeExact": string;
       "uiLanguage": string;
       "uiLineHeight": string;
+      "annotationFontSize": string;
+      "annotationLineHeight": string;
+      "annotationParagraphSpacing": string;
       "pluginRuntimeHost": boolean;
       "codexExecutable": string;
       "kimiExecutable": string;

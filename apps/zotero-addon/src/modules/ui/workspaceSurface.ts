@@ -1,5 +1,6 @@
 import { config, version } from "../../../package.json";
 import { bindAppearance } from "./workspaceAppearance";
+import paletteSource from "../../../addon/content/workspacePalette.css";
 
 const focusDocuments = new Map<Document, () => void>();
 
@@ -42,9 +43,25 @@ export function disposeFocusBindings(): void {
 }
 
 /** One palette for the startup page, embedded surfaces and portalled menus. */
-export function ensurePaletteStyles(doc: Document): void {
+export function ensurePaletteStyles(
+  doc: Document,
+  options: { inline?: boolean } = {},
+): void {
   bindFocusModality(doc);
   bindAppearance(doc);
+  // The PDF reader's content principal cannot load chrome stylesheet links.
+  // Use the identical bundled palette in that document, with no second theme.
+  if (options.inline) {
+    let style = doc.getElementById("confucius-palette-css");
+    if (style?.localName !== "style") {
+      style?.remove();
+      style = doc.createElementNS("http://www.w3.org/1999/xhtml", "style");
+      style.id = "confucius-palette-css";
+      (doc.head ?? doc.documentElement)?.appendChild(style);
+    }
+    if (style.textContent !== paletteSource) style.textContent = paletteSource;
+    return;
+  }
   const href = `chrome://${config.addonRef}/content/workspacePalette.css?v=${version}`;
   const existing = doc.getElementById("confucius-palette-css");
   const link =
@@ -58,6 +75,22 @@ export function ensurePaletteStyles(doc: Document): void {
   if (link.getAttribute("href") !== href) link.setAttribute("href", href);
   if (!existing) (doc.head ?? doc.documentElement)?.appendChild(link);
 }
+
+/** Shared by the workspace and native reader controls. */
+export const WORKSPACE_BUTTON_CSS = `
+.confucius-button {
+  appearance: none; display: inline-flex; align-items: center; justify-content: center;
+  height: auto; max-height: none; min-height: 32px; min-width: 0; max-width: 100%; margin: 0; padding: 6px 12px;
+  border: 0; border-radius: 8px; background: var(--confucius-surface);
+  color: var(--confucius-ink); font: inherit; font-weight: 550;
+  line-height: 1.4; cursor: pointer; box-sizing: border-box;
+}
+.confucius-button:hover:not(:disabled) { background: var(--confucius-hover); }
+.confucius-button[data-variant=primary] { background: var(--confucius-primary); color: var(--confucius-primary-ink); }
+.confucius-button[data-variant=primary]:hover:not(:disabled) { background: var(--confucius-primary-hover); }
+.confucius-button:disabled { opacity: .48; cursor: default; }
+.confucius-button:focus-visible { outline: 2px solid var(--confucius-focus); outline-offset: 2px; }
+`;
 
 /** Shared product primitives. Also installed in Zotero's preferences document. */
 export const SURFACE_CSS = `
@@ -168,13 +201,7 @@ export const SURFACE_CSS = `
 :is(.confucius-workspace-root, .confucius-dialog, #confucius-knowledge-overlay, #confucius-preferences) :is(input, textarea)::placeholder {
   color: var(--confucius-muted); opacity: 1;
 }
-.confucius-button {
-  appearance: none; display: inline-flex; align-items: center; justify-content: center;
-  height: auto; max-height: none; min-height: 32px; min-width: 0; max-width: 100%; margin: 0; padding: 6px 12px;
-  border: 0; border-radius: 8px; background: var(--confucius-surface);
-  color: var(--confucius-ink); font: inherit; font-weight: 550;
-  line-height: 1.4; cursor: pointer; box-sizing: border-box;
-}
+${WORKSPACE_BUTTON_CSS}
 .confucius-organizer-review-card { min-width:0; overflow-wrap:anywhere; }
 .confucius-organizer-review-card :is(article, section, [data-heading-scroll]) { min-width:0; max-width:100%; }
 .confucius-organizer-review-card article > div { min-width:0; }
@@ -182,11 +209,6 @@ export const SURFACE_CSS = `
 .confucius-organizer-review-card .confucius-button[aria-pressed=true] { background:var(--confucius-selected); color:var(--confucius-ink); }
 .confucius-organizer-review-card .confucius-button[aria-pressed=true]:hover { background:var(--confucius-hover); }
 .confucius-organizer-review-card input:focus-visible { outline:2px solid var(--confucius-focus); outline-offset:2px; }
-.confucius-button:hover:not(:disabled) { background: var(--confucius-hover); }
-.confucius-button[data-variant=primary] { background: var(--confucius-primary); color: var(--confucius-primary-ink); }
-.confucius-button[data-variant=primary]:hover:not(:disabled) { background: var(--confucius-primary-hover); }
-.confucius-button:disabled { opacity: .48; cursor: default; }
-.confucius-button:focus-visible { outline: 2px solid var(--confucius-focus); outline-offset: 2px; }
 .confucius-menu-row[data-danger=true] { color: var(--confucius-danger); }
 .confucius-topbar :is(#confucius-new-session, #confucius-toggle-sessions) { min-height: 34px; height: 34px; margin: 0; }
 .confucius-topbar #confucius-new-session, .confucius-artifact-toolbar .confucius-button { min-height: 34px; height: 34px; padding: 6px 8px; font-size: 13px; }

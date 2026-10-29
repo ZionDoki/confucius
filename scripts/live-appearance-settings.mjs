@@ -224,6 +224,66 @@ try {
   });
   await open();
   assert.equal((await geometry()).topTabs, true);
+  const annotationGlobal = await snapshot();
+  assert.equal((await instance.rpc("config/get")).annotationFontSize, null);
+  await evaluate(
+    `d.querySelector('#confucius-cfg-annotation-mode [data-value=custom]').click();for(const [id,value] of [['font-size','20.5'],['line-height','2.05'],['paragraph-spacing','18']]){const n=d.getElementById('confucius-cfg-annotation-'+id);n.value=value;n.dispatchEvent(new win.Event('input',{bubbles:true}));}d.querySelector('#confucius-cfg-annotation-mode [data-value=global]').click();d.querySelector('#confucius-cfg-annotation-mode [data-value=custom]').click();return true;`,
+  );
+  assert.equal(
+    await evaluate(
+      `return d.getElementById('confucius-cfg-annotation-font-size').value;`,
+    ),
+    "20.5",
+  );
+  assert.equal((await instance.rpc("config/get")).annotationFontSize, null);
+  await evaluate(
+    `d.getElementById('confucius-cfg-cancel').click();return true;`,
+  );
+  await appearance();
+  assert.equal(
+    await evaluate(
+      `return d.querySelector('#confucius-cfg-annotation-mode [data-value=global]').getAttribute('aria-checked');`,
+    ),
+    "true",
+  );
+  await evaluate(
+    `d.querySelector('#confucius-cfg-annotation-mode [data-value=custom]').click();for(const [id,value] of [['font-size','20.5'],['line-height','2.05'],['paragraph-spacing','18']]){const n=d.getElementById('confucius-cfg-annotation-'+id);n.value=value;n.dispatchEvent(new win.Event('input',{bubbles:true}));}return true;`,
+  );
+  await save();
+  const annotationSaved = await instance.rpc("config/get");
+  assert.equal(annotationSaved.annotationFontSize, 20.5);
+  assert.equal(annotationSaved.annotationLineHeight, 2.05);
+  assert.equal(annotationSaved.annotationParagraphSpacing, 18);
+  assert.deepEqual(await snapshot(), annotationGlobal);
+  await evaluate(
+    `d.getElementById('confucius-cfg-annotation-font-size').scrollIntoView({block:'center'});return true;`,
+  );
+  await capture("annotation-typography-settings");
+  check(
+    "Annotation typography has separate saved controls; mode toggles retain drafts and Cancel discards them without affecting workspace typography",
+  );
+  await evaluate(
+    `d.getElementById('confucius-cfg-annotation-font-size').value='20.2';d.getElementById('confucius-cfg-save').click();return true;`,
+  );
+  await wait(`return !d.getElementById('confucius-cfg-save').disabled;`);
+  assert.equal((await instance.rpc("config/get")).annotationFontSize, 20.5);
+  await evaluate(
+    `d.querySelector('#confucius-cfg-annotation-mode [data-value=global]').click();return true;`,
+  );
+  await save();
+  assert.equal((await instance.rpc("config/get")).annotationFontSize, null);
+  assert.equal((await instance.rpc("config/get")).annotationLineHeight, null);
+  assert.equal(
+    (await instance.rpc("config/get")).annotationParagraphSpacing,
+    null,
+  );
+  check(
+    "Invalid annotation values cannot persist; following global settings explicitly clears all annotation overrides",
+  );
+  await evaluate(
+    `d.getElementById('confucius-cfg-cancel').click();return true;`,
+  );
+  await appearance();
   const before = await snapshot();
   await evaluate(
     `const set=(id,value)=>{const n=d.getElementById(id);n.value=value;n.dispatchEvent(new win.Event('input',{bubbles:true}));};set('confucius-cfg-font-size','19.5');set('confucius-cfg-line-height','1.95');d.querySelector('#confucius-cfg-theme [data-value=dark]').click();set('confucius-cfg-color-accent','#123456');d.getElementById('confucius-cfg-colors-dark').click();set('confucius-cfg-color-paper','#23272f');return true;`,
@@ -348,6 +408,9 @@ try {
   );
   await appearance();
   await instance.rpc("config/set", { uiFontSize: 28, uiLanguage: "en-US" });
+  await evaluate(
+    `d.querySelector('#confucius-cfg-annotation-mode [data-value=custom]').click();return true;`,
+  );
   await wait(`return win.getComputedStyle(root).fontSize==='28px';`);
   await evaluate(`win.resizeTo(420,760);return true;`);
   await wait(`return win.innerWidth<=420;`);

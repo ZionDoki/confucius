@@ -6,7 +6,7 @@ import {
 } from "@confucius/protocol";
 
 export const APPEARANCE_SCOPE =
-  ":where([data-confucius-window], .confucius-workspace-root, .confucius-menu-surface, .confucius-dialog, #confucius-artifact-window, #confucius-knowledge-overlay, #confucius-preferences, #confucius-sidebar, #confucius-sidebar-splitter, [data-confucius-preferences-scroll])";
+  ":where([data-confucius-window], .confucius-workspace-root, .confucius-menu-surface, .confucius-dialog, #confucius-artifact-window, #confucius-knowledge-overlay, #confucius-preferences, #confucius-sidebar, #confucius-sidebar-splitter, [data-confucius-preferences-scroll], [data-confucius-annotation])";
 
 /** The shared stylesheet is the only source of default palette colors. */
 export function paletteDefaults(

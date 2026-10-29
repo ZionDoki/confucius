@@ -11,7 +11,8 @@
   #confucius-preferences,
   #confucius-sidebar,
   #confucius-sidebar-splitter,
-  [data-confucius-preferences-scroll]
+  [data-confucius-preferences-scroll],
+  [data-confucius-annotation]
 ) {
   color-scheme: light;
   --confucius-paper: #faf9f6;
@@ -61,7 +62,8 @@
       #confucius-preferences,
       #confucius-sidebar,
       #confucius-sidebar-splitter,
-      [data-confucius-preferences-scroll]
+      [data-confucius-preferences-scroll],
+      [data-confucius-annotation]
     ),
   :where(:root[data-confucius-window]:not([data-confucius-theme="light"])) {
     color-scheme: dark;
@@ -113,7 +115,8 @@
     #confucius-preferences,
     #confucius-sidebar,
     #confucius-sidebar-splitter,
-    [data-confucius-preferences-scroll]
+    [data-confucius-preferences-scroll],
+    [data-confucius-annotation]
   ),
 :where(:root[data-confucius-window][data-confucius-theme="dark"]) {
   color-scheme: dark;
@@ -165,7 +168,8 @@
     #confucius-preferences,
     #confucius-sidebar,
     #confucius-sidebar-splitter,
-    [data-confucius-preferences-scroll]
+    [data-confucius-preferences-scroll],
+    [data-confucius-annotation]
   ) {
     --confucius-paper: Canvas;
     --confucius-canvas: Canvas;

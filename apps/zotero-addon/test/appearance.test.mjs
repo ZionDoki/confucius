@@ -89,18 +89,34 @@ test("legacy preferences and decimal Gecko storage round-trip without changing d
   globalThis.Zotero = { Prefs: { get: (key) => prefs[key.split(".").at(-1)] } };
   assert.equal(readAppearancePrefs().uiFontSize, 14);
   assert.equal(readAppearancePrefs().uiLineHeight, 1.75);
+  assert.equal(readAppearancePrefs().annotationFontSize, null);
+  assert.equal(readAppearancePrefs().annotationLineHeight, null);
   Object.assign(prefs, {
     uiFontSizeExact: "14.5",
     uiLineHeight: "1.95",
     uiFont: "custom",
     uiFontFamily: "思源宋体",
     uiThemeColors: '{"dark":{"paper":"#202024"}}',
+    annotationFontSize: "19.5",
+    annotationLineHeight: "2.05",
+    annotationParagraphSpacing: "0",
   });
   const next = readAppearancePrefs();
   assert.equal(next.uiFontSize, 14.5);
   assert.equal(next.uiLineHeight, 1.95);
+  assert.equal(next.annotationFontSize, 19.5);
+  assert.equal(next.annotationLineHeight, 2.05);
+  assert.equal(next.annotationParagraphSpacing, 0);
   assert.equal(next.uiFontFamily, "思源宋体");
   assert.deepEqual(next.uiThemeColors, { dark: { paper: "#202024" } });
   prefs.uiThemeColors = "corrupt";
   assert.deepEqual(readAppearancePrefs().uiThemeColors, {});
+  Object.assign(prefs, {
+    annotationFontSize: "",
+    annotationLineHeight: "bad",
+    annotationParagraphSpacing: "",
+  });
+  assert.equal(readAppearancePrefs().annotationFontSize, null);
+  assert.equal(readAppearancePrefs().annotationLineHeight, null);
+  assert.equal(readAppearancePrefs().annotationParagraphSpacing, null);
 });

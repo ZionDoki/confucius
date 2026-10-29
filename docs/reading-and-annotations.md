@@ -74,6 +74,33 @@ briefly animate the capsule and update the count without forcing it open.
 Reduced motion uses the new count instead of animation. Loading history stays
 minimized; saved outcomes survive a restart.
 
+## Read comments in the PDF reader
+
+Starting with 0.6.3, native PDF annotation cards
+and comment popups follow Confucius's [Appearance settings](appearance.md),
+including font family, size, line height and light/dark colors. Save settings
+to update open readers.
+Under **Appearance → PDF annotations**, choose **Customize annotations** to set
+annotation font size, line height and paragraph spacing without changing chats
+or reports.
+
+Comments display Markdown headings, lists, tables, links and fenced code, with
+inline `$...$` and display `$$...$$` formulas. Choose **Edit comment** to use
+Zotero's native editor. Click outside the editor to return to the formatted
+preview; Escape follows Zotero's native focus and popup dismissal behavior.
+Empty comments remain directly editable; read-only
+annotations remain read-only. Long comments scroll inside the popup.
+Drag any of the popup's four corners to resize it within the reader pane. The
+size is remembered while that reader stays open. Double-click a corner to
+restore the automatic size. Keyboard users can focus a corner and use arrow
+keys (Shift for larger steps), or Enter to reset. Escape keeps Zotero's native
+popup dismissal behavior.
+
+Rendering does not rewrite stored comments, annotation colors or tags. Flex
+Annotations keeps its locator labels, editing menu and `§Heading` assignments.
+The preview is a desktop display feature; other clients and exported PDFs use
+their own rendering. Disabling Confucius restores the native display.
+
 ## Batches and existing annotations
 
 New annotations receive no automatic Confucius tags. Existing Confucius and user

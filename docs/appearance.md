@@ -8,11 +8,21 @@ Open **Confucius Settings → Appearance**, or **Zotero Settings → Confucius �
 Appearance**. Settings use top tabs. Edit the values, then click **Save** to apply
 them to open Confucius workspaces, reading windows and selection-question popups.
 Closing or cancelling discards unsaved appearance changes.
+Starting with 0.6.3, these settings also apply to
+native PDF annotation cards and comment popups. See
+[reading comments](reading-and-annotations.md#read-comments-in-the-pdf-reader).
 While Save is committing, editing and cancellation are temporarily unavailable;
 they become available again after success or an error.
 
 - **Font size:** 12–28 px in 0.5 px steps, using a slider or number input.
 - **Line height:** 1.2–2.4 in 0.05 steps. This adjusts reading text.
+- **PDF annotations:** follow global settings by default.
+  Choose **Customize annotations** to set their font size (12–28 px), line
+  height (1.2–2.4) and paragraph spacing (0–32 px) separately. This applies to
+  native cards and comment popups; chat and report typography stays unchanged.
+  Font family and colors continue to follow the shared appearance. Switching
+  back to **Follow global settings**, then saving, restores shared typography
+  and the default 12 px paragraph spacing.
 - **Font:** eight offline presets, or search and select an installed font under
   **Installed fonts**. Presets use available local fonts with system fallbacks;
   they do not download fonts. A saved font missing on another computer falls

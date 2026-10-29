@@ -13,14 +13,18 @@ export function mapMarkdownCitations(
   replace: (id: string, marker: string) => string,
 ): string {
   let fenced = false;
-  return source
-    .split("\n")
-    .map((line) => {
+  let displayEnd = -1;
+  const lines = source.split("\n");
+  return lines
+    .map((line, index) => {
+      if (index <= displayEnd) return line;
       if (line.trim().startsWith("```")) {
         fenced = !fenced;
         return line;
       }
       if (fenced) return line;
+      displayEnd = displayMathEnd(lines, index);
+      if (displayEnd > index) return line;
       return mapLineCitations(line, replace);
     })
     .join("\n");
@@ -110,6 +114,15 @@ function mathToken(index: number): string {
   return `${MATH_TOKEN_OPEN}${index}${MATH_TOKEN_CLOSE}`;
 }
 
+function displayMathEnd(lines: string[], start: number): number {
+  if (lines[start].trim() !== "$$") return -1;
+  for (let end = start + 1; end < lines.length; end++) {
+    if (lines[end].trim().startsWith("```")) return -1;
+    if (lines[end].trim() === "$$") return end;
+  }
+  return -1;
+}
+
 function extractMath(source: string): { text: string; slots: MathSlot[] } {
   const slots: MathSlot[] = [];
   const parts: string[] = [];
@@ -131,6 +144,19 @@ function extractMath(source: string): { text: string; slots: MathSlot[] } {
       if (lineIndex < lines.length - 1) {
         parts.push("\n");
       }
+      continue;
+    }
+    // Display formulas commonly put the delimiters on their own lines. Keep
+    // their newlines inside one math slot so block parsing cannot split TeX.
+    const displayEnd = displayMathEnd(lines, lineIndex);
+    if (displayEnd > lineIndex) {
+      parts.push(mathToken(slots.length));
+      slots.push({
+        tex: lines.slice(lineIndex + 1, displayEnd).join("\n"),
+        display: true,
+      });
+      lineIndex = displayEnd;
+      if (lineIndex < lines.length - 1) parts.push("\n");
       continue;
     }
     let rest = line;
