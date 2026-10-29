@@ -120,3 +120,56 @@ responses in the upgrade tests use deterministic fixtures. Windows, Linux, other
 Zotero/Flex versions, live model providers and publisher PDF access were not
 retested. Earlier Beta results are not counted as new stable validation. Raw
 logs, screenshots, machine paths and synthetic traces stay in ignored `output/`.
+
+## CI and original public assets
+
+The immutable release commit is
+`f4ebe6f0d3a9723ecb8c2e10cec1e71c54afd2e9`. The
+[tag workflow](https://github.com/ZionDoki/confucius/actions/runs/40879991069)
+and [master workflow](https://github.com/ZionDoki/confucius/actions/runs/40879991036)
+completed successfully. Node.js 22 and 24 both passed source checks, tests, lint
+and production builds. The release job verified uploaded draft assets before
+publication and passed its anonymous public discovery/download checks.
+
+[Confucius v0.6.3](https://github.com/ZionDoki/confucius/releases/tag/v0.6.3)
+was published at **2026-10-29 13:16:21 UTC**, release ID `427888029`, with
+`prerelease: false` and `draft: false`. The Latest endpoint resolves to `v0.6.3`.
+Its title and body exactly match the CHANGELOG-generated release notes. The only
+public assets are:
+
+| Original public asset |   Bytes | SHA-256                                                            |
+| --------------------- | ------: | ------------------------------------------------------------------ |
+| `confucius.xpi`       | 870,949 | `28e81ac9ca8b563ef5186ce7fef904e706d2e6d1560275ebff5e8d42af9096db` |
+| `update.json`         |     573 | `89911fa3acd12fd6857529d90f2338dc38195dcbd5095edd38e89cd97c299da4` |
+| `update-beta.json`    |     573 | `89911fa3acd12fd6857529d90f2338dc38195dcbd5095edd38e89cd97c299da4` |
+
+Uploaded states, sizes, SHA-256 digests, manifest and update metadata passed
+verification. All **25 XPI entries** have identical uncompressed bytes to the
+locally tested candidate; archive bytes differ. The saved original public files,
+not a rebuild, were used for the remaining checks.
+
+A separate `release-assets.mjs --public` run passed three consecutive anonymous
+release-list reads and both the asset API and browser download paths. Both
+downloads match the original public XPI size and SHA-256.
+
+## Unchanged-old-package online upgrades
+
+`live-legacy-update.mjs` passed **13 checks from public 0.6.2** and **13 from
+public 0.6.3-beta.2**, completing at 13:19:01 and 13:19:15 UTC. Each unchanged
+old XPI was normally installed in an isolated Zotero 10.0.6 profile, with its
+installed digest verified, and used its own updater against real GitHub
+endpoints. Updater code, reported versions and network responses were not replaced.
+
+With Zotero's global automatic updates disabled, stable-only checks discover
+0.6.3 from both old packages. The stable-source scenario installs with Betas
+disabled; the Beta-source scenario also discovers and installs 0.6.3 with Betas
+enabled. Both installations report `restartRequired=false`. Full restarts load
+the exact original public target bytes and preserve task identity, Chinese
+drafts and explicit channel choices. The installed version is not offered again;
+disabling Betas does not downgrade. Channel and independent automatic-check
+preferences survive another restart.
+
+Publication, public discovery/download and genuine old-client online-upgrade
+acceptance are complete. The tag and public artifacts are unchanged by this
+documentation follow-up. The platform, provider and manual-interaction limits
+above still apply.
