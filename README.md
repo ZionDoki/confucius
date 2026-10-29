@@ -47,6 +47,10 @@ your provider. See [model setup](docs/model-selection.md).
   confirm. Use **Export file** for a separate HTML copy.
 - **Annotate a PDF:** ask for highlights, then accept or reject suggestions in the
   **Annotations** capsule.
+- **Read annotation comments:** native PDF cards support Markdown and formulas.
+  Resize comment popups from any corner and set their typography in
+  **Settings → Appearance → PDF annotations**. See
+  [reading and annotations](docs/reading-and-annotations.md).
 
 A new conversation can start without a paper. Switching PDF tabs does not change
 its sources. You can also drop PDF, Markdown or TXT files into the workspace.

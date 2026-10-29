@@ -2,6 +2,93 @@
 
 ## Unreleased
 
+## 0.6.3 - 2026-10-29
+
+### Added
+
+- Native PDF annotation cards and comment popups use the Confucius theme and
+  font, with Markdown and inline/display formula rendering. Comment popups can
+  be resized from all four corners, and **Edit comment** sits beside the native
+  three-dot menu. Native editing, selection, tags and stored comments are kept.
+- **Settings → Appearance → PDF annotations** provides separate font size,
+  line height and paragraph spacing. Unset values follow the shared appearance
+  settings. These styles work without installing Flex Annotations and coexist
+  with the separate plugin when it is installed.
+- Flex Annotations integration reads collection outlines and finds unassigned
+  annotations. Ask-mode proposals show quotes, sources and heading numbers with
+  individual Accept/Reject controls before applying assignments or removals.
+  Collection boundaries and preview-only requests are preserved. The original
+  integration was contributed by
+  [@justanotherjurastudent](https://github.com/justanotherjurastudent) in
+  [#12](https://github.com/ZionDoki/confucius/pull/12).
+
+### Changed
+
+- Model-step and tool-call limits apply to each user prompt. Automatic
+  continuations share the current allowance; a new prompt renews execution
+  counters while retaining cumulative token usage and interrupted-write
+  receipts. The default tool allowance is 48 calls; custom limits are preserved.
+- OpenAlex searches support scoped and semantic retrieval, optional reranking,
+  root-field selection and retraction/paratext filters. Agents receive a
+  query-specific shortlist while users retain the complete review pool.
+  Equivalent searches reuse recent results, and refresh, cancellation, paging
+  and child-query snapshots retain the correct results and ranking.
+- Local MCP clients use a separate read-only token. UI pairing credentials no
+  longer grant MCP access, and the MCP token cannot change settings, tasks,
+  approvals or library data.
+
+### Fixed
+
+- Interrupted runs recover saved tool receipts without duplicating completed
+  writes. Approval and literature review waits pause tool deadlines; stale
+  events cannot finish or abort a newer turn. Repeated PDF reads are detected
+  even when only timestamps change, and ordinary questions use targeted reads.
+- Interrupted PDF downloads recheck article identity instead of accepting
+  supplementary or mismatched files. Zotero links keep their explicit library
+  scope, and nested collection traversal and counts work after a restart.
+- Provider rate limits use retry backoff; expired MCP sessions reconnect, and
+  failed calls are reported without blindly retrying writes. Response sizes and
+  attachment content are bounded, with visible truncation for large attachments.
+- Switching tasks keeps drafts, templates, sources and artifacts with their
+  intended task. Failed note previews can be retried, and memory, report
+  revisions, citations and interrupted retention cleanup preserve saved state.
+
+### Upgrade notes
+
+- This is a stable release. Both stable-only and prerelease-enabled installations
+  can update to 0.6.3, including 0.6.3 Betas. Explicit channel choices and the
+  independent automatic-check preference are preserved; no downgrade is offered.
+- No manual data migration is required. Tasks, drafts, notes, settings and
+  research data remain in place. Follow Zotero's restart prompt only if the
+  installation is staged. Older versions may drop newer memory provenance and
+  query metadata when rewriting data after a manual rollback.
+- MCP clients upgrading from 0.6.2 must replace their UI pairing token with the
+  read-only MCP token in **Settings → Security**. Users already configured for
+  0.6.3 Betas need no further credential change.
+- Flex Annotations remains a separate plugin. Its outline integration uses a
+  compatible installation or stored outline notes and the existing write
+  permissions. The new PDF annotation styles do not require that plugin.
+
+### Validation and known limits
+
+- All 1,655 tests passed, with type checking, lint, production build, version
+  consistency, skill synchronization and pinned venue-catalog checks.
+- In isolated Zotero 10.0.6 profiles on macOS 26.6.2, native annotation checks
+  passed without Flex (40) and with Flex Annotations 3.0.0 (43). Appearance
+  settings passed 26 checks, including independent annotation typography,
+  persistence, light/dark/high-contrast themes and narrow layouts. The separate
+  Flex outline/review integration passed 17 checks.
+- Ordinary-package upgrades from public 0.6.2 (21 checks) and 0.6.3-beta.2
+  (27 checks) preserved saved research, notes, history, drafts, settings and write
+  receipts across repeated restarts. Hot updates passed eight checks, retaining
+  open workspace state and keeping closed workspaces closed.
+- These are real Zotero tests with synthetic libraries and automated UI events;
+  model responses use deterministic fixtures. Windows, Linux, other Zotero/Flex
+  versions, live model/publisher behavior and manual pointer gestures were not
+  retested. Public discovery/download and unchanged-old-package online upgrades
+  are verified after publication. Preparation evidence and its scope are in the
+  [acceptance record](https://github.com/ZionDoki/confucius/blob/v0.6.3/.github/maintainers/acceptance/release-0.6.3.md).
+
 ## 0.6.3-beta.2 - 2026-10-29
 
 ### Added
