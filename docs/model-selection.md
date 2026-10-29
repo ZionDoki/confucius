@@ -59,7 +59,7 @@ then select the parameter format your endpoint accepts.
 `auto` sends no thinking parameter. Custom levels belong to the exact endpoint
 and model ID. Disable the customization to restore built-in options.
 
-In the unreleased development branch, Native defaults to **128 model steps per user prompt**. The default tool-call
+Since 0.6.3-beta.2, Native defaults to **128 model steps per user prompt**. The default tool-call
 limit is **48 per user prompt** across backends. Automatic continuations share
 the current prompt's model-step and tool-call allowances; a new prompt resets
 those execution counters, while token totals remain cumulative for accounting.

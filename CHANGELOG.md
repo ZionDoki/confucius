@@ -2,13 +2,17 @@
 
 ## Unreleased
 
+## 0.6.3-beta.2 - 2026-10-29
+
 ### Added
 
 - Flex Annotations integration reads a collection's outline and finds unassigned
   annotations. In Ask mode, assignment and removal proposals show quotes,
   sources and heading numbers with individual Accept/Reject controls before
   applying the selected changes. Collection boundaries and preview-only requests
-  are preserved. This integration is not yet included in a published package.
+  are preserved. Contributed by
+  [@justanotherjurastudent](https://github.com/justanotherjurastudent) in
+  [#12](https://github.com/ZionDoki/confucius/pull/12).
 
 ### Changed
 
@@ -35,6 +39,39 @@
   searches stay cancelled, and cursor paging retains reranked scores. Impact
   tiebreakers use consistent units. Child query shortlists use their own saved
   membership and preserve frozen source/acquisition snapshots.
+
+### Upgrade notes
+
+- This is a Beta release. Enable **Include prereleases** in Confucius Settings
+  → Update to receive it; stable-only installations keep the stable channel.
+- No manual data migration is required from 0.6.3-beta.1 or 0.6.2. Existing
+  custom execution limits and explicit update preferences are preserved.
+  Automatic downgrades are not offered. Older packages do not use the new
+  query-specific ranking and child-query metadata.
+- MCP clients upgrading from 0.6.2 must use the separate read-only MCP token
+  from **Settings → Security**, rather than the UI pairing token. Beta 1 users
+  already using that token need no credential reconfiguration.
+- Flex Annotations integration uses an installed compatible plugin or its
+  stored outline notes. It preserves collection scope and requires the existing
+  write permissions before applying changes.
+
+### Validation and known limits
+
+- All 1,652 tests passed, with type checking, lint, production build, release
+  validation, version/skill synchronization and pinned venue-catalog checks.
+- Isolated ordinary-package upgrades on macOS 26.6.2 / Zotero 10.0.6 passed
+  from public 0.6.3-beta.1 (27 checks) and 0.6.2 (21 checks). Saved research,
+  history, drafts, settings and write receipts survived repeated restarts.
+  Open-workspace hot updates passed eight checks.
+- The candidate passed budget recovery, literature ranking and child-query,
+  literature UI, and real Flex Annotations 3.0.0 integration acceptance. Model
+  and OpenAlex responses were deterministic fixtures; Zotero writes, PDF
+  handling and plugin review actions were real in isolated libraries.
+- Windows, Linux, other Zotero versions and live model/publisher behavior were
+  not retested. Public-package discovery/download and unchanged-old-client
+  online upgrades are verified after publication; the preparation scope and
+  limits are recorded in the
+  [acceptance record](https://github.com/ZionDoki/confucius/blob/v0.6.3-beta.2/.github/maintainers/acceptance/release-0.6.3-beta.2.md).
 
 ## 0.6.3-beta.1 - 2026-10-23
 

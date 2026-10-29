@@ -75,7 +75,7 @@ Agent 可按权限和审阅流程修改、删除有 Confucius 归属记录的批
 
 ## 用 Flex Annotations 整理已有标注
 
-此集成已加入当前源码，尚未发布。先在
+此集成从 0.6.3-beta.2 起提供。先在
 [Flex Annotations](https://github.com/justanotherjurastudent/zotero_FlexAnnotate)
 中建立大纲，再让 Confucius 整理指定分类中尚未归类的标注。子分类使用其顶层分类的大纲，
 处理范围也包含该顶层分类及其子分类；若没有大纲，请先创建。

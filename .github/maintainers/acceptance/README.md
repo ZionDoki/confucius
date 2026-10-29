@@ -17,6 +17,7 @@ below preserve test sections formerly mixed into the runtime and report guides.
 
 | Record                                          | Original language  |
 | ----------------------------------------------- | ------------------ |
+| [Release 0.6.3-beta.2](release-0.6.3-beta.2.md) | English            |
 | [Release 0.6.3-beta.1](release-0.6.3-beta.1.md) | English            |
 | [Release 0.6.2 stable](release-0.6.2.md)        | English            |
 | [Release 0.6.1 stable](release-0.6.1.md)        | English            |

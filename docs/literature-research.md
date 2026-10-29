@@ -38,7 +38,7 @@ abstracts can be looked up from local Zotero, OpenAlex and Crossref metadata.
 
 ## Agent shortlist
 
-The following behavior is available in the development branch and is not yet released.
+The following behavior is available starting with 0.6.3-beta.2.
 
 Normal OpenAlex pages contain at most 100 records; semantic searches contain at
 most 50. The user review keeps the complete fetched pool, but the Agent sees a

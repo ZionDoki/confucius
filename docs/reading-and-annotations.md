@@ -89,7 +89,7 @@ new annotation may use a different color from the one requested.
 
 ## Organize existing annotations with Flex Annotations
 
-This integration is available in the current source and is not yet released.
+This integration is available starting with 0.6.3-beta.2.
 Create the outline in [Flex Annotations](https://github.com/justanotherjurastudent/zotero_FlexAnnotate)
 first, then ask Confucius to organize the unassigned annotations in a named
 collection. Subcollections use their top-level collection's outline and scope.
