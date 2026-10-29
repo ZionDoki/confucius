@@ -110,3 +110,53 @@ PDF access, external CLI authentication and manual desktop drag gestures were no
 retested. Historical results are not presented as new Beta 2 validation.
 Raw logs, machine paths, synthetic traces and test profiles remain in ignored
 `output/`; they are not part of the release source or artifacts.
+
+## CI and original public assets
+
+The immutable release commit is
+`ac229b72fe6052e3d11fe76286bd3034dd5e4d62`. The
+[tag workflow](https://github.com/ZionDoki/confucius/actions/runs/40821198781)
+and [master workflow](https://github.com/ZionDoki/confucius/actions/runs/40821198276)
+completed successfully. Node.js 22 and 24 both passed the source checks, tests,
+lint and production build. The tag job also validated the release notes,
+verified draft assets and passed its anonymous public-availability checks.
+
+[Confucius v0.6.3-beta.2](https://github.com/ZionDoki/confucius/releases/tag/v0.6.3-beta.2)
+was published at **2026-10-29 05:06:34 UTC**, release ID `427486205`, with
+`prerelease: true` and `draft: false`. Latest remains `v0.6.2`. The title and body
+match the tagged CHANGELOG-generated notes. Its only assets are:
+
+| Original public asset |   Bytes | SHA-256                                                            |
+| --------------------- | ------: | ------------------------------------------------------------------ |
+| `confucius.xpi`       | 861,808 | `87f478ee4365b20f662cf76e360be659c23155a21890d1e1b1ec5ddb0f737972` |
+| `update-beta.json`    |     587 | `d500578988de534f725f8f6261fe647c62d2b03216786ce79a2f2c5baef82a2d` |
+
+Both uploaded asset sizes/digests and the manifest/update metadata were verified.
+All **25 XPI entries** have identical uncompressed bytes to the locally tested
+candidate; archive bytes differ. The original public files were saved and used
+for online acceptance, without substituting a rebuilt package.
+
+A separate local `release-assets.mjs --public` run passed three consecutive
+anonymous release-list reads and downloaded the XPI through both its asset API
+and browser URL, matching the original public size and SHA-256. The release tag
+and published assets are unchanged by this documentation follow-up.
+
+## Unchanged-old-package online upgrades
+
+`live-legacy-update.mjs` passed **12 checks from public 0.6.3-beta.1** and
+**12 checks from public 0.6.2**, completing at 05:08:37 and 05:08:49 UTC.
+Each run normally installed the unchanged old XPI in an isolated Zotero 10.0.6
+profile, verified its installed digest, and used that package's own updater
+against real GitHub endpoints. No updater code, reported version or network
+response was replaced.
+
+With Zotero's global automatic updates disabled, the old package's manual
+stable-only check excludes Betas. Enabling prereleases discovers, downloads,
+verifies and installs Beta 2. A full restart loads the exact original public
+target bytes and retains the task, Chinese draft and explicit channel choice.
+The installed version is not offered again. Disabling Betas does not downgrade;
+channel selection and the independent disabled automatic-check preference survive
+another restart.
+
+Publication, public discovery/download and genuine old-client online-upgrade
+acceptance are complete. The platform and provider limits above still apply.
