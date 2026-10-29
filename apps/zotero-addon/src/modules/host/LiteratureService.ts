@@ -1,3 +1,4 @@
+import { literatureSearchKey } from "@confucius/protocol";
 import type {
   LiteraturePool,
   LiteratureSearch,
@@ -16,6 +17,7 @@ import {
   runtimeJsonStorage,
   type JsonStorage,
 } from "./RuntimeStorage";
+import { shortlistWorks } from "./LiteratureRanking";
 import { LiteratureError, type OpenAlexClient } from "./OpenAlexClient";
 import { createAbortController } from "../../utils/webPlatform";
 import { LiteratureFulltextAgent } from "./LiteratureFulltextAgent";
@@ -227,15 +229,31 @@ export class LiteratureService {
       filter?: string;
       selected?: boolean;
       queryOffset?: number;
+      queryId?: string;
+      view?: "shortlist" | "metadata" | "status";
       status?: LiteratureWork["acquisition"]["status"];
     } = {},
   ): Promise<LiteraturePage> {
-    const pool = await this.load(taskId),
-      offset = Math.max(0, Math.floor(options.offset || 0)),
-      limit = Math.min(25, Math.max(1, Math.floor(options.limit || 20)));
+    const pool = await this.load(taskId);
+    const queryId =
+      options.queryId ??
+      (options.view === "shortlist" ? pool.queries.at(-1)?.id : undefined);
+    const query = queryId
+      ? pool.queries.find((candidate) => candidate.id === queryId)
+      : undefined;
+    if (options.queryId && !query) throw new Error("Unknown query");
+    const offset = Math.max(0, Math.floor(options.offset || 0));
+    const limit = Math.min(25, Math.max(1, Math.floor(options.limit || 20)));
     const filter = (options.filter ?? "").toLocaleLowerCase();
+    const queries = [...pool.queries]
+      .reverse()
+      .slice(
+        Math.max(0, Math.floor(options.queryOffset ?? 0)),
+        Math.max(0, Math.floor(options.queryOffset ?? 0)) + 10,
+      );
     const rows = pool.works.filter(
       (w) =>
+        (!queryId || w.queryIds.includes(queryId)) &&
         (!options.status || w.acquisition.status === options.status) &&
         (options.selected === undefined ||
           w.decision.selected === options.selected) &&
@@ -245,17 +263,30 @@ export class LiteratureService {
             .toLocaleLowerCase()
             .includes(filter)),
     );
+    if (options.view === "shortlist") {
+      const shortlist = shortlistWorks(rows, query, options.limit ?? 10);
+      return {
+        summary: literatureSummary(pool),
+        queries,
+        items: await this.enrich(shortlist.items),
+        total: shortlist.totalCandidates,
+        nextOffset: null,
+        queryId,
+        ranking: {
+          queryId,
+          strategy: query?.sort ?? "relevance",
+          reranked: shortlist.reranked,
+          totalCandidates: shortlist.totalCandidates,
+        },
+      };
+    }
     return {
       summary: literatureSummary(pool),
-      queries: [...pool.queries]
-        .reverse()
-        .slice(
-          Math.max(0, Math.floor(options.queryOffset ?? 0)),
-          Math.max(0, Math.floor(options.queryOffset ?? 0)) + 10,
-        ),
+      queries,
       items: await this.enrich(rows.slice(offset, offset + limit)),
       total: rows.length,
       nextOffset: offset + limit < rows.length ? offset + limit : null,
+      queryId,
     };
   }
   async get(taskId: string, id: string) {
@@ -300,17 +331,42 @@ export class LiteratureService {
     });
   }
   async search(taskId: string, input: LiteratureSearch, signal?: AbortSignal) {
+    const checkCancelled = () => {
+      if (signal?.aborted) throw new LiteratureError("cancelled", "Cancelled");
+    };
+    checkCancelled();
+    let resultQueryId = input.queryId;
     // Serialize page cursors without holding up user choices or download progress.
     await this.searchLocks.run([taskId], async () => {
       const pool = await this.load(taskId);
+      checkCancelled();
+      const key = literatureSearchKey(input);
+      const cached =
+        !input.queryId && !input.refresh
+          ? [...pool.queries]
+              .reverse()
+              .find(
+                (query) =>
+                  literatureSearchKey(query) === key &&
+                  Math.max(0, Date.now() - query.createdAt) < 300_000,
+              )
+          : undefined;
+      if (cached) {
+        resultQueryId = cached.id;
+        return;
+      }
       const existing = input.queryId
         ? pool.queries.find((q) => q.id === input.queryId)
         : undefined;
       if (input.queryId && !existing) throw new Error("Unknown query");
-      if (existing && !existing.cursor) return;
+      if (existing && !existing.cursor) {
+        resultQueryId = existing.id;
+        return;
+      }
       const id =
         existing?.id ??
         `q_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+      resultQueryId = id;
       const result = await this.options.client.search(
         existing ?? input,
         id,
@@ -318,11 +374,12 @@ export class LiteratureService {
         signal,
       );
       this.assert(taskId);
-      if (signal?.aborted) throw new LiteratureError("cancelled", "Cancelled");
+      checkCancelled();
       const arrivals: string[] = [];
       await this.mutate(
         taskId,
         (pool) => {
+          checkCancelled();
           // Merge into the current pool: selections and acquisitions may have changed
           // while the network request was in flight.
           const existing = pool.queries.find((q) => q.id === id);
@@ -341,6 +398,10 @@ export class LiteratureService {
             if (found) {
               for (const duplicate of same.filter((w) => w !== found)) {
                 found.queryIds.push(...duplicate.queryIds);
+                found.queryScores = {
+                  ...(duplicate.queryScores ?? {}),
+                  ...(found.queryScores ?? {}),
+                };
                 found.openAlexIds.push(...duplicate.openAlexIds);
                 found.pdfUrls.push(...duplicate.pdfUrls);
                 found.locations = [
@@ -376,6 +437,28 @@ export class LiteratureService {
                 pool.candidateRevision++;
               }
               found.doi = incoming.doi ?? found.doi;
+              found.year ??= incoming.year;
+              found.publicationDate ??= incoming.publicationDate;
+              found.isRetracted =
+                found.isRetracted === true || incoming.isRetracted === true
+                  ? true
+                  : (found.isRetracted ?? incoming.isRetracted);
+              found.fwci ??= incoming.fwci;
+              found.citationNormalizedPercentile ??=
+                incoming.citationNormalizedPercentile;
+              found.citedByPercentileYear ??= incoming.citedByPercentileYear;
+              for (const [queryId, scores] of Object.entries(
+                incoming.queryScores ?? {},
+              )) {
+                const previous = found.queryScores?.[queryId];
+                found.queryScores ??= {};
+                // Overlapping cursor pages cannot erase an earlier rerank receipt.
+                found.queryScores[queryId] = {
+                  relevanceScore:
+                    previous?.relevanceScore ?? scores.relevanceScore,
+                  rerankScore: previous?.rerankScore ?? scores.rerankScore,
+                };
+              }
               found.venue ??= incoming.venue;
               found.publicationType =
                 incoming.publicationType ?? found.publicationType;
@@ -414,6 +497,7 @@ export class LiteratureService {
               total: result.total,
               cursor: result.cursor,
               pages: existing.pages + 1,
+              reranked: existing.reranked === true || result.reranked,
             });
           else
             pool.queries.push({
@@ -424,12 +508,15 @@ export class LiteratureService {
               total: result.total,
               cursor: result.cursor,
               pages: 1,
+              reranked: result.reranked,
             });
         },
         arrivals,
       );
     });
-    return this.list(taskId);
+    const page = await this.list(taskId, { queryId: resultQueryId });
+    checkCancelled();
+    return page;
   }
   async updateCandidates(
     taskId: string,

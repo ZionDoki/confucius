@@ -36,6 +36,20 @@ It is not the search service's total hit count.
 only the local pool. Each OpenAlex page fetches at most 100 records. Missing
 abstracts can be looked up from local Zotero, OpenAlex and Crossref metadata.
 
+## Agent shortlist
+
+The following behavior is available in the development branch and is not yet released.
+
+Normal OpenAlex pages contain at most 100 records; semantic searches contain at
+most 50. The user review keeps the complete fetched pool, but the Agent sees a
+query-scoped shortlist of 10 papers (at most 12), ranked by relevance with
+normalized impact as supporting evidence. Publication year, venue and raw
+citation count are not treated as paper quality.
+
+Known retracted works and paratext are excluded by default. The Agent can use
+metadata views for a concrete evidence gap rather than reading the whole pool.
+Optional OpenAlex reranking costs additional request credits.
+
 ## Venue ratings
 
 Since 0.6.1-beta.2, cards and list rows automatically match **CCF 2026 (seventh edition)** and

@@ -10,8 +10,13 @@ import {
 } from "@confucius/protocol";
 import type { ToolProvider } from "@confucius/harness";
 import type { LiteratureService } from "./LiteratureService";
+import { LiteratureError } from "./OpenAlexClient";
 
-function compactWork(work: LiteratureWork, statusOnly = false) {
+export function compactWork(
+  work: Omit<LiteratureWork, "decision" | "queryIds" | "reads"> &
+    Partial<Pick<LiteratureWork, "decision" | "queryIds" | "reads">>,
+  statusOnly = false,
+) {
   const { attempts, ...acquisition } = work.acquisition;
   const common = {
     id: work.id,
@@ -25,6 +30,12 @@ function compactWork(work: LiteratureWork, statusOnly = false) {
     ...common,
     authors: work.authors,
     year: work.year,
+    publicationDate: work.publicationDate,
+    presentation: work.presentation,
+    fwci: work.fwci,
+    citationNormalizedPercentile: work.citationNormalizedPercentile,
+    citedByPercentileYear: work.citedByPercentileYear,
+    isRetracted: work.isRetracted,
     venue: work.venue,
     venueRatings: work.venueRatings,
     venueRatingStatus: work.venueRatingStatus,
@@ -64,10 +75,27 @@ const definition = (
 const definitions: ToolDefinition[] = [
   definition(
     "literature_search",
-    "Search OpenAlex into this task's pool; at most 100 per page. queryId continues a saved query. Does not select, import or download papers.",
+    "Search OpenAlex into this task's pool. The default shortlist has 10 papers (at most 12), ranked for the current query; use metadata only for a concrete evidence gap. titleAbstractKeywords is the default mode, semantic returns at most 50, and rerank costs extra credits. queryId continues a saved query; refresh explicitly refreshes it. Known retracted works and paratext are excluded unless explicitly included. Does not select, import or download papers.",
     {
       query: { type: "string" },
       queryId: { type: "string" },
+      searchMode: {
+        type: "string",
+        enum: [
+          "titleAbstract",
+          "titleAbstractKeywords",
+          "fulltext",
+          "semantic",
+        ],
+      },
+      perPage: { type: "integer", minimum: 1, maximum: 100 },
+      rerank: { type: "boolean" },
+      hasAbstract: { type: "boolean" },
+      includeRetracted: { type: "boolean" },
+      includeParatext: { type: "boolean" },
+      refresh: { type: "boolean" },
+      view: { type: "string", enum: ["shortlist", "metadata"] },
+      limit: { type: "integer", minimum: 1, maximum: 12 },
       fromYear: { type: "integer" },
       toYear: { type: "integer" },
       openAccess: { type: "boolean" },
@@ -76,17 +104,18 @@ const definitions: ToolDefinition[] = [
   ),
   definition(
     "literature_list",
-    "Page compact metadata and abstract previews from the LOCAL pool. For PDF acquisition use status=failed and view=status to avoid rereading successful papers. Full abstracts, locations and paged attempts are available through literature_get; this does not search the internet.",
+    "Read the LOCAL pool. The default shortlist has 10 papers (at most 12) for the current or requested query; use view=metadata for paged metadata only after a concrete evidence gap. For PDF acquisition use status=failed, view=status to avoid rereading successful papers. Full abstracts, locations and paged attempts are available through literature_get; this does not search the internet.",
     {
       offset: { type: "integer", minimum: 0 },
       limit: { type: "integer", minimum: 1, maximum: 25 },
       filter: { type: "string" },
       selected: { type: "boolean" },
+      queryId: { type: "string" },
       status: {
         type: "string",
         enum: ["missing", "queued", "downloading", "available", "failed"],
       },
-      view: { type: "string", enum: ["metadata", "status"] },
+      view: { type: "string", enum: ["shortlist", "metadata", "status"] },
       queryOffset: {
         type: "integer",
         minimum: 0,
@@ -241,14 +270,29 @@ export class LiteratureToolProvider implements ToolProvider {
     try {
       let data: unknown;
       if (signal?.aborted) throw new Error("Cancelled");
-      if (name === "literature_search")
-        data = await this.service.search(
+      if (name === "literature_search") {
+        const page = await this.service.search(
           this.taskId,
           { ...args, query: String(args.query ?? "") } as LiteratureSearch,
           signal,
         );
-      else if (name === "literature_list")
-        data = await this.service.list(this.taskId, args);
+        data =
+          args.view === "metadata"
+            ? page
+            : await this.service.list(this.taskId, {
+                queryId: page.queryId,
+                view: "shortlist",
+                limit:
+                  args.limit === undefined ? undefined : Number(args.limit),
+              });
+      } else if (name === "literature_list")
+        data = await this.service.list(this.taskId, {
+          ...args,
+          view:
+            args.view === "metadata" || args.view === "status"
+              ? args.view
+              : "shortlist",
+        });
       else if (name === "literature_get")
         data = await this.service.getWithAbstract(
           this.taskId,
@@ -313,6 +357,11 @@ export class LiteratureToolProvider implements ToolProvider {
         }
       }
       if (
+        signal?.aborted &&
+        (name === "literature_search" || name === "literature_list")
+      )
+        throw new LiteratureError("cancelled", "Cancelled");
+      if (
         [
           "literature_search",
           "literature_list",
@@ -345,6 +394,20 @@ export class LiteratureToolProvider implements ToolProvider {
       }
       return { ok: true, toolName: name, data };
     } catch (error) {
+      if (error instanceof LiteratureError)
+        return {
+          ok: false,
+          toolName: name,
+          code:
+            error.code === "rate_limit"
+              ? "timeout"
+              : error.code === "authentication"
+                ? "permission_denied"
+                : "unavailable",
+          retryable: error.code === "rate_limit" || error.code === "network",
+          message: error.message,
+          details: { providerCode: error.code },
+        };
       return {
         ok: false,
         toolName: name,

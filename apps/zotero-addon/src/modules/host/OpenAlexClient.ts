@@ -1,3 +1,7 @@
+import {
+  DEFAULT_LITERATURE_SEARCH_MODE,
+  literatureSearchPageSize,
+} from "@confucius/protocol";
 import type {
   LiteratureErrorCode,
   LiteratureSearch,
@@ -7,6 +11,31 @@ import type {
   LiteratureVenue,
 } from "@confucius/protocol";
 import { venueIssns } from "./VenueRatings";
+
+const OPENALEX_WORK_SELECT = [
+  "id",
+  "doi",
+  "title",
+  "display_name",
+  "publication_year",
+  "publication_date",
+  "authorships",
+  "abstract_inverted_index",
+  "primary_location",
+  "best_oa_location",
+  "locations",
+  "type",
+  "cited_by_count",
+  "open_access",
+  "has_content",
+  "content_urls",
+  "relevance_score",
+  "rerank_score",
+  "fwci",
+  "citation_normalized_percentile",
+  "cited_by_percentile_year",
+  "is_retracted",
+].join(",");
 
 export class LiteratureError extends Error {
   constructor(
@@ -50,6 +79,11 @@ export function publicUrl(value: unknown): string | undefined {
   }
 }
 type Obj = Record<string, any>;
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
 export function literatureVersion(value: unknown): LiteratureVersion {
   if (value === "publishedVersion" || value === "published")
     return "publishedVersion";
@@ -59,7 +93,11 @@ export function literatureVersion(value: unknown): LiteratureVersion {
     return "submittedVersion";
   return "unknown";
 }
-export function openAlexWork(raw: Obj, queryId: string): LiteratureWork | null {
+export function openAlexWork(
+  raw: Obj,
+  queryId: string,
+  options: { reranked?: boolean } = {},
+): LiteratureWork | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const id = String(raw.id ?? "")
     .match(/(?:^|\/)W\d+$/)?.[0]
@@ -109,6 +147,19 @@ export function openAlexWork(raw: Obj, queryId: string): LiteratureWork | null {
     if (!venues.some((v) => JSON.stringify(v) === JSON.stringify(venue)))
       venues.push(venue);
   }
+  const relevanceScore = numberValue(raw.relevance_score);
+  const rerankScore = options.reranked
+    ? numberValue(raw.rerank_score)
+    : undefined;
+  const queryScores =
+    relevanceScore !== undefined || rerankScore !== undefined
+      ? {
+          [queryId]: {
+            ...(relevanceScore !== undefined ? { relevanceScore } : {}),
+            ...(rerankScore !== undefined ? { rerankScore } : {}),
+          },
+        }
+      : undefined;
   return {
     id,
     openAlexIds: [id],
@@ -120,6 +171,35 @@ export function openAlexWork(raw: Obj, queryId: string): LiteratureWork | null {
     year: Number.isInteger(raw.publication_year)
       ? raw.publication_year
       : undefined,
+    publicationDate:
+      typeof raw.publication_date === "string"
+        ? raw.publication_date
+        : undefined,
+    isRetracted:
+      typeof raw.is_retracted === "boolean" ? raw.is_retracted : undefined,
+    fwci: numberValue(raw.fwci),
+    citationNormalizedPercentile: raw.citation_normalized_percentile
+      ? {
+          value: numberValue(raw.citation_normalized_percentile.value),
+          isInTop1Percent:
+            typeof raw.citation_normalized_percentile.is_in_top_1_percent ===
+            "boolean"
+              ? raw.citation_normalized_percentile.is_in_top_1_percent
+              : undefined,
+          isInTop10Percent:
+            typeof raw.citation_normalized_percentile.is_in_top_10_percent ===
+            "boolean"
+              ? raw.citation_normalized_percentile.is_in_top_10_percent
+              : undefined,
+        }
+      : undefined,
+    citedByPercentileYear: raw.cited_by_percentile_year
+      ? {
+          min: numberValue(raw.cited_by_percentile_year.min),
+          max: numberValue(raw.cited_by_percentile_year.max),
+        }
+      : undefined,
+    ...(queryScores ? { queryScores } : {}),
     abstract: words.length
       ? words
           .sort((a, b) => a[0] - b[0])
@@ -225,10 +305,9 @@ export class OpenAlexClient {
   async abstract(work: LiteratureWork, signal?: AbortSignal) {
     const id = work.openAlexIds.find((id) => /^W\d+$/.test(id));
     if (!id) return undefined;
-    const response = await this.request(
-      `https://api.openalex.org/works/${id}`,
-      signal,
-    );
+    const url = new URL(`https://api.openalex.org/works/${id}`);
+    url.searchParams.set("select", OPENALEX_WORK_SELECT);
+    const response = await this.request(url.href, signal);
     const found = response && openAlexWork(response, work.queryIds[0] ?? "");
     if (!found || !work.openAlexIds.includes(found.id)) return undefined;
     return found.abstract;
@@ -289,35 +368,77 @@ export class OpenAlexClient {
         throw new Error("Invalid year");
     if (input.fromYear && input.toYear && input.fromYear > input.toYear)
       throw new Error("Invalid year range");
+    const mode = input.searchMode ?? DEFAULT_LITERATURE_SEARCH_MODE;
+    const perPage = literatureSearchPageSize(input);
+    if (
+      !Number.isInteger(perPage) ||
+      perPage < 1 ||
+      perPage > 100 ||
+      (mode === "semantic" && perPage > 50)
+    )
+      throw new Error(
+        mode === "semantic"
+          ? "Semantic search supports 1–50 results per page"
+          : "OpenAlex supports 1–100 results per page",
+      );
+    if (mode === "semantic" && input.sort)
+      throw new Error("Semantic search does not support a custom sort");
+    if (
+      input.rerank &&
+      (mode === "semantic" || (input.sort && input.sort !== "relevance"))
+    )
+      throw new Error("Rerank requires a non-semantic relevance search");
+    if (cursor !== "*" && !this.key().trim())
+      throw new LiteratureError(
+        "authentication",
+        "OpenAlex cursor pagination requires an API key / 续页需要 OpenAlex Key",
+      );
     const url = new URL("https://api.openalex.org/works");
-    url.searchParams.set("search", input.query.trim());
-    url.searchParams.set("per_page", "100");
+    const searchParameter =
+      mode === "semantic"
+        ? "search.semantic"
+        : mode === "titleAbstract"
+          ? "search.title_and_abstract"
+          : mode === "fulltext"
+            ? "search"
+            : "search.title_abstract_keywords";
+    url.searchParams.set(searchParameter, input.query.trim());
+    url.searchParams.set("per_page", String(perPage));
     url.searchParams.set("cursor", cursor);
+    url.searchParams.set("select", OPENALEX_WORK_SELECT);
     const filters: string[] = [];
+    if (!input.includeRetracted) filters.push("is_retracted:false");
+    if (!input.includeParatext) filters.push("type:!paratext");
+    if (input.hasAbstract !== undefined)
+      filters.push(`has_abstract:${input.hasAbstract}`);
     if (input.fromYear || input.toYear)
       filters.push(
         `publication_year:${input.fromYear ?? ""}-${input.toYear ?? ""}`,
       );
     if (input.openAccess) filters.push("open_access.is_oa:true");
     if (filters.length) url.searchParams.set("filter", filters.join(","));
-    url.searchParams.set(
-      "sort",
-      input.sort === "date"
-        ? "publication_date:desc"
-        : input.sort === "citations"
-          ? "cited_by_count:desc"
-          : "relevance_score:desc",
-    );
+    if (mode !== "semantic")
+      url.searchParams.set(
+        "sort",
+        input.sort === "date"
+          ? "publication_date:desc"
+          : input.sort === "citations"
+            ? "cited_by_count:desc"
+            : "relevance_score:desc",
+      );
+    if (input.rerank) url.searchParams.set("rerank", "true");
     const data = await this.request(url.href, signal);
     if (!Array.isArray(data?.results))
       throw new LiteratureError("network", "Invalid OpenAlex response");
+    const reranked = data.meta?.reranked === true;
     return {
       works: data.results
-        .slice(0, 100)
-        .map((w: Obj) => openAlexWork(w, queryId))
+        .slice(0, perPage)
+        .map((w: Obj) => openAlexWork(w, queryId, { reranked }))
         .filter((w: LiteratureWork | null): w is LiteratureWork => !!w),
       total: Number(data.meta?.count) || 0,
       cursor: data.results.length ? (data.meta?.next_cursor ?? null) : null,
+      reranked,
     };
   }
 }

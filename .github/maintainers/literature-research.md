@@ -38,6 +38,39 @@ new work IDs only; identity duplicates, metadata refreshes and acquisition
 receipts do not replay arrival cues. Appending a page within the same query still
 notifies without changing the current view, filter, position or bulk selection.
 
+## Retrieval and model shortlist
+
+OpenAlex requests use root-level field selection. The default search scope is
+title/abstract/keywords; title/abstract, fulltext and semantic modes cover other
+intents. Rerank is optional and costs additional credits. Known retracted works
+and paratext are excluded unless explicitly included. Anonymous cursor
+continuation fails locally instead of making a doomed request.
+
+Equivalent queries reuse their newest saved result for five minutes; `refresh:true`
+explicitly starts a new first-page query and `queryId` continues cursor paging.
+Scores are stored per query, with `rerank_score` accepted only when
+`meta.reranked=true`. Relevance is primary and normalized impact auxiliary;
+date/citations lead only when explicitly requested. Venue and year are not a
+paper-quality formula.
+
+Reranking applies only to the first 100 hits. Later cursor pages retain that
+cohort's scores and place unreranked results after it; probabilities are never
+compared with raw text scores. Impact tiebreakers use one metric available for
+the entire candidate set, otherwise raw citation counts. Cancellation is checked
+after search-lock waits and asynchronous result projection, including cache hits.
+
+Model search/list defaults to a query-scoped shortlist of 10 (at most 12), with
+`nextOffset=null`; metadata remains available for concrete gaps. UI review,
+candidate decisions and acquisition are unchanged. `LiteratureService.search`
+still returns metadata for UI RPC, while provider and subagent projections limit
+only what the model sees, not the durable pool.
+
+Children archive their own query metadata, membership and scores. Their list
+views and cursor continuations accept only owned query IDs. Repeated searches
+retain the original source/acquisition snapshot; parent candidate decisions and
+later attachment changes never replace it. These query snapshots survive retry
+and restart with the child archive.
+
 ## Abstracts and full text
 
 Abstract lookup tries exact local metadata, OpenAlex and Crossref within bounded

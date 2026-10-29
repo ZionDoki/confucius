@@ -17,6 +17,11 @@
   those execution counters without clearing cumulative token usage. The default
   tool limit is 48 calls per prompt for new configurations; existing custom
   limits are preserved.
+- OpenAlex retrieval supports scoped and semantic searches, optional reranking,
+  root-field selection and retraction/paratext filters. Equivalent searches
+  reuse results for five minutes and anonymous cursor continuation fails locally.
+  Agents receive a query-scoped shortlist of 10 papers (up to 12), while the user
+  review keeps the complete pool.
 
 ### Fixed
 
@@ -26,6 +31,10 @@
   timestamps and cache-reuse metadata change. Ordinary questions use targeted
   reads and can stop with sufficient evidence instead of following pagination or
   all-source coverage unnecessarily.
+- Refreshed literature searches supersede older cached results, cancelled queued
+  searches stay cancelled, and cursor paging retains reranked scores. Impact
+  tiebreakers use consistent units. Child query shortlists use their own saved
+  membership and preserve frozen source/acquisition snapshots.
 
 ## 0.6.3-beta.1 - 2026-10-23
 

@@ -1,6 +1,8 @@
 import {
   SUBAGENT_TOOL_NAMES,
   contextTextSlice,
+  type LiteratureQuery,
+  type LiteratureWork,
   type ToolDefinition,
   type ToolExecutionContext,
   type ToolResult,
@@ -13,7 +15,8 @@ import {
   SubagentManager,
 } from "./SubagentManager";
 import type { LiteratureService } from "./LiteratureService";
-import { LiteratureToolProvider } from "./LiteratureToolProvider";
+import { compactWork, LiteratureToolProvider } from "./LiteratureToolProvider";
+import { shortlistWorks } from "./LiteratureRanking";
 import { sourceReadEvidence } from "./SourceReadEvidence";
 
 const def = (
@@ -153,6 +156,8 @@ const reads = new Set([
   "get_annotations",
   "inspect_pdf_page",
 ]);
+type ChildWork = Omit<LiteratureWork, "decision" | "queryIds" | "reads">;
+type ChildQuery = { query: LiteratureQuery; workIds: string[] };
 /** Hard permission boundary, independent of backend instructions or parent grants. */
 export class SubagentResearchTools implements ToolProvider {
   private readonly discovery: LiteratureToolProvider;
@@ -183,7 +188,19 @@ export class SubagentResearchTools implements ToolProvider {
           (t) =>
             t.name !== "literature_search" ||
             this.run.document.record.allowSearch,
-        ),
+        )
+        .map((tool) => {
+          if (tool.name !== "literature_list") return tool;
+          const properties = { ...tool.inputSchema.properties };
+          // Parent candidate decisions are deliberately absent from child snapshots.
+          delete properties.selected;
+          return {
+            ...tool,
+            description:
+              "Read this child's archived papers. Default shortlist returns 10 (at most 12) for its current or requested query. Metadata/status views page only owned snapshots; parent decisions and sibling queries are unavailable.",
+            inputSchema: { ...tool.inputSchema, properties },
+          };
+        }),
       def(
         "context_search",
         "Search this child's own archived passages. Parent and sibling histories are unavailable.",
@@ -227,13 +244,77 @@ export class SubagentResearchTools implements ToolProvider {
           ...work,
           decision: undefined,
           queryIds: undefined,
+          queryScores: undefined,
           reads: undefined,
         });
       }
     }
     return Object.entries(this.run.document.archive)
       .filter(([key]) => key.startsWith("literature:"))
-      .map(([, value]) => JSON.parse(value));
+      .map(([, value]) => JSON.parse(value) as ChildWork);
+  }
+  private querySnapshot(id: string): ChildQuery | undefined {
+    const saved = this.run.document.archive[`literature-query:${id}`];
+    return saved ? JSON.parse(saved) : undefined;
+  }
+  private listSnapshot(rows: ChildWork[], args: Record<string, unknown>) {
+    const view = args.view ?? "shortlist";
+    const current = this.run.document.archive["literature-current-query"];
+    const queryId =
+      args.queryId === undefined
+        ? view === "shortlist" && current
+          ? String(JSON.parse(current))
+          : undefined
+        : String(args.queryId);
+    const snapshot = queryId ? this.querySnapshot(queryId) : undefined;
+    if (queryId && !snapshot) return undefined;
+    const filter = String(args.filter ?? "").toLocaleLowerCase();
+    const filtered = rows.filter(
+      (work) =>
+        (!snapshot || snapshot.workIds.includes(work.id)) &&
+        (!args.status || work.acquisition.status === args.status) &&
+        (!filter ||
+          [work.title, work.abstract, ...work.authors]
+            .join(" ")
+            .toLocaleLowerCase()
+            .includes(filter)),
+    );
+    const queryOffset = Number(args.queryOffset ?? 0);
+    const queries = Object.entries(this.run.document.archive)
+      .filter(([key]) => key.startsWith("literature-query:"))
+      .map(([, value]) => (JSON.parse(value) as ChildQuery).query)
+      .reverse()
+      .slice(queryOffset, queryOffset + 10);
+    if (view === "shortlist") {
+      const shortlist = shortlistWorks(
+        filtered,
+        snapshot?.query,
+        Number(args.limit ?? 10),
+      );
+      return {
+        items: shortlist.items.map((work) => compactWork(work)),
+        total: shortlist.totalCandidates,
+        queryId,
+        queries,
+        nextOffset: null,
+        ranking: {
+          queryId,
+          strategy: snapshot?.query.sort ?? "relevance",
+          reranked: shortlist.reranked,
+          totalCandidates: shortlist.totalCandidates,
+        },
+      };
+    }
+    const offset = Number(args.offset ?? 0);
+    const limit = Math.min(25, Number(args.limit ?? 20));
+    const items = filtered.slice(offset, offset + limit);
+    return {
+      items: items.map((work) => compactWork(work, view === "status")),
+      total: filtered.length,
+      queryId,
+      queries,
+      nextOffset: offset + limit < filtered.length ? offset + limit : null,
+    };
   }
   async recordDelivered(
     result: ToolResult,
@@ -313,10 +394,21 @@ export class SubagentResearchTools implements ToolProvider {
         };
       }
     } else if (name === "literature_search") {
+      if (args.queryId && !this.querySnapshot(String(args.queryId)))
+        return {
+          ok: false,
+          toolName: name,
+          code: "permission_denied",
+          message: "Query outside child source scope",
+        };
       const response = await this.discovery.call(name, args, signal, context);
       if (!response.ok) return response;
-      const data = response.data as { queries: Array<{ id: string }> };
-      const queryId = args.queryId ?? data.queries[0]?.id;
+      const data = response.data as {
+        queryId?: string;
+        queries: Array<{ id: string }>;
+        items: Array<{ id: string; title: string; year?: number }>;
+      };
+      const queryId = data.queryId ?? data.queries[0]?.id;
       const pool = await this.literature.load(
         this.run.document.record.parentTaskId,
       );
@@ -330,23 +422,56 @@ export class SubagentResearchTools implements ToolProvider {
       const found = pool.works.filter((w) =>
         w.queryIds.includes(String(queryId)),
       );
-      for (const work of found)
-        this.run.document.archive[`literature:${work.id}`] = JSON.stringify({
-          ...work,
+      const query = pool.queries.find((query) => query.id === queryId);
+      if (!query)
+        return {
+          ok: false,
+          toolName: name,
+          code: "not_found",
+          message: "Search query is unavailable",
+        };
+      // Freeze sources/acquisition on first observation; only query-specific scores
+      // may be added when another child-owned search finds the same paper.
+      await this.metadata();
+      if (!this.active(signal))
+        return {
+          ok: false,
+          toolName: name,
+          code: "unavailable",
+          message: "Child research was cancelled",
+        };
+      for (const work of found) {
+        const ref = `literature:${work.id}`;
+        const saved = this.run.document.archive[ref];
+        const snapshot: ChildWork = saved ? JSON.parse(saved) : work;
+        this.run.document.archive[ref] = JSON.stringify({
+          ...snapshot,
           decision: undefined,
           queryIds: undefined,
           reads: undefined,
+          queryScores: {
+            ...(saved ? snapshot.queryScores : {}),
+            [query.id]: work.queryScores?.[query.id],
+          },
         });
+      }
+      this.run.document.archive[`literature-query:${query.id}`] =
+        JSON.stringify({
+          query,
+          workIds: found.map((work) => work.id),
+        } satisfies ChildQuery);
+      this.run.document.archive["literature-current-query"] = JSON.stringify(
+        query.id,
+      );
       result = {
         ok: true,
         toolName: name,
         data: {
           pool: found.length,
-          queryId,
-          items: found
-            .slice(0, 10)
-            .map((w) => ({ id: w.id, title: w.title, year: w.year })),
-          nextOffset: found.length > 10 ? 10 : null,
+          ...this.listSnapshot(await this.metadata(), {
+            ...args,
+            queryId: query.id,
+          }),
         },
       };
     } else if (name === "literature_list" || name === "literature_get") {
@@ -385,23 +510,15 @@ export class SubagentResearchTools implements ToolProvider {
               message: "Paper outside child source scope",
             };
       } else {
-        const filtered = rows.filter((w) =>
-            JSON.stringify(w)
-              .toLowerCase()
-              .includes(String(args.filter ?? "").toLowerCase()),
-          ),
-          offset = Math.max(0, Number(args.offset ?? 0)),
-          limit = Math.min(25, Number(args.limit ?? 20));
-        result = {
-          ok: true,
-          toolName: name,
-          data: {
-            items: filtered.slice(offset, offset + limit),
-            total: filtered.length,
-            nextOffset:
-              offset + limit < filtered.length ? offset + limit : null,
-          },
-        };
+        const data = this.listSnapshot(rows, args);
+        result = data
+          ? { ok: true, toolName: name, data }
+          : {
+              ok: false,
+              toolName: name,
+              code: "permission_denied",
+              message: "Query outside child source scope",
+            };
       }
     } else {
       const sources = this.run.task.lockedContext.items;

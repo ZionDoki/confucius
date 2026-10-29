@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
+import { URL } from "node:url";
 import { TextDecoder, TextEncoder } from "node:util";
 import {
   OpenAlexClient,
+  LiteratureError,
   openAlexWork,
   normalizeDoi,
   openAlexFailure,
@@ -11,6 +13,8 @@ import {
 } from "../src/modules/host/OpenAlexClient.ts";
 import { LiteratureService } from "../src/modules/host/LiteratureService.ts";
 import { LiteratureToolProvider } from "../src/modules/host/LiteratureToolProvider.ts";
+import { shortlistWorks } from "../src/modules/host/LiteratureRanking.ts";
+import { SubagentResearchTools } from "../src/modules/host/SubagentTools.ts";
 import {
   LiteratureAbstracts,
   abstractText,
@@ -647,7 +651,15 @@ test("single-work OpenAlex abstract refresh checks identity and cleans Crossref 
   const client = new OpenAlexClient(
     () => "key",
     async (url, key) => {
-      assert.equal(url, "https://api.openalex.org/works/W1000");
+      const request = new URL(url);
+      assert.equal(
+        request.origin + request.pathname,
+        "https://api.openalex.org/works/W1000",
+      );
+      assert.match(
+        request.searchParams.get("select"),
+        /abstract_inverted_index/,
+      );
       assert.equal(key, "key");
       return { status: 200, data: value };
     },
@@ -1499,4 +1511,641 @@ test("recovery keeps a native download unknown when no identity inspector is ava
   } finally {
     restore();
   }
+});
+
+test("scoped search builds a bounded, filtered and reranked OpenAlex request", async () => {
+  let requestUrl;
+  const client = new OpenAlexClient(
+    () => "",
+    async (url) => {
+      requestUrl = url;
+      return {
+        status: 200,
+        data: {
+          results: [
+            raw(0, {
+              relevance_score: 0.7,
+              rerank_score: 0.95,
+              fwci: 2.1,
+              citation_normalized_percentile: {
+                value: 97,
+                is_in_top_1_percent: false,
+                is_in_top_10_percent: true,
+              },
+              cited_by_percentile_year: { min: 75, max: 85 },
+              publication_date: "2024-05-01",
+              is_retracted: false,
+            }),
+          ],
+          meta: { count: 1, reranked: true, next_cursor: "next" },
+        },
+      };
+    },
+  );
+  const result = await client.search(
+    {
+      query: "graph neural networks",
+      perPage: 25,
+      rerank: true,
+      hasAbstract: true,
+      fromYear: 2020,
+      toYear: 2026,
+      openAccess: true,
+    },
+    "q",
+  );
+  const url = new URL(requestUrl);
+  assert.equal(
+    url.searchParams.get("search.title_abstract_keywords"),
+    "graph neural networks",
+  );
+  assert.equal(url.searchParams.has("search"), false);
+  assert.equal(url.searchParams.get("per_page"), "25");
+  assert.equal(url.searchParams.get("sort"), "relevance_score:desc");
+  assert.equal(url.searchParams.get("rerank"), "true");
+  const select = url.searchParams.get("select");
+  for (const field of [
+    "abstract_inverted_index",
+    "relevance_score",
+    "rerank_score",
+    "fwci",
+    "citation_normalized_percentile",
+    "cited_by_percentile_year",
+    "is_retracted",
+  ])
+    assert.ok(select.includes(field), field);
+  const filter = url.searchParams.get("filter");
+  for (const part of [
+    "is_retracted:false",
+    "type:!paratext",
+    "has_abstract:true",
+    "publication_year:2020-2026",
+    "open_access.is_oa:true",
+  ])
+    assert.ok(filter.includes(part), part);
+  assert.equal(result.reranked, true);
+  assert.deepEqual(result.works[0].queryScores.q, {
+    relevanceScore: 0.7,
+    rerankScore: 0.95,
+  });
+  assert.equal(result.works[0].fwci, 2.1);
+  assert.deepEqual(result.works[0].citationNormalizedPercentile, {
+    value: 97,
+    isInTop1Percent: false,
+    isInTop10Percent: true,
+  });
+  assert.deepEqual(result.works[0].citedByPercentileYear, {
+    min: 75,
+    max: 85,
+  });
+  assert.equal(result.works[0].publicationDate, "2024-05-01");
+  const fallback = openAlexWork(
+    raw(0, { relevance_score: 0.4, rerank_score: 0.99 }),
+    "q",
+    { reranked: false },
+  );
+  assert.deepEqual(fallback.queryScores.q, { relevanceScore: 0.4 });
+});
+
+test("search modes enforce semantic, sort and inclusion contracts", async () => {
+  const urls = [];
+  const client = new OpenAlexClient(
+    () => "",
+    async (url) => {
+      urls.push(url);
+      return { status: 200, data: { results: [], meta: { count: 0 } } };
+    },
+  );
+  await client.search(
+    {
+      query: "a long natural-language research question",
+      searchMode: "semantic",
+    },
+    "q",
+  );
+  const semantic = new URL(urls[0]);
+  assert.equal(
+    semantic.searchParams.get("search.semantic"),
+    "a long natural-language research question",
+  );
+  assert.equal(semantic.searchParams.get("per_page"), "50");
+  assert.equal(semantic.searchParams.has("sort"), false);
+  await client.search(
+    {
+      query: "retractions",
+      searchMode: "titleAbstract",
+      perPage: 3,
+      includeRetracted: true,
+      includeParatext: true,
+    },
+    "q",
+  );
+  const included = new URL(urls[1]);
+  assert.equal(
+    included.searchParams.get("search.title_and_abstract"),
+    "retractions",
+  );
+  assert.equal(included.searchParams.has("filter"), false);
+  await client.search(
+    { query: "broad evidence", searchMode: "fulltext", perPage: 3 },
+    "q",
+  );
+  const broad = new URL(urls[2]);
+  assert.equal(broad.searchParams.get("search"), "broad evidence");
+  assert.match(broad.searchParams.get("filter"), /is_retracted:false/);
+  await assert.rejects(
+    client.search({ query: "x", searchMode: "semantic", sort: "date" }, "q"),
+    /custom sort/,
+  );
+  await assert.rejects(
+    client.search({ query: "x", searchMode: "semantic", rerank: true }, "q"),
+    /Rerank/,
+  );
+  await assert.rejects(
+    client.search({ query: "x", searchMode: "semantic", perPage: 51 }, "q"),
+    /1–50/,
+  );
+  await assert.rejects(
+    client.search({ query: "x", sort: "citations", rerank: true }, "q"),
+    /Rerank/,
+  );
+  assert.equal(urls.length, 3);
+});
+
+test("anonymous cursor continuation fails before any network request", async () => {
+  let calls = 0;
+  const client = new OpenAlexClient(
+    () => "",
+    async () => {
+      calls++;
+      return { status: 401, data: {} };
+    },
+  );
+  await assert.rejects(
+    client.search({ query: "paper" }, "q", "next"),
+    (error) => error.code === "authentication",
+  );
+  assert.equal(calls, 0);
+});
+
+test("equivalent queries reuse results while refresh and queryId remain explicit", async () => {
+  const f = fixture();
+  const first = await f.service.search("task", { query: " repeated " });
+  await f.service.search("task", {
+    query: "repeated",
+    searchMode: "titleAbstractKeywords",
+    perPage: 100,
+    sort: "relevance",
+  });
+  assert.equal(f.calls.length, 1);
+  assert.equal((await f.service.load("task")).queries.length, 1);
+  const cached = await f.service.search("task", { query: "repeated" });
+  assert.equal(cached.queryId, first.queryId);
+  assert.equal(f.calls.length, 1);
+  const refreshed = await f.service.search("task", {
+    query: "repeated",
+    refresh: true,
+  });
+  assert.notEqual(refreshed.queryId, first.queryId);
+  assert.equal(f.calls.length, 2);
+  assert.equal((await f.service.load("task")).queries.length, 2);
+  const afterRefresh = await f.service.search("task", { query: "repeated" });
+  assert.equal(afterRefresh.queryId, refreshed.queryId);
+  assert.equal(f.calls.length, 2);
+  await f.service.search("task", { query: "", queryId: refreshed.queryId });
+  assert.equal(f.calls.length, 3);
+  assert.match(f.calls.at(-1).url, /cursor=page2/);
+});
+
+test("model shortlist is ranked and query-scoped without shrinking the UI pool", async () => {
+  const f = fixture();
+  const provider = new LiteratureToolProvider(f.service, "task");
+  let calls = 0;
+  f.client.search = async (_input, queryId) => {
+    calls++;
+    const second = calls === 2;
+    return {
+      works: Array.from({ length: 14 }, (_, index) => {
+        const id = second && index > 0 ? 100 + index : index;
+        const score = second ? 1 + index : index / 100;
+        return openAlexWork(
+          raw(id, {
+            relevance_score: score,
+            rerank_score: score + 0.1,
+            fwci: index,
+          }),
+          queryId,
+          { reranked: true },
+        );
+      }),
+      total: 14,
+      cursor: null,
+      reranked: true,
+    };
+  };
+  const first = await provider.call("literature_search", {
+    query: "first",
+    rerank: true,
+  });
+  assert.equal(first.ok, true);
+  assert.equal(first.data.items.length, 10);
+  assert.equal(first.data.total, 14);
+  assert.equal(first.data.nextOffset, null);
+  assert.equal(first.data.ranking.reranked, true);
+  assert.equal(first.data.ranking.totalCandidates, 14);
+  assert.deepEqual(
+    first.data.items.map((work) => work.id),
+    Array.from({ length: 10 }, (_, index) => `W${1013 - index}`),
+  );
+  assert.deepEqual(
+    first.data.items.map((work) => work.presentation.rank),
+    Array.from({ length: 10 }, (_, index) => index + 1),
+  );
+  assert.equal((await f.service.review("task")).items.length, 14);
+  const metadata = await provider.call("literature_search", {
+    query: "first",
+    rerank: true,
+    view: "metadata",
+  });
+  assert.equal(metadata.data.items.length, 14);
+  assert.equal(metadata.data.ranking, undefined);
+  assert.equal(calls, 1);
+  const capped = await provider.call("literature_list", {
+    queryId: first.data.queryId,
+    limit: 25,
+  });
+  assert.equal(capped.data.items.length, 12);
+  assert.equal(capped.data.nextOffset, null);
+
+  const firstQueryId = first.data.queryId;
+  const second = await provider.call("literature_search", {
+    query: "second",
+    rerank: true,
+  });
+  const secondQueryId = second.data.queryId;
+  assert.notEqual(secondQueryId, firstQueryId);
+  assert.ok(
+    second.data.items.every((work) => work.queryIds.includes(secondQueryId)),
+  );
+  assert.equal((await f.service.review("task")).items.length, 27);
+  const shared = await f.service.get("task", "W1000");
+  assert.equal(shared.queryScores[firstQueryId].rerankScore, 0.1);
+  assert.equal(shared.queryScores[secondQueryId].rerankScore, 1.1);
+  const firstView = await f.service.list("task", {
+    queryId: firstQueryId,
+    view: "shortlist",
+    filter: "Paper 0",
+  });
+  assert.equal(
+    firstView.items.find((work) => work.id === "W1000").presentation
+      .rerankScore,
+    0.1,
+  );
+  const latest = await provider.call("literature_list", {});
+  assert.equal(latest.data.queryId, secondQueryId);
+  assert.ok(
+    latest.data.items.every((work) => work.queryIds.includes(secondQueryId)),
+  );
+});
+
+test("explicit inclusions and OpenAlex failure details preserve intent", async () => {
+  const f = fixture();
+  const provider = new LiteratureToolProvider(f.service, "task");
+  f.client.search = async (_input, queryId) => ({
+    works: [
+      openAlexWork(raw(0, { is_retracted: true, type: "paratext" }), queryId),
+    ],
+    total: 1,
+    cursor: null,
+    reranked: false,
+  });
+  const included = await provider.call("literature_search", {
+    query: "retractions",
+    includeRetracted: true,
+    includeParatext: true,
+  });
+  assert.equal(included.ok, true);
+  assert.equal(included.data.items.length, 1);
+  assert.equal(included.data.items[0].isRetracted, true);
+
+  const failingProvider = new LiteratureToolProvider(
+    {
+      search: async () => {
+        throw new LiteratureError("rate_limit", "Retry later");
+      },
+    },
+    "task",
+  );
+  const failure = await failingProvider.call("literature_search", {
+    query: "paper",
+  });
+  assert.equal(failure.ok, false);
+  assert.equal(failure.code, "timeout");
+  assert.equal(failure.retryable, true);
+  assert.deepEqual(failure.details, {
+    providerCode: "rate_limit",
+  });
+});
+
+test("shortlist respects explicit sorts and uses normalized impact only as a tiebreaker", () => {
+  const makeWork = (id, overrides) => ({
+    ...openAlexWork(raw(0), "q"),
+    id,
+    ...overrides,
+  });
+  const works = [
+    makeWork("W1001", {
+      fwci: 0.1,
+      year: 2024,
+      publicationDate: "2024-01-01",
+      citedBy: 1,
+      queryScores: { q: { relevanceScore: 0.5 } },
+    }),
+    makeWork("W1002", {
+      year: 2026,
+      publicationDate: "2026-01-01",
+      citedBy: 2,
+      fwci: 10,
+      queryScores: { q: { relevanceScore: 0.5 } },
+    }),
+    makeWork("W1003", {
+      year: 2020,
+      publicationDate: "2020-01-01",
+      citedBy: 100,
+      fwci: 2,
+      queryScores: { q: { relevanceScore: 0.5 } },
+    }),
+  ];
+  const query = (sort) => ({
+    id: "q",
+    createdAt: 1,
+    total: 3,
+    cursor: null,
+    pages: 1,
+    query: "paper",
+    sort,
+  });
+  assert.deepEqual(
+    shortlistWorks(works, query("date")).items.map((work) => work.id),
+    ["W1002", "W1001", "W1003"],
+  );
+  assert.deepEqual(
+    shortlistWorks(works, query("citations")).items.map((work) => work.id),
+    ["W1003", "W1002", "W1001"],
+  );
+  const relevance = shortlistWorks(works, query("relevance"), 2);
+  assert.deepEqual(
+    relevance.items.map((work) => work.id),
+    ["W1002", "W1003"],
+  );
+  assert.equal(relevance.totalCandidates, 3);
+});
+
+test("cursor pages retain reranked scores and never compare them with raw text scores", async () => {
+  const f = fixture();
+  let calls = 0;
+  f.client.search = async (_input, queryId) =>
+    ++calls === 1
+      ? {
+          works: [
+            openAlexWork(
+              raw(1, { relevance_score: 10, rerank_score: 0.1 }),
+              queryId,
+              { reranked: true },
+            ),
+            openAlexWork(
+              raw(2, { relevance_score: 1, rerank_score: 0.9 }),
+              queryId,
+              { reranked: true },
+            ),
+          ],
+          total: 101,
+          cursor: "page2",
+          reranked: true,
+        }
+      : {
+          works: [
+            openAlexWork(raw(2, { relevance_score: 100 }), queryId),
+            openAlexWork(raw(3, { relevance_score: 999 }), queryId),
+          ],
+          total: 101,
+          cursor: null,
+          reranked: false,
+        };
+  const first = await f.service.search("task", {
+    query: "rerank",
+    rerank: true,
+  });
+  await f.service.search("task", { query: "", queryId: first.queryId });
+  const after = await f.service.list("task", {
+    view: "shortlist",
+    queryId: first.queryId,
+  });
+  assert.equal(after.queries[0].reranked, true);
+  assert.equal(after.ranking.reranked, true);
+  assert.deepEqual(
+    after.items.map((work) => work.id),
+    ["W1002", "W1001", "W1003"],
+  );
+  assert.equal(after.items[0].presentation.rerankScore, 0.9);
+  assert.equal(after.items[2].presentation.rerankScore, undefined);
+  // A pool saved by an older version may have a false page-level flag.
+  const legacy = { ...after.queries[0], reranked: false };
+  assert.deepEqual(
+    shortlistWorks(after.items, legacy).items.map((work) => work.id),
+    ["W1002", "W1001", "W1003"],
+  );
+  assert.equal(
+    shortlistWorks(after.items, { ...legacy, sort: "citations" }).reranked,
+    false,
+  );
+});
+
+test("impact tiebreakers use one common measurement regardless of input order", () => {
+  const query = {
+    id: "q",
+    query: "paper",
+    createdAt: 1,
+    total: 3,
+    pages: 1,
+    cursor: null,
+  };
+  const a = openAlexWork(raw(1, { relevance_score: 1, fwci: 10 }), "q");
+  const b = openAlexWork(raw(2, { relevance_score: 1, fwci: 1 }), "q");
+  const ids = (works) =>
+    shortlistWorks(works, query).items.map((work) => work.id);
+  assert.deepEqual(ids([a, b]), [a.id, b.id]);
+  a.citationNormalizedPercentile = { value: 0.99 };
+  assert.deepEqual(ids([a, b]), [a.id, b.id]);
+  // No shared normalized metric: fall back to the common raw citation count.
+  const c = openAlexWork(
+    raw(3, {
+      relevance_score: 1,
+      cited_by_count: 100,
+      cited_by_percentile_year: { max: 95 },
+    }),
+    "q",
+  );
+  for (const works of [
+    [a, b, c],
+    [a, c, b],
+    [b, a, c],
+    [b, c, a],
+    [c, a, b],
+    [c, b, a],
+  ])
+    assert.deepEqual(ids(works), [c.id, a.id, b.id]);
+  b.citationNormalizedPercentile = { value: 1 };
+  assert.deepEqual(ids([a, b]), [b.id, a.id]);
+});
+
+test("concurrent equivalent searches share one fetch while a queued cancellation stays cancelled", async () => {
+  const f = fixture();
+  let calls = 0,
+    release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  f.client.search = async (_input, queryId) => {
+    calls++;
+    await gate;
+    return {
+      works: [openAlexWork(raw(0), queryId)],
+      total: 1,
+      cursor: null,
+      reranked: false,
+    };
+  };
+  const first = f.service.search("task", { query: "shared" });
+  const second = f.service.search("task", { query: "shared" });
+  const abort = new globalThis.AbortController();
+  const provider = new LiteratureToolProvider(f.service, "task");
+  const cancelled = provider.call(
+    "literature_search",
+    { query: "shared" },
+    abort.signal,
+  );
+  await setImmediate();
+  abort.abort();
+  release();
+  const [a, b, result] = await Promise.all([first, second, cancelled]);
+  assert.equal(calls, 1);
+  assert.equal(a.queryId, b.queryId);
+  assert.equal(result.ok, false);
+  assert.equal(result.details.providerCode, "cancelled");
+});
+
+test("service and provider discard search results cancelled during asynchronous projection", async () => {
+  const f = fixture();
+  const first = await f.service.search("task", { query: "shared" });
+  const list = f.service.list.bind(f.service);
+  let abort = new globalThis.AbortController();
+  f.service.list = async (...args) => {
+    const page = await list(...args);
+    abort.abort();
+    return page;
+  };
+  await assert.rejects(
+    f.service.search("task", { query: "shared" }, abort.signal),
+    { code: "cancelled" },
+  );
+  abort = new globalThis.AbortController();
+  f.service.search = async () => first;
+  const result = await new LiteratureToolProvider(f.service, "task").call(
+    "literature_search",
+    { query: "shared" },
+    abort.signal,
+  );
+  assert.equal(result.ok, false);
+  assert.equal(result.details.providerCode, "cancelled");
+});
+
+test("child query shortlists survive restart and preserve their own source snapshots", async () => {
+  const f = fixture();
+  let calls = 0;
+  f.client.search = async (_input, queryId) => {
+    const base = 100 * calls++;
+    return {
+      works: Array.from({ length: 20 }, (_, i) =>
+        openAlexWork(raw(base + i, { relevance_score: i }), queryId),
+      ),
+      total: 20,
+      cursor: null,
+      reranked: false,
+    };
+  };
+  const run = {
+    document: {
+      record: {
+        parentTaskId: "task",
+        allowSearch: true,
+        sourceIds: [],
+        evidence: [],
+      },
+      archive: {},
+    },
+    task: { id: "child", lockedContext: { items: [] } },
+    abort: new globalThis.AbortController(),
+    save: async () => {},
+  };
+  const library = { listTools: () => [], getMeta: () => null };
+  let tools = new SubagentResearchTools(run, library, f.service);
+  const first = await tools.call("literature_search", { query: "first" });
+  const second = await tools.call("literature_search", {
+    query: "second",
+    limit: 12,
+  });
+  assert.equal(second.data.items.length, 12);
+  const listed = await tools.call("literature_list", {
+    view: "shortlist",
+    queryId: second.data.queryId,
+    limit: 12,
+  });
+  assert.deepEqual(listed.data.items, second.data.items);
+  assert.equal(listed.data.nextOffset, null);
+  const parent = await f.service.search("task", { query: "parent only" });
+  const pool = await f.service.load("task");
+  pool.works.find((work) => work.id === first.data.items[0].id).acquisition = {
+    status: "available",
+    attachmentKey: "PARENT-NEW",
+  };
+  await f.service.save(pool);
+  // Repeated cached searches must not refresh the child's frozen acquisition.
+  const again = await tools.call("literature_search", { query: "first" });
+  assert.equal(again.data.items[0].acquisition.status, "missing");
+  assert.equal(again.data.items[0].acquisition.attachmentKey, undefined);
+  tools = new SubagentResearchTools(
+    { ...run, document: JSON.parse(JSON.stringify(run.document)) },
+    library,
+    f.service,
+  );
+  const current = await tools.call("literature_list", {});
+  assert.deepEqual(current.data.items, again.data.items);
+  const metadata = await tools.call("literature_list", {
+    view: "metadata",
+    queryId: second.data.queryId,
+    offset: 10,
+    limit: 5,
+  });
+  assert.equal(metadata.data.total, 20);
+  assert.equal(metadata.data.items.length, 5);
+  assert.equal(metadata.data.nextOffset, 15);
+  assert.ok(
+    metadata.data.items.every(
+      (work) =>
+        Number(work.id.slice(1)) >= 1100 && Number(work.id.slice(1)) < 1120,
+    ),
+  );
+  const status = await tools.call("literature_list", {
+    view: "status",
+    status: "available",
+  });
+  assert.equal(status.data.items.length, 0);
+  for (const name of ["literature_list", "literature_search"]) {
+    const denied = await tools.call(name, { queryId: parent.queryId });
+    assert.equal(denied.ok, false);
+    assert.equal(denied.code, "permission_denied");
+  }
+  assert.equal((await tools.call("literature_get", { id: "W1200" })).ok, false);
+  assert.equal(calls, 3);
 });
