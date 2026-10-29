@@ -3534,7 +3534,9 @@ describe("organizer integration tools", () => {
     linkedUrlAtt.parentItemID = work1.id;
     linkedUrlAtt.isFileAttachment = () => false;
     linkedUrlAtt.getAnnotations = () => {
-      throw new Error("getAnnotations() can only be called on file attachments");
+      throw new Error(
+        "getAnnotations() can only be called on file attachments",
+      );
     };
     work1.attachments.push(linkedUrlAtt.id);
     registerItem(linkedUrlAtt);
@@ -3876,17 +3878,11 @@ describe("organizer integration tools", () => {
     assert.equal(aliasRes.ok, true);
     assert.equal((aliasRes.data as { outline: unknown[] }).outline.length, 4);
 
-    // Collection without its own outline falls back to the library-wide
-    // outline (heading names without numbers when only the note is available).
     const emptyRes = await env.execute("organizer_get_outline", {
       collection: "COL_UNRELATED",
     });
-    assert.equal(emptyRes.ok, true);
-    assert.equal((emptyRes.data as { outline: unknown[] }).outline.length, 1);
-    assert.equal(
-      (emptyRes.data as { outline: Array<{ title: string }> }).outline[0].title,
-      "General",
-    );
+    assert.equal(emptyRes.ok, false);
+    if (!emptyRes.ok) assert.equal(emptyRes.code, "not_found");
 
     // Nonexistent collection
     const notFound = await env.execute("organizer_get_outline", {
@@ -4244,10 +4240,9 @@ describe("organizer integration tools", () => {
       assignments: [{ key: "ANN_3", headings: ["1.1 Background"] }],
     });
     assert.equal(res.ok, true);
-    assert.deepEqual(
-      (res.data as { unassigned: unknown[] }).unassigned,
-      [{ key: "ANN_3", removed: ["§Background"] }],
-    );
+    assert.deepEqual((res.data as { unassigned: unknown[] }).unassigned, [
+      { key: "ANN_3", removed: ["§Background"] },
+    ]);
     assert.deepEqual(env.ann3.tags, ["to-read"]);
 
     // Re-add tag and unassign using path "Introduction > Background"
@@ -4257,10 +4252,9 @@ describe("organizer integration tools", () => {
       assignments: [{ key: "ANN_3", headings: ["Introduction > Background"] }],
     });
     assert.equal(resPath.ok, true);
-    assert.deepEqual(
-      (resPath.data as { unassigned: unknown[] }).unassigned,
-      [{ key: "ANN_3", removed: ["§Background"] }],
-    );
+    assert.deepEqual((resPath.data as { unassigned: unknown[] }).unassigned, [
+      { key: "ANN_3", removed: ["§Background"] },
+    ]);
     assert.deepEqual(env.ann3.tags, ["to-read"]);
   });
 
@@ -4306,5 +4300,34 @@ describe("organizer integration tools", () => {
     assert.equal(ctx.preparedOperation?.domain, "library.write");
     assert.ok(ctx.resources?.includes("zotero-collection:1:COL_ROOT"));
     assert.ok(ctx.resources?.includes("zotero:1:ANN_1"));
+  });
+  for (const pluginAvailable of [true, false]) {
+    it(`does not assign using the library outline when the collection has none (API ${pluginAvailable})`, async () => {
+      const env = installOrganizerFixture();
+      if (!pluginAvailable) delete (Zotero as any).FlexAnnotate;
+      const result = await env.execute("organizer_assign_annotations", {
+        collection: "COL_UNRELATED",
+        assignments: [{ key: "ANN_UNRELATED", headings: ["General"] }],
+      });
+      assert.equal(result.ok, false);
+      assert.equal(env.annUnrelated.tags.includes("§General"), false);
+    });
+  }
+
+  it("unassign leaves annotations outside the collection and unrelated heading tags untouched", async () => {
+    const env = installOrganizerFixture();
+    env.annUnrelated.addTag("§Background");
+    env.ann1.addTag("§Other outline");
+    const result = await env.execute("organizer_unassign_annotations", {
+      collection: "COL_ROOT",
+      assignments: [
+        { key: "ANN_UNRELATED", headings: ["Background"] },
+        { key: "ANN_1", headings: ["Other outline"] },
+      ],
+    });
+    assert.equal(result.ok, true);
+    assert.deepEqual(env.annUnrelated.tags, ["§Background"]);
+    assert.ok(env.ann1.tags.includes("§Other outline"));
+    assert.deepEqual((result as any).data.unassigned, []);
   });
 });

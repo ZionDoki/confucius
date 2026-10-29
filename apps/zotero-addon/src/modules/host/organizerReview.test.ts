@@ -129,3 +129,18 @@ describe("buildOrganizerReview", () => {
     assert.equal(review, undefined);
   });
 });
+
+it("does not show cached annotations from another library", async () => {
+  const { tools } = makeTools();
+  const review = await buildOrganizerReview(
+    tools,
+    "organizer_assign_annotations",
+    {
+      libraryID: 2,
+      collection: "COL",
+      assignments: [{ key: "A1", headings: ["Background"] }],
+    },
+  );
+  assert.equal(review?.items[0].quote, undefined);
+  assert.equal(review?.items[0].sourceCitation, undefined);
+});

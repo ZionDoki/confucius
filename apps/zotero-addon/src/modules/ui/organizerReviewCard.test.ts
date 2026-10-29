@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   renderOrganizerReviewCard,
+  OrganizerReviewCardCache,
   cleanHeadingTitle,
   compareNumBadges,
   type ApprovalRowLike,
@@ -422,7 +423,7 @@ describe("renderOrganizerReviewCard", () => {
     assert.equal(card.querySelectorAll("[data-status]").length, 2);
   });
 
-  it("commits approval with filtered assignments and dryRun: false", () => {
+  it("commits filtered assignments without turning a preview into a write", () => {
     const doc = createMockDoc();
     let committedVerdict = "";
     let committedScope = "";
@@ -462,8 +463,8 @@ describe("renderOrganizerReviewCard", () => {
     assert.ok(committedArgs);
     assert.equal(
       committedArgs!.dryRun,
-      false,
-      "dryRun must be set to false on approval",
+      true,
+      "approval must preserve an explicitly requested dry run",
     );
 
     const assignments = committedArgs!.assignments as Array<{ key: string }>;
@@ -991,7 +992,10 @@ describe("renderOrganizerReviewCard", () => {
     assert.doesNotMatch(card.textContent, /\[SECRET_KEY_123\]/);
 
     // 2. Quote, comment, source citation and page should be present
-    assert.match(card.textContent, /“Ein Vertrag kommt durch Willenserklärungen zustande\.”/);
+    assert.match(
+      card.textContent,
+      /“Ein Vertrag kommt durch Willenserklärungen zustande\.”/,
+    );
     assert.match(card.textContent, /Zentrale Definition/);
     assert.match(card.textContent, /Baur\/Stürner \(2020\) · S\. 45/);
 
@@ -1002,7 +1006,10 @@ describe("renderOrganizerReviewCard", () => {
 
     // 4. Accordion itemsWrapper should be scrollable with data-confucius-scroll
     const itemsWrapper = section.querySelector("[data-heading-scroll]");
-    assert.ok(itemsWrapper, "itemsWrapper should exist with data-heading-scroll");
+    assert.ok(
+      itemsWrapper,
+      "itemsWrapper should exist with data-heading-scroll",
+    );
     assert.equal(itemsWrapper.style.maxHeight, "360px");
     assert.equal(itemsWrapper.style.overflowY, "auto");
     assert.equal(itemsWrapper.getAttribute("data-confucius-scroll"), "");
@@ -1032,7 +1039,9 @@ describe("renderOrganizerReviewCard", () => {
         items: [
           {
             key: "K1",
-            headings: [{ num: "2.1", title: "Funktionen des Quellennachweises" }],
+            headings: [
+              { num: "2.1", title: "Funktionen des Quellennachweises" },
+            ],
             quote: "Test Zitat",
           },
         ],
@@ -1122,4 +1131,79 @@ describe("renderOrganizerReviewCard", () => {
     );
     assert.equal(article.dataset.status, "rejected");
   });
+});
+
+it("keeps rejected rows and the approval DOM across timeline refreshes", () => {
+  const doc = createMockDoc();
+  const cache = new OrganizerReviewCardCache();
+  let applied: Record<string, unknown> | undefined;
+  const options: OrganizerReviewCardOptions = {
+    language: "en-US",
+    resolve: (_v, _s, args) => {
+      applied = args;
+    },
+  };
+  const first = cache.render(
+    doc,
+    sampleItem,
+    options,
+  ) as unknown as MockElement;
+  first
+    .querySelectorAll("[data-status]")[0]
+    .querySelectorAll("button")
+    .find((b) => b.textContent === "✗ Reject")!
+    .click();
+  const refreshed = cache.render(
+    doc,
+    structuredClone(sampleItem),
+    options,
+  ) as unknown as MockElement;
+  assert.strictEqual(refreshed, first);
+  assert.equal(
+    refreshed.querySelectorAll("[data-status]")[0].dataset.status,
+    "rejected",
+  );
+  refreshed
+    .querySelectorAll("button")
+    .find((b) => b.textContent.startsWith("✓ Apply"))!
+    .click();
+  assert.deepEqual(
+    (applied!.assignments as Array<{ key: string }>).map((a) => a.key),
+    ["ANN_2"],
+  );
+  cache.forget(sampleItem.id);
+  assert.notStrictEqual(cache.render(doc, sampleItem, options), first);
+});
+
+it("synchronizes each heading's copy of a multi-heading decision", () => {
+  const item = structuredClone(sampleItem);
+  item.organizerReview!.items[0].headings.push({ title: "Methode", num: "2" });
+  const card = renderOrganizerReviewCard(createMockDoc(), item, {
+    language: "en-US",
+    resolve: () => {},
+  }) as unknown as MockElement;
+  const copies = card.querySelectorAll('[data-key="ANN_1"]');
+  assert.equal(copies.length, 2);
+  copies[0]
+    .querySelectorAll("button")
+    .find((b) => b.textContent === "✗ Reject")!
+    .click();
+  assert.ok(copies.every((row) => row.dataset.status === "rejected"));
+});
+
+it("keeps a failed approval submission retryable without losing rejected rows", async () => {
+  const card = renderOrganizerReviewCard(createMockDoc(), sampleItem, {
+    language: "en-US",
+    resolve: async () => {
+      throw new Error("Connection lost");
+    },
+  }) as unknown as MockElement;
+  const apply = card
+    .querySelectorAll("button")
+    .find((b) => b.textContent.startsWith("✓ Apply"))!;
+  apply.click();
+  assert.equal(apply.disabled, true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(apply.disabled, false);
+  assert.match(card.textContent, /Connection lost/);
 });

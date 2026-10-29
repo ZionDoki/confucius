@@ -34,7 +34,10 @@ export interface OrganizerReviewSource {
     libraryID: number,
     colRef?: string | null,
   ): Promise<{ roots: OutlineNode[]; headings: FlatHeading[] } | undefined>;
-  getCachedAnnotation?(key: string):
+  getCachedAnnotation?(
+    key: string,
+    libraryID: number,
+  ):
     | {
         key: string;
         text: string;
@@ -226,8 +229,8 @@ export async function buildOrganizerReview(
     let color = "";
     let sourceTitle = "";
     let sourceCitation = "";
-    const cachedAnn = tools?.getCachedAnnotation?.(key);
-    if (cachedAnn) {
+    const cachedAnn = tools?.getCachedAnnotation?.(key, libraryID);
+    if (cachedAnn?.libraryID === libraryID) {
       if (!quote && cachedAnn.text) quote = cachedAnn.text;
       if (!comment && cachedAnn.comment) comment = cachedAnn.comment;
       if (!page && cachedAnn.pageLabel) page = cachedAnn.pageLabel;
@@ -241,93 +244,78 @@ export async function buildOrganizerReview(
     if (!((sourceTitle || sourceCitation) && quote)) {
       try {
         if (typeof Zotero !== "undefined" && Zotero.Items) {
-        let item: any =
-          (await (Zotero.Items as any).getByLibraryAndKeyAsync?.(
-            libraryID,
-            key,
-          )) ||
-          (typeof (Zotero.Items as any).getByLibraryAndKey === "function"
-            ? (Zotero.Items as any).getByLibraryAndKey(libraryID, key)
-            : null);
-        if (item === false) item = null;
+          let item: any =
+            (await (Zotero.Items as any).getByLibraryAndKeyAsync?.(
+              libraryID,
+              key,
+            )) ||
+            (typeof (Zotero.Items as any).getByLibraryAndKey === "function"
+              ? (Zotero.Items as any).getByLibraryAndKey(libraryID, key)
+              : null);
+          if (item === false) item = null;
 
-        if (!item && typeof (Zotero.Libraries as any)?.getAll === "function") {
-          for (const lib of (Zotero.Libraries as any).getAll()) {
-            if (lib.libraryID === libraryID) continue;
-            const cand =
-              (await (Zotero.Items as any).getByLibraryAndKeyAsync?.(
-                lib.libraryID,
-                key,
-              )) ||
-              (typeof (Zotero.Items as any).getByLibraryAndKey === "function"
-                ? (Zotero.Items as any).getByLibraryAndKey(lib.libraryID, key)
-                : null);
-            if (cand && cand !== false) {
-              item = cand;
-              break;
+          if (item && item !== false) {
+            if (!quote) {
+              quote =
+                item.annotationText ||
+                (typeof item.getField === "function"
+                  ? item.getField("text")
+                  : "") ||
+                "";
             }
-          }
-        }
-        if (item && item !== false) {
-          if (!quote) {
-            quote =
-              item.annotationText ||
+            comment =
+              item.annotationComment ||
               (typeof item.getField === "function"
-                ? item.getField("text")
+                ? item.getField("comment")
                 : "") ||
               "";
-          }
-          comment =
-            item.annotationComment ||
-            (typeof item.getField === "function"
-              ? item.getField("comment")
-              : "") ||
-            "";
-          page =
-            item.annotationPageLabel ||
-            (item.annotationPosition
-              ? String(
-                  (typeof item.annotationPosition === "string"
-                    ? (JSON.parse(item.annotationPosition)?.pageIndex ?? 0)
-                    : (item.annotationPosition?.pageIndex ?? 0)) + 1,
-                )
-              : "");
-          color = item.annotationColor || "";
+            page =
+              item.annotationPageLabel ||
+              (item.annotationPosition
+                ? String(
+                    (typeof item.annotationPosition === "string"
+                      ? (JSON.parse(item.annotationPosition)?.pageIndex ?? 0)
+                      : (item.annotationPosition?.pageIndex ?? 0)) + 1,
+                  )
+                : "");
+            color = item.annotationColor || "";
 
-          let work: any = item.topLevelItem ?? null;
-          if (!work && item.parentItem) {
-            const p = item.parentItem;
-            work = p.topLevelItem ?? (p.isAttachment?.() ? p.parentItem : p);
-          }
-          if (!work) {
-            const parentID = (item as any).parentItemID;
-            if (parentID) {
-              const att: any =
-                (await (Zotero.Items as any).getAsync?.(parentID)) ||
-                (typeof (Zotero.Items as any).get === "function"
-                  ? (Zotero.Items as any).get(parentID)
-                  : null);
-              if (att) {
-                work = att.topLevelItem ?? null;
-                if (!work) {
-                  const workParentID = (att as any).parentItemID;
-                  if (workParentID) {
-                    work =
-                      (await (Zotero.Items as any).getAsync?.(workParentID)) ||
-                      (typeof (Zotero.Items as any).get === "function"
-                        ? (Zotero.Items as any).get(workParentID)
-                        : null);
+            let work: any = item.topLevelItem ?? null;
+            if (!work && item.parentItem) {
+              const p = item.parentItem;
+              work = p.topLevelItem ?? (p.isAttachment?.() ? p.parentItem : p);
+            }
+            if (!work) {
+              const parentID = (item as any).parentItemID;
+              if (parentID) {
+                const att: any =
+                  (await (Zotero.Items as any).getAsync?.(parentID)) ||
+                  (typeof (Zotero.Items as any).get === "function"
+                    ? (Zotero.Items as any).get(parentID)
+                    : null);
+                if (att) {
+                  work = att.topLevelItem ?? null;
+                  if (!work) {
+                    const workParentID = (att as any).parentItemID;
+                    if (workParentID) {
+                      work =
+                        (await (Zotero.Items as any).getAsync?.(
+                          workParentID,
+                        )) ||
+                        (typeof (Zotero.Items as any).get === "function"
+                          ? (Zotero.Items as any).get(workParentID)
+                          : null);
+                    }
                   }
                 }
               }
             }
+            if (work && typeof work === "object") {
+              const { title, citation } = buildWorkCitation(work);
+              sourceTitle = title;
+              sourceCitation = citation;
+            }
           }
-          if (work && typeof work === "object") {
-            const { title, citation } = buildWorkCitation(work);
-            sourceTitle = title;
-            sourceCitation = citation;
-          }
-        }
         }
       } catch {
         // Fallback
@@ -387,6 +375,7 @@ export async function buildOrganizerReview(
   }
 
   return {
+    libraryID,
     collectionKey,
     collectionTitle,
     totalAssignments: items.length,

@@ -17,7 +17,7 @@ import { createLiteraturePanel } from "./literaturePanel";
 import { reviewArrivals } from "./reviewArrivals";
 import { renderMemoryProposal } from "./memoryProposalCards";
 import { createAnnotationReviewPanel } from "./annotationReviewPanel";
-import { renderOrganizerReviewCard } from "./organizerReviewCard";
+import { OrganizerReviewCardCache } from "./organizerReviewCard";
 import { bindBtwSelection } from "./btwPopup";
 import { artifactWindows } from "./artifactWindow";
 import { mountWorkspaceArtifact } from "./artifactWorkspace";
@@ -2531,6 +2531,8 @@ function bindWorkspace(
     if (!resizeObserver) applyResponsiveLayout();
   }
 
+  const organizerReviewCards = new OrganizerReviewCardCache();
+
   function renderApprovalCard(
     targetDoc: Document,
     item: ApprovalRow,
@@ -2545,20 +2547,20 @@ function bindWorkspace(
         Array.isArray(item.args.keys) ||
         typeof item.args.key === "string")
     ) {
-      return renderOrganizerReviewCard(targetDoc, item, {
+      return organizerReviewCards.render(targetDoc, item, {
         resolve: (verdict, scope, editedArgs) => {
-          void resolveApproval(item.id, verdict, scope, editedArgs);
+          return resolveApproval(item.id, verdict, scope, editedArgs);
         },
         locate: (key, libraryID) => {
           void rpc("reader/open", {
             libraryID:
               libraryID ??
+              item.organizerReview?.libraryID ??
               (typeof item.args.libraryID === "number"
                 ? item.args.libraryID
                 : undefined),
             key,
             annotationKey: key,
-            selectItem: true,
           }).catch(() => {
             /* locate is cosmetic */
           });
@@ -4751,6 +4753,7 @@ function bindWorkspace(
   ) {
     try {
       await rpc("approval/resolve", { id, verdict, scope, editedArgs });
+      organizerReviewCards.forget(id);
     } catch (error) {
       state.sendError = error instanceof Error ? error.message : String(error);
       throw error;

@@ -17,6 +17,15 @@ import {
   PAPER_WRITE_TOOLS,
 } from "@confucius/protocol";
 
+/** Compatibility names share exactly the canonical tool's permission policy. */
+export const ORGANIZER_TOOL_ALIASES: Readonly<Record<string, string>> = {
+  outline_get: "organizer_get_outline",
+  annotations_list: "organizer_list_annotations",
+  annotation_context: "organizer_get_annotation_context",
+  annotations_assign: "organizer_assign_annotations",
+  annotations_unassign: "organizer_unassign_annotations",
+};
+
 const itemRef = {
   libraryID: { type: "integer", description: "Zotero libraryID" },
   key: {
@@ -977,3 +986,9 @@ export const READ_ONLY_TOOL_NAMES = new Set<string>([
   ...MEMORY_READ_TOOLS,
   ...ORGANIZER_READ_TOOLS,
 ]);
+
+for (const [alias, canonical] of Object.entries(ORGANIZER_TOOL_ALIASES)) {
+  TOOL_META[alias] = { ...TOOL_META[canonical], name: alias };
+  if (WRITE_TOOL_NAMES.has(canonical)) WRITE_TOOL_NAMES.add(alias);
+  else READ_ONLY_TOOL_NAMES.add(alias);
+}

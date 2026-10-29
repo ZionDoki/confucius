@@ -16,6 +16,7 @@
     "test": "npm run sync-skills --silent && node --test scripts/release-notes.test.mjs scripts/release-assets.test.mjs && npm test --workspaces --if-present",
     "verify": "npm run sync-skills:check && npm run versions:check && npm run typecheck && npm test",
     "test:live": "node --import tsx scripts/live-e2e.mjs",
+    "test:live:organizer": "node --import tsx scripts/live-organizer.mjs",
     "test:live:annotation-review": "node --import tsx scripts/live-annotation-review.mjs",
     "test:live:user-feedback": "node --import tsx scripts/live-user-feedback.mjs",
     "test:live:approval": "node scripts/live-approval.mjs",

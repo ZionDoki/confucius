@@ -86,3 +86,30 @@ The Agent can modify or delete annotations with recorded Confucius ownership,
 subject to review and permission checks. It cannot gain ownership from a matching
 tag or color. Existing PDF colors are reserved when sources are attached, so a
 new annotation may use a different color from the one requested.
+
+## Organize existing annotations with Flex Annotations
+
+This integration is available in the current source and is not yet released.
+Create the outline in [Flex Annotations](https://github.com/justanotherjurastudent/zotero_FlexAnnotate)
+first, then ask Confucius to organize the unassigned annotations in a named
+collection. Subcollections use their top-level collection's outline and scope.
+If that collection has no outline, create one before continuing.
+
+With tool permissions set to **Ask**, the review card groups proposals by
+heading and shows their quotes and sources. **Accept** and **Reject** select
+which proposals to keep; **Apply** submits the accepted entries. Search and
+status filters help review larger batches. Selections survive timeline refreshes.
+An explicit preview request does not write tags when approved. **Allow for
+session** authorizes subsequent calls to that tool in the current task; choose
+Apply for a single reviewed batch.
+
+Accepted assignments add the outline's `§Heading` tags to existing annotations.
+Ask explicitly to remove assignments to delete those tags. Other tags and the
+outline note remain unchanged. Removal is limited to headings in the selected
+collection's outline and annotations in its scope. Confucius does not create,
+rename or delete outline headings. Read-only annotations are skipped.
+
+Confucius can read an existing stored outline when Flex Annotations is not
+loaded. Use Flex Annotations itself to create or edit the outline. This workflow
+organizes existing annotations; creating new PDF highlights uses the review
+workflow above.

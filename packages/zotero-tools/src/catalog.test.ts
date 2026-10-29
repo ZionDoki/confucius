@@ -152,3 +152,15 @@ test("organizer tools are defined, typed, and correctly classified for reading/w
   assert.ok(list);
   assert.deepEqual(list.inputSchema.required, ["collection"]);
 });
+
+test("organizer aliases retain write approval and effect metadata", () => {
+  for (const [alias, canonical] of [
+    ["annotations_assign", "organizer_assign_annotations"],
+    ["annotations_unassign", "organizer_unassign_annotations"],
+  ]) {
+    assert.equal(WRITE_TOOL_NAMES.has(alias), true, alias);
+    assert.equal(READ_ONLY_TOOL_NAMES.has(alias), false, alias);
+    assert.equal(TOOL_META[alias]?.mutatesState, true, alias);
+    assert.equal(TOOL_META[alias]?.catalog, TOOL_META[canonical].catalog);
+  }
+});

@@ -23,9 +23,40 @@ export interface OrganizerReviewCardOptions {
     verdict: "allow" | "deny",
     scope: "once" | "session",
     editedArgs?: Record<string, unknown>,
-  ) => void;
+  ) => void | Promise<void>;
   locate?: (key: string, libraryID?: number) => void;
   language?: "de" | "en-US" | "zh-CN";
+}
+
+/** Pending approval cards own interactive state until their request is resolved. */
+export class OrganizerReviewCardCache {
+  private cards = new Map<
+    string,
+    { signature: string; doc: Document; card: HTMLElement }
+  >();
+
+  render(
+    doc: Document,
+    item: ApprovalRowLike,
+    options: OrganizerReviewCardOptions,
+  ): HTMLElement {
+    const signature = JSON.stringify([
+      item.toolName,
+      item.args,
+      item.organizerReview,
+      options.language,
+    ]);
+    const previous = this.cards.get(item.id);
+    if (previous?.doc === doc && previous.signature === signature)
+      return previous.card;
+    const card = renderOrganizerReviewCard(doc, item, options);
+    this.cards.set(item.id, { signature, doc, card });
+    return card;
+  }
+
+  forget(id: string): void {
+    this.cards.delete(id);
+  }
 }
 
 function l10n(lang: string) {
@@ -109,9 +140,11 @@ function el<K extends keyof HTMLElementTagNameMap>(
   attrs?: Record<string, string>,
 ): HTMLElementTagNameMap[K] {
   const node = doc.createElementNS(HTML_NS, tag) as HTMLElementTagNameMap[K];
-  if (styles) {
-    Object.assign(node.style, styles);
+  if (tag === "button") {
+    node.className = "confucius-button";
+    node.setAttribute("type", "button");
   }
+  if (styles) Object.assign(node.style, styles);
   if (attrs) {
     for (const [key, value] of Object.entries(attrs)) {
       node.setAttribute(key, value);
@@ -181,7 +214,8 @@ export function renderOrganizerReviewCard(
   item: ApprovalRowLike,
   options: OrganizerReviewCardOptions,
 ): HTMLElement {
-  const lang = options.language ?? "de";
+  const itemArgsLibraryID = item.args.libraryID;
+  const lang = options.language ?? "en-US";
   const t = l10n(lang);
 
   // Reconstruct review data if not already populated
@@ -254,13 +288,12 @@ export function renderOrganizerReviewCard(
     doc,
     "section",
     {
-      border: "1px solid var(--confucius-line, rgba(128, 128, 128, 0.2))",
+      border: "1px solid var(--confucius-line)",
       borderRadius: "8px",
       padding: "12px 14px",
       margin: "8px 0",
-      background: "var(--confucius-paper, transparent)",
-      color: "var(--confucius-ink, currentColor)",
-      boxShadow: "0 1px 3px rgba(0, 0, 0, 0.05)",
+      background: "var(--confucius-paper)",
+      color: "var(--confucius-ink)",
     },
     {
       "aria-label": t.badge,
@@ -275,6 +308,7 @@ export function renderOrganizerReviewCard(
   let viewMode: "grouped" | "flat" = "grouped";
   let searchQuery = "";
   const collapsedHeadings = new Set<string>();
+  const itemViews = new Map<number, Array<(accepted: boolean) => void>>();
 
   // --- Header ---
   const header = el(doc, "header", {
@@ -283,6 +317,7 @@ export function renderOrganizerReviewCard(
 
   const badgeRow = el(doc, "div", {
     display: "flex",
+    flexWrap: "wrap",
     alignItems: "center",
     justifyContent: "space-between",
     gap: "8px",
@@ -291,26 +326,30 @@ export function renderOrganizerReviewCard(
 
   const badge = el(doc, "div", {
     fontFamily: "ui-monospace, Consolas, monospace",
-    fontSize: "11px",
+    fontSize: "12px",
     fontWeight: "700",
     letterSpacing: "0.04em",
     textTransform: "uppercase",
-    color: "var(--confucius-accent, #805f38)",
+    color: "var(--confucius-accent)",
     display: "flex",
+    flexWrap: "wrap",
     alignItems: "center",
-    gap: "6px",
+    gap: "8px",
   });
-  badge.textContent = `📚 ${t.badge}`;
+  const removal =
+    item.toolName === "organizer_unassign_annotations" ||
+    item.toolName === "annotations_unassign";
+  badge.textContent = `📚 ${removal ? (lang === "zh-CN" ? "Flex Annotations · 取消归类" : lang === "de" ? "Flex Annotations · Zuweisungen entfernen" : "Flex Annotations · Remove assignments") : t.badge}${item.args.dryRun === true ? (lang === "zh-CN" ? " · 预览，不写入" : lang === "de" ? " · Vorschau, ohne Änderungen" : " · Preview, no changes") : ""}`;
 
   if (review.collectionTitle) {
     const colPill = el(doc, "span", {
-      fontSize: "11px",
+      fontSize: "12px",
       fontWeight: "600",
       padding: "2px 8px",
       borderRadius: "12px",
-      background: "var(--confucius-surface, rgba(128, 128, 128, 0.1))",
-      color: "var(--confucius-ink, currentColor)",
-      border: "1px solid var(--confucius-line, rgba(128, 128, 128, 0.2))",
+      background: "var(--confucius-surface)",
+      color: "var(--confucius-ink)",
+      border: "1px solid var(--confucius-line)",
       maxWidth: "260px",
       whiteSpace: "nowrap",
       overflow: "hidden",
@@ -325,7 +364,7 @@ export function renderOrganizerReviewCard(
 
   const tallyLabel = el(doc, "div", {
     fontSize: "12px",
-    color: "var(--confucius-muted, rgba(140, 140, 140, 0.9))",
+    color: "var(--confucius-muted)",
     lineHeight: "1.4",
   });
 
@@ -341,79 +380,37 @@ export function renderOrganizerReviewCard(
     justifyContent: "space-between",
     gap: "8px",
     padding: "6px 0",
-    borderTop: "1px solid var(--confucius-line, rgba(128, 128, 128, 0.2))",
-    borderBottom: "1px solid var(--confucius-line, rgba(128, 128, 128, 0.2))",
     marginBottom: "10px",
   });
 
   // Filter Buttons
   const filterGroup = el(doc, "div", {
     display: "flex",
+    flexWrap: "wrap",
     gap: "4px",
     alignItems: "center",
   });
 
-  const filterAllBtn = el(doc, "button", {
-    fontSize: "11px",
-    padding: "3px 8px",
-    borderRadius: "4px",
-    border: "1px solid transparent",
-    cursor: "pointer",
-  });
-  const filterAcceptedBtn = el(doc, "button", {
-    fontSize: "11px",
-    padding: "3px 8px",
-    borderRadius: "4px",
-    border: "1px solid transparent",
-    cursor: "pointer",
-  });
-  const filterRejectedBtn = el(doc, "button", {
-    fontSize: "11px",
-    padding: "3px 8px",
-    borderRadius: "4px",
-    border: "1px solid transparent",
-    cursor: "pointer",
-  });
+  const filterAllBtn = el(doc, "button");
+  const filterAcceptedBtn = el(doc, "button");
+  const filterRejectedBtn = el(doc, "button");
 
   filterGroup.append(filterAllBtn, filterAcceptedBtn, filterRejectedBtn);
 
   // Mode and Bulk Action Buttons
   const actionGroup = el(doc, "div", {
     display: "flex",
-    gap: "6px",
+    flexWrap: "wrap",
+    gap: "8px",
     alignItems: "center",
   });
 
-  const viewModeBtn = el(doc, "button", {
-    fontSize: "11px",
-    padding: "3px 8px",
-    borderRadius: "4px",
-    border: "1px solid var(--confucius-line, rgba(128, 128, 128, 0.2))",
-    background: "transparent",
-    color: "var(--confucius-ink, currentColor)",
-    cursor: "pointer",
-  });
+  const viewModeBtn = el(doc, "button");
 
-  const acceptAllBtn = el(doc, "button", {
-    fontSize: "11px",
-    padding: "3px 8px",
-    borderRadius: "4px",
-    border: "1px solid var(--confucius-line, rgba(128, 128, 128, 0.2))",
-    background: "transparent",
-    color: "var(--confucius-ink, currentColor)",
-    cursor: "pointer",
-  });
+  const acceptAllBtn = el(doc, "button");
   acceptAllBtn.textContent = `✓ ${t.acceptAll}`;
 
-  const rejectAllBtn = el(doc, "button", {
-    fontSize: "11px",
-    padding: "3px 8px",
-    borderRadius: "4px",
-    border: "1px solid var(--confucius-line, rgba(128, 128, 128, 0.2))",
-    background: "transparent",
-    color: "var(--confucius-ink, currentColor)",
-    cursor: "pointer",
-  });
+  const rejectAllBtn = el(doc, "button");
   rejectAllBtn.textContent = `✗ ${t.rejectAll}`;
 
   actionGroup.append(viewModeBtn, acceptAllBtn, rejectAllBtn);
@@ -434,10 +431,9 @@ export function renderOrganizerReviewCard(
       padding: "5px 10px",
       fontSize: "12px",
       borderRadius: "6px",
-      border: "1px solid var(--confucius-line, rgba(128, 128, 128, 0.2))",
-      background: "var(--confucius-surface, rgba(128, 128, 128, 0.08))",
-      color: "var(--confucius-ink, currentColor)",
-      outline: "none",
+      border: "1px solid var(--confucius-line)",
+      background: "var(--confucius-surface)",
+      color: "var(--confucius-ink)",
     },
     {
       type: "search",
@@ -467,46 +463,23 @@ export function renderOrganizerReviewCard(
     flexDirection: "column",
     gap: "8px",
     paddingTop: "8px",
-    borderTop: "1px solid var(--confucius-line, rgba(128, 128, 128, 0.2))",
   });
 
   const buttonRow = el(doc, "div", {
     display: "flex",
-    gap: "6px",
+    flexWrap: "wrap",
+    gap: "8px",
     alignItems: "center",
   });
 
-  const allowBtn = el(doc, "button", {
-    fontSize: "12px",
-    fontWeight: "600",
-    padding: "6px 14px",
-    borderRadius: "6px",
-    border: "none",
-    background: "var(--confucius-primary, #33302a)",
-    color: "var(--confucius-primary-ink, #ffffff)",
-    cursor: "pointer",
-  });
+  const allowBtn = el(doc, "button");
 
-  const sessionBtn = el(doc, "button", {
-    fontSize: "12px",
-    padding: "6px 12px",
-    borderRadius: "6px",
-    border: "1px solid var(--confucius-line, rgba(128, 128, 128, 0.2))",
-    background: "transparent",
-    color: "var(--confucius-ink, currentColor)",
-    cursor: "pointer",
-  });
+  allowBtn.dataset.variant = "primary";
+
+  const sessionBtn = el(doc, "button");
   sessionBtn.textContent = t.allowSession;
 
-  const denyBtn = el(doc, "button", {
-    fontSize: "12px",
-    padding: "6px 12px",
-    borderRadius: "6px",
-    border: "1px solid var(--confucius-danger, #efaa99)",
-    background: "transparent",
-    color: "var(--confucius-danger, #efaa99)",
-    cursor: "pointer",
-  });
+  const denyBtn = el(doc, "button");
   denyBtn.textContent = t.deny;
 
   buttonRow.append(allowBtn, sessionBtn, denyBtn);
@@ -514,12 +487,6 @@ export function renderOrganizerReviewCard(
 
   // Raw Parameters Toggle
   const paramsToggle = el(doc, "button", {
-    background: "transparent",
-    border: "none",
-    color: "var(--confucius-muted, rgba(140, 140, 140, 0.9))",
-    fontSize: "11px",
-    padding: "4px 0",
-    cursor: "pointer",
     textAlign: "left",
     alignSelf: "flex-start",
   });
@@ -533,13 +500,13 @@ export function renderOrganizerReviewCard(
     if (paramsOpen && !paramsPre) {
       paramsPre = el(doc, "pre", {
         whiteSpace: "pre-wrap",
-        fontSize: "11px",
+        fontSize: "12px",
         margin: "4px 0 0",
         padding: "8px",
         borderRadius: "6px",
-        background: "var(--confucius-surface, rgba(128, 128, 128, 0.08))",
-        color: "var(--confucius-ink, currentColor)",
-        border: "1px solid var(--confucius-line, rgba(128, 128, 128, 0.2))",
+        background: "var(--confucius-surface)",
+        color: "var(--confucius-ink)",
+        border: "1px solid var(--confucius-line)",
         maxHeight: "220px",
         overflowY: "auto",
       });
@@ -552,6 +519,35 @@ export function renderOrganizerReviewCard(
 
   bottomBar.appendChild(paramsToggle);
   card.appendChild(bottomBar);
+
+  const resolutionError = el(
+    doc,
+    "div",
+    { color: "var(--confucius-danger)" },
+    { role: "alert" },
+  );
+  bottomBar.appendChild(resolutionError);
+  let resolving = false;
+  const submit = async (
+    verdict: "allow" | "deny",
+    scope: "once" | "session",
+    editedArgs?: Record<string, unknown>,
+  ) => {
+    if (resolving) return;
+    resolving = true;
+    resolutionError.textContent = "";
+    allowBtn.disabled = sessionBtn.disabled = denyBtn.disabled = true;
+    try {
+      await options.resolve(verdict, scope, editedArgs);
+    } catch (error) {
+      resolutionError.textContent =
+        error instanceof Error ? error.message : String(error);
+    } finally {
+      resolving = false;
+      denyBtn.disabled = false;
+      updateTallies();
+    }
+  };
 
   // Helper to commit approval resolution
   const commitApproval = (scope: "once" | "session") => {
@@ -566,17 +562,18 @@ export function renderOrganizerReviewCard(
     const editedArgs: Record<string, unknown> = {
       ...item.args,
       assignments: acceptedAssignments,
-      dryRun: false, // Ensure write happens on approval
     };
     delete editedArgs.keys;
     delete editedArgs.key;
 
-    options.resolve("allow", scope, editedArgs);
+    void submit("allow", scope, editedArgs);
   };
 
   allowBtn.addEventListener("click", () => commitApproval("once"));
   sessionBtn.addEventListener("click", () => commitApproval("session"));
-  denyBtn.addEventListener("click", () => options.resolve("deny", "once"));
+  denyBtn.addEventListener("click", () => {
+    void submit("deny", "once");
+  });
 
   // --- Filtering & Render Logic ---
 
@@ -615,23 +612,14 @@ export function renderOrganizerReviewCard(
     if (typeof Zotero === "undefined" || !Zotero.Items) return;
     try {
       let item: any = null;
-      if (typeof (Zotero.Libraries as any)?.getAll === "function") {
-        for (const lib of (Zotero.Libraries as any).getAll()) {
-          const cand = (Zotero.Items as any).getByLibraryAndKey?.(
-            lib.libraryID,
-            entry.key,
-          );
-          if (cand && cand !== false) {
-            item = cand;
-            break;
-          }
-        }
-      }
       if (
         !item &&
         typeof (Zotero.Items as any).getByLibraryAndKey === "function"
       ) {
-        const userLib = (Zotero.Libraries as any)?.userLibraryID ?? 1;
+        const userLib =
+          typeof itemArgsLibraryID === "number"
+            ? itemArgsLibraryID
+            : ((Zotero.Libraries as any)?.userLibraryID ?? 1);
         const cand = (Zotero.Items as any).getByLibraryAndKey(
           userLib,
           entry.key,
@@ -661,8 +649,8 @@ export function renderOrganizerReviewCard(
             (item.annotationPosition
               ? String(
                   (typeof item.annotationPosition === "string"
-                    ? JSON.parse(item.annotationPosition)?.pageIndex ?? 0
-                    : item.annotationPosition?.pageIndex ?? 0) + 1,
+                    ? (JSON.parse(item.annotationPosition)?.pageIndex ?? 0)
+                    : (item.annotationPosition?.pageIndex ?? 0)) + 1,
                 )
               : "");
         }
@@ -699,7 +687,7 @@ export function renderOrganizerReviewCard(
             if (!entry.sourceCitation) {
               const creators = (
                 typeof work.getCreators === "function"
-                  ? work.getCreators() ?? []
+                  ? (work.getCreators() ?? [])
                   : []
               )
                 .map((c: any) => c.lastName || c.name || "")
@@ -740,13 +728,11 @@ export function renderOrganizerReviewCard(
       gap: "8px",
       padding: "10px 12px",
       borderRadius: "6px",
-      border: `1px solid ${isAccepted ? "var(--confucius-line, rgba(128, 128, 128, 0.2))" : "var(--confucius-danger, #efaa99)"}`,
+      border: `1px solid ${isAccepted ? "var(--confucius-line)" : "var(--confucius-danger)"}`,
       background: isAccepted
-        ? "var(--confucius-elevated, transparent)"
-        : "var(--confucius-danger-surface, rgba(239, 68, 68, 0.08))",
-      borderLeft: `4px solid ${entry.color || "var(--confucius-accent, #805f38)"}`,
-      opacity: isAccepted ? "1" : "0.7",
-      transition: "all 0.15s ease",
+        ? "var(--confucius-elevated)"
+        : "var(--confucius-danger-surface)",
+      borderLeft: `4px solid ${entry.color || "var(--confucius-accent)"}`,
       flexShrink: "0",
       boxSizing: "border-box",
       marginRight: "4px",
@@ -770,7 +756,7 @@ export function renderOrganizerReviewCard(
         fontSize: "12.5px",
         lineHeight: "1.55",
         fontWeight: "500",
-        color: "var(--confucius-ink, currentColor)",
+        color: "var(--confucius-ink)",
         textDecoration: isAccepted ? "none" : "line-through",
         overflowWrap: "anywhere",
         wordBreak: "break-word",
@@ -784,26 +770,26 @@ export function renderOrganizerReviewCard(
       display: "flex",
       flexWrap: "wrap",
       alignItems: "center",
-      gap: "6px",
-      fontSize: "11px",
-      color: "var(--confucius-secondary, currentColor)",
+      gap: "8px",
+      fontSize: "12px",
+      color: "var(--confucius-secondary)",
     });
 
+    const pageLabel =
+      lang === "de"
+        ? `S. ${entry.page}`
+        : lang === "zh-CN"
+          ? `第 ${entry.page} 页`
+          : `p. ${entry.page}`;
     if (entry.sourceCitation || entry.sourceTitle) {
-      const citeText = `📄 ${entry.sourceCitation || entry.sourceTitle}${entry.page ? ` · S. ${entry.page}` : ""}`;
+      const citeText = `📄 ${entry.sourceCitation || entry.sourceTitle}${entry.page ? ` · ${pageLabel}` : ""}`;
       if (options.locate) {
         const citeLink = el(doc, "button", {
-          background: "transparent",
-          border: "none",
-          padding: "0",
-          color: "var(--confucius-accent, #805f38)",
-          fontSize: "11px",
-          fontWeight: "400",
-          cursor: "pointer",
           textAlign: "left",
           textDecoration: "underline",
-          lineHeight: "1.35",
         });
+        citeLink.dataset.variant = "link";
+        citeLink.style.fontWeight = "400";
         citeLink.textContent = citeText;
         citeLink.title = t.openInReader;
         citeLink.addEventListener("click", () => options.locate?.(entry.key));
@@ -811,7 +797,7 @@ export function renderOrganizerReviewCard(
       } else {
         const citeSpan = el(doc, "span", {
           fontWeight: "400",
-          fontSize: "11px",
+          fontSize: "12px",
           lineHeight: "1.35",
         });
         citeSpan.textContent = citeText;
@@ -820,10 +806,10 @@ export function renderOrganizerReviewCard(
     } else if (entry.page) {
       const pageSpan = el(doc, "span", {
         fontWeight: "400",
-        fontSize: "11px",
+        fontSize: "12px",
         lineHeight: "1.35",
       });
-      pageSpan.textContent = `📄 S. ${entry.page}`;
+      pageSpan.textContent = `📄 ${pageLabel}`;
       metaRow.appendChild(pageSpan);
     }
 
@@ -839,13 +825,13 @@ export function renderOrganizerReviewCard(
       for (const h of entry.headings) {
         if (!h.title.trim()) continue;
         const hBadge = el(doc, "span", {
-          fontSize: "10px",
+          fontSize: "12px",
           fontWeight: "600",
           padding: "2px 7px",
           borderRadius: "10px",
-          background: "var(--confucius-surface, rgba(128, 128, 128, 0.1))",
-          color: "var(--confucius-accent, #805f38)",
-          border: "1px solid var(--confucius-line, rgba(128, 128, 128, 0.2))",
+          background: "var(--confucius-surface)",
+          color: "var(--confucius-accent)",
+          border: "1px solid var(--confucius-line)",
         });
         hBadge.textContent = formatHeadingBadge(h);
         metaRow.appendChild(hBadge);
@@ -859,13 +845,13 @@ export function renderOrganizerReviewCard(
       });
       for (const h of otherHeadings) {
         const hBadge = el(doc, "span", {
-          fontSize: "10px",
+          fontSize: "12px",
           fontWeight: "500",
           padding: "2px 7px",
           borderRadius: "10px",
-          background: "var(--confucius-surface, rgba(128, 128, 128, 0.1))",
-          color: "var(--confucius-secondary, currentColor)",
-          border: "1px solid var(--confucius-line, rgba(128, 128, 128, 0.2))",
+          background: "var(--confucius-surface)",
+          color: "var(--confucius-secondary)",
+          border: "1px solid var(--confucius-line)",
         });
         hBadge.textContent = `+ ${formatHeadingBadge(h)}`;
         metaRow.appendChild(hBadge);
@@ -879,13 +865,13 @@ export function renderOrganizerReviewCard(
     // User Comment
     if (entry.comment && entry.comment.trim()) {
       const commentEl = el(doc, "div", {
-        fontSize: "11px",
+        fontSize: "12px",
         lineHeight: "1.4",
-        color: "var(--confucius-ink, currentColor)",
-        background: "var(--confucius-surface, rgba(128, 128, 128, 0.08))",
+        color: "var(--confucius-ink)",
+        background: "var(--confucius-surface)",
         padding: "6px 10px",
         borderRadius: "4px",
-        border: "1px solid var(--confucius-line, rgba(128, 128, 128, 0.2))",
+        border: "1px solid var(--confucius-line)",
       });
       commentEl.textContent = `💬 ${t.comment}: ${entry.comment.trim()}`;
       itemRow.appendChild(commentEl);
@@ -894,60 +880,49 @@ export function renderOrganizerReviewCard(
     // Controls Row (Accept / Reject)
     const ctrlRow = el(doc, "div", {
       display: "flex",
+      flexWrap: "wrap",
       alignItems: "center",
       justifyContent: "space-between",
       marginTop: "4px",
       paddingTop: "6px",
-      borderTop: "1px solid var(--confucius-line, rgba(128, 128, 128, 0.2))",
     });
 
     const statusPill = el(doc, "span", {
-      fontSize: "11px",
+      fontSize: "12px",
       fontWeight: "700",
       letterSpacing: "0.03em",
       textTransform: "uppercase",
       color: isAccepted
-        ? "var(--confucius-success, #476d4f)"
-        : "var(--confucius-danger, #efaa99)",
+        ? "var(--confucius-success)"
+        : "var(--confucius-danger)",
     });
     statusPill.textContent = isAccepted ? `✓ ${t.accepted}` : `✗ ${t.rejected}`;
 
     const toggleBtns = el(doc, "div", {
       display: "flex",
-      gap: "6px",
+      flexWrap: "wrap",
+      gap: "8px",
     });
 
-    const acceptBtn = el(doc, "button", {
-      fontSize: "11px",
-      padding: "3px 10px",
-      borderRadius: "4px",
-      border: `1px solid ${isAccepted ? "var(--confucius-success, #476d4f)" : "var(--confucius-line, rgba(128, 128, 128, 0.2))"}`,
-      background: isAccepted
-        ? "var(--confucius-success, #476d4f)"
-        : "transparent",
-      color: isAccepted
-        ? "var(--confucius-primary-ink, #ffffff)"
-        : "var(--confucius-ink, currentColor)",
-      cursor: "pointer",
-      fontWeight: isAccepted ? "600" : "500",
-    });
+    const acceptBtn = el(doc, "button");
     acceptBtn.textContent = `✓ ${t.acceptItem}`;
-
-    const rejectBtn = el(doc, "button", {
-      fontSize: "11px",
-      padding: "3px 10px",
-      borderRadius: "4px",
-      border: `1px solid ${!isAccepted ? "var(--confucius-danger, #efaa99)" : "var(--confucius-line, rgba(128, 128, 128, 0.2))"}`,
-      background: !isAccepted
-        ? "var(--confucius-danger, #efaa99)"
-        : "transparent",
-      color: !isAccepted
-        ? "var(--confucius-primary-ink, #ffffff)"
-        : "var(--confucius-ink, currentColor)",
-      cursor: "pointer",
-      fontWeight: !isAccepted ? "600" : "500",
-    });
+    const rejectBtn = el(doc, "button");
     rejectBtn.textContent = `✗ ${t.rejectItem}`;
+
+    const updateDecision = (accepted: boolean) => {
+      itemRow.dataset.status = accepted ? "accepted" : "rejected";
+      itemRow.style.background = "var(--confucius-elevated)";
+      if (quoteEl)
+        quoteEl.style.textDecoration = accepted ? "none" : "line-through";
+      statusPill.textContent = accepted ? `✓ ${t.accepted}` : `✗ ${t.rejected}`;
+      statusPill.style.color = "var(--confucius-secondary)";
+      acceptBtn.setAttribute("aria-pressed", String(accepted));
+      rejectBtn.setAttribute("aria-pressed", String(!accepted));
+    };
+    const views = itemViews.get(index) ?? [];
+    views.push(updateDecision);
+    itemViews.set(index, views);
+    updateDecision(isAccepted);
 
     const setItemAccepted = (accepted: boolean) => {
       if (accepted) {
@@ -961,42 +936,8 @@ export function renderOrganizerReviewCard(
         return;
       }
 
-      // In "all" view, update in-place without rebuilding DOM or resetting scroll
-      itemRow.dataset.status = accepted ? "accepted" : "rejected";
-      itemRow.style.borderColor = accepted
-        ? "var(--confucius-line, rgba(128, 128, 128, 0.2))"
-        : "var(--confucius-danger, #efaa99)";
-      itemRow.style.background = accepted
-        ? "var(--confucius-elevated, transparent)"
-        : "var(--confucius-danger-surface, rgba(239, 68, 68, 0.08))";
-      itemRow.style.opacity = accepted ? "1" : "0.7";
-
-      if (quoteEl) {
-        quoteEl.style.textDecoration = accepted ? "none" : "line-through";
-      }
-
-      statusPill.textContent = accepted ? `✓ ${t.accepted}` : `✗ ${t.rejected}`;
-      statusPill.style.color = accepted
-        ? "var(--confucius-success, #476d4f)"
-        : "var(--confucius-danger, #efaa99)";
-
-      acceptBtn.style.border = `1px solid ${accepted ? "var(--confucius-success, #476d4f)" : "var(--confucius-line, rgba(128, 128, 128, 0.2))"}`;
-      acceptBtn.style.background = accepted
-        ? "var(--confucius-success, #476d4f)"
-        : "transparent";
-      acceptBtn.style.color = accepted
-        ? "var(--confucius-primary-ink, #ffffff)"
-        : "var(--confucius-ink, currentColor)";
-      acceptBtn.style.fontWeight = accepted ? "600" : "500";
-
-      rejectBtn.style.border = `1px solid ${!accepted ? "var(--confucius-danger, #efaa99)" : "var(--confucius-line, rgba(128, 128, 128, 0.2))"}`;
-      rejectBtn.style.background = !accepted
-        ? "var(--confucius-danger, #efaa99)"
-        : "transparent";
-      rejectBtn.style.color = !accepted
-        ? "var(--confucius-primary-ink, #ffffff)"
-        : "var(--confucius-ink, currentColor)";
-      rejectBtn.style.fontWeight = !accepted ? "600" : "500";
+      // Keep every heading's copy in sync without replacing the focused card.
+      for (const update of itemViews.get(index) ?? []) update(accepted);
 
       updateTallies();
     };
@@ -1029,13 +970,11 @@ export function renderOrganizerReviewCard(
     filterRejectedBtn.textContent = `${t.rejected} (${rejectedCount})`;
 
     allowBtn.textContent = t.applyButton(acceptedCount);
-    allowBtn.disabled = acceptedCount === 0;
-    allowBtn.style.opacity = acceptedCount === 0 ? "0.5" : "1";
-    allowBtn.style.cursor = acceptedCount === 0 ? "not-allowed" : "pointer";
+    allowBtn.disabled = resolving || acceptedCount === 0;
+    allowBtn.title = acceptedCount === 0 ? t.noResults : "";
 
-    sessionBtn.disabled = acceptedCount === 0;
-    sessionBtn.style.opacity = acceptedCount === 0 ? "0.5" : "1";
-    sessionBtn.style.cursor = acceptedCount === 0 ? "not-allowed" : "pointer";
+    sessionBtn.disabled = resolving || acceptedCount === 0;
+    sessionBtn.title = allowBtn.title;
   }
 
   function render(): void {
@@ -1043,16 +982,7 @@ export function renderOrganizerReviewCard(
     updateTallies();
 
     const setFilterStyle = (btn: HTMLElement, active: boolean) => {
-      btn.style.background = active
-        ? "var(--confucius-accent, #805f38)"
-        : "transparent";
-      btn.style.color = active
-        ? "var(--confucius-primary-ink, #ffffff)"
-        : "var(--confucius-ink, currentColor)";
-      btn.style.borderColor = active
-        ? "transparent"
-        : "var(--confucius-line, rgba(128, 128, 128, 0.2))";
-      btn.style.fontWeight = active ? "600" : "normal";
+      btn.setAttribute("aria-pressed", String(active));
     };
 
     setFilterStyle(filterAllBtn, filter === "all");
@@ -1072,6 +1002,7 @@ export function renderOrganizerReviewCard(
       if (key) savedGroupScrolls.set(key, wrapper.scrollTop);
     }
 
+    itemViews.clear();
     // 2. Clear content container
     while (listContainer.firstChild) {
       listContainer.removeChild(listContainer.firstChild);
@@ -1094,7 +1025,7 @@ export function renderOrganizerReviewCard(
         padding: "24px 12px",
         textAlign: "center",
         fontSize: "12px",
-        color: "var(--confucius-muted, #7a7265)",
+        color: "var(--confucius-muted)",
       });
       emptyState.textContent = t.noResults;
       listContainer.appendChild(emptyState);
@@ -1241,27 +1172,24 @@ export function renderOrganizerReviewCard(
       const section = el(doc, "section", {
         display: "flex",
         flexDirection: "column",
-        gap: "6px",
+        gap: "8px",
         borderRadius: "8px",
-        background: "var(--confucius-surface, rgba(128, 128, 128, 0.08))",
-        border: "1px solid var(--confucius-line, rgba(128, 128, 128, 0.2))",
+        background: "var(--confucius-surface)",
+        border: "1px solid var(--confucius-line)",
         overflow: "hidden",
         flexShrink: "0",
         marginRight: "6px",
       });
 
       // Section Header (Accordion)
-      const secHeader = el(doc, "header", {
+      const secHeader = el(doc, "button", {
+        textAlign: "left",
+        width: "100%",
         display: "flex",
+        flexWrap: "wrap",
         alignItems: "center",
         justifyContent: "space-between",
-        padding: "8px 12px",
-        background: "var(--confucius-surface, rgba(128, 128, 128, 0.08))",
-        cursor: "pointer",
         userSelect: "none",
-        borderBottom: isCollapsed
-          ? "none"
-          : "1px solid var(--confucius-line, rgba(128, 128, 128, 0.2))",
       });
 
       const titleCol = el(doc, "div", {
@@ -1274,14 +1202,14 @@ export function renderOrganizerReviewCard(
 
       const headingTitleRow = el(doc, "div", {
         display: "flex",
-        alignItems: "center",
-        gap: "6px",
         flexWrap: "wrap",
+        alignItems: "center",
+        gap: "8px",
       });
 
       const arrow = el(doc, "span", {
-        fontSize: "10px",
-        color: "var(--confucius-muted, rgba(140, 140, 140, 0.9))",
+        fontSize: "12px",
+        color: "var(--confucius-muted)",
         display: "inline-block",
         width: "12px",
       });
@@ -1294,7 +1222,7 @@ export function renderOrganizerReviewCard(
           fontWeight: "700",
           fontSize: "13px",
           lineHeight: "1.35",
-          color: "var(--confucius-ink, currentColor)",
+          color: "var(--confucius-ink)",
           flexShrink: "0",
         });
         const numText = group.num.includes(".") ? group.num : `${group.num}.`;
@@ -1307,18 +1235,18 @@ export function renderOrganizerReviewCard(
         fontWeight: "700",
         fontSize: "13px",
         lineHeight: "1.35",
-        color: "var(--confucius-ink, currentColor)",
+        color: "var(--confucius-ink)",
       });
       headingLabel.textContent = group.title;
       headingTitleRow.appendChild(headingLabel);
 
       const countBadge = el(doc, "span", {
-        fontSize: "11px",
+        fontSize: "12px",
         fontWeight: "600",
         padding: "1px 6px",
         borderRadius: "10px",
-        background: "var(--confucius-hover, rgba(128, 128, 128, 0.12))",
-        color: "var(--confucius-muted, rgba(140, 140, 140, 0.9))",
+        background: "var(--confucius-hover)",
+        color: "var(--confucius-muted)",
       });
       countBadge.textContent = `(${group.items.length})`;
       headingTitleRow.appendChild(countBadge);
@@ -1330,7 +1258,9 @@ export function renderOrganizerReviewCard(
       if (group.path) {
         const cleanPath = group.path.trim();
         const cleanTitle = group.title.trim();
-        const cleanWithNum = group.num ? `${group.num} ${cleanTitle}`.trim() : "";
+        const cleanWithNum = group.num
+          ? `${group.num} ${cleanTitle}`.trim()
+          : "";
         if (
           cleanPath !== cleanTitle &&
           cleanPath !== cleanWithNum &&
@@ -1341,15 +1271,16 @@ export function renderOrganizerReviewCard(
       }
       if (breadcrumbText) {
         const breadcrumb = el(doc, "div", {
-          fontSize: "11px",
+          fontSize: "12px",
           lineHeight: "1.35",
-          color: "var(--confucius-muted, rgba(140, 140, 140, 0.9))",
+          color: "var(--confucius-muted)",
           paddingLeft: "18px",
         });
         breadcrumb.textContent = `› ${breadcrumbText}`;
         titleCol.appendChild(breadcrumb);
       }
 
+      secHeader.setAttribute("aria-expanded", String(!isCollapsed));
       secHeader.appendChild(titleCol);
 
       secHeader.addEventListener("click", () => {
@@ -1367,7 +1298,7 @@ export function renderOrganizerReviewCard(
         const itemsWrapper = el(doc, "div", {
           display: "flex",
           flexDirection: "column",
-          gap: "6px",
+          gap: "8px",
           padding: "6px 12px 6px 6px",
           maxHeight: "360px",
           overflowY: "auto",
@@ -1442,7 +1373,17 @@ export function renderOrganizerReviewCard(
     render();
   });
 
-  searchInput.addEventListener("input", () => {
+  let composing = false;
+  searchInput.addEventListener("compositionstart", () => {
+    composing = true;
+  });
+  searchInput.addEventListener("compositionend", () => {
+    composing = false;
+    searchQuery = searchInput.value.trim();
+    render();
+  });
+  searchInput.addEventListener("input", (event) => {
+    if (composing || (event as InputEvent).isComposing) return;
     searchQuery = searchInput.value.trim();
     render();
   });

@@ -175,6 +175,13 @@ export const SURFACE_CSS = `
   color: var(--confucius-ink); font: inherit; font-weight: 550;
   line-height: 1.4; cursor: pointer; box-sizing: border-box;
 }
+.confucius-organizer-review-card { min-width:0; overflow-wrap:anywhere; }
+.confucius-organizer-review-card :is(article, section, [data-heading-scroll]) { min-width:0; max-width:100%; }
+.confucius-organizer-review-card article > div { min-width:0; }
+.confucius-organizer-review-card .confucius-button { min-height:34px; padding:6px 8px; white-space:normal; overflow-wrap:anywhere; }
+.confucius-organizer-review-card .confucius-button[aria-pressed=true] { background:var(--confucius-selected); color:var(--confucius-ink); }
+.confucius-organizer-review-card .confucius-button[aria-pressed=true]:hover { background:var(--confucius-hover); }
+.confucius-organizer-review-card input:focus-visible { outline:2px solid var(--confucius-focus); outline-offset:2px; }
 .confucius-button:hover:not(:disabled) { background: var(--confucius-hover); }
 .confucius-button[data-variant=primary] { background: var(--confucius-primary); color: var(--confucius-primary-ink); }
 .confucius-button[data-variant=primary]:hover:not(:disabled) { background: var(--confucius-primary-hover); }

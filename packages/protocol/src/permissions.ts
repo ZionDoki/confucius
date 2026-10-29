@@ -56,6 +56,7 @@ export interface OrganizerAssignmentItemReview {
 }
 
 export interface OrganizerAssignmentReview {
+  libraryID?: number;
   collectionKey?: string;
   collectionTitle?: string;
   totalAssignments: number;

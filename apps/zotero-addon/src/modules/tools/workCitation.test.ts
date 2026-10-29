@@ -42,9 +42,7 @@ describe("buildWorkCitation", () => {
   });
 
   it("falls back to title when there are no creators", () => {
-    const { citation } = buildWorkCitation(
-      fakeWork({ getCreators: () => [] }),
-    );
+    const { citation } = buildWorkCitation(fakeWork({ getCreators: () => [] }));
     assert.equal(citation, "Some Title");
   });
 

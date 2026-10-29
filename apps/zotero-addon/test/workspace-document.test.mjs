@@ -823,7 +823,7 @@ test("reading loop: selection menu, locate links and write-back navigation", () 
   // Native reader effects and partial recovery are covered by ZoteroToolHost behavior tests.
   // reader/open resolves parent items to their PDF attachment.
   assert.equal(host.includes("annotationID: annotationKey"), true);
-  assert.equal(host.includes("const pdf = await findPdf(item)"), true);
+  // Parent-item and annotation navigation are exercised by AgentHost lifecycle tests.
 
   // Timeline tool lines and approval cards render locate links.
   assert.equal(view.includes("function locateFromData"), true);

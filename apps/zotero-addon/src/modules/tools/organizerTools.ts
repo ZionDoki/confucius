@@ -17,9 +17,9 @@ import {
   COLLECTION_TAG_PREFIX,
   HEADING_PREFIX,
   OUTLINE_TAG,
+  ORGANIZER_TOOL_ALIASES,
   TOOL_META,
   buildHeadingLookup,
-  cleanHeadingTitle,
   extractSurroundingContext,
   flattenOutline,
   headingTag,
@@ -60,8 +60,6 @@ function asCollection(value: unknown): Zotero.Collection | null {
   return value as Zotero.Collection;
 }
 
-
-
 function isOutlineRootShape(value: unknown): value is OutlineNode {
   if (!value || typeof value !== "object") return false;
   const n = value as OutlineNode;
@@ -71,7 +69,6 @@ function isOutlineRootShape(value: unknown): value is OutlineNode {
     Array.isArray(n.children)
   );
 }
-
 
 function defaultLibraryID(args: Record<string, unknown>): number {
   if (typeof args.libraryID === "number" && Number.isInteger(args.libraryID)) {
@@ -97,14 +94,7 @@ function annotationCreationTime(
   return Number.isFinite(time) ? time : Date.now();
 }
 
-/** Kurze Alias-Namen, mit denen das Modell die Organizer-Tools ansprechen kann. */
-export const ORGANIZER_TOOL_ALIASES: Record<string, string> = {
-  outline_get: "organizer_get_outline",
-  annotations_list: "organizer_list_annotations",
-  annotation_context: "organizer_get_annotation_context",
-  annotations_assign: "organizer_assign_annotations",
-  annotations_unassign: "organizer_unassign_annotations",
-};
+export { ORGANIZER_TOOL_ALIASES } from "@confucius/zotero-tools";
 
 /** Schreibende Organizer-Tools (kanonische Namen). */
 export const ORGANIZER_WRITE_TOOL_NAMES = [
@@ -283,7 +273,6 @@ export function prepareOrganizerRead(
  * Annotation-Cache und implementiert die fünf Tools gegen die Zotero-API.
  */
 export class OrganizerTools {
-
   private outlineCache = new Map<
     string,
     { roots: OutlineNode[]; headings: FlatHeading[]; cachedAt: number }
@@ -344,14 +333,14 @@ export class OrganizerTools {
       const oldestKey = this.annotationCache.keys().next().value;
       if (oldestKey) this.annotationCache.delete(oldestKey);
     }
-    this.annotationCache.set(key, data);
+    this.annotationCache.set(`${data.libraryID}:${key}`, data);
   }
 
-  public getCachedAnnotation(key: string) {
-    return this.annotationCache.get(key);
+  public getCachedAnnotation(key: string, libraryID: number) {
+    return this.annotationCache.get(`${libraryID}:${key}`);
   }
 
-    /**
+  /**
    * Read the outline from the Flex Annotate public plugin interface
    * (Zotero.FlexAnnotate.api) when it is installed. Returns null when the plugin
    * is absent or the call fails, so the caller falls back to its own parsing.
@@ -429,7 +418,7 @@ export class OrganizerTools {
     }
   }
 
-    /**
+  /**
    * Fallback that reads the outline from the storage note when the FlexAnnotate
    * plugin interface is unavailable. Flattens headings with computed decimal
    * numbers so numbering is always available.
@@ -437,21 +426,14 @@ export class OrganizerTools {
   private async outlineFromNote(
     libraryID: number,
     topmostKey: string | null,
-    colKey: string | null,
   ): Promise<{ roots: OutlineNode[]; headings: FlatHeading[] } | null> {
-    let note = await this.findOutlineNote(libraryID, topmostKey);
-    if (!note && colKey && colKey !== topmostKey) {
-      note = await this.findOutlineNote(libraryID, colKey);
-    }
-    if (!note) {
-      note = await this.findOutlineNote(libraryID, null);
-    }
+    const note = await this.findOutlineNote(libraryID, topmostKey);
     if (!note) return null;
     const roots = parseOutline(note.getNote?.() || "");
     return { roots, headings: flattenOutline(roots) };
   }
 
-    /**
+  /**
    * Resolve the organizer outline by reading it from the Flex Annotate
    * plugin interface (preferred), or falling back to the storage note.
    * Results are cached so subsequent queries and review generation
@@ -475,42 +457,53 @@ export class OrganizerTools {
       }
     }
 
-    const candidateKeys: Array<string | null> = [];
-    if (col?.key) candidateKeys.push(col.key);
-    if (topmostKey && !candidateKeys.includes(topmostKey)) {
-      candidateKeys.push(topmostKey);
-    }
-    if (ref && !candidateKeys.includes(ref)) {
-      candidateKeys.push(ref);
-    }
-    candidateKeys.push(null);
+    // Flex Annotate scopes collection trees to the top-level ancestor. A
+    // missing collection tree must never fall back to a different outline.
+    if (ref && !col) return undefined;
+    const candidateKeys = [topmostKey];
 
     for (const key of candidateKeys) {
       const fromApi = await this.flexAnnotateOutlineAsync(libraryID, key);
       if (fromApi && fromApi.headings.length > 0) {
         this.cacheOutline(libraryID, colRef, fromApi.roots, fromApi.headings);
         if (col?.key) {
-          this.cacheOutline(libraryID, col.key, fromApi.roots, fromApi.headings);
+          this.cacheOutline(
+            libraryID,
+            col.key,
+            fromApi.roots,
+            fromApi.headings,
+          );
         }
         if (topmostKey) {
-          this.cacheOutline(libraryID, topmostKey, fromApi.roots, fromApi.headings);
+          this.cacheOutline(
+            libraryID,
+            topmostKey,
+            fromApi.roots,
+            fromApi.headings,
+          );
         }
         return fromApi;
       }
     }
 
-    const fromNote = await this.outlineFromNote(
-      libraryID,
-      topmostKey,
-      col?.key ?? null,
-    );
+    const fromNote = await this.outlineFromNote(libraryID, topmostKey);
     if (fromNote) {
       this.cacheOutline(libraryID, colRef, fromNote.roots, fromNote.headings);
       if (col?.key) {
-        this.cacheOutline(libraryID, col.key, fromNote.roots, fromNote.headings);
+        this.cacheOutline(
+          libraryID,
+          col.key,
+          fromNote.roots,
+          fromNote.headings,
+        );
       }
       if (topmostKey) {
-        this.cacheOutline(libraryID, topmostKey, fromNote.roots, fromNote.headings);
+        this.cacheOutline(
+          libraryID,
+          topmostKey,
+          fromNote.roots,
+          fromNote.headings,
+        );
       }
       return fromNote;
     }
@@ -625,6 +618,7 @@ export class OrganizerTools {
 
     const matching = notes.filter((note) => {
       const tags = note.getTags().map((t) => t.tag);
+      if (!tags.includes(OUTLINE_TAG)) return false;
       if (collectionKey === null) {
         return !tags.some((t) => t.startsWith(COLLECTION_TAG_PREFIX));
       }
@@ -788,7 +782,7 @@ export class OrganizerTools {
       const isAtt = Boolean(work.isAttachment?.());
       const effectiveWork =
         isAtt && work.parentItemID
-          ? asItem(Zotero.Items.get(work.parentItemID)) ?? work
+          ? (asItem(Zotero.Items.get(work.parentItemID)) ?? work)
           : work;
       const attachments = isAtt
         ? [work]
@@ -1160,7 +1154,18 @@ export class OrganizerTools {
 
     const dryRun = Boolean(args.dryRun);
     const resolved = await this.resolveOutline(libraryID, colRef);
-    const outlineTags = new Set((resolved?.headings ?? []).map((h) => h.tag));
+    if (!resolved) {
+      return fail(
+        "organizer_unassign_annotations",
+        "not_found",
+        "No outline found for this collection",
+      );
+    }
+    const scopeColIDs = this.getCollectionScopeIDs(
+      libraryID,
+      this.getTopmostCollection(col),
+    );
+    const outlineTags = new Set(resolved.headings.map((h) => h.tag));
     const headingLookup = buildHeadingLookup(resolved?.headings ?? []);
 
     const unassigned: Array<{ key: string; removed: string[] }> = [];
@@ -1184,6 +1189,17 @@ export class OrganizerTools {
         continue;
       }
 
+      const attachment = item.parentItemID
+        ? asItem(Zotero.Items.get(item.parentItemID))
+        : null;
+      const work = attachment?.parentItemID
+        ? asItem(Zotero.Items.get(attachment.parentItemID))
+        : attachment;
+      if (!(work?.getCollections?.() ?? []).some((id) => scopeColIDs.has(id))) {
+        skipped.push({ key, reason: "work not in collection" });
+        continue;
+      }
+
       const currentTags = new Set(item.getTags().map((t) => t.tag));
       let toRemove: string[];
       if (entry.headings && entry.headings.length) {
@@ -1196,9 +1212,6 @@ export class OrganizerTools {
             headingLookup.get(`§${normKey}`);
           if (match && currentTags.has(match.tag)) {
             tagsToRemove.add(match.tag);
-          } else {
-            const fallback = headingTag(cleanHeadingTitle(h).title || h);
-            if (currentTags.has(fallback)) tagsToRemove.add(fallback);
           }
         }
         toRemove = Array.from(tagsToRemove);

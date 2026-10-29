@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- Flex Annotations integration reads a collection's outline and finds unassigned
+  annotations. In Ask mode, assignment and removal proposals show quotes,
+  sources and heading numbers with individual Accept/Reject controls before
+  applying the selected changes. Collection boundaries and preview-only requests
+  are preserved. This integration is not yet included in a published package.
+
 ## 0.6.3-beta.1 - 2026-10-23
 
 ### Changed

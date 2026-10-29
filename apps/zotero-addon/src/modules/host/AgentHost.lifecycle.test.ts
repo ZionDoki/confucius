@@ -4021,7 +4021,6 @@ it("does not persist a planned note key after an unknown write outcome", async (
   }
 });
 
-
 it("requestToolApproval builds async organizer review with outline numbering and item metadata", async (t) => {
   const previousZotero = Reflect.get(globalThis, "Zotero");
   t.after(() => Reflect.set(globalThis, "Zotero", previousZotero));
@@ -4035,7 +4034,8 @@ it("requestToolApproval builds async organizer review with outline numbering and
       { tag: "★outline" },
       { tag: "#flexannotate-outline-COL_1" },
     ],
-    getNote: () => "<h1>1 Einleitung</h1><h2>1.1 Relevanz</h2><h1>2 Methode</h1>",
+    getNote: () =>
+      "<h1>1 Einleitung</h1><h2>1.1 Relevanz</h2><h1>2 Methode</h1>",
   };
 
   const annotationItem = {
@@ -4188,12 +4188,24 @@ it("AgentHost PermissionGate enrichRequest enriches organizer approvals with out
   state.record.permissionMode = "ask";
   (host as any).describeApprovalCall = () => "Assign to outline";
   (host as any).tools = {
-    getCollectionByRef: () => ({ id: 1, key: "COL_1", name: "Test Datenbank", libraryID: 1 }),
+    getCollectionByRef: () => ({
+      id: 1,
+      key: "COL_1",
+      name: "Test Datenbank",
+      libraryID: 1,
+    }),
     getTopmostCollection: (c: any) => c,
     resolveOutline: async () => ({
       roots: [],
       headings: [
-        { id: "h1", title: "Öffnet den Download-Link", num: "1", path: "Öffnet den Download-Link", depth: 0, tag: "§Öffnet den Download-Link" }
+        {
+          id: "h1",
+          title: "Öffnet den Download-Link",
+          num: "1",
+          path: "Öffnet den Download-Link",
+          depth: 0,
+          tag: "§Öffnet den Download-Link",
+        },
       ],
     }),
     getOutlineCache: () => undefined,
@@ -4243,4 +4255,87 @@ it("AgentHost PermissionGate enrichRequest enriches organizer approvals with out
   assert.ok(capturedRequest.organizerReview, "organizerReview attached");
   assert.equal(capturedRequest.organizerReview.items[0].headings[0].num, "1");
   assert.equal(capturedRequest.organizerReview.outlineHeadings[0].num, "1");
+});
+
+for (const name of ["annotations_assign", "annotations_unassign"]) {
+  it(`requires approval for the organizer alias ${name} through the external tool gateway`, async () => {
+    const { host, state } = fixture();
+    let approvals = 0;
+    const provider = {
+      listTools: () => [
+        {
+          name,
+          description: "Organizer write",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+      getMeta: () => ({
+        name,
+        catalog: "library.write",
+        concurrency: "serial",
+        mutatesState: true,
+      }),
+      getSchema: () => ({ type: "object", properties: {} }),
+      prepare: async () => null,
+      call: async () => assert.fail("Denied organizer write must not execute"),
+    };
+    Object.assign(host, {
+      validatedRuntimeLease: () => undefined,
+      pluginRuntime: {
+        leaseSignal: () => undefined,
+        isCurrentLease: () => true,
+      },
+      reviewTools: () => provider,
+      requestToolApproval: async () => {
+        approvals++;
+        return { id: "denied", verdict: "deny", scope: "once" };
+      },
+    });
+    const result = toolResult(
+      await host.taskToolCall({ taskId: state.record.id, name, arguments: {} }),
+    );
+    assert.equal(approvals, 1);
+    assert.equal(!result.ok && result.code, "permission_denied");
+  });
+}
+
+it("opens an organizer annotation link at its parent attachment and annotation location", async () => {
+  const previous = Reflect.get(globalThis, "Zotero");
+  const calls: unknown[] = [];
+  const attachment = {
+    id: 10,
+    isAttachment: () => true,
+    attachmentContentType: "application/pdf",
+  };
+  Reflect.set(globalThis, "Zotero", {
+    Items: {
+      getByLibraryAndKey: (libraryID: number, key: string) => {
+        assert.equal(libraryID, 2);
+        assert.equal(key, "ANNOTATION");
+        return { id: 20, parentItemID: 10, isAnnotation: () => true };
+      },
+      get: (id: number) => {
+        assert.equal(id, 10);
+        return attachment;
+      },
+    },
+    Reader: {
+      open: async (...args: unknown[]) => {
+        calls.push(args);
+      },
+    },
+  });
+  try {
+    const host = Object.create(AgentHost.prototype) as {
+      readerOpen: (params: Record<string, unknown>) => Promise<unknown>;
+    };
+    await host.readerOpen({
+      libraryID: 2,
+      key: "ANNOTATION",
+      annotationKey: "ANNOTATION",
+    });
+    assert.deepEqual(calls, [[10, { annotationID: "ANNOTATION" }]]);
+  } finally {
+    Reflect.set(globalThis, "Zotero", previous);
+  }
 });

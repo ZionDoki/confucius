@@ -5,6 +5,7 @@
 import { readdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { format, resolveConfig } from "prettier";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const skillsDir = join(root, "skills");
@@ -45,7 +46,10 @@ for (const slug of entries) {
 }
 lines.push("};");
 lines.push("");
-const generated = lines.join("\n");
+const generated = await format(lines.join("\n"), {
+  ...(await resolveConfig(target)),
+  filepath: target,
+});
 
 if (process.argv.includes("--check")) {
   const current = existsSync(target) ? readFileSync(target, "utf8") : "";

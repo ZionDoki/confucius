@@ -10257,8 +10257,18 @@ export class AgentHost {
         : undefined;
     // Locate links may carry a parent-item key; resolve the PDF attachment so
     // Reader.open always receives something it can render.
-    const pdf = await findPdf(item);
-    await Zotero.Reader.open((pdf ?? item).id, location as never);
+    let source = item;
+    if (item.isAnnotation?.()) {
+      const parent = item.parentItemID
+        ? Zotero.Items.get(item.parentItemID)
+        : null;
+      if (!parent || Array.isArray(parent) || !parent.isAttachment?.()) {
+        throw new Error("Annotation attachment not found");
+      }
+      source = parent;
+    }
+    const pdf = await findPdf(source);
+    await Zotero.Reader.open((pdf ?? source).id, location as never);
     return { opened: true };
   }
 
