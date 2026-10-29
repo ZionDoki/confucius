@@ -27,8 +27,11 @@ export interface RunState {
   budget: {
     maxIterations: number;
     maxToolCalls: number;
+    /** Current user-prompt model steps; automatic continuations share this allowance. */
     iterationsUsed: number;
+    /** Current user-prompt tool calls; automatic continuations share this allowance. */
     toolCallsUsed: number;
+    /** Current prompt executor starts, used when provider model steps are opaque. */
     executorStarts: number;
     promptTokens: number;
     completionTokens: number;

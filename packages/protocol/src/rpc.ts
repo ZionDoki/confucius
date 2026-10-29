@@ -562,7 +562,7 @@ export function isReasoningEffort(value: unknown): value is ReasoningEffort {
 }
 
 export const DEFAULT_MAX_ITERATIONS = 128;
-export const DEFAULT_MAX_TOOL_CALLS = 96;
+export const DEFAULT_MAX_TOOL_CALLS = 48;
 export const MAX_MAX_ITERATIONS = 200;
 export const MAX_MAX_TOOL_CALLS = 500;
 

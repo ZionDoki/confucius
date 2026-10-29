@@ -84,11 +84,11 @@ describe("validateConfigPatch", () => {
 });
 
 describe("budget clamps", () => {
-  it("falls back to the raised defaults", () => {
+  it("falls back to the configured defaults", () => {
     assert.equal(clampMaxIterations(undefined), DEFAULT_MAX_ITERATIONS);
     assert.equal(clampMaxToolCalls(""), DEFAULT_MAX_TOOL_CALLS);
     assert.equal(DEFAULT_MAX_ITERATIONS, 128);
-    assert.equal(DEFAULT_MAX_TOOL_CALLS, 96);
+    assert.equal(DEFAULT_MAX_TOOL_CALLS, 48);
   });
 });
 

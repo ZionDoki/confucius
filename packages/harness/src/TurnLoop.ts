@@ -51,8 +51,10 @@ export interface TurnLoopInput {
    * Replayed before the new user text so turns build on each other.
    */
   history?: ModelMessage[];
-  /** Resume a verified checkpoint without resetting budgets or write records. */
+  /** Resume a verified checkpoint, including its write records. */
   resume?: TurnCheckpoint;
+  /** A new user prompt renews model/tool counters, but retains usage and recovery receipts. */
+  renewPromptBudget?: boolean;
   signal?: AbortSignal;
 }
 
@@ -131,16 +133,19 @@ export class TurnLoop {
   async run(input: TurnLoopInput): Promise<TurnLoopResult> {
     // The host execution journal protects unresolved writes while allowing read-only reconciliation.
     if (input.resume)
-      this.deps.budget.restoreMax(
-        input.resume.budget ?? {
+      this.deps.budget.restoreMax({
+        ...(input.resume.budget ?? {
           iterationsUsed: input.resume.iteration,
           toolCallsUsed:
             input.resume.toolCallsUsed ??
             input.resume.toolExecutions.filter(
               (call) => !this.deps.completionToolNames?.has(call.toolName),
             ).length,
-        },
-      );
+        }),
+        ...(input.renewPromptBudget
+          ? { iterationsUsed: 0, modelAttempts: 0, toolCallsUsed: 0 }
+          : {}),
+      });
     const resumed = input.resume
       ? (cloneValue(input.resume.messages.slice(1)) as ModelMessage[])
       : (input.history ?? []);
@@ -468,7 +473,7 @@ export class TurnLoop {
             messages
               .slice(beforeTools)
               .filter((message) => message.role === "tool")
-              .map((message) => message.content)
+              .map((message) => toolResultFingerprint(message.content))
               .sort(),
           );
         repeated = fingerprint === lastFingerprint ? repeated + 1 : 1;
@@ -1195,6 +1200,42 @@ class TransientMediaTimeoutError extends Error {
     super("Transient page image request timed out");
     this.name = "TransientMediaTimeoutError";
   }
+}
+
+function toolResultFingerprint(content: string): string {
+  let result: ToolResult;
+  try {
+    result = JSON.parse(content) as ToolResult;
+  } catch {
+    return content;
+  }
+  if (
+    !result.ok ||
+    result.toolName !== "get_pages" ||
+    !result.data ||
+    typeof result.data !== "object"
+  )
+    return content;
+  const data = result.data as Record<string, unknown>;
+  if (!Array.isArray(data.pages)) return content;
+  return canonicalArguments({
+    ...result,
+    data: {
+      ...data,
+      pages: data.pages.map((page) => {
+        if (!page || typeof page !== "object" || Array.isArray(page))
+          return page;
+        const {
+          readAt: _readAt,
+          previouslyRead: _previouslyRead,
+          reused: _reused,
+          rereadReason: _rereadReason,
+          ...evidence
+        } = page as Record<string, unknown>;
+        return evidence;
+      }),
+    },
+  });
 }
 
 function canonicalArguments(value: unknown): string {

@@ -572,6 +572,30 @@ it("plain answer ends after one executor result with no hidden verifier", async 
   );
   assert.equal(calls, 1);
 });
+it("automatic continuations share the current prompt's tool allowance", async () => {
+  const state = run();
+  let snapshots = 0;
+  let starts = 0;
+  const c = new RunCoordinator({
+    run: state,
+    current: () => true,
+    persist: async () => {},
+    progress: () => {},
+    snapshot: async () => (++snapshots === 2 ? gap() : empty()),
+    executor: {
+      run: async ({ continuation }) => {
+        starts++;
+        if (!continuation) state.budget.toolCallsUsed += 3;
+        else assert.equal(state.budget.toolCallsUsed, 3);
+        return { stopReason: "completed", text: "Answer" };
+      },
+    },
+  });
+  const outcome = await c.execute("Question", new AbortController().signal);
+  assert.equal(outcome.stopReason, "completed");
+  assert.equal(starts, 2);
+  assert.equal(state.budget.toolCallsUsed, 3);
+});
 it("keeps advancing the same batch while authoritative remaining counts decrease", async () => {
   const state = run();
   let remaining = 5;

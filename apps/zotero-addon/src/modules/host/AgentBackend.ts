@@ -39,6 +39,8 @@ export interface BackendTurnInput {
   /** Prompt enriched by the host with extracted, path-free attachment text. */
   modelPrompt?: string;
   resumeCheckpoint?: TurnCheckpoint;
+  /** Renew only execution counters when the user explicitly continues a saved run. */
+  renewPromptBudget?: boolean;
   mode: SessionMode;
   capabilityProfile: CapabilityProfile;
   workingDirectory?: string;

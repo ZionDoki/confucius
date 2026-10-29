@@ -10,6 +10,23 @@
   applying the selected changes. Collection boundaries and preview-only requests
   are preserved. This integration is not yet included in a published package.
 
+### Changed
+
+- Model-step and tool-call limits now apply to each user prompt. Automatic
+  continuations share the current prompt's allowances, while a new prompt resets
+  those execution counters without clearing cumulative token usage. The default
+  tool limit is 48 calls per prompt for new configurations; existing custom
+  limits are preserved.
+
+### Fixed
+
+- User-requested continuation preserves interrupted write receipts while renewing
+  execution allowances, preventing already-applied writes from being repeated.
+- Repeated PDF page reads now trigger stall detection when only receipt
+  timestamps and cache-reuse metadata change. Ordinary questions use targeted
+  reads and can stop with sufficient evidence instead of following pagination or
+  all-source coverage unnecessarily.
+
 ## 0.6.3-beta.1 - 2026-10-23
 
 ### Changed

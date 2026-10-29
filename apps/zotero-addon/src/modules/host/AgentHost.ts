@@ -378,6 +378,8 @@ const TOOL_GROUNDING_PROMPT = [
   "If no transient page image is available, omit image annotations and explain",
   "the limitation; never guess image-region coordinates from text anchors.",
 ] as const;
+const ORDINARY_TASK_GUIDANCE =
+  "For ordinary questions and targeted follow-ups, answer directly with the minimum sufficient tool use. Start with supplied selections and task sources; use targeted search, section or page reads for concrete evidence gaps, reuse existing results, and stop when the answer is supported. Do not enumerate all sources or perform discovery, unrelated memory searches, delegation, context maintenance, writes, or artifact creation unless the current request requires them.";
 
 interface ResolvedPresetSources {
   scope: PresetSourceScope;
@@ -6902,7 +6904,10 @@ export class AgentHost {
     if (failure) throw failure;
   }
 
-  private async taskContinue(taskId: string): Promise<unknown> {
+  private async taskContinue(
+    taskId: string,
+    renewPromptBudget = false,
+  ): Promise<unknown> {
     const state = this.requireSession(taskId);
     if (
       !state.record.run ||
@@ -6916,6 +6921,7 @@ export class AgentHost {
       undefined,
       [],
       true,
+      renewPromptBudget,
     );
   }
 
@@ -6961,6 +6967,12 @@ export class AgentHost {
       RESEARCH_INSTRUCTIONS,
       `Preferred task references: ${JSON.stringify(task.references ?? [])}`,
     );
+    if (
+      task.mode !== "plan" &&
+      !presetWorkflow(task.templateId) &&
+      !task.run?.skillInvocation
+    )
+      lines.push(ORDINARY_TASK_GUIDANCE);
     if (options.researchHandoff !== undefined) {
       lines.push(
         "",
@@ -7240,6 +7252,7 @@ export class AgentHost {
     promptContext?: PromptContextOptions,
     requestedAttachmentIds: string[] = [],
     resuming = false,
+    renewPromptBudget = !resuming,
   ): Promise<unknown> {
     if (this.shuttingDown)
       throw new Error(
@@ -7304,7 +7317,7 @@ export class AgentHost {
       await this.resumeContextCleanup(state);
     if (superseded()) return { sessionId, superseded: true };
     state.record.historyCleanupBatch = undefined;
-    if (continues) return this.taskContinue(sessionId);
+    if (continues) return this.taskContinue(sessionId, true);
     const effectiveContext = state.record.lockedContext;
     if (promptReferences !== undefined)
       state.record.references = promptReferences.filter(
@@ -7397,6 +7410,11 @@ export class AgentHost {
           createdAt: now,
           updatedAt: now,
         };
+    if (renewPromptBudget) {
+      run.budget.iterationsUsed = 0;
+      run.budget.toolCallsUsed = 0;
+      run.budget.executorStarts = 0;
+    }
     const changedIntent =
       continuing &&
       (!resuming ||
@@ -7697,6 +7715,7 @@ export class AgentHost {
                     }`
                   : undefined,
               resumeCheckpoint: continuation ? undefined : resumeCheckpoint,
+              renewPromptBudget: !continuation && renewPromptBudget,
             };
             const result = await this.executeBackend(state, input, signal);
             if (isCurrent() && result.messages)
@@ -8400,6 +8419,7 @@ export class AgentHost {
         modelUserText: input.modelPrompt ?? input.prompt,
         history: state.messages,
         resume: resumeCheckpoint,
+        renewPromptBudget: input.renewPromptBudget,
         signal: abort.signal,
       })
       .then((result) =>
@@ -9867,6 +9887,12 @@ export class AgentHost {
       "New annotations share this task chat’s persistent batch. The host remaps colors against each PDF’s frozen baseline; use actual returned colors in legends. Only verified Confucius Agent annotations can be updated or deleted, across tasks and agents, while retaining original ownership. Use update_annotation for comments or a same-PDF text anchor and delete_annotation for removal. Old unknown marks remain existing annotations; tags and author names are not permission.",
       "Ordinary work memory is automatically maintained and may expire. context_save with protected=true requests per-item approval to keep a user memory. Changes to protected memory require approval; tool grants never replace it.",
     ];
+    if (
+      !options.planMode &&
+      !presetWorkflow(options.templateId) &&
+      !options.invokedSkillSlug
+    )
+      parts.push(ORDINARY_TASK_GUIDANCE);
     if (options.includeRecallContext !== false) {
       parts.push(
         "Knowledge is a unified index of live Zotero notes and research memory. Use knowledge_search and knowledge_read to find the user's existing projects, open questions, preferences and source notes before repeating research.",

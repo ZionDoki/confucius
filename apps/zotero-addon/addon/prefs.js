@@ -20,7 +20,7 @@ pref("memoryConsent", "review");
 pref("historyAutoCleanup", true);
 pref("historyCleanupMigrated", false);
 pref("maxIterations", 128);
-pref("maxToolCalls", 96);
+pref("maxToolCalls", 48);
 pref("alwaysAllowedTools", "[]");
 pref("reasoningEffort", "auto");
 pref("contextWindowTokens", 32768);

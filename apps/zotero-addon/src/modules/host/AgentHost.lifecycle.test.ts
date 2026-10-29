@@ -199,8 +199,12 @@ interface LifecycleHost {
     context?: PromptContextOptions,
     attachments?: string[],
     resuming?: boolean,
+    renewPromptBudget?: boolean,
   ): Promise<{ turnId?: string; superseded?: boolean }>;
-  taskContinue(id: string): Promise<{ turnId?: string }>;
+  taskContinue(
+    id: string,
+    renewPromptBudget?: boolean,
+  ): Promise<{ turnId?: string }>;
   taskToolCall(args: Record<string, unknown>): Promise<McpToolCallResult>;
   workSnapshot(state: TestState): Promise<WorkSnapshot>;
   executeBackend(
@@ -385,6 +389,268 @@ async function waitFor(predicate: () => boolean) {
   }
   assert.fail("Lifecycle did not reach the expected state");
 }
+
+describe("prompt-scoped execution budgets", () => {
+  let previousZotero: unknown;
+  beforeEach(() => {
+    previousZotero = Reflect.get(globalThis, "Zotero");
+    Reflect.set(globalThis, "Zotero", {
+      locale: "en-US",
+      Prefs: { get: () => "en-US" },
+      getMainWindow: () => ({ setTimeout, clearTimeout }),
+    });
+  });
+  afterEach(() => Reflect.set(globalThis, "Zotero", previousZotero));
+  it("typed continuation renews counters without dropping interrupted write recovery", async () => {
+    const { host, state } = fixture();
+    state.record.backend = "native";
+    state.record.contextWindow = initialContextWindow(
+      state.record.id,
+      "native",
+    );
+    state.record.run = run(state.record);
+    state.record.run.status = "interrupted";
+    Object.assign(state.record.run.budget, {
+      iterationsUsed: 8,
+      toolCallsUsed: 20,
+      executorStarts: 8,
+      totalTokens: 30,
+    });
+    const checkpoint: TurnCheckpoint = {
+      turnId: "interrupted-turn",
+      iteration: 8,
+      savedAt: 10,
+      budget: {
+        iterationsUsed: 8,
+        modelAttempts: 8,
+        toolCallsUsed: 20,
+        tokensUsed: 30,
+        elapsedMs: 100,
+      },
+      messages: [
+        { role: "system", content: "System" },
+        { role: "user", content: "Inspect the paper" },
+      ],
+      toolExecutions: [
+        {
+          callId: "write-1",
+          modelCallId: "model-write-1",
+          toolName: "create_collection",
+          args: { name: "Research" },
+          status: "started",
+          result: {
+            ok: true,
+            toolName: "create_collection",
+            effect: "applied",
+            data: { key: "EXISTING" },
+          },
+        },
+      ],
+    };
+    state.latestCheckpoint = checkpoint;
+    let observed: BackendTurnInput | undefined;
+    Object.assign(host, {
+      requireEndpoint: () => ({}),
+      executeBackend: async (_state: TestState, input: BackendTurnInput) => {
+        observed = input;
+        assert.equal(state.runBudget?.toolCallsUsed, 0);
+        assert.equal(state.runBudget?.iterationsUsed, 0);
+        assert.equal(state.runBudget?.tokensUsed, 30);
+        return { stopReason: "incomplete", text: "Paused" };
+      },
+    });
+    await host.sessionPrompt(state.record.id, "继续");
+    await waitFor(() => state.activeTurnId === null);
+    assert.equal(observed?.renewPromptBudget, true);
+    assert.deepEqual(observed?.resumeCheckpoint, checkpoint);
+    assert.equal(checkpoint.budget?.iterationsUsed, 8);
+    assert.equal(checkpoint.toolExecutions[0].status, "started");
+  });
+  for (const backendKind of ["native", "codex", "kimi"] as const) {
+    it(`${backendKind} renews execution budgets for new prompts without clearing token usage`, async () => {
+      const { host, state } = fixture();
+      state.record.backend = backendKind;
+      state.record.contextWindow = initialContextWindow(
+        state.record.id,
+        backendKind,
+      );
+      const observed: Array<{
+        toolCalls: number;
+        iterations: number;
+        executorStarts: number;
+        totalTokens: number;
+        resumed: boolean;
+      }> = [];
+      let executions = 0;
+      Object.assign(host, {
+        requireEndpoint: () => ({}),
+        executeBackend: async (_state: TestState, input: BackendTurnInput) => {
+          executions++;
+          const budget = state.record.run!.budget;
+          observed.push({
+            toolCalls: budget.toolCallsUsed,
+            iterations: budget.iterationsUsed,
+            executorStarts: budget.executorStarts,
+            totalTokens: budget.totalTokens,
+            resumed: input.resumeCheckpoint !== undefined,
+          });
+          if (executions <= 2) {
+            budget.toolCallsUsed = budget.maxToolCalls;
+            budget.iterationsUsed = budget.maxIterations;
+            budget.executorStarts = budget.maxIterations;
+            budget.totalTokens += 10;
+            state.runBudget?.restoreMax({
+              toolCallsUsed: budget.toolCallsUsed,
+              iterationsUsed: budget.iterationsUsed,
+              modelAttempts: budget.iterationsUsed,
+              tokensUsed: budget.totalTokens,
+            });
+            return { stopReason: "incomplete", text: "Paused" };
+          }
+          return { stopReason: "completed", text: "Answered" };
+        },
+      });
+
+      await host.sessionPrompt(state.record.id, "First question");
+      await waitFor(() => state.activeTurnId === null);
+      assert.equal(
+        state.record.run!.budget.toolCallsUsed,
+        state.record.run!.budget.maxToolCalls,
+      );
+      assert.equal(
+        state.record.run!.budget.iterationsUsed,
+        state.record.run!.budget.maxIterations,
+      );
+      assert.equal(
+        state.record.run!.budget.executorStarts,
+        state.record.run!.budget.maxIterations,
+      );
+
+      await host.sessionPrompt(state.record.id, "继续");
+      await waitFor(() => state.activeTurnId === null);
+      assert.equal(observed[1].toolCalls, 0);
+      assert.equal(observed[1].iterations, 0);
+      assert.equal(observed[1].executorStarts, 1);
+      assert.equal(observed[1].totalTokens, 10);
+      assert.equal(observed[1].resumed, false);
+      assert.equal(
+        state.record.run!.budget.iterationsUsed,
+        state.record.run!.budget.maxIterations,
+      );
+      assert.equal(
+        state.record.run!.budget.executorStarts,
+        state.record.run!.budget.maxIterations,
+      );
+
+      await host.sessionPrompt(state.record.id, "A different question");
+      await waitFor(() => state.activeTurnId === null);
+      assert.equal(observed[2].toolCalls, 0);
+      assert.equal(observed[2].iterations, 0);
+      assert.equal(observed[2].executorStarts, 1);
+      assert.equal(observed[2].totalTokens, 20);
+      assert.equal(state.record.run!.budget.toolCallsUsed, 0);
+      assert.equal(state.record.run!.budget.iterationsUsed, 0);
+      assert.equal(state.record.run!.budget.executorStarts, 1);
+      assert.equal(state.record.run!.budget.totalTokens, 20);
+      assert.equal(state.record.run!.status, "completed");
+    });
+
+    it(`${backendKind} preserves the spent allowance for automatic continuation`, async () => {
+      const { host, state } = fixture();
+      state.record.backend = backendKind;
+      state.record.contextWindow = initialContextWindow(
+        state.record.id,
+        backendKind,
+      );
+      let executions = 0;
+      Object.assign(host, {
+        requireEndpoint: () => ({}),
+        workSnapshot: async (): Promise<WorkSnapshot> => ({
+          completed: [],
+          missing: [
+            {
+              id: "artifact:report",
+              kind: "artifact",
+              description: "Save report",
+            },
+          ],
+          unknownOperationIds: [],
+        }),
+        executeBackend: async () => {
+          executions++;
+          const budget = state.record.run!.budget;
+          budget.toolCallsUsed = budget.maxToolCalls;
+          state.runBudget?.restoreMax({
+            toolCallsUsed: budget.toolCallsUsed,
+          });
+          return { stopReason: "incomplete", text: "Paused" };
+        },
+      });
+      await host.sessionPrompt(state.record.id, "Create a report");
+      await waitFor(() => state.activeTurnId === null);
+      await host.taskContinue(state.record.id);
+      await waitFor(() => state.activeTurnId === null);
+      assert.equal(executions, 1);
+      assert.equal(state.record.run!.stopReason, "tool_budget");
+      assert.equal(
+        state.record.run!.budget.toolCallsUsed,
+        state.record.run!.budget.maxToolCalls,
+      );
+    });
+
+    it(`${backendKind} preserves model budgets for automatic continuation`, async () => {
+      const { host, state } = fixture();
+      state.record.backend = backendKind;
+      state.record.contextWindow = initialContextWindow(
+        state.record.id,
+        backendKind,
+      );
+      let executions = 0;
+      Object.assign(host, {
+        requireEndpoint: () => ({}),
+        workSnapshot: async (): Promise<WorkSnapshot> => ({
+          completed: [],
+          missing: [
+            {
+              id: "artifact:report",
+              kind: "artifact",
+              description: "Save report",
+            },
+          ],
+          unknownOperationIds: [],
+        }),
+        executeBackend: async () => {
+          executions++;
+          const budget = state.record.run!.budget;
+          budget.iterationsUsed = budget.maxIterations;
+          budget.executorStarts = budget.maxIterations;
+          state.runBudget?.restoreMax({
+            iterationsUsed: budget.iterationsUsed,
+            modelAttempts: budget.iterationsUsed,
+          });
+          return { stopReason: "incomplete", text: "Paused" };
+        },
+      });
+      await host.sessionPrompt(state.record.id, "Create a report");
+      await waitFor(() => state.activeTurnId === null);
+      await host.taskContinue(state.record.id);
+      await waitFor(() => state.activeTurnId === null);
+      assert.equal(executions, 1);
+      assert.equal(
+        state.record.run!.stopReason,
+        backendKind === "native" ? "iteration_budget" : "executor_budget",
+      );
+      assert.equal(
+        state.record.run!.budget.iterationsUsed,
+        state.record.run!.budget.maxIterations,
+      );
+      assert.equal(
+        state.record.run!.budget.executorStarts,
+        state.record.run!.budget.maxIterations,
+      );
+    });
+  }
+});
 
 it("requires a host-issued lease for the task tool gateway", async () => {
   const { host, state } = fixture();
@@ -1106,6 +1372,8 @@ describe("skills in subsequent user messages", () => {
       Object.assign(host, {
         requireEndpoint: () => ({}),
         taskToolList: () => ({ tools: [] }),
+        // This test isolates skill activation from tool-schema context costs.
+        advertisedTaskTools: () => [],
       });
       backend.startTurn = async (input, callbacks) => {
         prompts.push(
@@ -1480,6 +1748,63 @@ it("applies retained report preferences only while the paper reading preset is a
         /only available for paper reading/,
       );
     assert.deepEqual(state.record.reportStyle, style);
+  }
+});
+
+it("adds bounded-reading guidance only to ordinary agent prompts", async (t) => {
+  const previous = Reflect.get(globalThis, "Zotero");
+  Reflect.set(globalThis, "Zotero", {
+    locale: "en-US",
+    Prefs: { get: () => "en-US" },
+  });
+  t.after(() => Reflect.set(globalThis, "Zotero", previous));
+  const { host, state } = fixture();
+  const prompts = host as unknown as {
+    buildSystemPrompt(
+      text: string,
+      options: Record<string, unknown>,
+    ): Promise<string>;
+    externalPrompt(
+      task: ResearchTaskRecord,
+      text: string,
+      history: ModelMessage[],
+    ): string;
+  };
+  for (const templateId of [
+    undefined,
+    "freeform",
+    "deep-read",
+    "evidence-audit",
+    "synthesis",
+  ]) {
+    state.record.templateId = templateId;
+    for (const planMode of [false, true]) {
+      state.record.mode = planMode ? "plan" : "agent";
+      const native = await prompts.buildSystemPrompt("Answer the question", {
+        planMode,
+        skills: [],
+        loadedSkills: [],
+        lockedContext: state.record.lockedContext,
+        includeRecallContext: false,
+        templateId,
+      });
+      const external = prompts.externalPrompt(
+        state.record,
+        "Answer the question",
+        [],
+      );
+      const ordinary =
+        !planMode &&
+        !["deep-read", "evidence-audit", "synthesis"].includes(
+          templateId ?? "",
+        );
+      for (const prompt of [native, external])
+        assert.equal(
+          prompt.includes("minimum sufficient tool use"),
+          ordinary,
+          `${templateId ?? "ordinary"}, plan=${planMode}`,
+        );
+    }
   }
 });
 
@@ -2537,8 +2862,10 @@ describe("AgentHost lifecycle ownership", () => {
       oldStarts + 1,
       "no continuation to submit withdrawn candidates",
     );
-    assert.ok(
-      state.record.run!.budget.executorStarts > oldRun.budget.executorStarts,
+    assert.equal(
+      state.record.run!.budget.executorStarts,
+      1,
+      "a new prompt starts a fresh executor budget",
     );
   });
 

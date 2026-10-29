@@ -59,5 +59,11 @@ then select the parameter format your endpoint accepts.
 `auto` sends no thinking parameter. Custom levels belong to the exact endpoint
 and model ID. Disable the customization to restore built-in options.
 
-Native defaults to **128 model steps** and **96 tool calls** per request. Raising
-a limit does not increase the model's context window. See [context and history](context-system.md).
+In the unreleased development branch, Native defaults to **128 model steps per user prompt**. The default tool-call
+limit is **48 per user prompt** across backends. Automatic continuations share
+the current prompt's model-step and tool-call allowances; a new prompt resets
+those execution counters, while token totals remain cumulative for accounting.
+Typing a continuation also preserves saved write receipts, so an interrupted
+write that already succeeded is not dispatched again.
+Existing custom limits are preserved. Raising a limit does not increase the
+model's context window. See [context and history](context-system.md).

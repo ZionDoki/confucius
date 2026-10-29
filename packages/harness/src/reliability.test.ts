@@ -9,6 +9,7 @@ import { BudgetAccountant } from "./BudgetAccountant";
 import { createHarness, session } from "./test-kit";
 import { validateArgs, validateValue } from "./SchemaValidate";
 import { latestReplayGroup } from "./WindowContext";
+import type { TurnCheckpoint } from "./CheckpointStore";
 
 const request: ModelRequest = {
   messages: [{ role: "user", content: "fixture" }],
@@ -313,6 +314,119 @@ describe("deadlines and cancellation", () => {
 });
 
 describe("run accounting and guarded progress", () => {
+  it("a renewed user prompt preserves receipts and cumulative usage while allowing fresh work", async () => {
+    const checkpoint: TurnCheckpoint = {
+      turnId: "old-turn",
+      iteration: 8,
+      toolCallsUsed: 20,
+      savedAt: 10,
+      budget: {
+        iterationsUsed: 8,
+        modelAttempts: 8,
+        toolCallsUsed: 20,
+        tokensUsed: 30,
+        promptTokens: 20,
+        completionTokens: 10,
+        elapsedMs: 100,
+      },
+      messages: [
+        { role: "system", content: "System" },
+        { role: "user", content: "fixture" },
+      ],
+      toolExecutions: [
+        {
+          callId: "old-call",
+          modelCallId: "old-model-call",
+          toolName: "create_collection",
+          args: { name: "Research" },
+          status: "started",
+          result: {
+            ok: true,
+            toolName: "create_collection",
+            effect: "applied",
+            data: { key: "EXISTING" },
+          },
+        },
+      ],
+    };
+    const automatic = createHarness({ script: [{ text: "Must not run" }] });
+    assert.equal(
+      (await automatic.loop.run({ ...runInput, resume: checkpoint }))
+        .stopReason,
+      "iteration_budget",
+    );
+    const budget = new BudgetAccountant(
+      { maxIterations: 8, maxToolCalls: 20 },
+      () => 0,
+    );
+    const h = createHarness({
+      budget,
+      modeFor: () => "auto_allow",
+      script: [
+        {
+          toolCalls: [
+            {
+              id: "new-write-id",
+              name: "create_collection",
+              args: { name: "Research" },
+            },
+          ],
+        },
+        {
+          toolCalls: [
+            { id: "read", name: "search_items", args: { query: "fresh" } },
+          ],
+        },
+        {
+          text: "Done",
+          usage: { promptTokens: 2, completionTokens: 1, totalTokens: 3 },
+        },
+      ],
+    });
+    let writes = 0;
+    h.tools.register(
+      {
+        name: "create_collection",
+        description: "Create collection",
+        inputSchema: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+        },
+      },
+      {
+        name: "create_collection",
+        catalog: "library.write",
+        concurrency: "serial",
+        mutatesState: true,
+      },
+      () => {
+        writes++;
+        return { key: "DUPLICATE" };
+      },
+    );
+    const result = await h.loop.run({
+      ...runInput,
+      resume: checkpoint,
+      renewPromptBudget: true,
+    });
+    assert.equal(result.stopReason, "completed");
+    assert.equal(writes, 0);
+    assert.ok(
+      result.messages.some(
+        (message) =>
+          message.role === "tool" && message.content.includes("hit:fresh"),
+      ),
+    );
+    assert.equal(budget.tokensUsed, 33);
+    assert.equal(budget.promptTokens, 22);
+    assert.equal(budget.completionTokens, 11);
+    assert.equal(budget.snapshot().elapsedMs, 100);
+    assert.ok(budget.iterationsUsed < 8);
+    assert.ok(budget.toolCallsUsed < 20);
+    assert.equal(checkpoint.budget?.toolCallsUsed, 20);
+    assert.equal(checkpoint.toolExecutions[0].status, "started");
+  });
   it("charges every HTTP retry before dispatch, with a shared run ceiling", async () => {
     let requests = 0;
     const model = adapter(async () => {
@@ -397,6 +511,100 @@ describe("run accounting and guarded progress", () => {
     const result = await h.loop.run(runInput);
     assert.equal(result.stopReason, "stalled");
     assert.equal(h.budget.iterationsUsed, 4);
+  });
+  it("bounds repeated PDF reads when only receipt metadata changes", async () => {
+    let reads = 0;
+    const script: ModelTurn[] = Array.from({ length: 8 }, (_, index) => ({
+      toolCalls: [
+        {
+          id: `page-${index}`,
+          name: "get_pages",
+          args: { libraryID: 1, key: "PDF", start: 1, end: 1 },
+        },
+      ],
+    }));
+    const h = createHarness({ script });
+    h.tools.register(
+      {
+        name: "get_pages",
+        description: "Read a PDF page",
+        inputSchema: {
+          type: "object",
+          properties: {},
+          additionalProperties: true,
+        },
+      },
+      {
+        name: "get_pages",
+        catalog: "paper.read",
+        concurrency: "parallel_safe",
+        mutatesState: false,
+      },
+      () => {
+        reads++;
+        return {
+          sourceVersion: "pdf:v1",
+          pages: [
+            {
+              page: 1,
+              text: "unchanged evidence",
+              readAt: 1000 + reads,
+              ...(reads > 1
+                ? {
+                    previouslyRead: {
+                      at: 999 + reads,
+                      operationId: `operation-${reads - 1}`,
+                    },
+                    reused: true,
+                  }
+                : {}),
+            },
+          ],
+        };
+      },
+    );
+    const result = await h.loop.run(runInput);
+    assert.equal(result.stopReason, "stalled");
+    assert.equal(h.budget.iterationsUsed, 4);
+    assert.equal(reads, 4);
+  });
+  it("does not treat changed PDF evidence as a stalled read", async () => {
+    let reads = 0;
+    const script: ModelTurn[] = Array.from({ length: 5 }, (_, index) => ({
+      toolCalls: [
+        {
+          id: `page-${index}`,
+          name: "get_pages",
+          args: { libraryID: 1, key: "PDF", start: 1, end: 1 },
+        },
+      ],
+    }));
+    script.push({ text: "done" });
+    const h = createHarness({ script });
+    h.tools.register(
+      {
+        name: "get_pages",
+        description: "Read a PDF page",
+        inputSchema: {
+          type: "object",
+          properties: {},
+          additionalProperties: true,
+        },
+      },
+      {
+        name: "get_pages",
+        catalog: "paper.read",
+        concurrency: "parallel_safe",
+        mutatesState: false,
+      },
+      () => ({
+        sourceVersion: "pdf:v1",
+        pages: [{ page: 1, text: `evidence-${++reads}`, readAt: 1000 + reads }],
+      }),
+    );
+    const result = await h.loop.run(runInput);
+    assert.equal(result.stopReason, "completed");
+    assert.equal(reads, 5);
   });
   it("rejects non-object arguments before provider prepare", async () => {
     const h = createHarness({

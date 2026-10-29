@@ -423,7 +423,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   ),
   def(
     "get_pages",
-    "Read real physical PDF pages (1-based), preserving blank pages. Text includes [anchor:ID] before selectable passages: use that ID with commit_annotations to mark the exact native text without copying quotes or guessing pages. Markers are metadata, not paper text. Complete page results may be reused only when their file version is unchanged. Supply rereadReason for refresh, verification or a specific evidence gap; those reads execute again. If nextPage is not null, continue there; use non-overlapping ranges and do not treat a truncated result as fully read. Indexed text without reliable pages is never assigned invented page numbers.",
+    "Read real physical PDF pages (1-based), preserving blank pages. Text includes [anchor:ID] before selectable passages: use that ID with commit_annotations to mark the exact native text without copying quotes or guessing pages. Markers are metadata, not paper text. Complete page results may be reused only when their file version is unchanged. Supply rereadReason for refresh, verification or a specific evidence gap; those reads execute again. If nextPage is not null and the remaining pages are still needed for the current request, continue there; otherwise stop with the sufficient evidence already obtained. Use non-overlapping ranges and do not treat a truncated result as fully read. Indexed text without reliable pages is never assigned invented page numbers.",
     {
       ...itemRef,
       start: { type: "integer", minimum: 1 },
