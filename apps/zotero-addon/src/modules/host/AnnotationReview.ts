@@ -7,6 +7,7 @@ import type {
   ToolResult,
 } from "@confucius/protocol";
 import type { ToolProvider } from "@confucius/harness";
+import { ANNOTATION_COMMENT_GUIDANCE } from "../tools/AnnotationQuality";
 import { ResourceLocks, type JsonStorage } from "./RuntimeStorage";
 import { canonical, type OperationRecord } from "./ReliableToolProvider";
 
@@ -16,6 +17,7 @@ interface Candidate {
   status: string;
   annotationKey?: string;
   error?: string;
+  reviewIssue?: string;
   draft?: {
     type: string;
     quote?: string;
@@ -124,13 +126,6 @@ export class AnnotationReviewService {
         await this.options.storage.remove?.(this.key(taskId));
     });
   }
-  async submittedProposalIds(taskId: string): Promise<Set<string>> {
-    return new Set(
-      Object.values((await this.read(taskId)).submissions).map(
-        (s) => s.proposalId,
-      ),
-    );
-  }
   async stage(
     intent: PreparedOperation,
     context: ToolExecutionContext,
@@ -182,8 +177,32 @@ export class AnnotationReviewService {
             row.draft ??
             row.raw ?? { id: row.id, error: row.error },
         });
-        const duplicate = record.batches.find((b) =>
-          Object.values(b.identities).includes(identity),
+        const duplicate = record.batches.find(
+          (b) =>
+            Object.entries(b.identities).some(
+              ([id, value]) =>
+                value === identity &&
+                (b.entries.find((entry) => entry.id === id)?.status !==
+                  "rejected" ||
+                  (b.context.runId === context.runId &&
+                    b.context.intentRevision === context.intentRevision)),
+            ) ||
+            (b.libraryID === batch.libraryID &&
+              b.attachmentKey === batch.attachmentKey &&
+              b.context.runId === context.runId &&
+              b.context.intentRevision === context.intentRevision &&
+              !!row.located &&
+              candidates(b.intent).some(
+                (previous) =>
+                  b.entries.some(
+                    (entry) =>
+                      entry.id === previous.id && entry.status === "rejected",
+                  ) &&
+                  previous.located?.type === row.located!.type &&
+                  previous.located?.text === row.located!.text &&
+                  canonical(previous.located?.position) ===
+                    canonical(row.located!.position),
+              )),
         );
         if (duplicate) {
           batchIds.add(duplicate.id);
@@ -209,6 +228,7 @@ export class AnnotationReviewService {
             ? row.annotationKey
             : undefined,
           error: row.error,
+          reviewIssue: row.reviewIssue,
         });
       }
       if (batch.entries.length) {
@@ -240,11 +260,16 @@ export class AnnotationReviewService {
         reviewBatchIds: submitted.batchIds,
         proposalId: submitted.proposalId,
         saved: false,
+        reviewIssues: batches.flatMap((batch) =>
+          batch.entries
+            .filter((entry) => entry.reviewIssue)
+            .map((entry) => ({ id: entry.id, message: entry.reviewIssue })),
+        ),
         pending: batches
           .flatMap((b) => b.entries)
           .filter((e) => e.status === "pending").length,
         nextAction:
-          "Suggestions are saved in the task's annotation review area, NOT written to the PDF. The user accepts or rejects them there. Continue the task; do not wait, resubmit these candidates, or claim they are saved annotations. Further batches can be submitted independently.",
+          "Suggestions are saved in the task's annotation review area, NOT written to the PDF. The user accepts or rejects them there. Annotation generation is complete for these suggestions. Finish only remaining requested work; do not wait, resubmit, expand the scope, or claim they are saved annotations.",
       },
     };
   }
@@ -519,7 +544,7 @@ export class AnnotationReviewProvider implements ToolProvider {
       tool.name === "commit_annotations"
         ? {
             ...tool,
-            description: `${tool.description}\nSubmits a batch for human review. No PDF write occurs until the user accepts individual suggestions in the workspace; additional batches may be submitted without waiting.`,
+            description: `Submit annotation suggestions to the task review area using annotations:[{anchor,comment}]. The tool resolves source text and positions. No PDF write occurs until the user accepts exact entries. Use propose_annotations only for an explicitly requested saved draft. ${ANNOTATION_COMMENT_GUIDANCE} Submission completes generation for those entries; continue only remaining requested work.`,
           }
         : tool,
     );

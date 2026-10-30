@@ -71,8 +71,12 @@ async function panelRegressions(doc, createPanel) {
     "position:absolute;bottom:0;left:0;right:0;min-height:34px";
   wrapper.append(anchor);
   doc.body.append(wrapper);
-  let nextRead, decision, reader;
+  let nextRead,
+    decision,
+    reader,
+    running = false;
   const panel = createPanel(doc, {
+    deferArrivals: () => running,
     viewport: wrapper,
     anchor,
     opened() {},
@@ -682,6 +686,48 @@ async function panelRegressions(doc, createPanel) {
         !capsule.dataset.reminder &&
         !$(".ar-capsule-new").hidden &&
         win.getComputedStyle(capsule).borderTopWidth === "1px",
+    );
+    pools.coalesced = { taskId: "coalesced", revision: 0, batches: [] };
+    panel.update("coalesced");
+    await tick();
+    running = true;
+    for (const id of ["c1", "c2", "c3"]) {
+      pools.coalesced.batches.push(batch(id, 1));
+      pools.coalesced.revision++;
+      await panel.refresh([id]);
+      check(
+        `running arrival ${id} updates quietly`,
+        !panel.floating && !$(".ar-capsule").dataset.reminder,
+      );
+    }
+    running = false;
+    await panel.refresh();
+    check(
+      "completion flushes coalesced arrivals without another batch event",
+      panel.floating && root.dataset.view === "card",
+    );
+    panel.close();
+    await panel.refresh();
+    check(
+      "completion notification is consumed exactly once",
+      !panel.floating && !$(".ar-capsule").dataset.reminder,
+    );
+    running = true;
+    pools.coalesced.batches[0].entries[0].reviewIssue = "Explain the passage";
+    pools.coalesced.revision++;
+    await panel.refresh();
+    $(".ar-capsule").click();
+    check(
+      "users can inspect quality feedback during generation",
+      panel.floating &&
+        $(".ar-paper .ar-row-error").textContent === "Explain the passage",
+    );
+    panel.close();
+    running = false;
+    await panel.refresh();
+    check(
+      "manually inspected arrivals do not reopen at completion",
+      !panel.floating,
     );
     return checks;
   } finally {

@@ -1,3 +1,7 @@
+/** Shared generation guidance; lexical notices below are not semantic certification. */
+export const ANNOTATION_COMMENT_GUIDANCE =
+  "Explain what this passage establishes and why it matters to the user's question, usually in one to three short sentences. Preserve the author's metric, denominator and tested conditions. Add a limitation only when the source supports it; do not invent experimental settings, ability ceilings, deployment performance or causal conclusions. Label any interpretation explicitly. Do not force every comment to contain a benefit or limitation.";
+
 export function annotationExplanationIssue(
   entry: Record<string, unknown>,
   policy: "key_explanations" | "all_explanations" | "advisory" = "advisory",

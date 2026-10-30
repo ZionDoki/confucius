@@ -21,9 +21,13 @@ Continue keeps the intent revision and consumed budget; new requirements can
 create a new intent revision. Old proposals do not automatically become new
 obligations. Delayed callbacks must match the current generation.
 
-A plain answer may finish directly. Known incomplete artifacts or candidates
-continue within the remaining budget. Repeated identical content or revision
-bumps do not count as progress. Do not implement a separate preset stage machine.
+A plain answer may finish directly. Only explicitly required artifact kinds
+create completion obligations; incidental drafts do not schedule more work.
+Saving an annotation draft completes preparation, not submission or PDF writes.
+Direct annotation submissions use the prepared review snapshot without persisting
+an implicit draft. Legacy saved drafts and operation receipts remain readable.
+Repeated identical required content or revision bumps do not count as progress.
+Do not implement a separate preset stage machine.
 
 ## Sources and permissions
 
@@ -73,9 +77,8 @@ than assumptions about Node globals.
 Context switching preserves originals, write receipts and budgets. History
 cleanup is independent of memory distillation. See [context contracts](context-memory-refactor.md).
 
-Ready reports can receive one independent revision within the current request's
-remaining budget. A failed revision preserves the saved report and does not
-create an artificial completion gate. See [report contracts](research-reports.md).
+Ready reports finish delivery without another host editing pass. User-requested
+changes use the ordinary artifact tools. See [report contracts](research-reports.md).
 
 ## Persistence and lifecycle
 

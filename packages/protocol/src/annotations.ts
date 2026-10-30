@@ -64,6 +64,7 @@ export interface AnnotationReviewEntry {
   status: AnnotationReviewStatus;
   annotationKey?: string;
   error?: string;
+  reviewIssue?: string;
 }
 export interface AnnotationReviewBatch {
   id: string;

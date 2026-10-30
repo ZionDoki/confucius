@@ -2279,7 +2279,6 @@ export class ZoteroToolHost {
       const explicit = args.annotations ?? args.highlights;
       if (!args.proposalId && Array.isArray(explicit) && explicit.length)
         proposal = this.makeProposal(
-          record,
           explicit,
           taskId,
           fingerprint,
@@ -2290,6 +2289,7 @@ export class ZoteroToolHost {
         return reject(
           "No annotations were proposed; provide a non-empty batch or proposalId",
         );
+      const savedDraft = !!record.proposals[proposal.id];
       if (proposal.fingerprint !== fingerprint)
         return reject(
           "PDF changed since the proposal; propose updated anchors",
@@ -2364,6 +2364,15 @@ export class ZoteroToolHost {
                       initializingSearch ? 30_000 : 5_000,
                     ),
             );
+            entry.reviewIssue =
+              annotationExplanationIssue(
+                {
+                  ...entry.raw,
+                  quote: entry.located.text ?? "",
+                  comment: entry.located.comment,
+                },
+                context.annotationPolicy,
+              ) ?? undefined;
             entry.status = "pending";
             entry.error = undefined;
             const duplicate = actual.find((annotation) =>
@@ -2387,11 +2396,14 @@ export class ZoteroToolHost {
           !eligible.length &&
           !proposal.entries.some((entry) => entry.annotationKey)
         ) {
-          await this.saveAnnotationRecord(token, record);
+          if (savedDraft) await this.saveAnnotationRecord(token, record);
           return reject(
             "No candidates have a reliable location; repair the per-entry issues",
             "invalid_args",
-            { proposalId: proposal.id, entries: proposal.entries },
+            {
+              proposalId: savedDraft ? proposal.id : undefined,
+              entries: proposal.entries,
+            },
           );
         }
         if (
@@ -2419,7 +2431,7 @@ export class ZoteroToolHost {
             }
           ).DataObjectUtilities.generateKey();
         const request = canonical(args);
-        args.proposalId = proposal.id;
+        if (savedDraft) args.proposalId = proposal.id;
         args.annotations = eligible.map((entry) => ({
           ...entry.raw,
           color: entry.located!.color,
@@ -2434,14 +2446,14 @@ export class ZoteroToolHost {
         // immutable operation receipts keep their original execution binding.
         proposal.runId = context.runId;
         proposal.intentRevision = context.intentRevision;
-        record.latest[taskId] = proposal.id;
+        if (savedDraft) record.latest[taskId] = proposal.id;
         context.expectedAfter ??= {};
         Object.assign(context.expectedAfter, {
           annotationBatch: canonical(batch),
           annotationCreator: canonical(this.ownerContext(context)),
           annotationRequest: request,
           annotationArgs: canonical(args),
-          annotationProposal: proposal.id,
+          ...(savedDraft ? { annotationProposal: proposal.id } : {}),
           annotationFingerprint: fingerprint,
           annotationTarget: canonical({
             libraryID: pdf.libraryID,
@@ -2449,7 +2461,7 @@ export class ZoteroToolHost {
           }),
           annotationEntries: canonical(proposal.entries),
         });
-        await this.saveAnnotationRecord(token, record);
+        if (savedDraft) await this.saveAnnotationRecord(token, record);
         return null;
       } finally {
         progress.close();
@@ -4689,39 +4701,19 @@ export class ZoteroToolHost {
         )
           continue;
       }
-      await pdf.reload?.(["childItems"], true);
-      await this.projectAnnotationOutcomes(
-        proposal,
-        pdf,
-        readPdfAnnotations(pdf),
-        true,
-      );
-      const pending = proposal.entries.filter(
-        (entry) =>
-          !entry.annotationKey && !entry.resolved && entry.status !== "skipped",
-      );
-      const invalid = proposal.entries.filter(
-        (entry) =>
-          !entry.annotationKey && !entry.resolved && entry.status === "skipped",
-      );
-      if (pending.length || invalid.length)
-        missing.push({
-          id: proposal.id,
-          kind: "proposal",
-          description: `Candidate batch ${proposal.id}: ${pending.length} candidates remain to submit and ${invalid.length} need correction or explicit omission. Use its existing IDs; preserve annotations already saved.`,
-        });
-      else
-        completed.push({
-          id: proposal.id,
-          revision: proposal.intentRevision,
-          description: `Candidate batch ${proposal.id} resolved; ${proposal.entries.filter((entry) => entry.status === "alreadyPresent").length} annotations currently exist. Removed marks were not recreated.`,
-        });
+      // Saving a requested draft completes preparation. It does not authorize
+      // submission or native writes, and must not start an automatic continuation.
+      completed.push({
+        id: proposal.id,
+        revision: proposal.intentRevision,
+        description:
+          "Annotation draft saved; submission and individual review remain separate actions.",
+      });
     }
     return { completed, missing };
   }
 
   private makeProposal(
-    record: AnnotationRecord,
     raw: unknown,
     taskId: string,
     fingerprint: string,
@@ -4810,8 +4802,6 @@ export class ZoteroToolHost {
       fingerprint,
       entries,
     };
-    record.proposals[proposalId] = proposal;
-    record.latest[taskId] = proposalId;
     return proposal;
   }
 
@@ -4853,7 +4843,6 @@ export class ZoteroToolHost {
       let proposal: AnnotationProposal;
       try {
         proposal = this.makeProposal(
-          record,
           legacy ? args.highlights : args.annotations,
           context.taskId ?? "local",
           await pdfFingerprint(pdf),
@@ -4863,6 +4852,8 @@ export class ZoteroToolHost {
       } catch (error) {
         return { ...fail(name, "invalid_args", String(error)), effect: "none" };
       }
+      record.proposals[proposal.id] = proposal;
+      record.latest[proposal.taskId] = proposal.id;
       await this.saveAnnotationRecord(token, record);
       const issues = proposal.entries
         .filter((entry) => entry.error)

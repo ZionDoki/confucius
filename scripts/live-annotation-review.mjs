@@ -442,6 +442,9 @@ try {
   await ui(
     `const r=d.querySelector('.confucius-annotation-review'),capsule=r.querySelector('.ar-capsule'),draft=d.querySelector('#confucius-prompt');draft.value='Keep this draft while the Agent works';draft.focus();globalThis.arrivalMonitor={reminders:0};globalThis.arrivalObserver=new win.MutationObserver(records=>{if(records.some(record=>record.attributeName==='data-reminder')&&capsule.dataset.reminder==='true')globalThis.arrivalMonitor.reminders++;});globalThis.arrivalObserver.observe(capsule,{attributes:true,attributeFilter:['data-reminder']});return true;`,
   );
+  await evaluate(
+    `const q=globalThis.reviewQA;q.host.emitSessionEvent(q.host.sessions.get(q.liveTask.id),'review-live','turn_started',{userText:'Prepare the requested annotations'});return true;`,
+  );
   const firstLive = await evaluate(
     `const q=globalThis.reviewQA;const result=await q.liveCall([{anchor:q.liveAnchors[0],comment:'Live arrival one'}]);return {result,pool:await q.host.reviews().list(q.liveTask.id)};`,
   );
@@ -452,6 +455,19 @@ try {
       firstLive.pool.batches[0].entries[0].status === "pending",
   );
   await until(
+    () => ui(`return !d.querySelector('.confucius-annotation-review').hidden;`),
+    30000,
+  );
+  check(
+    "Real workspace defers the first batch while its turn is running",
+    await ui(
+      `const r=d.querySelector('.confucius-annotation-review');return r.querySelector('.ar-popup').hidden&&!r.querySelector('.ar-capsule').dataset.reminder;`,
+    ),
+  );
+  await evaluate(
+    `const q=globalThis.reviewQA;q.host.emitSessionEvent(q.host.sessions.get(q.liveTask.id),'review-live','turn_completed',{text:'Suggestions ready',stopReason:'completed'});return true;`,
+  );
+  await until(
     () =>
       ui(
         `const r=d.querySelector('.confucius-annotation-review');return !r.hidden&&!r.querySelector('.ar-popup').hidden;`,
@@ -459,7 +475,7 @@ try {
     30000,
   );
   check(
-    "The real workspace automatically opens the first live batch while preserving composer focus and draft",
+    "A completion event without new batches opens pending review while preserving composer focus and draft",
     await ui(
       `const r=d.querySelector('.confucius-annotation-review'),draft=d.querySelector('#confucius-prompt');return r.dataset.view==='card'&&d.activeElement===draft&&draft.value==='Keep this draft while the Agent works'&&globalThis.arrivalMonitor.reminders===0;`,
     ),

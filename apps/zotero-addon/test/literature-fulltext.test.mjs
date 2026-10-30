@@ -628,7 +628,16 @@ function serviceFixture(t, options = {}) {
     candidateRevision: 1,
     confirmedRevision: 1,
     confirmedIds: ["W1"],
-    works: [work()],
+    works: [
+      work({
+        decision: {
+          selected: true,
+          evaluated: true,
+          actor: "user",
+          revision: 1,
+        },
+      }),
+    ],
     queries: [],
     updatedAt: 1,
   };
@@ -1448,6 +1457,14 @@ test("candidate edits cancel in-flight AI acquisition before it can import", asy
   };
   const pending = f.service.downloadFulltext("task", "W1", "link1");
   await ready;
+  await f.service.updateCandidates(
+    "task",
+    1,
+    [{ id: "W1", selected: true, reason: "Clarified evidence" }],
+    "user",
+  );
+  assert.equal((await f.service.load("task")).candidateRevision, 1);
+  assert.equal(f.downloads(), 0);
   await f.service.updateCandidates(
     "task",
     1,

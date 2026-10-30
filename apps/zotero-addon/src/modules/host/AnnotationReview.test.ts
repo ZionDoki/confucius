@@ -535,3 +535,60 @@ it("pins the actual attachment when the Agent submitted a parent article key", a
   assert.equal(t.calls[0].args.attachmentKey, "ACTUALPDF");
   assert.equal(t.calls[0].args.key, "ARTICLE");
 });
+
+it("keeps quality feedback visible without blocking review or writing early", async () => {
+  const t = setup(),
+    prepared = intent("quality");
+  const after = prepared.recovery.expectedAfter as Record<string, string>;
+  const rows = JSON.parse(after.annotationEntries);
+  rows[0].reviewIssue = "Explain the evidence instead of repeating it";
+  after.annotationEntries = canonical(rows);
+  const result = await t.service.stage(prepared, {
+    taskId: "task",
+    operationId: "quality",
+  });
+  assert.ok(result.ok);
+  assert.deepEqual((result.data as { reviewIssues: unknown[] }).reviewIssues, [
+    { id: "quality", message: rows[0].reviewIssue },
+  ]);
+  const entry = (await t.service.list("task")).batches[0].entries[0];
+  assert.equal(entry.reviewIssue, rows[0].reviewIssue);
+  assert.equal(entry.status, "pending");
+  assert.equal(t.calls.length, 0);
+});
+it("changing a comment cannot bypass rejection within the same user intent", async () => {
+  const t = setup(),
+    original = intent("refused");
+  const context = { taskId: "task", runId: "run", intentRevision: 1 };
+  await t.service.stage(original, { ...context, operationId: "first" });
+  const batch = (await t.service.list("task")).batches[0];
+  await t.service.decide({
+    taskId: "task",
+    action: "reject",
+    entries: [{ batchId: batch.id, entryId: "refused" }],
+  });
+  const after = original.recovery.expectedAfter as Record<string, string>;
+  const rows = JSON.parse(after.annotationEntries);
+  rows[0].located.comment = "A different explanation";
+  after.annotationEntries = canonical(rows);
+  await t.service.stage(original, { ...context, operationId: "rephrase" });
+  assert.equal((await t.service.list("task")).batches.length, 1);
+  assert.equal(
+    (await t.service.list("task")).batches[0].entries[0].status,
+    "rejected",
+  );
+  await t.service.stage(original, {
+    ...context,
+    intentRevision: 2,
+    operationId: "new-request",
+  });
+  assert.equal((await t.service.list("task")).batches.length, 2);
+  const same = intent("refused");
+  await t.service.stage(same, {
+    ...context,
+    intentRevision: 3,
+    operationId: "explicit-same-request",
+  });
+  assert.equal((await t.service.list("task")).batches.length, 3);
+  assert.equal(t.calls.length, 0);
+});

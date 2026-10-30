@@ -48,7 +48,7 @@ const gap = () => ({
   ],
 });
 
-for (const action of ["switch", "recover", "improve"])
+for (const action of ["switch", "recover", "complete"])
   it(`a superseded result snapshot cannot ${action} the newer execution`, async () => {
     const state = run();
     state.budget.modelRequestsObservable = false;
@@ -68,9 +68,6 @@ for (const action of ["switch", "recover", "improve"])
         effects++;
       },
       recover: async () => {
-        effects++;
-      },
-      improve: async () => {
         effects++;
       },
       wait: async () => {},
@@ -418,7 +415,7 @@ for (const language of ["zh-CN", "en-US"] as const) {
 }
 
 for (const backend of ["native", "kimi", "codex"] as const) {
-  it(`${backend}: ordinary task continues a known draft without mandatory stages`, async () => {
+  it(`${backend}: ordinary task leaves incidental drafts without scheduling extra work`, async () => {
     const state = run();
     const store = fixtureStore();
     const ids: string[] = [];
@@ -466,9 +463,10 @@ for (const backend of ["native", "kimi", "codex"] as const) {
       new AbortController().signal,
     );
     assert.equal(outcome.stopReason, "completed");
-    assert.equal(calls, 2);
+    assert.equal(calls, 1);
     assert.equal((await store.list(ids)).length, 1);
-    assert.equal(state.budget.iterationsUsed, 2);
+    assert.equal(state.budget.iterationsUsed, 1);
+    assert.equal((await store.list(ids))[0].status, "draft");
   });
 }
 it("ready artifact revision bumps do not count as progress while work remains", async () => {
@@ -633,6 +631,7 @@ it("keeps advancing the same batch while authoritative remaining counts decrease
 for (const changed of [true, false]) {
   it(`${changed ? "changed" : "identical"} draft contents determine progress independently of record revision`, async () => {
     const state = run();
+    state.requiredArtifactKinds = ["report"];
     const store = fixtureStore();
     const ids: string[] = [];
     let calls = 0;
@@ -966,54 +965,48 @@ it("unknown writes, authentication failures and cancelled recovery never start a
   }
 });
 
-it("direct improvement failures do not reopen completed work or create a delivery gate", async () => {
-  const state = run();
-  let starts = 0,
-    edits = 0;
-  const coordinator = new RunCoordinator({
-    run: state,
-    current: () => true,
-    persist: async () => {},
-    progress: () => {},
-    snapshot: async () => empty(),
-    executor: {
-      run: async () => {
-        starts++;
-        return { stopReason: "completed", text: "Saved report" };
+for (const backend of ["native", "codex", "kimi"] as const) {
+  it(`${backend}: a ready deep-read finishes without an additional model pass`, async () => {
+    const state = run();
+    state.templateId = "deep-read";
+    state.requiredArtifactKinds = ["deep_read"];
+    const store = fixtureStore();
+    const ids: string[] = [];
+    let starts = 0;
+    const coordinator = new RunCoordinator({
+      run: state,
+      current: () => true,
+      persist: async () => {},
+      progress: () => {},
+      snapshot: async () =>
+        projectWork(state, await store.list(ids), empty(), []),
+      executor: {
+        run: async () => {
+          starts++;
+          const report = await store.upsert(
+            {
+              taskId: "task",
+              kind: "deep_read",
+              title: "Report",
+              status: "ready",
+              body: { type: "markdown", markdown: "Supported explanation" },
+            },
+            backend,
+            [],
+            undefined,
+            executionBinding(state),
+          );
+          ids.push(report.id);
+          return { stopReason: "completed", text: "Saved" };
+        },
       },
-    },
-    improve: async () => {
-      edits++;
-      throw new Error("Editing unavailable");
-    },
+    });
+    const result = await coordinator.execute(
+      "Read",
+      new AbortController().signal,
+    );
+    assert.equal(result.stopReason, "completed");
+    assert.equal(starts, 1);
+    assert.equal((await store.get(ids[0]))?.revision, 1);
   });
-  const result = await coordinator.execute(
-    "Read",
-    new AbortController().signal,
-  );
-  assert.equal(result.stopReason, "completed");
-  assert.equal(starts, 1);
-  assert.equal(edits, 1);
-  assert.deepEqual(result.work.missing, []);
-});
-
-it("cancellation during direct improvement keeps the run cancelled", async () => {
-  const state = run(),
-    controller = new AbortController();
-  const coordinator = new RunCoordinator({
-    run: state,
-    current: () => true,
-    persist: async () => {},
-    progress: () => {},
-    snapshot: async () => empty(),
-    executor: {
-      run: async () => ({ stopReason: "completed", text: "Saved report" }),
-    },
-    improve: async () => {
-      controller.abort();
-    },
-  });
-  const result = await coordinator.execute("Read", controller.signal);
-  assert.equal(result.stopReason, "aborted");
-  assert.equal(state.status, "interrupted");
-});
+}

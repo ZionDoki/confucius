@@ -33,9 +33,9 @@ conversation, ask for a specific change, such as “Check this number and update
 the summary.” Revisions keep the same report and its history. The version menu
 can pin an older version; **Latest** resumes following updates.
 
-A report marked ready is deliverable, not fact-certified. Deep-reading reports
-can receive one automatic revision using the current model and remaining budget.
-Failure leaves the saved report available.
+A report marked ready is deliverable, not fact-certified. The host does not start
+an additional revision after delivery. Ask for a specific change in the same
+conversation when needed.
 
 ## Save or export
 
@@ -54,11 +54,12 @@ or ID is needed. **Export file** creates an independent HTML copy. See
 
 Ask for highlights or comments, optionally specifying pages and quantity.
 
-The automatic opening, arrival reminder and initial view defaults below apply
-from 0.6.1-beta.1.
+Starting with 0.6.4-beta.1, suggestions accumulate quietly while the Agent works.
+You can open the capsule at any time. A saved candidate draft does not request PDF
+writes or automatically create a separate annotation report.
 
-1. The first Agent batch opens review automatically. Use the **Annotations**
-   capsule above the composer to reopen it.
+1. When generation ends, the first live suggestions open review together. Use
+   the **Annotations** capsule above the composer to open it earlier or reopen it.
 2. Review the quoted text, comment and page in cards or the list. Fewer than ten
    entries default to cards; ten or more default to a list. You can switch views.
 3. **Accept** writes the annotation to Zotero. **Reject** leaves it unwritten and
@@ -70,7 +71,9 @@ Only a confirmed write receipt is shown as saved. If a result is uncertain, use
 **Verify write status**; do not assume it failed and repeat the write.
 
 The viewer preserves selection and position when minimized. Later suggestions
-briefly animate the capsule and update the count without forcing it open.
+update the count while generation continues, then give one capsule reminder
+without forcing it open. Quality notices appear beside affected comments. A
+rephrased comment cannot bypass rejection in the same request.
 Reduced motion uses the new count instead of animation. Loading history stays
 minimized; saved outcomes survive a restart.
 

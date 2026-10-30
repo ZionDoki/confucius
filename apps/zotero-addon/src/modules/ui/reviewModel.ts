@@ -16,6 +16,7 @@ export interface ReviewEntry {
   type?: string;
   color?: string;
   error?: string;
+  reviewIssue?: string;
   searchText?: string;
 }
 export interface ReviewBatch<E extends ReviewEntry = ReviewEntry> {

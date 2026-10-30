@@ -12,6 +12,7 @@ export function createAnnotationReviewPanel(
     rpc: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
     viewport: HTMLElement;
     anchor: HTMLElement;
+    deferArrivals?: () => boolean;
     opened: () => void;
     visibilityChanged: () => void;
   },

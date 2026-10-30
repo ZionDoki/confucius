@@ -65,23 +65,24 @@ export function projectWork(
         )
         .filter((kind) => !ready.some((artifact) => artifact.kind === kind))
         .map((kind) => ({
+          progress: bound.some(
+            (artifact) => artifact.kind === kind && artifact.status === "draft",
+          )
+            ? contentFingerprint(
+                bound
+                  .filter(
+                    (artifact) =>
+                      artifact.kind === kind && artifact.status === "draft",
+                  )
+                  .map((artifact) => artifact.body),
+              )
+            : undefined,
           id: `artifact:${kind}`,
           kind: "artifact" as const,
           description:
             language === "en-US"
               ? `Save ${kind} for the current request and sources`
               : `保存 ${kind} 成果，关联当前请求和来源`,
-        })),
-      ...bound
-        .filter((artifact) => artifact.status === "draft")
-        .map((artifact) => ({
-          id: `draft:${artifact.id}`,
-          kind: "artifact" as const,
-          description:
-            language === "en-US"
-              ? `Finish draft: ${artifact.title}`
-              : `完成草稿 ${artifact.title}`,
-          progress: contentFingerprint(artifact.body),
         })),
       ...domain.missing,
     ],
@@ -136,8 +137,6 @@ export class RunCoordinator {
       requestProgress?(
         progress: import("@confucius/protocol").ModelRequestProgress,
       ): void;
-      /** Optional direct editing; failure never adds a work gap. */
-      improve?(): Promise<void>;
       recover?(): Promise<void>;
       switchContext?(): Promise<void>;
       wait?: (ms: number, signal: AbortSignal) => Promise<void>;
@@ -306,18 +305,6 @@ export class RunCoordinator {
       recoveries = 0;
       requestId = `runtime_${run.id}_${run.budget.executorStarts + 1}`;
       if (!work.missing.length) {
-        try {
-          await this.options.improve?.();
-        } catch {
-          this.options.progress(
-            this.options.language === "en-US"
-              ? "Automatic improvements were unavailable; the saved report is retained."
-              : "自动完善暂不可用，已保留生成的报告。",
-          );
-        }
-        if (!this.options.current())
-          return { ...result, work, superseded: true };
-        if (signal.aborted) return finish("aborted");
         work = await this.options.snapshot();
         if (!this.options.current())
           return { ...result, work, superseded: true };

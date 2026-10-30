@@ -1608,6 +1608,7 @@ function bindWorkspace(
   composerDock.appendChild(composerCapsules);
   const literaturePanel = createLiteraturePanel(doc, {
     rpc,
+    running: () => state.running,
     viewport: timelinePane,
     anchor: composerDock,
     opened: () => annotationReview.close(),
@@ -1651,6 +1652,7 @@ function bindWorkspace(
   composer.insertBefore(composerDock, composerCard);
   const annotationReview = createAnnotationReviewPanel(doc, {
     rpc,
+    deferArrivals: () => state.running,
     viewport: timelinePane,
     anchor: composerDock,
     opened: () => literaturePanel.close(),
@@ -7511,12 +7513,21 @@ function bindWorkspace(
           // cursor even if a different request rendered an overlapping batch.
           state.lastEventId = incoming[incoming.length - 1].id;
         }
+        const wasRunning = state.running;
+        state.running = isRunningFromEvents(state.events);
+        if (wasRunning !== state.running) {
+          updateRunningUI();
+        }
         collectApprovals();
         if (
+          (wasRunning && !state.running) ||
           incoming.some((event) => event.type === "annotation_review_changed")
         )
           await annotationReview.refresh(reviewBatchIds);
-        if (incoming.some((event) => event.type === "literature_updated"))
+        if (
+          (wasRunning && !state.running) ||
+          incoming.some((event) => event.type === "literature_updated")
+        )
           await literaturePanel.refresh(candidateIds);
         if (incoming.some((event) => event.type === "memory_updated")) {
           renderKnowledgeWindow();
@@ -7536,11 +7547,6 @@ function bindWorkspace(
           selection !== taskLoadGeneration
         )
           return;
-        const wasRunning = state.running;
-        state.running = isRunningFromEvents(state.events);
-        if (wasRunning !== state.running) {
-          updateRunningUI();
-        }
         try {
           const stats = (await rpc("task/context", {
             taskId: state.sessionId,

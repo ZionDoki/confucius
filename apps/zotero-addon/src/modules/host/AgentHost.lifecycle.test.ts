@@ -3586,7 +3586,7 @@ it("a candidate prepared after user steering cannot overwrite the newer run", as
   assert.equal(discarded, true);
 });
 
-it("submitted annotation suggestions satisfy the Agent obligation without claiming PDF writes", async (t) => {
+it("saved annotation drafts do not create a write obligation", async (t) => {
   const previous = Reflect.get(globalThis, "Zotero");
   Reflect.set(globalThis, "Zotero", {
     locale: "en-US",
@@ -3597,35 +3597,27 @@ it("submitted annotation suggestions satisfy the Agent obligation without claimi
   state.record.run = run(state.record);
   Reflect.deleteProperty(host, "workSnapshot");
   Object.assign(host, {
-    annotationReviews: {
-      submittedProposalIds: async () => new Set(["queued"]),
-    },
     tools: {
       workForTask: async () => ({
-        completed: [],
-        missing: [
+        completed: [
           {
-            id: "queued",
-            kind: "proposal",
-            description: "Commit candidate annotations",
-          },
-          {
-            id: "unsubmitted",
-            kind: "proposal",
-            description: "Unsubmitted candidates",
+            id: "draft",
+            description:
+              "Annotation draft saved; submission and individual review remain separate actions.",
           },
         ],
+        missing: [],
       }),
     },
   });
   const snapshot = await host.workSnapshot(state);
   assert.deepEqual(
     snapshot.missing.map((item) => item.id),
-    ["unsubmitted"],
+    [],
   );
   assert.match(
     snapshot.completed[0].description,
-    /review pool.*require individual acceptance/,
+    /draft saved.*separate actions/,
   );
 });
 

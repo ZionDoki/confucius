@@ -2,6 +2,61 @@
 
 ## Unreleased
 
+## 0.6.4-beta.1 - 2026-10-30
+
+### Changed
+
+- Annotation and literature review arrivals accumulate quietly while the agent
+  is generating, then show a combined reminder when the turn ends. A literature
+  decision required to continue still opens immediately. Reviewing arrivals
+  manually acknowledges them so they do not reopen at the end of the turn.
+- A completed reading report ends the requested work without an automatic
+  second model revision. Incidental drafts no longer make the agent continue
+  working after the requested deliverable is ready. Explicitly required
+  deliverables still participate in completion checks.
+- Direct annotation suggestions use the existing review entries without also
+  saving an implicit proposal. Explicit draft requests and existing saved
+  drafts remain supported. Submitting suggestions finishes generation;
+  accepting individual entries is what writes them to the PDF.
+
+### Fixed
+
+- Annotation guidance now asks for concise, source-grounded explanations that
+  preserve metrics, denominators and tested conditions. Quality notices use the
+  resolved source passage and remain visible during review. Rephrasing a
+  rejected suggestion cannot resubmit the same passage within the same request;
+  a later explicit request can reconsider it.
+- Repeated literature selections and evaluation-only changes no longer cancel
+  a valid continuation. Actual selection changes still invalidate it, and the
+  agent cannot overwrite the user's selection or its reason.
+
+### Upgrade notes
+
+- This is a Beta. Enable **Include prereleases** in Confucius Settings → Update
+  to receive it. The stable Latest release remains 0.6.3. Follow Zotero's restart
+  prompt if installation is staged.
+- No manual data migration or model reconfiguration is required. Existing
+  tasks, drafts, review entries, write receipts and explicit update preferences
+  are preserved. Saved drafts do not become automatic write requests.
+
+### Validation and known limits
+
+- All 1,640 automated tests passed, along with type checking, lint, production
+  build, version consistency, skill synchronization and pinned venue catalogs.
+- In isolated Zotero 10.0.7 profiles on macOS 26.6.2, 142 annotation/literature
+  review checks and 21 ordinary-package upgrade checks from public 0.6.3 passed.
+  These checks use synthetic libraries and automated UI events.
+- Native-model sampling with `deepseek-flash` delivered one review batch with
+  two requested annotation suggestions and one reading report. This is not a
+  general quality or speed benchmark: wording can still be verbose or overreach.
+  The recovery sample failed the strict no-page-refetch check after context
+  rollover; its report identity and other structural checks passed.
+- Windows, Linux, other Zotero versions, manual pointer gestures and live
+  publisher acquisition were not retested. Public discovery/download and an
+  unchanged-old-package online upgrade are checked after publication. See the
+  [acceptance record](https://github.com/ZionDoki/confucius/blob/v0.6.4-beta.1/.github/maintainers/acceptance/release-0.6.4-beta.1.md)
+  for the tested scope and remaining limits.
+
 ## 0.6.3 - 2026-10-29
 
 ### Added

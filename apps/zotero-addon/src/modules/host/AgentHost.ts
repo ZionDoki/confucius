@@ -130,19 +130,10 @@ import {
 } from "./ContextMaintenance";
 import {
   CONTEXT_POLICY,
-  contextInputLimit,
   contextTextSlice,
   contextTextHead,
   contextTextTokens,
 } from "@confucius/protocol";
-import {
-  reportContent,
-  reportEvidence,
-  missingReportPages,
-  reportRevisionCandidate,
-  reportRevisionMessages,
-  reportRevisionPatch,
-} from "./ReportRevision";
 import { sourceReadEvidence, sourceReviewBinding } from "./SourceReadEvidence";
 import { createHistoryStore } from "./MemoryTools";
 import { historySourceRefs } from "./HistorySources";
@@ -7146,23 +7137,6 @@ export class AgentHost {
         sourceRefs,
       },
     );
-    const submitted = this.annotationReviews
-      ? await this.annotationReviews.submittedProposalIds(state.record.id)
-      : new Set<string>();
-    domain.completed = [
-      ...domain.completed,
-      ...domain.missing.filter((item) => submitted.has(item.id)),
-    ];
-    domain.missing = domain.missing.filter((item) => !submitted.has(item.id));
-    domain.completed = domain.completed.map((item) =>
-      submitted.has(item.id)
-        ? {
-            ...item,
-            description:
-              "Annotation suggestions submitted to the user's review pool; PDF writes require individual acceptance.",
-          }
-        : item,
-    );
     const coverage = await this.history.sourceCoverage(state.record.id, run);
     if (sourceRefs)
       coverage.entries = coverage.entries.filter((entry) =>
@@ -7463,14 +7437,6 @@ export class AgentHost {
       );
     }
     if (run.skillInvocation) state.loadedSkills.add(run.skillInvocation.slug);
-    if (!continuing || changedIntent) {
-      run.reportRevision = undefined;
-      run.reportRevisionBaseline = Object.fromEntries(
-        existingArtifacts
-          .filter((artifact) => artifact.kind === "deep_read")
-          .map((artifact) => [artifact.id, reportContent(artifact)]),
-      );
-    }
     delete state.record.presetPrepared;
     state.runBudget = new BudgetAccountant({
       maxIterations: run.budget.maxIterations,
@@ -7670,10 +7636,6 @@ export class AgentHost {
           await this.persistNow();
         },
         snapshot: () => this.workSnapshot(state),
-        improve: async () => {
-          if (state.record.mode === "agent")
-            await this.improveReadingReport(state, run, turnId, isCurrent);
-        },
         requestProgress: (progress) =>
           this.emitSessionEvent(
             state,
@@ -8445,240 +8407,6 @@ export class AgentHost {
         ),
       );
     return {};
-  }
-
-  /** One optional editing pass. Its outcome never controls report delivery. */
-  private async improveReadingReport(
-    state: SessionState,
-    run: RunState,
-    turnId: string,
-    isCurrent: () => boolean,
-  ): Promise<void> {
-    if (
-      !isCurrent() ||
-      state.abort?.signal.aborted ||
-      run.templateId !== "deep-read"
-    )
-      return;
-    const artifact = reportRevisionCandidate(
-      run,
-      await this.artifacts.list(state.record.artifactIds),
-    );
-    if (!artifact || !isCurrent()) return;
-    const attempt: NonNullable<RunState["reportRevision"]> = {
-      artifactId: artifact.id,
-      inputRevision: artifact.revision,
-      intentRevision: run.intentRevision,
-      status: "started",
-    };
-    run.reportRevision = attempt;
-    const budget = state.runBudget;
-    const signal = state.abort?.signal;
-    const active = () => isCurrent() && !signal?.aborted;
-    const canCallModel = () =>
-      active() &&
-      (budget?.canStartIteration() ?? true) &&
-      (run.budget.modelRequestsObservable
-        ? run.budget.iterationsUsed < run.budget.maxIterations
-        : run.budget.executorStarts < run.budget.maxIterations);
-    const canRead = () =>
-      active() &&
-      (budget?.canRunTools(2) ?? true) &&
-      run.budget.toolCallsUsed + 1 < run.budget.maxToolCalls;
-    const note = (message: string) =>
-      this.emitSessionEvent(state, turnId, "text_delta", {
-        text: message,
-        phase: "commentary",
-      });
-    let notice: string | undefined;
-    try {
-      await this.persistNow(); // An interrupted attempt is not automatically replayed.
-      if (!canCallModel()) throw new Error("No remaining model budget");
-      if (
-        run.budget.toolCallsUsed >= run.budget.maxToolCalls ||
-        !(budget?.canRunTools(1) ?? true)
-      )
-        throw new Error("No remaining tool budget for report edits");
-      note(
-        configuredUiLanguage() === "zh-CN"
-          ? "正在按所选风格直接完善报告。已保存内容可继续阅读。"
-          : "Improving the report in the selected style. The saved report remains readable.",
-      );
-      let evidence = reportEvidence(artifact, state.events, state.messages);
-      const read = async (name: string, args: Record<string, unknown>) => {
-        if (!canRead()) return;
-        budget?.recordToolCalls(1);
-        run.budget.toolCallsUsed++;
-        await this.persistNow();
-        if (!active()) return;
-        const callId = `revision_read_${this.ids()}`;
-        this.emitSessionEvent(state, turnId, "tool_requested", {
-          callId,
-          toolName: name,
-          args,
-        });
-        const result = await this.executeTool(name, args, state, callId);
-        if (!active()) return;
-        this.emitSessionEvent(state, turnId, "tool_result", { callId, result });
-        return result;
-      };
-      // Reserve the final write. Missing sources are a limitation, not a repair loop.
-      for (const args of missingReportPages(artifact, evidence)) {
-        if (!canRead()) break;
-        try {
-          await read("get_pages", args);
-        } catch {
-          /* keep available evidence */
-        }
-      }
-      // Fetch current comments, as old reads may precede a successful edit/deletion.
-      const attachments = new Map(
-        artifact.citations
-          .filter((cite) => cite.attachmentKey && cite.annotationKey)
-          .map((cite) => [`${cite.itemLibraryID}:${cite.attachmentKey}`, cite]),
-      );
-      for (const cite of attachments.values()) {
-        let offset = 0;
-        while (canRead()) {
-          let result: ToolResult | undefined;
-          try {
-            result = await read("get_annotations", {
-              libraryID: cite.itemLibraryID,
-              key: cite.attachmentKey,
-              offset,
-              limit: 25,
-            });
-          } catch {
-            break;
-          }
-          if (!result?.ok) break;
-          const data = result.data as { nextOffset?: number | null };
-          if (!Number.isInteger(data.nextOffset) || data.nextOffset! <= offset)
-            break;
-          offset = data.nextOffset!;
-        }
-      }
-      evidence = reportEvidence(artifact, state.events, state.messages);
-      const outputAllowance =
-        state.record.backend === "native"
-          ? this.maxOutputTokens() || 4096
-          : 8192;
-      const capacity =
-        state.record.backend === "native"
-          ? this.contextWindowTokens()
-          : state.record.contextWindow?.capacityTokens || 32768;
-      const messages = reportRevisionMessages({
-        request: run.request,
-        languageInstruction: this.languageInstruction(
-          state.record,
-          run.request,
-        ),
-        style: state.record.reportStyle,
-        artifact,
-        evidence,
-        maxInputTokens: contextInputLimit(capacity, outputAllowance),
-      });
-      if (!canCallModel()) throw new Error("No remaining model budget");
-      const configuredTimeout =
-        state.record.backend === "native"
-          ? (activeEndpoint(this.readEndpointStore().store)?.timeouts
-              ?.absoluteMs ?? 600000)
-          : 600000;
-      const timeoutMs = Math.max(
-        1,
-        Math.min(
-          configuredTimeout,
-          budget?.remainingElapsedMs() ?? configuredTimeout,
-        ),
-      );
-      const adapter =
-        state.record.backend === "native"
-          ? this.openaiAdapter({ stream: false })
-          : this.externalAnalysisAdapter(state, {
-              preserveSettings: true,
-              timeoutMs,
-            });
-      const result = await adapter.complete(
-        {
-          messages,
-          maxAttempts: 1,
-          deadlineMs: Date.now() + timeoutMs,
-          onAttempt: async () => {
-            if (!canCallModel())
-              throw new Error("Revision cancelled or budget exhausted");
-            budget?.recordIteration();
-            budget?.recordModelAttempt();
-            if (!run.budget.modelRequestsObservable)
-              run.budget.executorStarts++;
-            this.captureRunBudget(state);
-            await this.persistNow();
-          },
-          onRequestProgress: (progress) =>
-            this.emitSessionEvent(
-              state,
-              turnId,
-              "model_request_progress",
-              progress,
-            ),
-        },
-        signal,
-      );
-      if (result.usage) {
-        budget?.recordUsage(result.usage);
-        this.captureRunBudget(state);
-      }
-      if (!active()) return;
-      if (result.end && result.end !== "stop")
-        throw new Error(`Incomplete revision output: ${result.end}`);
-      const patch = reportRevisionPatch(result.text ?? "", artifact);
-      if (patch) {
-        const latest = await this.artifacts.get(artifact.id);
-        if (!active()) return;
-        if (latest?.revision !== artifact.revision)
-          throw new Error("Report changed during revision");
-        if (
-          run.budget.toolCallsUsed >= run.budget.maxToolCalls ||
-          !(budget?.canRunTools(1) ?? true)
-        )
-          throw new Error("No remaining tool budget for report edits");
-        budget?.recordToolCalls(1);
-        run.budget.toolCallsUsed++;
-        await this.persistNow();
-        const context = this.toolContext(
-          state,
-          turnId,
-          `artifact_revision_${this.ids()}`,
-        );
-        // The normal operation path preserves atomic writes, cancellation and recovery.
-        const saved = await this.execution
-          .wrap(this.artifactProvider(state, turnId), context)
-          .call("artifact_patch", patch, signal);
-        if (!saved.ok) throw new Error(saved.message);
-      }
-      attempt.status = "finished";
-    } catch (error) {
-      if (error instanceof ModelError && error.options.partial?.usage) {
-        budget?.recordUsage(error.options.partial.usage);
-        this.captureRunBudget(state);
-      }
-      attempt.status = "skipped";
-      attempt.reason = errorMessage(error);
-      notice =
-        configuredUiLanguage() === "zh-CN"
-          ? "自动完善未完成，已保留原报告；可继续阅读或提出具体修改。"
-          : "Automatic improvements were not completed. The saved report is retained for reading or further edits.";
-    } finally {
-      this.captureRunBudget(state);
-      if (isCurrent()) {
-        if (notice && !signal?.aborted) note(notice);
-        await this.persistNow().catch((error) =>
-          ztoolkit.log(
-            "[Confucius] report revision record persistence pending",
-            error,
-          ),
-        );
-      }
-    }
   }
 
   private async finalizeRun(
@@ -9890,7 +9618,7 @@ export class AgentHost {
       "Write tools require user approval. For PDF annotations, read get_pages",
       "and call commit_annotations directly with annotations:[{anchor,comment}].",
       "Copy [anchor:ID] references; omit page and quote. One entry or a batch is supported.",
-      "propose_annotations is optional for a saved draft. The commit tool approval dialog is the consent step. Keep",
+      "propose_annotations is only for a saved draft the user requests. Submission completes annotation generation; individual acceptance in the review area authorizes PDF writes. Keep",
       "propose_highlights only for compatibility.",
       "New annotations share this task chat’s persistent batch. The host remaps colors against each PDF’s frozen baseline; use actual returned colors in legends. Only verified Confucius Agent annotations can be updated or deleted, across tasks and agents, while retaining original ownership. Use update_annotation for comments or a same-PDF text anchor and delete_annotation for removal. Old unknown marks remain existing annotations; tags and author names are not permission.",
       "Ordinary work memory is automatically maintained and may expire. context_save with protected=true requests per-item approval to keep a user memory. Changes to protected memory require approval; tool grants never replace it.",

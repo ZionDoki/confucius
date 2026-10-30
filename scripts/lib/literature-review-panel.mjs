@@ -94,8 +94,11 @@ async function regressions(doc, createPanel) {
     "position:absolute;bottom:0;left:0;right:0;min-height:34px";
   wrapper.append(anchor);
   doc.body.append(wrapper);
-  let nextRead, abstractLookup;
+  let nextRead,
+    abstractLookup,
+    running = false;
   const panel = createPanel(doc, {
+    running: () => running,
     viewport: wrapper,
     anchor,
     opened() {},
@@ -451,6 +454,32 @@ async function regressions(doc, createPanel) {
     check(
       "task revisits retain their manual presentation",
       root.dataset.view === "list",
+    );
+    pages.waiting = page("waiting", 0);
+    panel.update("waiting", pages.waiting.summary);
+    await tick();
+    await panel.refresh();
+    running = true;
+    pages.waiting.items.push(work("decision-paper"));
+    pages.waiting.summary.revision++;
+    pages.waiting.summary.pool = 1;
+    await panel.refresh(["decision-paper"]);
+    check(
+      "literature discovery stays quiet during generation",
+      !panel.floating,
+    );
+    pages.waiting.summary.awaitingConfirmation = true;
+    pages.waiting.summary.revision++;
+    await panel.refresh();
+    check(
+      "a blocking literature decision opens while the Agent is running",
+      panel.floating,
+    );
+    panel.close();
+    await panel.refresh();
+    check(
+      "an unchanged blocking decision does not repeatedly reopen",
+      !panel.floating,
     );
     return { checks, total: checks.length };
   } finally {

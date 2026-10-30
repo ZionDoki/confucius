@@ -257,6 +257,41 @@ describe("native passage annotation contract", () => {
     };
   }
 
+  it("checks anchor comments against resolved source text without saving an implicit proposal", async () => {
+    const env = installHost({
+      nativeChars: [positionedChars(["Precise source evidence."])],
+    });
+    const { anchors } = await readAnchors(env);
+    const context: ToolExecutionContext = {
+      taskId: "quality",
+      annotationPolicy: "key_explanations",
+    };
+    const args = {
+      libraryID: 1,
+      key: "ITEMKEY1",
+      annotations: [
+        { anchor: anchors[0], comment: "Precise source evidence." },
+      ],
+    };
+    const provider = env.service.wrap(new ZoteroToolProvider(env.host));
+    assert.equal(
+      await provider.prepare!("commit_annotations", args, context),
+      null,
+    );
+    const entries = JSON.parse(
+      (
+        context.preparedOperation!.recovery.expectedAfter as Record<
+          string,
+          string
+        >
+      ).annotationEntries,
+    );
+    assert.match(entries[0].reviewIssue, /repeats/);
+    assert.equal(env.native.size, 0);
+    assert.equal(await env.storage.read("1_PDFKEY01"), null);
+    assert.equal("proposalId" in args, false);
+  });
+
   it("changes an owned text selection inside its PDF while preserving key, color and origin", async () => {
     const installed = installHost({
       nativeChars: [positionedChars(["First evidence. Second evidence."])],
@@ -2399,7 +2434,14 @@ it("repairs only failed entries of a partial batch and stores outcomes only in t
   assert.equal(first.effect, "partial");
   const repaired = await env.execute(
     "commit_annotations",
-    { libraryID: 1, key: "ITEMKEY1" },
+    {
+      libraryID: 1,
+      key: "ITEMKEY1",
+      annotations: [
+        { id: "second", type: "highlight", page: 2, quote: "Second" },
+        { id: "third", type: "highlight", page: 3, quote: "Third" },
+      ],
+    },
     undefined,
     { ...context, operationId: "partial-repair" },
   );
@@ -2410,10 +2452,7 @@ it("repairs only failed entries of a partial batch and stores outcomes only in t
     ["First", "Second", "Second", "Third"],
   );
   const record = await env.storage.read<Record<string, unknown>>("1_PDFKEY01");
-  assert.equal(record?.version, 2);
-  assert.equal("operations" in record!, false);
-  assert.equal("operationProposals" in record!, false);
-  assert.equal(JSON.stringify(record).includes("annotationKey"), false);
+  assert.equal(record, null); // Direct submissions do not persist hidden drafts.
   assert.equal(
     (await env.service.listOperations({ name: "commit_annotations" })).length,
     2,
@@ -2424,7 +2463,7 @@ it("repairs only failed entries of a partial batch and stores outcomes only in t
     sourceRefs: ["1:ITEMKEY1"],
   });
   assert.equal(work.missing.length, 0);
-  assert.equal(work.completed.length, 1);
+  assert.equal(work.completed.length, 0);
 });
 
 it("reconciles a lost annotation response through native objects without a model read", async () => {
@@ -2455,7 +2494,7 @@ it("reconciles a lost annotation response through native objects without a model
 it("migrates legacy annotation receipts before removing duplicated proposal outcomes", async () => {
   const env = installHost();
   await env.execute(
-    "commit_annotations",
+    "propose_annotations",
     {
       libraryID: 1,
       key: "ITEMKEY1",
@@ -2463,6 +2502,12 @@ it("migrates legacy annotation receipts before removing duplicated proposal outc
         { id: "old", type: "highlight", page: 1, quote: "Old evidence" },
       ],
     },
+    undefined,
+    { operationId: "legacy-draft", taskId: "legacy" },
+  );
+  await env.execute(
+    "commit_annotations",
+    { libraryID: 1, key: "ITEMKEY1" },
     undefined,
     { operationId: "legacy-source", taskId: "legacy" },
   );
@@ -2526,7 +2571,7 @@ it("projects only candidates belonging to the current run and current sources", 
   );
   assert.equal(
     (await env.host.workForTask("task", 0, undefined, { runId: "new-run" }))
-      .missing.length,
+      .completed.length,
     0,
   );
   assert.equal(
@@ -2535,7 +2580,7 @@ it("projects only candidates belonging to the current run and current sources", 
         runId: "old-run",
         sourceRefs: ["1:OTHER"],
       })
-    ).missing.length,
+    ).completed.length,
     0,
   );
   assert.equal(
@@ -2544,7 +2589,7 @@ it("projects only candidates belonging to the current run and current sources", 
         runId: "old-run",
         sourceRefs: ["1:ITEMKEY1"],
       })
-    ).missing.length,
+    ).completed.length,
     1,
   );
 });
@@ -2565,7 +2610,7 @@ it("keeps pending candidates on Continue and withdraws them from a later intent"
     context,
   );
   const continuing = await env.host.workForTask("steer", 0, undefined, context);
-  assert.equal(continuing.missing.length, 1);
+  assert.equal(continuing.completed.length, 1);
   const steered = { ...context, intentRevision: 2 };
   assert.deepEqual(await env.host.workForTask("steer", 0, undefined, steered), {
     completed: [],
@@ -2583,7 +2628,8 @@ it("keeps pending candidates on Continue and withdraws them from a later intent"
   assert.equal(implicit.ok, false);
   assert.equal(env.saved.length, 0);
   assert.equal(
-    (await env.host.workForTask("steer", 0, undefined, context)).missing.length,
+    (await env.host.workForTask("steer", 0, undefined, context)).completed
+      .length,
     1,
   );
 });
@@ -2620,7 +2666,7 @@ it("uses the latest revised batch while explicit reuse adopts an older proposal 
   );
   assert.equal(latest.ok, true);
   assert.equal(
-    (await env.host.workForTask("adopt", 0, undefined, next)).missing[0].id,
+    (await env.host.workForTask("adopt", 0, undefined, next)).completed[0].id,
     (latest.ok ? (latest.data as { proposalId: string }) : undefined)
       ?.proposalId,
   );
@@ -2639,7 +2685,7 @@ it("uses the latest revised batch while explicit reuse adopts an older proposal 
   );
   const active = await env.host.workForTask("adopt", 0, undefined, next);
   assert.deepEqual(
-    active.missing.map((gap) => gap.id),
+    active.completed.map((gap) => gap.id),
     [id.proposalId],
   );
   const record = (await env.storage.read<{
@@ -2692,7 +2738,7 @@ it("keeps current candidates visible and implicitly committable after an old sco
   assert.deepEqual(
     (
       await env.host.workForTask(current.taskId, 0, undefined, current)
-    ).missing.map((entry) => entry.id),
+    ).completed.map((entry) => entry.id),
     [currentId],
   );
   const committed = await env.execute(
@@ -2718,8 +2764,8 @@ it("adopts a partial batch in a later intent and writes only its remaining entri
     runId: "run-partial",
     intentRevision: 1,
   };
-  const first = await env.execute(
-    "commit_annotations",
+  await env.execute(
+    "propose_annotations",
     {
       libraryID: 1,
       key: "ITEMKEY1",
@@ -2728,6 +2774,12 @@ it("adopts a partial batch in a later intent and writes only its remaining entri
         { id: "retry", type: "highlight", page: 2, quote: "Second" },
       ],
     },
+    undefined,
+    { ...context, operationId: "before-steering-draft" },
+  );
+  const first = await env.execute(
+    "commit_annotations",
+    { libraryID: 1, key: "ITEMKEY1" },
     undefined,
     { ...context, operationId: "before-steering" },
   );
@@ -2779,6 +2831,15 @@ it("clears old denied projections when a candidate is explicitly adopted by a la
     intentRevision: 1,
     operationId: "denied-original",
   };
+  const draft = await env.execute(
+    "propose_annotations",
+    { ...args },
+    undefined,
+    { ...context, operationId: "saved-draft" },
+  );
+  assert.ok(draft.ok);
+  args.proposalId = (draft.data as { proposalId: string }).proposalId;
+  delete args.annotations;
   assert.equal(
     await provider.prepare!("commit_annotations", args, context),
     null,
@@ -2833,10 +2894,10 @@ it("clears old denied projections when a candidate is explicitly adopted by a la
   );
   const work = await env.host.workForTask(context.taskId, 0, undefined, next);
   assert.deepEqual(
-    work.missing.map((gap) => gap.id),
+    work.completed.map((gap) => gap.id),
     [args.proposalId],
   );
-  assert.equal(work.completed.length, 0);
+  assert.equal(work.missing.length, 0);
   assert.equal(
     (await env.service.getOperation("denied-original"))?.context.intentRevision,
     1,
@@ -2869,7 +2930,11 @@ it("treats a declined concrete annotation intent as resolved without requesting 
     sourceRefs: ["1:ITEMKEY1"],
   });
   assert.equal(work.missing.length, 0);
-  assert.equal(work.completed.length, 1);
+  assert.equal(work.completed.length, 0);
+  assert.equal(
+    (await env.service.getOperation("declined-op"))?.result?.effect,
+    "none",
+  );
   assert.equal(env.native.size, 0);
 });
 

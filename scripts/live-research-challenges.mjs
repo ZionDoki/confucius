@@ -32,11 +32,6 @@ import {
   normalizeArtifactBodyArgument,
 } from "../apps/zotero-addon/src/modules/host/ArtifactToolProvider.ts";
 import {
-  reportEvidence,
-  reportRevisionMessages,
-  reportRevisionPatch,
-} from "../apps/zotero-addon/src/modules/host/ReportRevision.ts";
-import {
   DEFAULT_REPORT_STYLE,
   REPORT_STYLE_OPTIONS,
   reportStyleGuidance,
@@ -555,63 +550,6 @@ async function runCase(model, variant, challenge, repeat, style) {
     elapsedMs: 0,
     before: initialReport?.body.markdown,
   };
-  if (
-    variant === "candidate" &&
-    initialReport?.status === "ready" &&
-    budget.canStartIteration() &&
-    budget.canRunTools(1)
-  ) {
-    revision.attempted = true;
-    const started = Date.now();
-    try {
-      const evidence = reportEvidence(initialReport, events.events, [
-        toolMessage("get_pages", { ...item, pages }),
-        toolMessage("get_annotations", {
-          ...item,
-          annotations,
-          offset: 0,
-          nextOffset: null,
-        }),
-      ]);
-      const messages = reportRevisionMessages({
-        request: userText,
-        languageInstruction: "All report prose must be Chinese.",
-        style,
-        artifact: initialReport,
-        evidence,
-        maxInputTokens: 24000,
-      });
-      const response = await engine.complete(
-        {
-          messages,
-          maxAttempts: 1,
-          onAttempt: async () => {
-            if (!budget.canStartIteration())
-              throw Error("Revision budget exhausted");
-            budget.recordIteration();
-            budget.recordModelAttempt();
-          },
-        },
-        AbortSignal.timeout(
-          Math.max(1, Math.min(120000, budget.remainingElapsedMs() ?? 120000)),
-        ),
-      );
-      budget.recordUsage(response.usage);
-      if (response.end && response.end !== "stop")
-        throw Error(`Incomplete revision: ${response.end}`);
-      const patch = reportRevisionPatch(response.text ?? "", initialReport);
-      if (patch) {
-        budget.recordToolCalls(1);
-        const result = await artifact.call("artifact_patch", patch);
-        if (!result.ok) throw Error(result.message);
-      }
-      revision.outcome = "finished";
-    } catch (error) {
-      revision.outcome = "retained-original";
-      revision.error = String(error);
-    }
-    revision.elapsedMs = Date.now() - started;
-  }
   const products = [...saved.values()],
     report = products.find((a) => a.kind === "deep_read");
   const markdown = report?.body.markdown || "",

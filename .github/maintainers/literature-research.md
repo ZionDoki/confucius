@@ -13,8 +13,10 @@ user confirmation. `literature_acquire` registers a wait, not self-authorization
 The pool separates fetched records, decisions, confirmed candidate revision,
 queries and acquisition receipts. Deduplicate by OpenAlex IDs or normalized DOI;
 similar titles alone do not merge. Preserve user choices and source provenance.
-Candidate edits/identity joins invalidate old confirmations; progress uses a
-separate pool revision. API total hits are not the fetched pool size.
+Only changes to the selected identities invalidate confirmation and continuation;
+reason updates, evaluations and repeated choices keep the candidate revision.
+Agents cannot overwrite user choices or reasons. Progress uses the separate pool
+revision. API total hits are not the fetched pool size.
 
 Confirm persists the authorized revision, then item receipts, source bindings and
 the download queue. Reuse existing items and verified attachments. Removal only
@@ -36,7 +38,9 @@ chunks; fewer than ten entries start as cards and ten or more as a list. Choices
 use the existing candidate revision and confirmation APIs. Search events include
 new work IDs only; identity duplicates, metadata refreshes and acquisition
 receipts do not replay arrival cues. Appending a page within the same query still
-notifies without changing the current view, filter, position or bulk selection.
+updates without changing the current view, filter, position or bulk selection.
+Arrivals accumulate during generation and notify together at completion. A live
+blocking confirmation opens immediately; restored history remains minimized.
 
 ## Retrieval and model shortlist
 

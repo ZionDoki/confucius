@@ -65,6 +65,7 @@ export function createLiteraturePanel(
     rpc: Rpc;
     viewport: HTMLElement;
     anchor: HTMLElement;
+    running?: () => boolean;
     opened: () => void;
     changed: () => void;
     visibilityChanged: () => void;
@@ -283,6 +284,10 @@ export function createLiteraturePanel(
   }
   const panel = createReviewPanel<CandidateEntry>(doc, {
     kind: "literature",
+    deferArrivals: options.running,
+    requiresDecision: () =>
+      !!options.running?.() &&
+      !!(summary?.awaitingConfirmation || summary?.awaitingFulltext),
     viewport: options.viewport,
     anchor: options.anchor,
     opened: options.opened,

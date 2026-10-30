@@ -4,6 +4,12 @@ English · [简体中文](literature-research.zh-CN.md)
 
 [User guide](README.md)
 
+From 0.6.4-beta.1, search results accumulate quietly during generation. A decision
+needed to continue opens immediately; other arrivals are announced together when
+generation ends. Agent updates preserve your Include/Exclude choices. Updating
+an explanation or repeating the same selection does not invalidate confirmation
+or your choice to continue with abstracts; a changed selected set does.
+
 ## Find your first papers
 
 Try: “Find recent papers on graph neural networks for molecular prediction.

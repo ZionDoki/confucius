@@ -100,6 +100,8 @@ export function createReviewPanel<E extends ReviewEntry>(
       open: boolean;
     }) => void;
     busy?: () => boolean;
+    deferArrivals?: () => boolean;
+    requiresDecision?: () => boolean;
     visible?: () => boolean;
     capsuleCount?: () => string;
     summary?: () => string;
@@ -117,6 +119,7 @@ export function createReviewPanel<E extends ReviewEntry>(
   remembered.set(doc, views);
   const radioGroup = `review-${Math.random().toString(36).slice(2)}`;
   const busyTasks = new Set<string>();
+  let decisionRequired = false;
   const busy = () => (!!taskId && busyTasks.has(taskId)) || !!options.busy?.();
   const root = node(
     doc,
@@ -437,6 +440,17 @@ export function createReviewPanel<E extends ReviewEntry>(
     if (presentation) model.presentation = presentation;
     else model.resume();
     open = true;
+    // Manually inspected arrivals do not reopen the overlay after generation.
+    const seenBatches = [...pendingArrivals].filter((id) =>
+      model!.pool.batches.some((batch) => batch.id === id),
+    );
+    const seenEntries = [...pendingEntryArrivals].filter((id) =>
+      model!.allRows().some((row) => row.entry.id === id),
+    );
+    model.arrived(seenBatches);
+    model.arrivedEntries(seenEntries);
+    seenBatches.forEach((id) => pendingArrivals.delete(id));
+    seenEntries.forEach((id) => pendingEntryArrivals.delete(id));
     popup.hidden = false;
     capsule.setAttribute("aria-expanded", "true");
     options.opened();
@@ -464,7 +478,7 @@ export function createReviewPanel<E extends ReviewEntry>(
     source.classList.add("ar-source");
     status.textContent = statusText(row.entry.status);
     status.dataset.status = row.entry.status;
-    cardReason.textContent = row.entry.error ?? "";
+    cardReason.textContent = row.entry.error ?? row.entry.reviewIssue ?? "";
     const quoteText = row.entry.quote || text("image");
     if (quote.textContent !== quoteText) quote.textContent = quoteText;
     if (comment.textContent !== row.entry.comment)
@@ -617,7 +631,8 @@ export function createReviewPanel<E extends ReviewEntry>(
         const state = item.querySelector(".ar-status") as HTMLElement;
         state.textContent = statusText(entry.status);
         state.dataset.status = entry.status;
-        item.querySelector(".ar-row-error")!.textContent = entry.error ?? "";
+        item.querySelector(".ar-row-error")!.textContent =
+          entry.error ?? entry.reviewIssue ?? "";
         const quote = item.querySelector(".ar-quote")!,
           comment = item.querySelector(".ar-comment")!;
         if (quote.textContent !== (entry.quote || text("image")))
@@ -844,22 +859,31 @@ export function createReviewPanel<E extends ReviewEntry>(
     try {
       const pool = await options.load(id);
       if (!destroyed && taskId === id && generation === request && model) {
-        const changed = model.update(pool),
-          arrived = [...pendingArrivals].filter((batchId) =>
+        const changed = model.update(pool);
+        const required = options.requiresDecision?.() === true;
+        const deferred = !required && options.deferArrivals?.() === true;
+        const arrived = [...pendingArrivals].filter((batchId) =>
             model!.pool.batches.some((batch) => batch.id === batchId),
           ),
           arrivedEntries = [...pendingEntryArrivals].filter((entryId) =>
             model!.allRows().some((row) => row.entry.id === entryId),
           ),
-          batchNotification = model.arrived(arrived),
-          entryNotification = model.arrivedEntries(arrivedEntries),
+          batchNotification = deferred ? null : model.arrived(arrived),
+          entryNotification = deferred
+            ? null
+            : model.arrivedEntries(arrivedEntries),
           notification =
-            batchNotification === "open" || entryNotification === "open"
+            (required && !decisionRequired) ||
+            batchNotification === "open" ||
+            entryNotification === "open"
               ? "open"
               : (batchNotification ?? entryNotification);
-        for (const entryId of arrivedEntries)
-          pendingEntryArrivals.delete(entryId);
-        for (const batchId of arrived) pendingArrivals.delete(batchId);
+        decisionRequired = required;
+        if (!deferred) {
+          for (const entryId of arrivedEntries)
+            pendingEntryArrivals.delete(entryId);
+          for (const batchId of arrived) pendingArrivals.delete(batchId);
+        }
         if (changed || notification) {
           render();
           sizePopup();
@@ -1310,6 +1334,7 @@ export function createReviewPanel<E extends ReviewEntry>(
       close();
       generation++;
       loading = pendingRefresh = false;
+      decisionRequired = false;
       composing = undefined;
       taskId = id;
       model = id

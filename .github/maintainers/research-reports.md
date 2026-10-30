@@ -17,15 +17,11 @@ claims. Source quotations keep their original language. `reportStyleGuidance`
 combines layout, tone and focus; it is the shared style entry.
 
 `ready` means deliverable, not independently fact-certified. Only incomplete
-content stays draft. The host can make one independent revision after a ready
-report changes in the current request, using the current model and remaining
-budget. Inputs contain the current request/report and available source evidence,
-not the drafting conversation or hidden reasoning.
-
-Opening a report, saving a style or ordinary Q&A does not trigger revision.
-Record the attempt against the request and report version; restart does not
-replay it. Failure, cancellation, invalid output or conflict leaves the saved
-report unchanged. No-change output creates no new revision.
+content stays draft. Completion does not start another model call, source read
+or editing phase. User-requested revisions reuse the normal artifact tools.
+Incidental drafts do not become automatic continuation obligations; explicitly
+required artifact kinds still participate in completion checks. Failed edits,
+cancellation or revision conflicts preserve the saved report.
 
 ## Reading, patching and citations
 

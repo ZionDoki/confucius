@@ -434,7 +434,7 @@ export class LiteratureService {
                     (id) => (id === duplicate.id ? found.id : id),
                   );
                 pool.works = pool.works.filter((w) => w !== duplicate);
-                pool.candidateRevision++;
+                if (duplicate.decision.selected) pool.candidateRevision++;
               }
               found.doi = incoming.doi ?? found.doi;
               found.year ??= incoming.year;
@@ -540,9 +540,28 @@ export class LiteratureService {
       for (const change of changes)
         if (!pool.works.some((w) => w.id === change.id))
           throw new Error("Unknown paper");
-      pool.candidateRevision++;
       for (const change of changes) {
         const work = pool.works.find((w) => w.id === change.id)!;
+        if (
+          actor === "agent" &&
+          work.decision.actor === "user" &&
+          work.decision.selected !== change.selected
+        )
+          throw new Error(
+            "The user has decided this paper; preserve their choice",
+          );
+      }
+      if (
+        changes.some(
+          (change) =>
+            pool.works.find((w) => w.id === change.id)!.decision.selected !==
+            change.selected,
+        )
+      )
+        pool.candidateRevision++;
+      for (const change of changes) {
+        const work = pool.works.find((w) => w.id === change.id)!;
+        if (actor === "agent" && work.decision.actor === "user") continue;
         work.decision = {
           selected: change.selected,
           evaluated: true,

@@ -2149,3 +2149,73 @@ test("child query shortlists survive restart and preserve their own source snaps
   assert.equal((await tools.call("literature_get", { id: "W1200" })).ok, false);
   assert.equal(calls, 3);
 });
+
+test("explanations, empty updates and identical choices preserve the accepted candidate set", async () => {
+  const f = fixture();
+  await selectOne(f);
+  await f.service.continue("task", 1, "abstracts");
+  for (const changes of [
+    [],
+    [{ id: "W1000", selected: true }],
+    [{ id: "W1000", selected: true, reason: "More precise evidence" }],
+    [{ id: "W1001", selected: false, reason: "Outside scope" }],
+  ]) {
+    const page = await f.service.updateCandidates("task", 1, changes, "agent");
+    assert.equal(page.summary.candidateRevision, 1);
+    assert.equal(page.summary.continuation, "abstracts");
+    assert.equal(page.summary.hasCandidateChanges, false);
+  }
+  const changed = await f.service.updateCandidates(
+    "task",
+    1,
+    [{ id: "W1001", selected: true }],
+    "agent",
+  );
+  assert.equal(changed.summary.candidateRevision, 2);
+  assert.equal(changed.summary.continuation, undefined);
+});
+test("agent updates preserve user decisions and reasons atomically", async () => {
+  const f = fixture();
+  await selectOne(f);
+  await f.service.updateCandidates(
+    "task",
+    1,
+    [{ id: "W1000", selected: false, reason: "User excluded" }],
+    "user",
+  );
+  await assert.rejects(
+    f.service.updateCandidates(
+      "task",
+      2,
+      [
+        { id: "W1001", selected: true },
+        { id: "W1000", selected: true },
+      ],
+      "agent",
+    ),
+    /user has decided/,
+  );
+  await f.service.updateCandidates(
+    "task",
+    2,
+    [{ id: "W1000", selected: false, reason: "Agent rewrite" }],
+    "agent",
+  );
+  const pool = await f.service.load("task");
+  assert.equal(pool.candidateRevision, 2);
+  assert.equal(
+    pool.works.find((w) => w.id === "W1001").decision.selected,
+    false,
+  );
+  assert.equal(
+    pool.works.find((w) => w.id === "W1000").decision.reason,
+    "User excluded",
+  );
+  const changed = await f.service.updateCandidates(
+    "task",
+    2,
+    [{ id: "W1000", selected: true }],
+    "user",
+  );
+  assert.equal(changed.summary.candidateRevision, 3);
+});
