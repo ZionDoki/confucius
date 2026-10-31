@@ -436,12 +436,17 @@ export function createInlineComposer(
   Object.defineProperties(input, {
     value: {
       get: () => read().text,
-      set: (text: string) =>
+      set: (text: string) => {
+        const value = String(text);
+        // Polling may restore the same draft. Replacing contenteditable children
+        // still resets Gecko's native caret, selection, scroll and composition.
+        if (value === read().text) return;
         render({
-          text: String(text),
-          mentions: composerMentions(String(text), previous.mentions),
+          text: value,
+          mentions: composerMentions(value, previous.mentions),
           binding,
-        }),
+        });
+      },
     },
     selectionStart: { get: () => selection().start },
     selectionEnd: { get: () => selection().end },
@@ -485,9 +490,12 @@ export function createInlineComposer(
           ...input.querySelectorAll<HTMLElement>("[data-composer-source]"),
         ].find((node) => node.dataset.composerSource === source.id);
         if (node) {
-          node.title = source.title;
-          node.setAttribute("aria-label", source.title);
-          node.querySelector("span:last-child")!.textContent = source.label;
+          if (node.title !== source.title) node.title = source.title;
+          if (node.getAttribute("aria-label") !== source.title)
+            node.setAttribute("aria-label", source.title);
+          const label = node.querySelector("span:last-child")!;
+          if (label.textContent !== source.label)
+            label.textContent = source.label;
           continue;
         }
         // Older drafts stored @[Title] as text. Hydrate only references already

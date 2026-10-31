@@ -52,6 +52,7 @@ below preserve test sections formerly mixed into the runtime and report guides.
 
 | Record                                                                                                              | Original language  |
 | ------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| [Composer selection regression — 2026-10-31](composer-selection-2026-10-31.md)                                      | English            |
 | [Conversation PDF binding — 2026-10-31](pdf-binding-2026-10-31.md)                                                  | English            |
 | [Conversation sidebar typography — 2026-10-12](sidebar-typography-2026-10-12.md)                                    | English            |
 | [UI, attachments and idle work — 2026-10-12](ui-quality-2026-10-12.md)                                              | English            |

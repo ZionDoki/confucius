@@ -374,6 +374,11 @@ try {
   await wait(
     `return host.sessions.get('${task.id}').record.status!=='running'&&host.sessions.get('${task.id}').record.run;`,
   );
+  // Host completion precedes the workspace's next poll. Editing sources stays
+  // locked until that poll restores the idle UI; do not race the intentional lock.
+  await wait(
+    "return d.getElementById('confucius-stop').style.display==='none'&&d.getElementById('confucius-send').style.display!=='none';",
+  );
   assert.equal(
     (await current()).run.sources.reader.attachmentKey,
     papers[2].pdfKey,

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+
+- Background draft and reference refreshes preserve the composer's caret,
+  selection and scroll position instead of rebuilding unchanged editable text.
+
 ## 0.6.4-beta.3 - 2026-10-31
 
 ### Changed
