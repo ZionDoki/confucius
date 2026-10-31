@@ -472,15 +472,13 @@ export function createInlineComposer(
     },
     setSources(sources: ComposerSource[]) {
       const allowed = new Set(sources.map((source) => source.id));
-      const caret = selection(),
-        focused = doc.activeElement === input;
-      let edited = false;
+      // Preserve native DOM selection anchors while reconciling sources. A
+      // serialized offset becomes stale when a reference is inserted before it.
       for (const node of input.querySelectorAll<HTMLElement>(
         "[data-composer-source]",
       )) {
         if (!allowed.has(node.dataset.composerSource!)) {
           node.remove();
-          edited = true;
         }
       }
       const current = ids(read());
@@ -532,19 +530,19 @@ export function createInlineComposer(
           }
           if (offsets.length) {
             current.add(source.id);
-            edited = true;
           }
         }
         if (!current.has(source.id)) {
-          input.prepend(
-            token(source),
-            doc.createTextNode(source.binding ? "\u200b" : " "),
+          const node = token(source),
+            gap = doc.createTextNode(source.binding ? "\u200b" : " ");
+          const pdf = input.querySelector<HTMLElement>(
+            '[data-composer-source][data-binding="true"]',
           );
-          edited = true;
+          if (!source.binding && pdf) pdf.after(node, gap);
+          else input.prepend(node, gap);
         }
       }
       sync();
-      if (edited && focused) setSelection(caret.start, caret.end);
     },
     insert(source: ComposerSource, start: number, end: number) {
       known.set(source.id, source);

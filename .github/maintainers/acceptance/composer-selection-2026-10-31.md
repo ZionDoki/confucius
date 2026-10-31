@@ -2,6 +2,10 @@
 
 Original language: English.
 
+This record covers the initial local candidate at commit `190f4fa`. Subsequent
+review and release acceptance are recorded separately in
+[Release 0.6.4-beta.4](release-0.6.4-beta.4.md).
+
 ## Reproduction and fix
 
 The unchanged public 0.6.4-beta.3 XPI reproduced the reported caret jump in

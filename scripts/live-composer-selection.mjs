@@ -146,6 +146,86 @@ try {
   check(
     "Explicit task switching still restores the new draft and preserves the old one",
   );
+
+  // Real Gecko line-break commands exercise the DOM produced by Shift+Enter,
+  // which differs from pasting a string that already contains newline characters.
+  await evaluate(
+    "p.focus();p.setSelectionRange(0,0);d.execCommand('insertText',false,'First');d.execCommand('insertLineBreak');return true;",
+  );
+  report.lineBreak = await evaluate("return {text:p.value,html:p.innerHTML};");
+  assert.equal(
+    report.lineBreak.text,
+    "First\n",
+    "One line-break command must serialize exactly one newline",
+  );
+  await evaluate(
+    "d.execCommand('insertLineBreak');d.execCommand('insertText',false,'Third');return true;",
+  );
+  assert.equal((await snapshot()).text, "First\n\nThird");
+  await remainsStable(
+    "Native line breaks and blank lines preserve text and caret across polls",
+  );
+
+  await evaluate(
+    `d.querySelector('[data-task-id="${fixture.id}"] .confucius-task-open').click();return true;`,
+  );
+  await wait(
+    `return !!d.querySelector('[data-entry-id="overview:${fixture.id}"]');`,
+  );
+  await evaluate(
+    "p.focus();p.setSelectionRange(p.value.length-4,p.value.length-4);const s=d.getSelection();win.__caretAnchor={node:s.anchorNode,offset:s.anchorOffset};return true;",
+  );
+  const added = await evaluate(
+    `const item=new Zotero.Item('journalArticle');item.setField('title','Added fixture paper');await item.saveTx();await host.rpc('task/setContext',{taskId:${JSON.stringify(fixture.id)},mode:'add',context:{version:1,capturedAt:Date.now(),items:[{id:'item:1:'+item.key,libraryID:1,key:item.key,title:'Added fixture paper',source:'library'}]}});return {key:item.key};`,
+  );
+  await wait(
+    `return !!p.querySelector('[data-composer-source="item:1:${added.key}"]');`,
+  );
+  assert.equal(
+    await evaluate(
+      "const s=d.getSelection();return s.anchorNode===win.__caretAnchor.node&&s.anchorOffset===win.__caretAnchor.offset;",
+    ),
+    true,
+    "Adding a source before existing prose must retain its insertion point",
+  );
+  check("A newly attached source preserves the caret in existing prose");
+
+  await evaluate(
+    "p.setSelectionRange(p.value.length-12,p.value.length-2);const s=d.getSelection(),r=s.getRangeAt(0);s.setBaseAndExtent(r.endContainer,r.endOffset,r.startContainer,r.startOffset);win.__caretAnchor={node:s.anchorNode,offset:s.anchorOffset,focus:s.focusNode,end:s.focusOffset};return true;",
+  );
+  await instance.rpc("task/setContext", {
+    taskId: fixture.id,
+    mode: "remove",
+    items: [{ libraryID: 1, key: added.key }],
+  });
+  await wait(
+    `return !p.querySelector('[data-composer-source="item:1:${added.key}"]');`,
+  );
+  assert.equal(
+    await evaluate(
+      "const s=d.getSelection(),a=win.__caretAnchor;return s.anchorNode===a.node&&s.anchorOffset===a.offset&&s.focusNode===a.focus&&s.focusOffset===a.end;",
+    ),
+    true,
+    "Removing an earlier source must retain both selection endpoints and direction",
+  );
+  check("Removing an earlier source preserves a backward prose selection");
+
+  const pdf = await evaluate(
+    `const parent=new Zotero.Item('journalArticle');parent.setField('title','Bound fixture PDF');await parent.saveTx();const attachment=await Zotero.Attachments.importFromFile({file:${JSON.stringify(join(root, "scripts/fixtures/confucius-tool-e2e-fixture.pdf"))},parentItemID:parent.id});await host.rpc('task/setContext',{taskId:${JSON.stringify(fixture.id)},mode:'reader',pdf:{libraryID:1,key:attachment.key}});return {key:attachment.key};`,
+  );
+  await wait(
+    `return !!p.querySelector('[data-composer-source="pdf:1:${pdf.key}"]');`,
+  );
+  await evaluate(
+    "p.value='Follow-up';p.dispatchEvent(new win.Event('input',{bubbles:true}));p.focus();p.setSelectionRange(9,9);return true;",
+  );
+  await wait("return p.querySelectorAll('[data-composer-source]').length===2;");
+  assert.equal(
+    await evaluate("return p.firstElementChild?.dataset.binding;"),
+    "true",
+    "Restored materials must remain after the bound PDF prefix",
+  );
+  check("Restoring retained materials keeps the bound PDF at the beginning");
   report.pass = true;
 } catch (error) {
   report.pass = false;

@@ -2,10 +2,42 @@
 
 ## Unreleased
 
+## 0.6.4-beta.4 - 2026-10-31
+
 ### Fixed
 
 - Background draft and reference refreshes preserve the composer's caret,
   selection and scroll position instead of rebuilding unchanged editable text.
+- Adding or removing a reference while editing keeps the insertion point and
+  backward selection in the same prose. Source synchronization no longer restores
+  a character offset that became stale when preceding references changed.
+- Restoring retained materials after a turn keeps the bound PDF reference at
+  the beginning of the composer.
+
+### Upgrade notes
+
+- This is a Beta. Enable **Include prereleases** in Confucius Settings → Update
+  to receive it. Stable Latest remains 0.6.3. Follow Zotero's restart prompt if
+  installation is staged; completed hot updates need no restart.
+- No library migration or model reconfiguration is required. Existing tasks,
+  drafts, reference identities and update preferences are preserved.
+
+### Validation and known limits
+
+- All 1,689 automated tests passed, along with type checking, lint, production
+  build, workspace version consistency and skill synchronization on Node.js 22.
+- Real Zotero 10.0.7 on macOS passed 14 editing regression groups and 17 inline
+  source interaction groups: idle polling, backward selections, multiline
+  scrolling, composition, native line breaks, reference changes, task switching,
+  PDF binding, undo/redo, restart and actual request contents. Light, dark,
+  narrow layouts with 28px text and native high contrast were checked.
+- An ordinary-package upgrade from public beta.3 passed 27 checks for drafts,
+  sources, research data, write receipts, budgets and settings across restarts.
+  See the [release acceptance record](https://github.com/ZionDoki/confucius/blob/v0.6.4-beta.4/.github/maintainers/acceptance/release-0.6.4-beta.4.md).
+- Native tests use isolated profiles, synthetic material and injected Gecko
+  events. Windows, Linux, other Zotero versions, human-operated IMEs, screen
+  readers and live provider accounts were not retested. Public discovery/download
+  and unchanged-old-package online upgrades are checked after publication.
 
 ## 0.6.4-beta.3 - 2026-10-31
 
