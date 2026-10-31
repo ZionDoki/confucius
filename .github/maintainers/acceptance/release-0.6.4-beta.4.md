@@ -85,3 +85,57 @@ complete. Tag CI, original public asset validation, three consecutive anonymous
 release-list reads, both download paths and unchanged-old-package online upgrades
 must run after publication. Record those results in a follow-up without moving
 the tag or replacing published files. This Beta must not replace stable Latest.
+
+## CI and original public assets
+
+The immutable release commit is
+`aba9830ca2400f859ac4e35bb4f8301c1af8b625`. The
+[tag workflow](https://github.com/ZionDoki/confucius/actions/runs/41175311092)
+completed successfully on Node.js 22 and 24, including tests, type checking,
+lint and builds. The release job verified uploaded draft assets before
+publication and then passed anonymous discovery and download verification.
+
+[Confucius v0.6.4-beta.4](https://github.com/ZionDoki/confucius/releases/tag/v0.6.4-beta.4)
+was published at **2026-10-31 06:11:07 UTC**, release ID `429757813`, with
+`draft: false` and `prerelease: true`. Stable Latest still resolves to `v0.6.3`.
+The title and body match the CHANGELOG-generated notes. Original public assets:
+
+| Asset              |   Bytes | SHA-256                                                            |
+| ------------------ | ------: | ------------------------------------------------------------------ |
+| `confucius.xpi`    | 887,289 | `45fac30a62bdd64879e0235d78a182db9da44dd7302c6ffa664b92a0a961d55b` |
+| `update-beta.json` |     587 | `6094d758d88ae555208d187c3fb49e96c0863874baf98e5a18dabf06c92ded53` |
+
+All **25 XPI entries** match the final local candidate's uncompressed contents;
+archive bytes differ. Uploaded states, names, sizes, SHA-256, manifest and update
+metadata passed verification. Remaining acceptance uses these saved original
+public files, not a rebuild.
+
+A separate `release-assets.mjs --public` run passed three consecutive anonymous
+release-list reads. Both the asset API and browser download URL returned the
+same original XPI size and SHA-256. Light and narrow dark screenshots from the
+installed interaction suite were inspected.
+
+## Unchanged-old-package online upgrades and local installation
+
+`live-legacy-update.mjs` passed **12 checks from public beta.3** and **12 checks
+from public 0.6.3** in separate isolated Zotero 10.0.7 profiles. Each old package
+was normally installed with unchanged bytes and used its own updater against
+actual GitHub endpoints. Updater code, reported versions and network responses
+were not replaced.
+
+With prereleases disabled, neither updater offers this Beta. Enabling them
+discovers, downloads, verifies and installs beta.4. Full restarts load the exact
+original public target bytes and preserve the synthetic task, Chinese draft
+and explicit channel preference. The current version is not offered again;
+disabling prereleases cannot downgrade it. Channel and independent automatic
+check settings survive another restart.
+
+The existing local Zotero profile was updated through its native Plugins
+Manager from the earlier local beta.4 candidate to the original public package.
+The enabled version is 0.6.4-beta.4; installed bytes match the public SHA-256
+above. The open workspace and its existing draft references were retained.
+
+Publication, anonymous discovery/download, both genuine old-client online
+upgrade paths and local installation are complete. This follow-up does not move
+the tag or replace published assets. The platform and accessibility limitations
+above still apply.
