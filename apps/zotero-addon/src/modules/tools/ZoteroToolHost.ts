@@ -527,7 +527,7 @@ export function liveReaderContext(): {
     const attachment = reader.itemID
       ? asItem(Zotero.Items.get(reader.itemID))
       : null;
-    if (!attachment) {
+    if (!attachment || attachment.isPDFAttachment?.() === false) {
       return { reader: null, selection: null };
     }
     const view = reader._internalReader?._primaryView;

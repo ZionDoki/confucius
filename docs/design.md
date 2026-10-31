@@ -93,6 +93,34 @@ Width means the available workspace or reader-window width.
   inserts a newline, Escape cancels, and IME composition cannot submit or cancel.
   Polling and blur preserve the draft. Prevent empty and duplicate submissions.
 
+## Inline sources and PDF binding
+
+- The current PDF is a prefilled, atomic text reference at the beginning of the
+  composer. Materials inserted with `@`, including conversation references, use
+  the same inline text style at the insertion point. Do not add source cards,
+  icon tiles or duplicate material rows in the toolbar or task heading.
+- Use shared accent text, a quiet `@`, normal composer type size, weight 500,
+  transparent background and a 34px minimum target. Keep 4px of space after the
+  reference. Ellipsize long names at 280px or the available width; expose the
+  complete title and interaction hint in the tooltip and accessible name.
+  Hover underlines the text; keyboard focus uses the shared focus color.
+- Backspace/Delete beside a reference removes it as a whole. Cut or replacing a
+  selection removes its sources too. Undo/redo restores both draft content and
+  source identities. Plain-text copy/paste preserves line breaks; pasted markup
+  never creates references or executes HTML. Save reference identities and
+  positions with drafts, independently of titles.
+- Click a reference to search and switch it. The PDF picker searches article
+  titles and attachment filenames in the current library; `+` also offers this
+  picker when no PDF is bound. Keep input and status visible, results scrolling
+  inside an opaque shared menu, and the menu within the window. Preserve IME,
+  arrow/Enter navigation, Escape and focus.
+- Automatic binding seeds only an unbound conversation before its first turn.
+  Deleting the PDF reference is an explicit unbinding that survives polling and
+  restart. Refresh the same PDF's page/selection on Send without following other
+  tabs. Freeze source changes during a response or pending save, retain ordinary
+  draft editing, and explain disabled actions. Source changes preserve earlier
+  messages and never delete the underlying Zotero materials.
+
 ## File drop
 
 - Sent attachments belong beneath the text of their user message. Reuse the

@@ -53,7 +53,7 @@ test("Zotero workspace UI is mounted from privileged TypeScript, not an injected
   assert.equal(source.includes("setWorkspaceLayout"), true);
   assert.equal(source.includes("mountWorkspace"), true);
   assert.equal(source.includes("workspace-app.js"), false);
-  assert.equal(view.includes('id: "confucius-prompt"'), true);
+  assert.equal(view.includes("createInlineComposer(doc"), true);
   assert.equal(view.includes('type: "text"'), true);
   assert.equal(view.includes("createElementNS"), true);
   assert.equal(view.includes('"textarea"'), true);
@@ -107,15 +107,12 @@ test("workspace layout can switch between window and sidebar", () => {
   assert.equal(view.includes('className = "confucius-icon-button"'), true);
 });
 
-test("window topbar ellipsizes attached titles instead of shrinking New task", () => {
+test("PDF binding ellipsizes long titles and the topbar retains New task width", () => {
   const view = workspaceSource();
+  assert.match(view, /\.confucius-inline-reference \{[^}]*max-width:/);
   assert.match(
     view,
-    /\.confucius-workspace-root \.confucius-attached-sources \{[^}]*overflow: hidden/,
-  );
-  assert.match(
-    view,
-    /\.confucius-attached-sources > span \{[^}]*text-overflow: ellipsis/,
+    /\.confucius-inline-reference > span:last-child \{[^}]*text-overflow: ellipsis/,
   );
   assert.match(
     view,
@@ -329,7 +326,8 @@ test("task switches restore per-task drafts and timeline viewports", () => {
   assert.equal(view.includes("rememberComposerDraft(previousTaskId)"), true);
   assert.equal(view.includes("rememberTimelineViewport()"), true);
   assert.equal(
-    view.includes('prompt.value = composerDrafts.get(taskId) ?? ""'),
+    view.includes('composerDrafts.get(taskId) ?? ""') &&
+      view.includes("mentionDrafts.get(taskId) ?? loaded.draft?.mentions"),
     true,
   );
   assert.equal(view.includes("savedViewport?.scrollTop"), true);
@@ -711,9 +709,10 @@ test("tasks preserve their sources and expose context controls", () => {
   assert.equal(view.includes('rpc("context/live"'), true);
   assert.equal(view.includes('rpc("reader/open"'), true);
   assert.equal(view.includes('rpc("task/setContext"'), true);
-  assert.equal(view.includes('id: "confucius-task-sources"'), true);
-  assert.equal(view.includes('const mode of ["add", "replace"]'), true);
-  assert.equal(view.includes("updateTaskContext(mode)"), true);
+  assert.equal(view.includes('"#confucius-pdf-binding"'), true);
+  assert.equal(view.includes('id: "confucius-task-sources"'), false);
+  assert.equal(view.includes('rpc("context/search-pdfs"'), true);
+  assert.equal(view.includes('mode: "reader"'), true);
   assert.equal(view.includes("suppressedSelectionKey"), false);
 });
 

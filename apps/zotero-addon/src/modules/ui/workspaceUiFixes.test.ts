@@ -307,18 +307,22 @@ test("approval decisions are caught and disabled while resolving", () => {
   assert.match(resolve, /state\.sendError =/);
 });
 
-test("context updates do not reselect the captured task after an await", () => {
+test("PDF updates remain scoped to the selected task after awaits", () => {
   const context = body(
-    "async function updateTaskContext",
-    "function renderTemplatePicker",
+    "async function selectPdf",
+    "function showPdfPicker",
     view,
   );
-  const guard = context.indexOf(
-    "if (state.sessionId !== task.id || selection !== taskLoadGeneration)",
+  assert.match(
+    context,
+    /if \(state.sessionId !== task.id \|\| selection !== taskLoadGeneration\)\s*return;/,
   );
-  const reload = context.indexOf("await loadTask(task.id)");
-  assert.ok(guard !== -1 && reload > guard);
-  assert.match(context, /const selection = taskLoadGeneration;/);
+  assert.match(context, /if \(state.sessionId !== task.id\) return;/);
+  assert.doesNotMatch(context, /await loadTask/);
+  assert.doesNotMatch(
+    view,
+    /confucius-attached-sources|confucius-task-sources/,
+  );
 });
 
 function artifactHarness() {

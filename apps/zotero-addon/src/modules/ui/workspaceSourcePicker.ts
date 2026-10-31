@@ -48,6 +48,11 @@ export function renderSourcePicker(
     hover: (index: number, menu: HTMLElement) => void;
     select: (index: number) => void;
     loadMore: () => void;
+    search?: {
+      value: string;
+      change: (value: string) => void;
+      keydown: (event: KeyboardEvent) => void;
+    };
     place: (menu: HTMLElement, header: HTMLElement, list: HTMLElement) => void;
   },
 ): void {
@@ -57,6 +62,11 @@ export function renderSourcePicker(
     "confucius-mention-results",
   ) as HTMLElement | null;
   const previousScrollTop = preserveScroll ? previousList?.scrollTop || 0 : 0;
+  const oldSearch = doc.getElementById(
+    "confucius-reference-search",
+  ) as HTMLInputElement | null;
+  const searchFocused = doc.activeElement === oldSearch;
+  const caret = oldSearch?.selectionStart;
   doc.getElementById("confucius-mention-menu")?.remove();
   if (!mentionState.open) return;
   const menu = createMenuSurface(
@@ -76,6 +86,40 @@ export function renderSourcePicker(
       : getString("workspace-mention-hint"),
   );
   menu.appendChild(header);
+  if (options.search) {
+    const search = el(doc, "input", undefined, {
+      type: "search",
+      id: "confucius-reference-search",
+      "aria-label": getString("workspace-mention-heading"),
+      placeholder: getString("workspace-mention-heading"),
+    }) as HTMLInputElement;
+    search.className = "confucius-reference-search";
+    search.value = options.search.value;
+    let composing = false;
+    search.addEventListener("compositionstart", () => {
+      composing = true;
+    });
+    search.addEventListener("compositionend", () => {
+      composing = false;
+      options.search?.change(search.value);
+    });
+    search.addEventListener("input", () => {
+      if (!composing) options.search?.change(search.value);
+    });
+    search.addEventListener("keydown", (event) => {
+      const key = event as KeyboardEvent;
+      if (!composing && !key.isComposing && key.keyCode !== 229)
+        options.search?.keydown(key);
+    });
+    menu.appendChild(search);
+    // Placement is synchronous below. Restore keyboard focus after a query refresh.
+    doc.defaultView?.queueMicrotask(() => {
+      if (search.isConnected && (searchFocused || !oldSearch)) {
+        search.focus({ preventScroll: true });
+        if (caret != null) search.setSelectionRange(caret, caret);
+      }
+    });
+  }
   const tabs = el(doc, "div");
   tabs.className = "confucius-mention-tabs";
   for (const kind of ["literature", "tasks"] as const) {

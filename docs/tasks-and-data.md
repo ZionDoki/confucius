@@ -6,9 +6,25 @@ English · [简体中文](tasks-and-data.zh-CN.md)
 
 ## Sources and conversations
 
-A new task starts without a paper. Add sources with `@`, a Zotero item entry,
-file drop or confirmed literature candidates. Switching PDF tabs does not attach
-the current PDF.
+From 0.6.4-beta.3, a new conversation automatically binds the PDF open in
+Zotero's reader. A conversation without a PDF can also pick up a reader before
+its first message. The PDF appears as a quiet `@Title` reference at the start
+of the input. Click it to search the current library by article title or PDF
+filename and switch attachments. With no PDF bound, choose a PDF from `+`.
+
+Materials and conversations chosen through `@` appear inline where you insert
+them. Backspace/Delete next to a reference removes the whole reference and its
+context binding. Deleting the PDF reference keeps the conversation unbound,
+even if that PDF remains open. Cmd/Ctrl+Z restores a removed reference; drafts
+retain reference identities and positions across task switches and restart.
+Removing a reference does not delete the original Zotero material or earlier
+messages. Text copied outside the composer is plain text, not a source binding.
+
+Switching reader tabs or closing a PDF does not change an existing binding.
+Stop a running response before changing references. While a source change is
+being saved, Send waits for it; ordinary prompt text remains editable. Sources
+can also be added through a Zotero item entry, file drop or confirmed literature
+candidates. Version 0.6.4-beta.2 started new tasks without a paper.
 
 From 0.6.1-beta.1, drop PDF, Markdown or TXT attachments inside
 the composer's dashed box. Dragging over the surrounding workspace shows this

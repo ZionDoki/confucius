@@ -9,6 +9,7 @@ import {
 } from "@confucius/protocol";
 import { AgentHost } from "./AgentHost";
 import {
+  automaticReaderContext,
   contextArticles,
   followReaderContext,
   readerAttachmentIdentity,
@@ -117,7 +118,7 @@ it("uses library-qualified identities and recovers a reader without its parent r
   );
 });
 
-it("host never rebinds a task when PDF tabs change, while explicit additions persist", async () => {
+it("host binds an empty task once and preserves it when PDF tabs change", async () => {
   const record = task("existing");
   const state = { record, activeTurnId: null as string | null };
   let live = pdf("A");
@@ -139,8 +140,8 @@ it("host never rebinds a task when PDF tabs change, while explicit additions per
       refresh: true,
     });
   await follow();
-  assert.equal(record.lockedContext.items.length, 0);
-  assert.equal(record.updatedAt, 1);
+  assert.equal(record.lockedContext.reader?.attachmentKey, "PDFA");
+  assert.ok(record.updatedAt > 1);
   await host.taskSetContext({ taskId: record.id, mode: "add", context: live });
   assert.equal(record.lockedContext.items[0].key, "A");
   const bound = record.lockedContext;
@@ -161,6 +162,98 @@ it("host never rebinds a task when PDF tabs change, while explicit additions per
     ["A", "B"],
   );
   assert.deepEqual(record.createdFrom, []);
+});
+
+it("automatic binding ignores unrelated selections, old conversations and explicit unbinding", () => {
+  const record = task("new");
+  assert.equal(
+    automaticReaderContext(record, emptyLockedContext(), true),
+    undefined,
+  );
+  const live = pdf("A");
+  live.items.push({ ...pdf("UNRELATED").items[0], source: "library" });
+  live.collection = {
+    id: "collection:1:C",
+    libraryID: 1,
+    key: "C",
+    name: "Other collection",
+  };
+  const seeded = automaticReaderContext(record, live, false)!;
+  assert.deepEqual(
+    seeded.items.map((item) => item.key),
+    ["A"],
+  );
+  assert.equal(seeded.collection, undefined);
+  record.pdfBinding = "manual";
+  assert.equal(automaticReaderContext(record, live, true), undefined);
+  assert.equal(migrateSessionRecord(record).pdfBinding, "manual");
+  record.pdfBinding = undefined;
+  record.status = "completed";
+  assert.equal(automaticReaderContext(record, live, true), undefined);
+  record.status = "ready";
+  record.run = { id: "completed-run" } as ResearchTaskRecord["run"];
+  assert.equal(automaticReaderContext(record, live, true), undefined);
+});
+
+it("Send refreshes only the bound PDF's page and selection", () => {
+  const record = task("bound", pdf("A"));
+  const live = pdf("A", 1, 4);
+  assert.equal(automaticReaderContext(record, live, false), undefined);
+  assert.equal(automaticReaderContext(record, pdf("B"), true), undefined);
+  assert.equal(
+    automaticReaderContext(record, emptyLockedContext(), true),
+    undefined,
+  );
+  const refreshed = automaticReaderContext(record, live, true)!;
+  assert.equal(refreshed.reader?.pageIndex, 4);
+  assert.equal(record.lockedContext.reader?.pageIndex, 0);
+});
+
+it("manual PDF switching and clearing preserve mentions and survive poll/reload", async () => {
+  const record = task("switch", pdf("A"));
+  record.lockedContext.items.push({ ...pdf("M").items[0], source: "library" });
+  const state = { record, activeTurnId: null as string | null };
+  const host = Object.assign(Object.create(AgentHost.prototype), {
+    sessions: new Map([[record.id, state]]),
+    pdfContext: (value: unknown) =>
+      value === null ? emptyLockedContext() : pdf("B"),
+    captureLockedContext: () => pdf("A"),
+    emitSessionEvent: () => {},
+    persistSoon: () => {},
+    freezeBoundAnnotations: async () => {},
+  }) as {
+    taskSetContext(
+      params: Record<string, unknown>,
+    ): Promise<ResearchTaskRecord>;
+  };
+  await host.taskSetContext({
+    taskId: record.id,
+    mode: "reader",
+    pdf: { libraryID: 1, key: "PDFB" },
+  });
+  assert.equal(record.lockedContext.reader?.attachmentKey, "PDFB");
+  assert.deepEqual(
+    record.lockedContext.items.map((item) => item.key),
+    ["B", "M"],
+  );
+  await host.taskSetContext({ taskId: record.id, mode: "reader", pdf: null });
+  assert.equal(record.lockedContext.reader, undefined);
+  assert.deepEqual(
+    record.lockedContext.items.map((item) => item.key),
+    ["M"],
+  );
+  state.record = migrateSessionRecord(record);
+  await host.taskSetContext({
+    taskId: record.id,
+    mode: "follow_reader",
+    refresh: true,
+  });
+  assert.equal(state.record.lockedContext.reader, undefined);
+  state.activeTurnId = "running";
+  await assert.rejects(
+    host.taskSetContext({ taskId: record.id, mode: "reader", pdf: null }),
+    /Wait/,
+  );
 });
 
 it("captures navigation before explicit source additions without moving a blank task", () => {
@@ -330,4 +423,206 @@ it("time groups cover every task once at local midnight boundaries including old
     records.length,
   );
   assert.deepEqual(timeTaskGroups([], now), []);
+});
+
+it("PDF lookup rejects deleted/non-PDF attachments and identifies alternate files precisely", async () => {
+  const globals = globalThis as unknown as { Zotero: unknown };
+  const original = globals.Zotero;
+  const parent = {
+    key: "PAPER",
+    getDisplayTitle: () => "Paper title",
+    deleted: false,
+  };
+  const attachments = Array.from({ length: 28 }, (_, i) => ({
+    libraryID: 1,
+    key: `PDF${i}`,
+    parentItemID: 10,
+    deleted: false,
+    isPDFAttachment: () => true,
+    getDisplayTitle: () => `Attachment ${i}`,
+    attachmentFilename: `Appendix ${i}.pdf`,
+    dateModified: String(100 + i),
+  }));
+  const orphan = {
+    ...attachments[0],
+    key: "ORPHAN",
+    parentItemID: 0,
+    attachmentFilename: "standalone.pdf",
+  };
+  const deleted = { ...attachments[0], key: "TRASH", deleted: true };
+  const nonPDF = {
+    ...attachments[0],
+    key: "EPUB",
+    isPDFAttachment: () => false,
+  };
+  const all = [...attachments, orphan, deleted, nonPDF];
+  globals.Zotero = {
+    Reader: { getByTabID: () => undefined },
+    getMainWindow: () => ({}),
+    getActiveZoteroPane: () => ({ getSelectedLibraryID: () => 1 }),
+    Libraries: {
+      exists: (id: number) => id === 1,
+      userLibraryID: 1,
+      getName: () => "My library",
+    },
+    Items: {
+      get: () => parent,
+      getAll: async () => all,
+      getByLibraryAndKey: (id: number, key: string) =>
+        id === 1 ? all.find((item) => item.key === key) : undefined,
+    },
+  };
+  try {
+    const host = Object.assign(Object.create(AgentHost.prototype), {
+      captureLockedContext: () => pdf("OTHER"),
+    }) as {
+      pdfContext(pdf: unknown): LockedContextSnapshot;
+      contextSearchPdfs(
+        params: Record<string, unknown>,
+      ): Promise<import("@confucius/protocol").ContextSearchPdfsResult>;
+    };
+    const first = await host.contextSearchPdfs({});
+    assert.equal(first.total, 29);
+    assert.equal(first.items.length, 25);
+    assert.equal(first.nextOffset, 25);
+    const second = await host.contextSearchPdfs({ offset: first.nextOffset });
+    assert.equal(second.items.length, 4);
+    assert.equal(second.nextOffset, null);
+    assert.equal(
+      new Set([...first.items, ...second.items].map((item) => item.key)).size,
+      29,
+    );
+    const searched = await host.contextSearchPdfs({ query: "appendix 3.pdf" });
+    assert.equal(searched.items[0].key, "PDF3");
+    assert.equal(searched.items.length, 1);
+    const bound = host.pdfContext({ libraryID: 1, key: "PDF3" });
+    assert.equal(bound.reader?.attachmentKey, "PDF3");
+    assert.equal(bound.reader?.parentKey, "PAPER");
+    assert.equal(bound.selection, undefined);
+    assert.equal(bound.reader?.pageIndex, null);
+    assert.equal(
+      host.pdfContext({ libraryID: 1, key: "ORPHAN" }).reader?.parentKey,
+      null,
+    );
+    for (const key of ["TRASH", "EPUB", "MISSING"])
+      assert.throws(
+        () => host.pdfContext({ libraryID: 1, key }),
+        /no longer available/,
+      );
+    parent.deleted = true;
+    assert.throws(
+      () => host.pdfContext({ libraryID: 1, key: "PDF3" }),
+      /no longer available/,
+    );
+  } finally {
+    globals.Zotero = original;
+  }
+});
+
+it("explicit task-entry context wins over an unrelated reader, while composer mentions allow automatic binding", async () => {
+  const globals = globalThis as unknown as { PathUtils: unknown };
+  const original = globals.PathUtils;
+  globals.PathUtils = {};
+  try {
+    const host = Object.assign(Object.create(AgentHost.prototype), {
+      sessions: new Map(),
+      history: { register: () => {} },
+      queueHistory: async () => {},
+      persistSoon: () => {},
+      emitSessionEvent: () => {},
+      captureLockedContext: () => pdf("B"),
+    }) as {
+      sessionNew(params: Record<string, unknown>): ResearchTaskRecord;
+      taskSetContext(
+        params: Record<string, unknown>,
+      ): Promise<ResearchTaskRecord>;
+    };
+    const context = {
+      ...emptyLockedContext(),
+      items: [{ ...pdf("A").items[0], source: "library" }],
+    };
+    const explicit = host.sessionNew({ context });
+    await host.taskSetContext({
+      taskId: explicit.id,
+      mode: "follow_reader",
+      refresh: true,
+    });
+    assert.equal(explicit.lockedContext.reader, undefined);
+    assert.deepEqual(
+      explicit.lockedContext.items.map((item) => item.key),
+      ["A"],
+    );
+    const composer = host.sessionNew({ context, followReader: true });
+    assert.equal(composer.lockedContext.reader?.attachmentKey, "PDFB");
+    assert.deepEqual(
+      composer.lockedContext.items.map((item) => item.key),
+      ["B", "A"],
+    );
+    assert.equal(composer.pdfBinding, undefined);
+  } finally {
+    globals.PathUtils = original;
+  }
+});
+
+it("removing inline sources unbinds only their exact identities and survives automatic refresh", async () => {
+  const record = task("inline-remove", pdf("A"));
+  record.lockedContext.items.push({ ...pdf("M").items[0], source: "library" });
+  record.lockedContext.items.push({
+    ...pdf("M", 2).items[0],
+    source: "library",
+  });
+  const state = { record, activeTurnId: null as string | null };
+  const host = Object.assign(Object.create(AgentHost.prototype), {
+    sessions: new Map([[record.id, state]]),
+    captureLockedContext: () => pdf("A"),
+    emitSessionEvent: () => {},
+    persistSoon: () => {},
+    freezeBoundAnnotations: async () => {},
+  }) as {
+    taskSetContext(
+      params: Record<string, unknown>,
+    ): Promise<ResearchTaskRecord>;
+  };
+  await host.taskSetContext({
+    taskId: record.id,
+    mode: "remove",
+    items: [{ libraryID: 1, key: "M" }],
+  });
+  assert.equal(record.lockedContext.reader?.attachmentKey, "PDFA");
+  assert.equal(
+    record.lockedContext.items.some(
+      (item) => item.libraryID === 1 && item.key === "M",
+    ),
+    false,
+  );
+  assert.equal(
+    record.lockedContext.items.some(
+      (item) => item.libraryID === 2 && item.key === "M",
+    ),
+    true,
+  );
+  await host.taskSetContext({
+    taskId: record.id,
+    mode: "remove",
+    items: [],
+    clearReader: true,
+  });
+  assert.equal(record.pdfBinding, "manual");
+  assert.equal(record.lockedContext.reader, undefined);
+  state.record = migrateSessionRecord(record);
+  await host.taskSetContext({
+    taskId: record.id,
+    mode: "follow_reader",
+    refresh: true,
+  });
+  assert.equal(state.record.lockedContext.reader, undefined);
+  assert.deepEqual(
+    record.createdFrom?.map((item) => item.key),
+    ["A", "M", "M"],
+  );
+  state.activeTurnId = "active";
+  await assert.rejects(
+    host.taskSetContext({ taskId: record.id, mode: "remove", items: [] }),
+    /Wait/,
+  );
 });

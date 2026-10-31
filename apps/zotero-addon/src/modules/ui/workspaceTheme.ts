@@ -356,9 +356,27 @@ ${REPORT_STYLE_CSS}
   border-radius: 0;
   appearance: none;
   resize: none;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  cursor: text;
   line-height: var(--confucius-reading-line-height, 1.6);
 }
 #confucius-prompt:focus { outline: none; box-shadow: none; }
+#confucius-prompt[data-empty=true]::after { content: attr(data-placeholder); color: var(--confucius-muted); pointer-events: none; }
+.confucius-workspace-root .confucius-inline-reference {
+  appearance: none; display: inline-flex; vertical-align: baseline; align-items: baseline;
+  gap: 2px; max-width: min(100%, 280px); min-height: 34px; margin: 0; padding: 3px 5px 3px 1px;
+  border: 0; border-radius: 3px; background: transparent; color: var(--confucius-accent-text);
+  font: inherit; font-weight: 500; line-height: inherit; white-space: nowrap; cursor: pointer;
+  text-align: start; text-underline-offset: 4px; text-decoration-thickness: 1px;
+}
+.confucius-inline-reference > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.confucius-inline-reference .confucius-inline-at { color: var(--confucius-muted); font-weight: 400; }
+.confucius-workspace-root .confucius-inline-reference:hover { background: transparent; text-decoration: underline; }
+.confucius-inline-reference:focus-visible { outline: 2px solid var(--confucius-focus); outline-offset: 2px; }
+.confucius-inline-reference[aria-disabled=true] { cursor: default; }
+
 .confucius-composer-toolbar {
   display: grid;
   grid-template-columns: var(--confucius-composer-control-size) minmax(0, 1fr) 30px var(--confucius-composer-control-size);
@@ -1082,24 +1100,27 @@ ${REPORT_STYLE_CSS}
 .confucius-topbar-actions { flex: 0 0 auto; min-width: auto; }
 .confucius-workspace-root[data-confucius-density=wide] .confucius-topbar-actions { min-width: max-content; }
 .confucius-workspace-root[data-confucius-density=wide] #confucius-new-session { flex: 0 0 auto; min-width: max-content; max-width: none; overflow: visible; }
-.confucius-workspace-root .confucius-attached-sources { appearance: none; display: flex; align-items: center; gap: 7px; flex: 1 1 0%; min-width: 0; max-width: 420px; overflow: hidden; padding: 5px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--confucius-ink); font: inherit; cursor: pointer; text-align: left; }
-.confucius-attached-sources:hover { background: var(--confucius-hover); }
-.confucius-attached-sources small { flex: 0 0 auto; color: var(--confucius-muted); font-size: .8em; }
-.confucius-attached-sources > span { flex: 1 1 0%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .9em; }
-.confucius-attached-sources[data-empty=true] > span { color: var(--confucius-muted); }
-.confucius-workspace-root[data-confucius-density=narrow] .confucius-attached-sources { display: block; max-width: 100%; padding: 3px 4px; }
-.confucius-workspace-root[data-confucius-density=narrow] .confucius-attached-sources > :is(small, span) { display: block; }
-.confucius-workspace-root .confucius-attached-sources[data-empty=true] > small { display:none; }
+.confucius-pdf-feedback { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.confucius-pdf-picker { display: flex; flex-direction: column; gap: 8px; height: 360px; box-sizing: border-box; overflow: hidden !important; }
+.confucius-pdf-picker .confucius-menu-header { display: block; padding: 4px 8px; }
+.confucius-pdf-picker .confucius-menu-header > span:empty { display: none; }
+.confucius-pdf-picker > :not(.confucius-pdf-options) { flex-shrink: 0; }
+.confucius-pdf-picker input, .confucius-reference-search { width: 100%; min-width: 0; min-height: 34px; box-sizing: border-box; border: 1px solid var(--confucius-line); border-radius: 8px; padding: 6px 8px; background: var(--confucius-paper); color: var(--confucius-ink); font: inherit; }
+.confucius-pdf-result-status { font-size: .85em; color: var(--confucius-muted); overflow-wrap: anywhere; }
+.confucius-pdf-options { min-height: 48px; overflow-y: auto; }
+.confucius-pdf-option { appearance: none; display: flex; align-items: center; gap: 8px; width: 100%; min-height: 34px; margin: 0 0 4px; padding: 8px; border: 0; border-radius: 8px; background: transparent; color: var(--confucius-ink); font: inherit; text-align: start; cursor: pointer; }
+.confucius-pdf-option > span:first-child { flex: 1; min-width: 0; }
+.confucius-pdf-option strong, .confucius-pdf-option small { display: block; overflow-wrap: anywhere; }
+.confucius-pdf-option strong { font-weight: 550; }
+.confucius-pdf-option small { margin-top: 4px; color: var(--confucius-muted); font-size: .85em; }
+.confucius-pdf-option:hover, .confucius-pdf-option[data-highlighted=true] { background: var(--confucius-hover); }
+.confucius-pdf-option[aria-selected=true] { background: var(--confucius-surface); }
+.confucius-pdf-picker [hidden] { display: none; }
+
 .confucius-session-pane .confucius-task-empty { padding: 8px; color: var(--confucius-muted); font-size: .9em; }
 .confucius-activity-shell { max-width: 880px; margin: 0 auto; padding-bottom: 16px; }
 .confucius-activity-head { display: none; }
 .confucius-task-overview { border: 0; padding: 8px 0 20px; }
-.confucius-source-tray { display: flex; flex-wrap: wrap; gap: 8px; }
-.confucius-source-tag { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; border: 0; border-radius: 8px; background: var(--confucius-surface); padding: 2px 4px 2px 8px; font-size: .86em; }
-.confucius-source-tag button { min-width: 24px; border: 0; background: transparent; color: var(--confucius-accent-text); cursor: pointer; font: inherit; }
-.confucius-source-tag .confucius-source-title { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
-.confucius-source-tag[data-unavailable=true] { color: var(--confucius-muted); border-style: dashed; }
-.confucius-source-unavailable { flex-shrink: 0; color: var(--confucius-muted); font-size: .9em; }
 .confucius-history-sources { margin: 12px 0; border: 0; padding: 12px 0; font-size: .9em; color: var(--confucius-muted); }
 .confucius-history-sources > summary { cursor: pointer; }
 .confucius-history-sources button { border: 0; background: transparent; color: var(--confucius-accent-text); text-align: left; cursor: pointer; font: inherit; }
@@ -1114,7 +1135,6 @@ ${REPORT_STYLE_CSS}
 .confucius-reading-surface th { background: var(--confucius-surface); font-weight: 600; }
 .confucius-reading-surface blockquote { border-left: 3px solid var(--confucius-line-strong); padding-left: 16px; margin-left: 0; color: var(--confucius-secondary); }
 @media (prefers-reduced-motion: reduce) { .confucius-workspace-root * { animation: none !important; transition: none !important; } }
-.confucius-workspace-root[data-confucius-layout=sidebar] .confucius-source-title { max-width: 170px; }
 .confucius-workspace-root[data-confucius-layout=sidebar] .confucius-task-overview { padding: 4px 0 12px; }
 
 .confucius-workspace-root[data-confucius-layout=sidebar] .confucius-template-grid { grid-template-columns: 1fr; }

@@ -119,6 +119,7 @@ export const RPC_METHODS = {
   sessionContext: "session/context",
   contextLive: "context/live",
   contextSearchItems: "context/search-items",
+  contextSearchPdfs: "context/search-pdfs",
   attachmentPrepare: "attachment/prepare",
   attachmentRelease: "attachment/release",
   readerOpen: "reader/open",
@@ -213,6 +214,8 @@ export interface TaskNewParams {
   mode?: SessionMode;
   backend?: AgentBackendKind;
   lockedContext?: LockedContextSnapshot;
+  /** Seed an unbound workspace conversation from the current PDF. */
+  followReader?: boolean;
   activeKnowledgeBaseId?: string;
   capabilityProfile?: CapabilityProfile;
   workingDirectory?: string;
@@ -261,7 +264,14 @@ export interface TaskBranchParams {
 
 export interface TaskSetContextParams {
   taskId: string;
-  mode: "add" | "replace";
+  mode: "add" | "replace" | "follow_reader" | "reader" | "remove";
+  /** Exact explicit sources to remove; never deletes Zotero library data. */
+  items?: Array<{ libraryID: number; key: string }>;
+  clearReader?: boolean;
+  /** Refresh the bound reader's page/selection before sending. */
+  refresh?: boolean;
+  /** Exact PDF attachment for reader mode; null explicitly unbinds it. */
+  pdf?: { libraryID: number; key: string } | null;
   /** Omit to capture the current Zotero selection at click time. */
   context?: LockedContextSnapshot;
 }
@@ -410,6 +420,21 @@ export interface ContextSearchItemsResult {
   items: ContextSearchItem[];
   total: number;
   nextOffset: number | null;
+}
+
+export interface ContextPdfItem {
+  libraryID: number;
+  key: string;
+  title: string;
+  filename: string;
+  current: boolean;
+}
+
+export interface ContextSearchPdfsResult {
+  items: ContextPdfItem[];
+  total: number;
+  nextOffset: number | null;
+  libraryName: string;
 }
 
 export interface ReaderOpenParams {

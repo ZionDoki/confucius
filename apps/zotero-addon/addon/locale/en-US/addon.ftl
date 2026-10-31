@@ -877,3 +877,19 @@ confucius-workspace-runtime-save-path = Save path
 confucius-workspace-model-settings-protocol = API protocol
 confucius-workspace-model-settings-protocol-auto = Auto (from URL)
 confucius-workspace-model-settings-protocol-help = Choose the API accepted by your endpoint. Auto recognizes explicit API URLs and official hosts; other gateways use Chat Completions. Importing model settings does not change this choice.
+
+confucius-workspace-pdf-bound = Conversation PDF · click to switch
+confucius-workspace-pdf-unbound = No PDF bound to this conversation
+confucius-workspace-pdf-choose = Choose a PDF
+confucius-workspace-pdf-help = Switching preserves @ materials and earlier messages.
+confucius-workspace-pdf-running = Stop the current response before switching PDFs.
+confucius-workspace-pdf-saving = Saving PDF choice…
+confucius-workspace-pdf-search = Search title or filename
+confucius-workspace-pdf-loading = Loading PDFs…
+confucius-workspace-pdf-no-results = No matching PDFs in the current library
+confucius-workspace-pdf-none = No PDF
+confucius-workspace-pdf-none-help = Keep this conversation unbound until you choose a PDF.
+confucius-workspace-pdf-reading = Currently reading
+confucius-workspace-pdf-more = Show more
+
+confucius-workspace-inline-reference-help = Click to change; Backspace removes the reference. Cmd/Ctrl+Z undoes removal.

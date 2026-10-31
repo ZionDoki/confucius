@@ -17,6 +17,7 @@ below preserve test sections formerly mixed into the runtime and report guides.
 
 | Record                                          | Original language  |
 | ----------------------------------------------- | ------------------ |
+| [Release 0.6.4-beta.3](release-0.6.4-beta.3.md) | English            |
 | [Release 0.6.4-beta.2](release-0.6.4-beta.2.md) | English            |
 | [Release 0.6.4-beta.1](release-0.6.4-beta.1.md) | English            |
 | [Release 0.6.3 stable](release-0.6.3.md)        | English            |
@@ -51,6 +52,7 @@ below preserve test sections formerly mixed into the runtime and report guides.
 
 | Record                                                                                                              | Original language  |
 | ------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| [Conversation PDF binding — 2026-10-31](pdf-binding-2026-10-31.md)                                                  | English            |
 | [Conversation sidebar typography — 2026-10-12](sidebar-typography-2026-10-12.md)                                    | English            |
 | [UI, attachments and idle work — 2026-10-12](ui-quality-2026-10-12.md)                                              | English            |
 | [Venue ratings and ShowJCR imports — 2026-10-11](venue-ratings-2026-10-11.md)                                       | English            |

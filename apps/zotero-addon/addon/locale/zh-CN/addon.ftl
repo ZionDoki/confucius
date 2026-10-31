@@ -877,3 +877,19 @@ confucius-workspace-runtime-save-path = 保存路径
 confucius-workspace-model-settings-protocol = API 协议
 confucius-workspace-model-settings-protocol-auto = 自动（根据 URL）
 confucius-workspace-model-settings-protocol-help = 选择端点支持的 API。自动模式识别明确的 API 路径及官方域名，其他网关使用 Chat Completions。导入模型设置不会改变此选择。
+
+confucius-workspace-pdf-bound = 对话 PDF · 点击切换
+confucius-workspace-pdf-unbound = 当前对话未绑定 PDF
+confucius-workspace-pdf-choose = 选择 PDF
+confucius-workspace-pdf-help = 切换后保留 @ 添加的材料和已有聊天记录。
+confucius-workspace-pdf-running = 请先停止当前回复，再切换 PDF。
+confucius-workspace-pdf-saving = 正在保存 PDF 选择…
+confucius-workspace-pdf-search = 搜索标题或文件名
+confucius-workspace-pdf-loading = 正在加载 PDF…
+confucius-workspace-pdf-no-results = 当前文库中没有匹配的 PDF
+confucius-workspace-pdf-none = 不绑定 PDF
+confucius-workspace-pdf-none-help = 保持未绑定，直到你再次选择 PDF。
+confucius-workspace-pdf-reading = 正在阅读
+confucius-workspace-pdf-more = 显示更多
+
+confucius-workspace-inline-reference-help = 点击切换，退格移除引用；Cmd/Ctrl+Z 可撤销。

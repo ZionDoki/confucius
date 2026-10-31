@@ -2,6 +2,59 @@
 
 ## Unreleased
 
+## 0.6.4-beta.3 - 2026-10-31
+
+### Changed
+
+- New conversations bind the PDF currently being read. Its title appears as a
+  quiet inline reference at the beginning of the composer, replacing duplicate
+  material controls in the header and under the task title.
+- Materials and conversations selected with `@` use the same inline text style
+  at the insertion point. Click a reference to search and switch it;
+  Backspace/Delete and cut remove its corresponding context. Undo/redo restores
+  both the text and its source identities.
+
+### Fixed
+
+- Explicit PDF unbinding survives polling, reader-tab changes and restart.
+  Sending refreshes the bound PDF's page and selection without following an
+  unrelated reader tab. Switching preserves earlier messages and other sources.
+- Drafts retain inline reference identities and positions across task switches
+  and restart. Older unambiguous `@[Title]` references restore without duplicated
+  text. Plain-text paste preserves line breaks without accepting rich HTML.
+- Source changes wait during a response or pending save, while ordinary draft
+  editing remains available. IME composition cannot remove references or send
+  a prompt prematurely.
+
+### Upgrade notes
+
+- This is a Beta. Enable **Include prereleases** in Confucius Settings → Update
+  to receive it. The stable Latest release remains 0.6.3. Follow Zotero's restart
+  prompt if installation is staged; completed hot updates need no restart.
+- No manual library migration or model reconfiguration is required. Removing a
+  reference does not delete its original material or previous messages.
+  With no PDF bound, choose one from `+`. Undo history lasts for the current
+  composer session; saved drafts and bindings persist across restart.
+
+### Validation and known limits
+
+- All 1,689 automated tests passed, along with type checking, lint, production
+  build, workspace version consistency and skill synchronization on Node.js 22.
+- An ordinary candidate XPI passed 17 interaction check groups in isolated
+  Zotero 10.0.7 on macOS: reader binding, atomic deletion, undo/redo, searchable
+  replacement, conversation references, IME, paste, restart, legacy drafts,
+  busy-state source locking and actual model request contents. Chinese/light,
+  English/dark at 28px and 430px width, and native high contrast were checked.
+- An ordinary-package upgrade from public 0.6.4-beta.2 passed 27 checks for
+  preserved tasks, drafts, notes, annotations, reports, memory, research state,
+  write receipts and update preferences. See the
+  [release acceptance record](https://github.com/ZionDoki/confucius/blob/v0.6.4-beta.3/.github/maintainers/acceptance/release-0.6.4-beta.3.md).
+- Tests use synthetic libraries and automated Gecko events. Windows, Linux,
+  other Zotero versions, manual pointer gestures, screen-reader software,
+  separate native PDF reader windows and very large libraries were not retested.
+  Public discovery/download and unchanged-old-package online upgrades are
+  verified after publication, separately from local candidate acceptance.
+
 ## 0.6.4-beta.2 - 2026-10-31
 
 ### Added

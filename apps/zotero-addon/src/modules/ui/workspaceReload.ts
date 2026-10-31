@@ -1,4 +1,7 @@
-import type { TaskContextReference } from "@confucius/protocol";
+import type {
+  ComposerMention,
+  TaskContextReference,
+} from "@confucius/protocol";
 
 export type WorkspaceSettingsTab =
   "model" | "runtime" | "memory" | "security" | "appearance" | "update";
@@ -7,6 +10,7 @@ export interface WorkspaceViewSnapshot {
   taskId: string | null;
   drafts: [string, string][];
   references: [string, TaskContextReference[]][];
+  mentions?: [string, ComposerMention[]][];
   viewports: [string, { scrollTop: number; followsBottom: boolean }][];
   showSessions?: boolean;
   settingsTab?: WorkspaceSettingsTab;

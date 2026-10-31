@@ -1,4 +1,6 @@
 export { CONFUCIUS_VERSION } from "./version";
+export { composerMentionText, composerMentions } from "./composer";
+export type { ComposerMention } from "./composer";
 export type { RuntimeTurnLease } from "./runtimeLease";
 
 export {
@@ -274,6 +276,8 @@ export type {
   ContextSearchItem,
   ContextSearchItemsParams,
   ContextSearchItemsResult,
+  ContextPdfItem,
+  ContextSearchPdfsResult,
   MemoryDeleteParams,
   MemoryListParams,
   MemorySaveParams,

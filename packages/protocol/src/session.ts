@@ -132,7 +132,11 @@ export interface ResearchTaskRecord extends SessionRecord {
   schemaVersion: 4;
   contextWindow?: ContextWindowState;
   references?: TaskContextReference[];
-  draft?: { text: string; references: TaskContextReference[] };
+  draft?: {
+    text: string;
+    references: TaskContextReference[];
+    mentions?: import("./composer").ComposerMention[];
+  };
   backend: AgentBackendKind;
   runtimeModel?: RuntimeModelSelection;
   externalSessionId?: string;
@@ -155,6 +159,8 @@ export interface ResearchTaskRecord extends SessionRecord {
   status: TaskStatus;
   activeKnowledgeBaseId?: string;
   lockedContext: LockedContextSnapshot;
+  /** An explicit PDF choice (including none) disables first-reader binding. */
+  pdfBinding?: "manual";
   /** Sidebar origin, captured at creation; later research never changes it. */
   createdFrom?: LockedItemContext[];
   /** Legacy sidebar associations, which could also contain acquired research papers. */
@@ -225,6 +231,7 @@ export function migrateSessionRecord(
           : initialContextWindow(input.id, backend, now),
       references: taskContextReferences(candidate.references),
       status,
+      pdfBinding: candidate.pdfBinding === "manual" ? "manual" : undefined,
       lockedContext: isLockedContextSnapshot(locked)
         ? withLockedContextFingerprint(locked)
         : emptyLockedContext(now),

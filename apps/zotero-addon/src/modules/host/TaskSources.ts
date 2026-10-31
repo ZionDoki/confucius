@@ -84,3 +84,24 @@ export function followReaderContext(
     selection: reader ? live.selection : undefined,
   });
 }
+
+/** Bind once before the first turn; refresh only the same PDF on Send. */
+export function automaticReaderContext(
+  task: ResearchTaskRecord,
+  live: LockedContextSnapshot,
+  refresh: boolean,
+): LockedContextSnapshot | undefined {
+  if (!live.reader) return;
+  const bound = readerAttachmentIdentity(task.lockedContext);
+  if (bound) {
+    if (!refresh || bound !== readerAttachmentIdentity(live)) return;
+  } else if (
+    task.pdfBinding === "manual" ||
+    task.run ||
+    task.status !== "ready"
+  ) {
+    return;
+  }
+  const next = followReaderContext(task.lockedContext, live);
+  return next.fingerprint === task.lockedContext.fingerprint ? undefined : next;
+}

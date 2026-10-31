@@ -13,7 +13,11 @@ import {
   executeNativeSubagent,
   executeExternalSubagent,
 } from "./SubagentExecution";
-import { isApprovalResolution, SUBAGENT_TOOL_NAMES } from "@confucius/protocol";
+import {
+  composerMentions,
+  isApprovalResolution,
+  SUBAGENT_TOOL_NAMES,
+} from "@confucius/protocol";
 import { LiteratureService } from "./LiteratureService";
 import { VenueRatingStore } from "./VenueRatingStore";
 import { OpenAlexClient } from "./OpenAlexClient";
@@ -158,6 +162,7 @@ import type {
   ConfuciusHealthResponse,
   ContextSearchItem,
   ContextSearchItemsResult,
+  ContextSearchPdfsResult,
   LaunchConsumeResult,
   LaunchIntent,
   LockedContextSnapshot,
@@ -353,7 +358,11 @@ import {
   type PresetWorkflow,
 } from "./PresetWorkflow";
 
-import { contextArticles } from "./TaskSources";
+import {
+  automaticReaderContext,
+  contextArticles,
+  followReaderContext,
+} from "./TaskSources";
 
 const MAX_EVENTS_PER_SESSION = 2_000;
 const CONTEXT_ITEM_SEARCH_CACHE_MS = 15_000;
@@ -2354,6 +2363,7 @@ export class AgentHost {
           state.record.draft = {
             text: params.text,
             references: taskContextReferences(params.references),
+            mentions: composerMentions(params.text, params.mentions),
           };
           try {
             await this.persistNow();
@@ -2675,6 +2685,8 @@ export class AgentHost {
         return this.liveContext();
       case RPC_METHODS.contextSearchItems:
         return this.contextSearchItems(params);
+      case RPC_METHODS.contextSearchPdfs:
+        return this.contextSearchPdfs(params);
       case RPC_METHODS.attachmentPrepare:
         return {
           attachment: await this.attachments.prepare(String(params.path ?? "")),
@@ -3486,11 +3498,19 @@ export class AgentHost {
     const suppliedLocked = isLockedContextSnapshot(contextCandidate)
       ? contextCandidate
       : undefined;
-    const lockedContext = suppliedLocked
+    let lockedContext = suppliedLocked
       ? withLockedContextFingerprint(suppliedLocked)
       : contextCandidate
         ? legacyContextSnapshot(params.context as SessionContext, now)
         : emptyLockedContext();
+    if (
+      params.followReader === true &&
+      params.pdfBinding !== "manual" &&
+      !lockedContext.reader
+    ) {
+      const live = this.captureLockedContext();
+      if (live.reader) lockedContext = followReaderContext(lockedContext, live);
+    }
     const backend = isAgentBackendKind(params.backend)
       ? params.backend
       : "native";
@@ -3518,6 +3538,11 @@ export class AgentHost {
           ? params.activeKnowledgeBaseId
           : undefined,
       lockedContext,
+      pdfBinding:
+        params.pdfBinding === "manual" ||
+        (contextCandidate && params.followReader !== true)
+          ? "manual"
+          : undefined,
       createdFrom: contextArticles(lockedContext),
       artifactIds: [],
       capabilityProfile: capabilities.capabilityProfile,
@@ -3598,6 +3623,7 @@ export class AgentHost {
       titleState: requestedTitle ? "fixed" : "pending",
       mode: source.record.mode,
       backend: source.record.backend,
+      pdfBinding: source.record.pdfBinding,
       lockedContext: JSON.parse(
         JSON.stringify(source.record.lockedContext),
       ) as LockedContextSnapshot,
@@ -3977,28 +4003,82 @@ export class AgentHost {
   ): Promise<ResearchTaskRecord> {
     const taskId = String(params.taskId ?? params.sessionId ?? "");
     const state = this.requireSession(taskId);
-    // The reader-follow mode is a poll refresh only: it never rebinds sources,
-    // so it returns before any write path below (covered by TaskSources tests).
-    if (params.mode === "follow_reader") return state.record;
+    const follow = params.mode === "follow_reader";
+    if (follow && state.activeTurnId) return state.record;
+    if (
+      follow &&
+      !state.record.lockedContext.reader &&
+      state.events?.some((event) => event.type === "turn_started")
+    )
+      return state.record;
     if (state.activeTurnId)
       throw new Error("Wait for the running research before changing sources");
-    // Preserve the original association of legacy tasks before the reader moves.
-    state.record.createdFrom ??= taskArticles(state.record);
     const supplied = params.context;
-    const context = isLockedContextSnapshot(supplied)
-      ? withLockedContextFingerprint(supplied)
-      : this.captureLockedContext();
+    const context =
+      params.mode === "reader"
+        ? this.pdfContext(params.pdf)
+        : isLockedContextSnapshot(supplied)
+          ? withLockedContextFingerprint(supplied)
+          : this.captureLockedContext();
+    const removals = new Set<string>();
+    if (params.mode === "remove") {
+      if (!Array.isArray(params.items))
+        throw new Error("Invalid source removal");
+      for (const item of params.items) {
+        if (
+          !item ||
+          !Number.isInteger(item.libraryID) ||
+          typeof item.key !== "string"
+        )
+          throw new Error("Invalid source removal");
+        removals.add(`${item.libraryID}:${item.key}`);
+      }
+    }
     const nextContext =
-      params.mode === "add"
-        ? mergeLockedContexts(state.record.lockedContext, {
-            ...context,
-            items: context.items.map((item) => ({
-              ...item,
-              source: "library" as const,
-            })),
+      params.mode === "remove"
+        ? withLockedContextFingerprint({
+            ...state.record.lockedContext,
+            capturedAt: Date.now(),
+            items: state.record.lockedContext.items.filter(
+              (item) =>
+                !(params.clearReader === true && item.source === "reader") &&
+                !(
+                  item.source !== "reader" &&
+                  removals.has(`${item.libraryID}:${item.key}`)
+                ),
+            ),
+            ...(params.clearReader === true
+              ? { reader: undefined, selection: undefined }
+              : {}),
           })
-        : context;
+        : follow
+          ? automaticReaderContext(
+              state.record,
+              context,
+              params.refresh === true,
+            )
+          : params.mode === "reader"
+            ? followReaderContext(state.record.lockedContext, context)
+            : params.mode === "add"
+              ? mergeLockedContexts(state.record.lockedContext, {
+                  ...context,
+                  items: context.items.map((item) => ({
+                    ...item,
+                    source: "library" as const,
+                  })),
+                })
+              : context;
+    if (!nextContext) return state.record;
+    // Preserve sidebar origins; source switching does not move conversations.
+    state.record.createdFrom ??= taskArticles(state.record);
     if (state.record.run) await this.freezeBoundAnnotations(state, nextContext);
+    if (state.activeTurnId)
+      throw new Error("Wait for the running research before changing sources");
+    if (
+      params.mode === "reader" ||
+      (params.mode === "remove" && params.clearReader === true)
+    )
+      state.record.pdfBinding = "manual";
     state.record.lockedContext = nextContext;
     state.driftReportedForLockedFingerprint = undefined;
     state.record.context = legacyContextForLocked(state.record.lockedContext);
@@ -10095,6 +10175,118 @@ export class AgentHost {
       items,
       total: cached.items.length,
       nextOffset: nextOffset < cached.items.length ? nextOffset : null,
+    };
+  }
+
+  private pdfContext(pdf: unknown): LockedContextSnapshot {
+    if (pdf === null) return emptyLockedContext();
+    if (!pdf || typeof pdf !== "object") throw new Error("Choose a PDF");
+    const { libraryID, key } = pdf as { libraryID: number; key: string };
+    const attachment = Zotero.Items.getByLibraryAndKey(libraryID, key);
+    if (
+      !attachment ||
+      Array.isArray(attachment) ||
+      attachment.deleted ||
+      !attachment.isPDFAttachment?.()
+    )
+      throw new Error("PDF is no longer available");
+    const parent = attachment.parentItemID
+      ? Zotero.Items.get(attachment.parentItemID)
+      : undefined;
+    if (parent && !Array.isArray(parent) && parent.deleted)
+      throw new Error("PDF is no longer available");
+    const live = this.captureLockedContext();
+    if (
+      live.reader?.libraryID === libraryID &&
+      live.reader.attachmentKey === key
+    )
+      return followReaderContext(emptyLockedContext(), live);
+    const item = parent && !Array.isArray(parent) ? parent : attachment;
+    return withLockedContextFingerprint({
+      ...emptyLockedContext(),
+      items: [
+        {
+          id: `item:${libraryID}:${item.key}`,
+          libraryID,
+          key: item.key,
+          title: item.getDisplayTitle(),
+          source: "reader",
+          attachmentKey: key,
+        },
+      ],
+      reader: {
+        id: `reader:${libraryID}:${key}`,
+        libraryID,
+        attachmentKey: key,
+        parentKey: parent && !Array.isArray(parent) ? parent.key : null,
+        title: item.getDisplayTitle(),
+        pageLabel: null,
+        pageIndex: null,
+      },
+    });
+  }
+
+  private async contextSearchPdfs(
+    params: Record<string, unknown>,
+  ): Promise<ContextSearchPdfsResult> {
+    const live = liveReaderContext().reader;
+    const selectedLibrary =
+      Number(params.libraryID) ||
+      live?.libraryID ||
+      Zotero.getActiveZoteroPane?.()?.getSelectedLibraryID?.();
+    const libraryID =
+      selectedLibrary && Zotero.Libraries.exists(selectedLibrary)
+        ? selectedLibrary
+        : Zotero.Libraries.userLibraryID;
+    const query = String(params.query ?? "")
+      .trim()
+      .toLocaleLowerCase();
+    const offset = Math.max(0, Math.floor(Number(params.offset) || 0));
+    const limit = 25;
+    const items = (await Zotero.Items.getAll(libraryID, false))
+      .filter((item) => !item.deleted && item.isPDFAttachment?.())
+      .flatMap((attachment) => {
+        const parent = attachment.parentItemID
+          ? Zotero.Items.get(attachment.parentItemID)
+          : undefined;
+        if (parent && !Array.isArray(parent) && parent.deleted) return [];
+        const title =
+          parent && !Array.isArray(parent)
+            ? parent.getDisplayTitle()
+            : attachment.getDisplayTitle();
+        const filename =
+          attachment.attachmentFilename || attachment.getDisplayTitle();
+        if (
+          query &&
+          !`${title} ${filename}`.toLocaleLowerCase().includes(query)
+        )
+          return [];
+        return [
+          {
+            libraryID,
+            key: attachment.key,
+            title,
+            filename,
+            current:
+              live?.libraryID === libraryID &&
+              live.attachmentKey === attachment.key,
+            modified: attachment.dateModified,
+          },
+        ];
+      })
+      .sort(
+        (a, b) =>
+          Number(b.current) - Number(a.current) ||
+          String(b.modified).localeCompare(String(a.modified)) ||
+          a.title.localeCompare(b.title),
+      );
+    return {
+      items: items
+        .slice(offset, offset + limit)
+        .map(({ modified: _modified, ...item }) => item),
+      total: items.length,
+      nextOffset: offset + limit < items.length ? offset + limit : null,
+      libraryName: Zotero.Libraries.getName(libraryID),
     };
   }
 

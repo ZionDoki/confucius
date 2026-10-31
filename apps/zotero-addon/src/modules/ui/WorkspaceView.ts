@@ -1,3 +1,4 @@
+import { createInlineComposer, type ComposerSource } from "./inlineComposer";
 import { createKnowledgeLibrary } from "./knowledgeLibrary";
 import {
   createSubagentEntries,
@@ -56,7 +57,10 @@ import {
   taskScopedFailure,
   taskSelectionCurrent,
 } from "./workspaceTasks";
-import { contextArticles, readerAttachmentIdentity } from "../host/TaskSources";
+import {
+  followReaderContext,
+  readerAttachmentIdentity,
+} from "../host/TaskSources";
 import { exportTaskTrace } from "./taskTraceExport";
 import {
   keyedTimeline,
@@ -83,8 +87,12 @@ import type {
   AgentBackendKind,
   ArtifactRecord,
   ConfuciusEvent,
+  ComposerMention,
+  LockedItemContext,
   ContextSearchItem,
   ContextSearchItemsResult,
+  ContextPdfItem,
+  ContextSearchPdfsResult,
   LaunchIntent,
   LockedContextSnapshot,
   MemoryConsent,
@@ -133,7 +141,6 @@ import {
   libraryMentionTokenAtCaret,
   LibraryMentionSources,
   mentionItemKey,
-  replaceLibraryMention,
   type LibraryMentionToken,
 } from "./libraryMention";
 import {
@@ -151,6 +158,7 @@ let workspaceViewState:
       taskId: string | null;
       drafts: Map<string, string>;
       references: Map<string, TaskContextReference[]>;
+      mentions: Map<string, ComposerMention[]>;
       viewports: Map<string, { scrollTop: number; followsBottom: boolean }>;
       showSessions?: boolean;
     }
@@ -1066,6 +1074,7 @@ function bindWorkspace(
         taskId: restored.taskId,
         drafts: new Map(restored.drafts),
         references: new Map(restored.references),
+        mentions: new Map(restored.mentions ?? []),
         viewports: new Map(restored.viewports),
         showSessions: restored.showSessions,
       }
@@ -1107,6 +1116,8 @@ function bindWorkspace(
     | undefined;
   const traceExports = new Set<string>();
   const composerDrafts = cachedView?.drafts ?? new Map<string, string>();
+  const mentionDrafts =
+    cachedView?.mentions ?? new Map<string, ComposerMention[]>();
   const referenceDrafts =
     cachedView?.references ?? new Map<string, TaskContextReference[]>();
   let composing = false;
@@ -1216,17 +1227,6 @@ function bindWorkspace(
     : getString("workspace-host-missing");
   brandGroup.appendChild(brandMark(doc));
   brandGroup.appendChild(brand);
-  const attachedSources = el(doc, "button", undefined, {
-    id: "confucius-attached-sources",
-    type: "button",
-    "aria-haspopup": "menu",
-  });
-  attachedSources.className = "confucius-attached-sources";
-  const attachedLabel = el(doc, "small");
-  const attachedTitle = el(doc, "span");
-  attachedSources.append(attachedLabel, attachedTitle);
-  attachedSources.addEventListener("click", () => showAttachedSources());
-  brandGroup.appendChild(attachedSources);
   brandGroup.appendChild(status);
   let newSessionLabel = getString("workspace-new-session");
   const newSessionBtn = button(doc, "confucius-new-session", newSessionLabel);
@@ -1372,6 +1372,10 @@ function bindWorkspace(
   composer.className = "confucius-composer";
   const composerCard = el(doc, "div");
   composerCard.className = "confucius-composer-card";
+  let pdfBinding: HTMLButtonElement | null = null;
+  const pdfFeedback = el(doc, "span", undefined, { role: "status" });
+  pdfFeedback.className = "confucius-pdf-feedback";
+  let changingPdf = false;
   const composerSources = el(doc, "div");
   composerSources.className = "confucius-composer-sources";
   const attachmentTray = el(
@@ -1395,29 +1399,30 @@ function bindWorkspace(
   });
   dropHint.className = "confucius-drop-hint";
   dropHint.textContent = getString("workspace-attachment-drop");
-  const prompt = el(
-    doc,
-    "textarea",
-    {
-      display: "block",
-      minWidth: "0px",
-      border: "0",
-      background: "transparent",
-      color: "var(--confucius-ink)",
-      fontFamily: "inherit",
-      fontSize: "inherit",
+  const composerEditor = createInlineComposer(doc, {
+    placeholder: getString("workspace-composer-placeholder"),
+    canChangeSources: () =>
+      !state.running &&
+      !state.sending &&
+      !changingPdf &&
+      composerSourceChanges === 0,
+    activate: activateComposerSource,
+    sourcesChanged: (removed, added) => {
+      void applyComposerSources(removed, added);
     },
+  });
+  const prompt = composerEditor.input;
+  const composerSourceCatalog = new Map<
+    string,
     {
-      id: "confucius-prompt",
-      rows: "1",
-      "aria-label": getString("workspace-composer-placeholder"),
-      placeholder: getString("workspace-composer-placeholder"),
-    },
-  ) as HTMLTextAreaElement;
-  prompt.style.boxSizing = "border-box";
-  const sourceTray = el(doc, "div");
-  sourceTray.className = "confucius-source-tray";
-  composerSources.appendChild(sourceTray);
+      source: ComposerSource;
+      item?: LockedItemContext;
+      reference?: TaskContextReference;
+      pdf?: Pick<ContextPdfItem, "libraryID" | "key">;
+    }
+  >();
+  let composerSourceTask: string | null | undefined;
+  let composerSourceChanges = 0;
   function currentReferences(): TaskContextReference[] {
     return (
       referenceDrafts.get(state.sessionId ?? "new") ??
@@ -1426,61 +1431,8 @@ function bindWorkspace(
       []
     );
   }
-  let sourceTagSignature = "";
   function renderSourceTags(): void {
-    const references = currentReferences();
-    const signature = JSON.stringify(
-      references.map((ref) => [
-        ref,
-        state.sessions.some((task) => task.id === ref.taskId),
-      ]),
-    );
-    if (signature === sourceTagSignature) return;
-    sourceTagSignature = signature;
-    sourceTray.replaceChildren();
-    for (const ref of references) {
-      const available = state.sessions.some((task) => task.id === ref.taskId);
-      const tag = el(doc, "span", undefined, {
-        "data-unavailable": String(!available),
-      });
-      tag.className = "confucius-source-tag";
-      const title = button(
-        doc,
-        "",
-        `${getString("workspace-reference-task")} · ${ref.title}`,
-      );
-      title.className = "confucius-source-title";
-      title.title = `${ref.title} · ${ref.taskId}${available ? "" : ` · ${getString("workspace-source-unavailable")}`}`;
-      title.setAttribute("aria-disabled", String(!available));
-      title.addEventListener("click", () => {
-        if (available) void loadTask(ref.taskId).then(renderLists);
-      });
-      const remove = button(doc, "", "×");
-      remove.setAttribute(
-        "aria-label",
-        `${getString("workspace-reference-remove")} ${ref.title}`,
-      );
-      remove.addEventListener("click", () => {
-        referenceDrafts.set(
-          state.sessionId ?? "new",
-          currentReferences().filter((item) => item.taskId !== ref.taskId),
-        );
-        rememberComposerDraft();
-        renderSourceTags();
-        prompt.focus();
-      });
-      tag.append(title);
-      if (!available) {
-        const unavailable = el(doc, "small");
-        unavailable.className = "confucius-source-unavailable";
-        unavailable.textContent = getString(
-          "workspace-source-unavailable-short",
-        );
-        tag.append(unavailable);
-      }
-      tag.append(remove);
-      sourceTray.append(tag);
-    }
+    syncPdfBinding();
   }
   const sendBtn = el(doc, "button", undefined, {
     id: "confucius-send",
@@ -1602,7 +1554,7 @@ function bindWorkspace(
   composerToolbar.appendChild(sendBtn);
   composerToolbar.appendChild(stopBtn);
   composerSources.appendChild(attachmentTray);
-  composerCard.appendChild(composerSources);
+  composerCard.append(composerSources, pdfFeedback);
   composerCard.appendChild(prompt);
   composerCard.appendChild(composerToolbar);
   composer.appendChild(composerCard);
@@ -1725,7 +1677,11 @@ function bindWorkspace(
     );
     dropHint.textContent = getString("workspace-attachment-drop");
     prompt.setAttribute(
-      "placeholder",
+      "data-placeholder",
+      getString("workspace-composer-placeholder"),
+    );
+    prompt.setAttribute(
+      "aria-label",
       getString("workspace-composer-placeholder"),
     );
     sendBtn.setAttribute("aria-label", sendLabel);
@@ -1889,6 +1845,7 @@ function bindWorkspace(
       taskId: state.sessionId,
       drafts: [...composerDrafts],
       references: [...referenceDrafts],
+      mentions: [...mentionDrafts],
       viewports: [...timelineViewports],
       showSessions,
       settingsTab: openWorkspaceSettingsTab(doc),
@@ -1913,6 +1870,7 @@ function bindWorkspace(
       taskId: state.sessionId,
       drafts: composerDrafts,
       references: referenceDrafts,
+      mentions: mentionDrafts,
       viewports: timelineViewports,
       showSessions,
     };
@@ -1984,7 +1942,7 @@ function bindWorkspace(
   }
 
   function renderAttachmentTray(): void {
-    syncHeaderSources();
+    syncPdfBinding();
     attachmentTray.textContent = "";
     attachmentTray.style.display = pendingAttachments.length ? "flex" : "none";
     for (const item of pendingAttachments) {
@@ -2922,10 +2880,12 @@ function bindWorkspace(
 
   function rememberComposerDraft(taskId = state.sessionId): void {
     composerDrafts.set(taskId ?? "new", prompt.value);
+    mentionDrafts.set(taskId ?? "new", composerEditor.mentions());
     referenceDrafts.set(taskId ?? "new", currentReferences());
     const previousSave = taskId ? draftSaves.get(taskId) : undefined;
     if (previousSave && win) win.clearTimeout(previousSave.timer);
     const text = prompt.value,
+      mentions = composerEditor.mentions(),
       references = currentReferences();
     if (!taskId) return;
     const save = () => {
@@ -2934,7 +2894,7 @@ function bindWorkspace(
         .catch(() => undefined)
         .then(() =>
           state.sessions.some((task) => task.id === taskId)
-            ? rpc("task/draft", { taskId, text, references })
+            ? rpc("task/draft", { taskId, text, references, mentions })
             : undefined,
         )
         .catch((error) => {
@@ -3004,7 +2964,10 @@ function bindWorkspace(
       state.sendError = "";
       if (switching || loadedComposerTaskId !== taskId) {
         loadedComposerTaskId = taskId;
-        prompt.value = composerDrafts.get(taskId) ?? "";
+        composerEditor.reset(
+          composerDrafts.get(taskId) ?? "",
+          mentionDrafts.get(taskId) ?? loaded.draft?.mentions,
+        );
         closeSlashMenu();
         closeMentionMenu();
       }
@@ -3049,7 +3012,9 @@ function bindWorkspace(
       !taskId ||
       state.sessionId !== taskId ||
       state.running ||
-      (state.sending && !refresh)
+      (state.sending && !refresh) ||
+      changingPdf ||
+      composerSourceChanges > 0
     )
       return Promise.resolve();
     const update = pendingReaderUpdate
@@ -3059,7 +3024,9 @@ function bindWorkspace(
           !taskId ||
           state.sessionId !== taskId ||
           state.running ||
-          (state.sending && !refresh)
+          (state.sending && !refresh) ||
+          changingPdf ||
+          composerSourceChanges > 0
         )
           return;
         await mentionSources.flush(taskId);
@@ -3074,7 +3041,7 @@ function bindWorkspace(
         // Poll will supply a fresh preview; do not show an older polled tab as the
         // next attachment immediately after Send's authoritative host capture.
         if (refresh) state.live = null;
-        syncHeaderSources();
+        syncPdfBinding();
       });
     pendingReaderUpdate = update;
     return update;
@@ -3099,8 +3066,8 @@ function bindWorkspace(
       : options.context;
     const created = (await rpc("task/new", {
       title: options.title ?? "Untitled research task",
-      // Blank tasks bind only explicitly selected materials.
       context: initialContext,
+      followReader: !options.context,
       backend: options.backend ?? current?.backend ?? "native",
       mode: current?.mode ?? state.mode,
       activeKnowledgeBaseId: current?.activeKnowledgeBaseId,
@@ -3118,6 +3085,7 @@ function bindWorkspace(
     if (!current) {
       // Keep the draft on the created task if a late mention needs retrying.
       composerDrafts.set(created.id, prompt.value);
+      mentionDrafts.set(created.id, composerEditor.mentions());
       referenceDrafts.set(created.id, currentReferences());
       referenceDrafts.delete("new");
     }
@@ -3426,156 +3394,396 @@ function bindWorkspace(
     return state.runtimes.find((runtime) => runtime.backend === backend);
   }
 
-  function contextSummary(context: LockedContextSnapshot): string {
-    const pieces: string[] = [];
-    if (context.selection) {
-      pieces.push(getString("workspace-source-selection"));
-    }
-    if (context.items.length) {
-      pieces.push(
-        `${context.items.length} ${getString("workspace-ctx-items")}`,
-      );
-    }
-    if (context.collection) pieces.push(context.collection.name);
-    if (context.savedSearch) pieces.push(context.savedSearch.name);
-    if (context.reader?.pageLabel)
-      pieces.push(`p. ${context.reader.pageLabel}`);
-    return pieces.join(" · ") || getString("workspace-source-empty");
-  }
-
-  function contextHasSources(context: LockedContextSnapshot): boolean {
-    return Boolean(
-      context.items.length ||
-      context.collection ||
-      context.savedSearch ||
-      context.reader ||
-      context.selection,
-    );
-  }
-
-  function contextDetail(context: LockedContextSnapshot): string {
-    const details = context.items
-      .map((item) => item.title || item.key)
-      .filter(Boolean);
-    if (context.reader?.title && !details.includes(context.reader.title)) {
-      details.push(context.reader.title);
-    }
-    return details.join("\n");
-  }
-
   function attachedContext(): LockedContextSnapshot {
     const task = currentTask();
-    const context = task?.lockedContext ?? emptyLockedContext();
+    const context =
+      task?.lockedContext ??
+      (state.live?.lockedSnapshot?.reader
+        ? followReaderContext(emptyLockedContext(), state.live.lockedSnapshot)
+        : emptyLockedContext());
     return mentionSources.context(context, task?.id ?? null) ?? context;
   }
 
-  function attachmentIsNext(context: LockedContextSnapshot): boolean {
-    const task = currentTask();
-    return Boolean(
-      task &&
-      state.running &&
-      readerAttachmentIdentity(context) !==
-        readerAttachmentIdentity(task.run?.sources ?? task.lockedContext),
-    );
-  }
-
-  function syncHeaderSources(): void {
+  function syncPdfBinding(): void {
+    if (composing || composerSourceChanges) return;
+    if (composerSourceTask !== state.sessionId) {
+      composerSourceCatalog.clear();
+      composerSourceTask = state.sessionId;
+    }
     const context = attachedContext();
-    const articles = contextArticles(context);
+    const sources: ComposerSource[] = [];
     const reader = context.reader;
-    if (reader)
-      articles.sort(
-        (a, b) =>
-          Number(
-            b.libraryID === reader.libraryID &&
-              b.key === (reader.parentKey ?? reader.attachmentKey),
-          ) -
-          Number(
-            a.libraryID === reader.libraryID &&
-              a.key === (reader.parentKey ?? reader.attachmentKey),
-          ),
-      );
-    const names = [
-      ...articles.map((item) => item.title || item.key),
-      ...pendingAttachments.map((item) => item.name),
-    ];
-    if (context.collection) names.push(context.collection.name);
-    if (context.savedSearch) names.push(context.savedSearch.name);
-    const label = getString(
-      attachmentIsNext(context)
-        ? "workspace-attached-next"
-        : "workspace-attached-label",
+    const busy = state.running || state.sending || changingPdf;
+    if (reader) {
+      const source = {
+        id: `pdf:${reader.libraryID}:${reader.attachmentKey}`,
+        label: reader.title || reader.attachmentKey,
+        title: `${reader.title || reader.attachmentKey}\n${getString(busy ? "workspace-pdf-running" : "workspace-inline-reference-help")}`,
+        binding: true,
+      };
+      composerSourceCatalog.set(source.id, {
+        source,
+        pdf: { libraryID: reader.libraryID, key: reader.attachmentKey },
+      });
+      sources.push(source);
+    }
+    for (const item of context.items.filter(
+      (item) => item.source !== "reader",
+    )) {
+      const source = {
+        id: `item:${mentionItemKey(item)}`,
+        label: item.title || item.key,
+        title: `${item.title || item.key}\n${getString("workspace-inline-reference-help")}`,
+      };
+      composerSourceCatalog.set(source.id, { source, item });
+      sources.push(source);
+    }
+    for (const reference of currentReferences()) {
+      const source = {
+        id: `task:${reference.taskId}`,
+        label: reference.title,
+        title: `${reference.title}\n${getString("workspace-inline-reference-help")}`,
+      };
+      composerSourceCatalog.set(source.id, { source, reference });
+      sources.push(source);
+    }
+    composerEditor.setSources(sources);
+    pdfBinding = prompt.querySelector<HTMLButtonElement>(
+      "#confucius-pdf-binding",
     );
-    attachedLabel.textContent = label;
-    attachedTitle.textContent = names.length
-      ? `${names[0]}${names.length > 1 ? ` +${names.length - 1}` : ""}`
-      : getString("workspace-attached-empty");
-    attachedSources.dataset.empty = String(!names.length);
-    attachedSources.title = `${label}\n${names.join("\n")}\n${getString("workspace-attached-follow")}`;
-    attachedSources.setAttribute(
-      "aria-label",
-      `${label}: ${names.join(", ") || getString("workspace-attached-empty")}`,
-    );
+    for (const control of prompt.querySelectorAll<HTMLButtonElement>(
+      ".confucius-inline-reference",
+    )) {
+      control.setAttribute("aria-disabled", String(busy));
+      if (busy) control.title = getString("workspace-pdf-running");
+    }
   }
 
-  function showAttachedSources(anchor: HTMLElement = attachedSources): void {
+  function activateComposerSource(id: string): void {
+    if (id.startsWith("pdf:")) {
+      showPdfPicker();
+      return;
+    }
+    const mention = composerEditor.mentions().find((item) => item.id === id);
+    if (!mention) return;
+    closePlusMenu();
+    closeSlashMenu();
+    mentionState.open = true;
+    mentionState.editingId = id;
+    mentionState.token = { start: mention.start, end: mention.end, query: "" };
+    mentionState.query = "";
+    mentionState.scope = id.startsWith("task:") ? "tasks" : "literature";
+    mentionState.items = [];
+    mentionState.index = 0;
+    mentionState.loading = false;
+    mentionState.requestId++;
+    void loadMentionItems(true);
+  }
+
+  async function applyComposerSources(
+    removed: string[],
+    added: string[],
+  ): Promise<void> {
+    if (!removed.length && !added.length) return;
+    const entries = added
+      .map((id) => composerSourceCatalog.get(id))
+      .filter((entry) => !!entry);
+    const key = state.sessionId ?? "new";
+    let references = currentReferences().filter(
+      (ref) => !removed.includes(`task:${ref.taskId}`),
+    );
+    for (const entry of entries)
+      if (entry.reference)
+        references = mergeTaskReferences(references, entry.reference);
+    referenceDrafts.set(key, references);
+    const removedItems = removed
+      .filter((id) => id.startsWith("item:"))
+      .map((id) => composerSourceCatalog.get(id)?.item)
+      .filter((item) => !!item);
+    const removedPdf = removed.some((id) => id.startsWith("pdf:"));
+    if (
+      !removedItems.length &&
+      !removedPdf &&
+      !entries.some((entry) => entry.item || entry.pdf)
+    ) {
+      rememberComposerDraft();
+      return;
+    }
+    composerSourceChanges++;
+    updateRunningUI();
+    let task = currentTask();
+    let selection = taskLoadGeneration;
+    try {
+      if (!task) {
+        task = await createTask();
+        selection = taskLoadGeneration;
+        if (state.sessionId !== task.id) return;
+      }
+      await mentionSources.flush(task.id);
+      let updated: ResearchTaskRecord = task;
+      if (removedItems.length || removedPdf)
+        updated = (await rpc("task/setContext", {
+          taskId: task.id,
+          mode: "remove",
+          items: removedItems.map(({ libraryID, key }) => ({ libraryID, key })),
+          clearReader: removedPdf,
+        })) as ResearchTaskRecord;
+      const items = entries.flatMap((entry) =>
+        entry.item ? [entry.item] : [],
+      );
+      if (items.length)
+        updated = (await rpc("task/setContext", {
+          taskId: task.id,
+          mode: "add",
+          context: withLockedContextFingerprint({
+            ...emptyLockedContext(),
+            items,
+          }),
+        })) as ResearchTaskRecord;
+      const pdf = entries.find((entry) => entry.pdf)?.pdf;
+      if (pdf)
+        updated = (await rpc("task/setContext", {
+          taskId: task.id,
+          mode: "reader",
+          pdf,
+        })) as ResearchTaskRecord;
+      const index = state.sessions.findIndex((row) => row.id === task!.id);
+      if (index >= 0) state.sessions[index] = updated;
+      if (state.sessionId === task.id && selection === taskLoadGeneration) {
+        state.sendError = "";
+        pdfFeedback.textContent = getString(
+          removedPdf ? "workspace-pdf-unbound" : "workspace-context-updated",
+        );
+      }
+    } catch (error) {
+      if (state.sessionId === task?.id) state.sendError = String(error);
+    } finally {
+      composerSourceChanges--;
+      if (state.sessionId === task?.id) {
+        syncPdfBinding();
+        rememberComposerDraft();
+      }
+      renderLists();
+      updateRunningUI();
+    }
+  }
+
+  async function selectPdf(
+    pdf: Pick<ContextPdfItem, "libraryID" | "key"> | null,
+  ): Promise<void> {
+    if (state.running || state.sending || changingPdf) return;
+    changingPdf = true;
+    syncPdfBinding();
+    sendBtn.setAttribute("disabled", "true");
+    let task = currentTask();
+    let selection = taskLoadGeneration;
+    try {
+      if (!task) {
+        task = await createTask();
+        // A task chosen while creation was pending remains selected.
+        if (state.sessionId !== task.id) return;
+        selection = taskLoadGeneration;
+      }
+      await mentionSources.flush(task.id);
+      const updated = (await rpc("task/setContext", {
+        taskId: task.id,
+        mode: "reader",
+        pdf,
+      })) as ResearchTaskRecord;
+      const index = state.sessions.findIndex((item) => item.id === task!.id);
+      if (index >= 0) state.sessions[index] = updated;
+      if (state.sessionId !== task.id || selection !== taskLoadGeneration)
+        return;
+      state.sendError = "";
+      flashContextUpdated();
+    } catch (error) {
+      if (selection === taskLoadGeneration) state.sendError = String(error);
+    } finally {
+      changingPdf = false;
+      renderLists();
+      updateRunningUI();
+    }
+  }
+
+  function showPdfPicker(): void {
     const existing = doc.getElementById("confucius-source-menu");
     if (existing) {
       existing.remove();
       return;
     }
+    if (state.running || state.sending || changingPdf || composerSourceChanges)
+      return;
     closeEndpointMenu();
     closePlusMenu();
     closeMentionMenu();
     closeSlashMenu();
-    const context = attachedContext();
+    const taskId = state.sessionId;
+    const selection = taskLoadGeneration;
     const menu = menuPanel("confucius-source-menu");
+    menu.classList.add("confucius-pdf-picker");
+    menu.setAttribute("role", "dialog");
+    menu.setAttribute("aria-label", getString("workspace-pdf-choose"));
     menu.appendChild(
-      createMenuHeader(
-        doc,
-        getString(
-          attachmentIsNext(context)
-            ? "workspace-attached-next"
-            : "workspace-attached-label",
-        ),
-        getString("workspace-attached-follow"),
-      ),
+      createMenuHeader(doc, getString("workspace-pdf-choose"), ""),
     );
-    for (const item of contextArticles(context)) {
-      const row = menuRow(item.title || item.key, {
-        hint: item.source === "reader" ? "PDF" : "@",
-        onClick: () => {
-          menu.remove();
-          void rpc("reader/open", {
-            libraryID: item.libraryID,
-            key: item.attachmentKey ?? item.key,
-            selectItem: !item.attachmentKey,
-          }).catch((error) => {
-            state.sendError = String(error);
-            renderLists();
-          });
-        },
-      });
-      row.title = item.title || item.key;
-      menu.appendChild(row);
-    }
-    for (const item of pendingAttachments)
-      menu.appendChild(menuRow(item.name, { hint: attachmentMeta(item) }));
-    for (const source of [context.collection, context.savedSearch])
-      if (source) menu.appendChild(menuRow(source.name));
-    if (!contextHasSources(context) && !pendingAttachments.length)
-      menu.appendChild(menuRow(getString("workspace-attached-empty")));
-    if (currentTask()) {
-      const pin = menuRow(getString("workspace-context-add"), {
-        onClick: () => {
-          menu.remove();
-          void updateTaskContext("add");
-        },
-      });
-      pin.dataset.contextAction = "add";
-      menu.appendChild(pin);
-    }
-    placeMenu(anchor, menu, 380);
+    const search = el(doc, "input", undefined, {
+      type: "search",
+      id: "confucius-pdf-search",
+      role: "combobox",
+      "aria-label": getString("workspace-pdf-search"),
+      "aria-controls": "confucius-pdf-options",
+      "aria-expanded": "true",
+      "aria-autocomplete": "list",
+      placeholder: getString("workspace-pdf-search"),
+    }) as HTMLInputElement;
+    const resultStatus = el(doc, "div", undefined, { role: "status" });
+    resultStatus.className = "confucius-pdf-result-status";
+    const list = el(doc, "div", undefined, {
+      id: "confucius-pdf-options",
+      role: "listbox",
+      "aria-label": getString("workspace-pdf-choose"),
+    });
+    list.className = "confucius-pdf-options";
+    const more = button(
+      doc,
+      "confucius-pdf-more",
+      getString("workspace-pdf-more"),
+    );
+    more.hidden = true;
+    menu.append(search, resultStatus, list, more);
+    const choose = (pdf: Pick<ContextPdfItem, "libraryID" | "key"> | null) => {
+      if (taskId !== state.sessionId || selection !== taskLoadGeneration) {
+        menu.remove();
+        return;
+      }
+      menu.remove();
+      prompt.focus({ preventScroll: true });
+      void selectPdf(pdf);
+    };
+    let request = 0,
+      nextOffset: number | null = null,
+      highlighted = -1;
+    let rows: HTMLButtonElement[] = [];
+    const bound = attachedContext().reader;
+    const clear = button(
+      doc,
+      "confucius-pdf-clear",
+      getString("workspace-pdf-none"),
+    );
+    clear.dataset.pdfKey = "";
+    clear.title = getString("workspace-pdf-none-help");
+    clear.setAttribute("aria-pressed", String(!bound));
+    clear.addEventListener("click", () => choose(null));
+    menu.appendChild(clear);
+
+    const addRow = (
+      title: string,
+      detail: string,
+      pdf: ContextPdfItem | null,
+    ) => {
+      const selected = pdf
+        ? bound?.libraryID === pdf.libraryID && bound?.attachmentKey === pdf.key
+        : !bound;
+      const row = el(doc, "button", undefined, {
+        type: "button",
+        role: "option",
+        tabindex: "-1",
+        "aria-selected": String(selected),
+        id: `confucius-pdf-option-${rows.length}`,
+      }) as HTMLButtonElement;
+      row.className = "confucius-pdf-option";
+      row.dataset.pdfKey = pdf?.key ?? "";
+      const copy = el(doc, "span");
+      const name = el(doc, "strong");
+      name.textContent = title;
+      const meta = el(doc, "small");
+      meta.textContent = detail;
+      copy.append(name, meta);
+      const mark = el(doc, "span");
+      mark.setAttribute("aria-hidden", "true");
+      mark.textContent = selected ? "✓" : "";
+      row.append(copy, mark);
+      row.title = `${title}\n${detail}`;
+      row.addEventListener("click", () => choose(pdf));
+      rows.push(row);
+      list.appendChild(row);
+    };
+    const update = async (offset = 0) => {
+      const generation = ++request;
+      more.hidden = true;
+      resultStatus.textContent = getString("workspace-pdf-loading");
+      if (!offset) {
+        list.replaceChildren();
+        rows = [];
+        highlighted = -1;
+        search.removeAttribute("aria-activedescendant");
+      }
+      try {
+        const result = (await rpc("context/search-pdfs", {
+          query: search.value,
+          offset,
+        })) as ContextSearchPdfsResult;
+        if (
+          generation !== request ||
+          !menu.isConnected ||
+          taskId !== state.sessionId ||
+          selection !== taskLoadGeneration
+        )
+          return;
+        for (const pdf of result.items)
+          addRow(
+            pdf.title || pdf.filename,
+            `${pdf.current ? getString("workspace-pdf-reading") + " · " : ""}${pdf.filename}`,
+            pdf,
+          );
+        nextOffset = result.nextOffset;
+        more.hidden = nextOffset === null;
+        resultStatus.textContent =
+          result.items.length || offset
+            ? result.libraryName
+            : getString("workspace-pdf-no-results");
+      } catch (error) {
+        if (generation === request && menu.isConnected)
+          resultStatus.textContent = String(error);
+      }
+    };
+    more.addEventListener("click", () => {
+      if (nextOffset !== null) void update(nextOffset);
+    });
+    let composing = false;
+    search.addEventListener("compositionstart", () => {
+      composing = true;
+      ++request;
+    });
+    search.addEventListener("compositionend", () => {
+      composing = false;
+      void update();
+    });
+    search.addEventListener("input", () => {
+      if (!composing) void update();
+    });
+    search.addEventListener("keydown", (event) => {
+      const key = event as KeyboardEvent;
+      if (key.isComposing || composing || key.keyCode === 229) return;
+      if (["ArrowDown", "ArrowUp"].includes(key.key) && rows.length) {
+        key.preventDefault();
+        highlighted =
+          (highlighted + (key.key === "ArrowDown" ? 1 : -1) + rows.length) %
+          rows.length;
+        rows.forEach(
+          (row, index) =>
+            (row.dataset.highlighted = String(index === highlighted)),
+        );
+        search.setAttribute("aria-activedescendant", rows[highlighted].id);
+        rows[highlighted].scrollIntoView({ block: "nearest" });
+      } else if (key.key === "Enter") {
+        key.preventDefault();
+        if (highlighted >= 0) rows[highlighted]?.click();
+      }
+    });
+    placeMenu(pdfBinding ?? plusBtn, menu, 420);
+    search.focus({ preventScroll: true });
+    void update();
   }
 
   function taskHasMentionItem(item: ContextSearchItem): boolean {
@@ -3589,101 +3797,17 @@ function bindWorkspace(
     );
   }
 
-  async function addMentionContext(item: ContextSearchItem): Promise<void> {
-    const task = currentTask();
-    if (!task) {
-      mentionSources.add(null, item);
-      renderLists();
-      flashContextUpdated();
-      return;
-    }
-    if (
-      task.lockedContext.items.some(
-        (locked) =>
-          locked.source !== "reader" &&
-          mentionItemKey(locked) === mentionItemKey(item),
-      )
-    ) {
-      flashContextUpdated();
-      return;
-    }
-    const taskId = task.id;
-    mentionSources.add(taskId, item);
-    try {
-      await mentionSources.flush(taskId);
-      if (state.sessionId !== taskId) return;
-      state.sendError = "";
-      renderLists();
-      flashContextUpdated();
-    } catch (error) {
-      if (state.sessionId !== taskId) return;
-      state.sendError = error instanceof Error ? error.message : String(error);
-      renderLists();
-    }
-  }
-
   let contextFlashGeneration = 0;
   function flashContextUpdated(): void {
-    const source = doc.getElementById(
-      "confucius-task-sources",
-    ) as HTMLElement | null;
-    if (!source) return;
     const generation = ++contextFlashGeneration;
-    const label = getString("workspace-context-updated");
-    const text = source.textContent;
-    const title = source.title;
-    source.textContent = `${text} · ${label}`;
-    source.title = label;
-    source.setAttribute("aria-live", "polite");
+    pdfFeedback.textContent = getString("workspace-context-updated");
     doc.defaultView?.setTimeout(() => {
-      if (generation !== contextFlashGeneration || !source.isConnected) return;
-      source.textContent = text;
-      source.title = title;
-      source.removeAttribute("aria-live");
+      if (generation === contextFlashGeneration) pdfFeedback.textContent = "";
     }, 1_200);
   }
 
-  async function updateTaskContext(mode: "add" | "replace"): Promise<void> {
-    const task = currentTask();
-    if (!task) return;
-    const selection = taskLoadGeneration;
-    closePlusMenu();
-    try {
-      await mentionSources.flush(task.id);
-      // Capture again at action time. A polled live snapshot may be stale if
-      // the Zotero selection changed while this menu was open.
-      const live = (await rpc("context/live", {})) as LiveContextResult;
-      state.live = live;
-      const current = live.lockedSnapshot;
-      if (!current || !contextHasSources(current)) {
-        throw new Error(getString("workspace-context-current-empty"));
-      }
-      await rpc("task/setContext", {
-        taskId: task.id,
-        mode,
-        context: current,
-      });
-      await refreshSessions();
-      // The context still belongs to the captured task, but a late reload must
-      // not reselect it after the user moved to another conversation.
-      if (state.sessionId !== task.id || selection !== taskLoadGeneration)
-        return;
-      await loadTask(task.id);
-      state.sendError = "";
-      renderLists();
-      flashContextUpdated();
-    } catch (error) {
-      if (state.sessionId !== task.id || selection !== taskLoadGeneration)
-        return;
-      state.sendError = error instanceof Error ? error.message : String(error);
-      renderLists();
-    }
-  }
-
   function renderTemplatePicker(target: HTMLElement): void {
-    const visibleTemplates = featuredTemplatesForContext(
-      currentTask()?.lockedContext ?? mentionSources.context(),
-    );
+    const visibleTemplates = featuredTemplatesForContext(attachedContext());
     if (!visibleTemplates.length) return;
     const heading = el(doc, "div", {
       marginTop: "22px",
@@ -3759,19 +3883,7 @@ function bindWorkspace(
       overview.appendChild(eyebrow);
       overview.appendChild(heading);
       overview.appendChild(copy);
-      const context = mentionSources.context() ?? emptyLockedContext();
-      if (context) {
-        const source = el(doc, "div", {
-          marginTop: "12px",
-          color: "var(--confucius-muted)",
-          fontSize: ".9em",
-        });
-        source.id = "confucius-task-sources";
-        source.title = contextDetail(context);
-        source.textContent = `${getString("workspace-current-source")}: ${contextSummary(context)}`;
-        overview.appendChild(source);
-        renderTemplatePicker(overview);
-      }
+      renderTemplatePicker(overview);
       return overview;
     }
 
@@ -3788,67 +3900,8 @@ function bindWorkspace(
     meta.textContent = `${runtimeLabel(task.backend)} · ${taskStatusLabel(task)}`;
     const title = el(doc, "h1");
     title.textContent = task.title || getString("workspace-untitled-task");
-    const source = el(
-      doc,
-      "button",
-      {
-        color: "var(--confucius-muted)",
-        fontSize: ".9em",
-        fontFamily: "inherit",
-        textAlign: "start",
-        background: "transparent",
-        border: "0",
-        padding: "4px 0",
-        cursor: "pointer",
-        maxWidth: "100%",
-      },
-      { id: "confucius-task-sources", type: "button", "aria-haspopup": "menu" },
-    );
-    source.textContent = `${contextSummary(task.lockedContext)} ⌄`;
-    source.title =
-      contextDetail(task.lockedContext) ||
-      getString("workspace-context-heading");
-    source.addEventListener("click", (event) => {
-      event.stopPropagation();
-      const existing = doc.getElementById("confucius-source-menu");
-      if (existing) {
-        existing.remove();
-        return;
-      }
-      closeEndpointMenu();
-      closePlusMenu();
-      closeMentionMenu();
-      closeSlashMenu();
-      const menu = menuPanel("confucius-source-menu");
-      menu.appendChild(
-        createMenuHeader(
-          doc,
-          getString("workspace-context-heading"),
-          contextSummary(task.lockedContext),
-        ),
-      );
-      for (const mode of ["add", "replace"] as const) {
-        const row = menuRow(
-          getString(
-            mode === "add"
-              ? "workspace-context-add"
-              : "workspace-context-replace",
-          ),
-          {
-            onClick: () => {
-              menu.remove();
-              if (currentTask()?.id === task.id) void updateTaskContext(mode);
-            },
-          },
-        );
-        row.dataset.contextAction = mode;
-        menu.appendChild(row);
-      }
-      placeMenu(source, menu, 300);
-    });
     headerCopy.appendChild(meta);
     headerCopy.appendChild(title);
-    headerCopy.appendChild(source);
 
     header.appendChild(headerCopy);
     const exportButton = button(
@@ -4136,7 +4189,7 @@ function bindWorkspace(
     applyAppearance();
     syncEndpointButton();
     syncPresetChip();
-    syncHeaderSources();
+    syncPdfBinding();
     lastListSignature = listSignature();
     if (initialViewReady || state.sessions.length) {
       updateTaskList(state.sessions, pendingTaskId ?? state.sessionId);
@@ -4676,7 +4729,10 @@ function bindWorkspace(
           selected.id,
           selected.draft?.references ?? selected.references ?? [],
         );
-      prompt.value = composerDrafts.get(selected.id) ?? "";
+      composerEditor.reset(
+        composerDrafts.get(selected.id) ?? "",
+        mentionDrafts.get(selected.id) ?? selected.draft?.mentions,
+      );
       loadedComposerTaskId = selected.id;
     }
   }
@@ -4687,6 +4743,8 @@ function bindWorkspace(
     if (
       reportStyleDialog ||
       state.sending ||
+      changingPdf ||
+      composerSourceChanges > 0 ||
       state.running ||
       presetUpdatePending ||
       modeUpdatePending ||
@@ -4713,7 +4771,11 @@ function bindWorkspace(
       (submittedAttachments.length
         ? getString("workspace-attachment-default-prompt")
         : "");
-    if (!text) return;
+    if (
+      !text ||
+      (!composerEditor.prose().trim() && !submittedAttachments.length)
+    )
+      return;
     const submittedUiIds = new Set(
       submittedAttachments.map((item) => item.uiId),
     );
@@ -4778,6 +4840,7 @@ function bindWorkspace(
             72,
           ),
           lockedContext,
+          followReader: true,
           mode: state.mode,
         })) as SessionRow;
         promptSessionId = created.id;
@@ -4795,6 +4858,7 @@ function bindWorkspace(
           artifactList.select(created.id);
           loadedComposerTaskId = created.id;
           composerDrafts.set(created.id, prompt.value);
+          mentionDrafts.set(created.id, composerEditor.mentions());
           state.events = [];
           state.lastEventId = null;
           state.running = false;
@@ -6213,6 +6277,7 @@ function bindWorkspace(
     query: "",
     items: [] as MentionChoice[],
     scope: "literature" as "literature" | "tasks",
+    editingId: null as string | null,
     index: 0,
     nextOffset: 0 as number | null,
     total: 0,
@@ -6227,6 +6292,7 @@ function bindWorkspace(
   function closeMentionMenu(): void {
     mentionState.open = false;
     mentionState.token = null;
+    mentionState.editingId = null;
     mentionState.items = [];
     mentionState.loading = false;
     mentionState.error = "";
@@ -6245,7 +6311,7 @@ function bindWorkspace(
     );
     if (!token) {
       closeMentionMenu();
-      updateSlashMenu(prompt.value);
+      updateSlashMenu(composerEditor.prose());
       return;
     }
     closeSlashMenu();
@@ -6361,6 +6427,41 @@ function bindWorkspace(
     renderSourcePicker(doc, {
       state: mentionState,
       preserveScroll,
+      search: mentionState.editingId
+        ? {
+            value: mentionState.query,
+            change: (value) => {
+              mentionState.query = value;
+              mentionState.index = 0;
+              mentionState.items = [];
+              mentionState.loading = false;
+              mentionState.requestId++;
+              void loadMentionItems(true);
+            },
+            keydown: (event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                closeMentionMenu();
+                prompt.focus();
+              } else if (event.key === "Enter") {
+                event.preventDefault();
+                runMentionSelection();
+              } else if (
+                ["ArrowDown", "ArrowUp"].includes(event.key) &&
+                mentionState.items.length
+              ) {
+                event.preventDefault();
+                mentionState.index =
+                  (mentionState.index +
+                    (event.key === "ArrowDown" ? 1 : -1) +
+                    mentionState.items.length) %
+                  mentionState.items.length;
+                const menu = doc.getElementById("confucius-mention-menu");
+                if (menu) highlightMentionRows(menu);
+              }
+            },
+          }
+        : undefined,
       included: (item) =>
         item.taskReference
           ? currentReferences().some(
@@ -6405,31 +6506,45 @@ function bindWorkspace(
   function runMentionSelection(): void {
     const item = mentionState.items[mentionState.index];
     const token = mentionState.token;
-    if (!item || !token) return;
-    const replacement = item.taskReference
-      ? {
-          value:
-            prompt.value.slice(0, token.start) + prompt.value.slice(token.end),
-          caret: token.start,
-        }
-      : replaceLibraryMention(prompt.value, token, item.title);
-    prompt.value = replacement.value;
+    if (
+      !item ||
+      !token ||
+      state.running ||
+      state.sending ||
+      changingPdf ||
+      composerSourceChanges
+    )
+      return;
+    const id = item.taskReference
+      ? `task:${item.taskReference.taskId}`
+      : `item:${mentionItemKey(item)}`;
+    const source = {
+      id,
+      label: item.title,
+      title: `${item.title}\n${getString("workspace-inline-reference-help")}`,
+    };
+    composerSourceCatalog.set(id, {
+      source,
+      ...(item.taskReference
+        ? { reference: item.taskReference }
+        : {
+            item: {
+              id,
+              libraryID: item.libraryID,
+              key: item.key,
+              title: item.title,
+              source: "library" as const,
+            },
+          }),
+    });
     closeMentionMenu();
-    prompt.focus();
-    prompt.setSelectionRange(replacement.caret, replacement.caret);
-    if (item.taskReference) {
-      referenceDrafts.set(
-        state.sessionId ?? "new",
-        mergeTaskReferences(currentReferences(), item.taskReference),
-      );
-      renderSourceTags();
-    } else void addMentionContext(item);
+    composerEditor.insert(source, token.start, token.end);
     rememberComposerDraft();
   }
 
   function slashCommands(): SlashCommand[] {
     const commands: SlashCommand[] = featuredTemplatesForContext(
-      currentTask()?.lockedContext ?? mentionSources.context(),
+      attachedContext(),
     ).map((template) => ({
       label: localizedTemplateTitle(template),
       description: getString(`workspace-template-${template.id}-help`),
@@ -6836,7 +6951,10 @@ function bindWorkspace(
       return;
     }
     if (command.kind === "skill" && command.slug) {
-      const remainder = prompt.value.replace(/^\s*\/[^\s]*/, "").trim();
+      const remainder = composerEditor
+        .prose()
+        .replace(/^\s*\/[^\s]*/, "")
+        .trim();
       prompt.value = remainder
         ? `/${command.slug} ${remainder}`
         : `/${command.slug} `;
@@ -6848,7 +6966,10 @@ function bindWorkspace(
     }
     if (command.kind === "template") {
       const template = taskTemplate(command.templateId);
-      const remainder = prompt.value.replace(/^\s*\/[^\s]*/, "").trim();
+      const remainder = composerEditor
+        .prose()
+        .replace(/^\s*\/[^\s]*/, "")
+        .trim();
       closeSlashMenu();
       if (template) {
         const basePrompt = localizedTemplatePrompt(template);
@@ -7421,6 +7542,11 @@ function bindWorkspace(
       menu.appendChild(menuRow(label, { active, onClick }));
     };
 
+    option(getString("workspace-pdf-choose"), false, () => {
+      closePlusMenu();
+      showPdfPicker();
+    });
+
     section(getString("workspace-mode"));
     const modeDisabled =
       modeUpdatePending ||
@@ -7630,6 +7756,8 @@ function bindWorkspace(
     stopBtn.style.display = working ? "" : "none";
     if (
       state.sending ||
+      changingPdf ||
+      composerSourceChanges > 0 ||
       presetUpdatePending ||
       modeUpdatePending ||
       modelUpdatePending ||
@@ -7957,6 +8085,7 @@ function bindWorkspace(
       taskId: state.sessionId,
       drafts: composerDrafts,
       references: referenceDrafts,
+      mentions: mentionDrafts,
       viewports: timelineViewports,
       showSessions,
     };
@@ -8007,8 +8136,7 @@ function bindWorkspace(
       sourceMenu &&
       target &&
       !sourceMenu.contains(target) &&
-      !attachedSources.contains(target) &&
-      !doc.getElementById("confucius-task-sources")?.contains(target)
+      !pdfBinding?.contains(target)
     )
       sourceMenu.remove();
     if (!endpointMenuOpen) return;
@@ -8063,6 +8191,7 @@ function bindWorkspace(
   });
   prompt.addEventListener("click", updateComposerMenus);
   prompt.addEventListener("keydown", (event) => {
+    if (event.defaultPrevented) return;
     const action = composerKeyAction(event as KeyboardEvent, composing);
     if (action === "ignore" || action === "newline") return;
     const key = (event as KeyboardEvent).key;
