@@ -26,7 +26,7 @@ await appendFile(
 const result = { checks: [], clicks: 0 };
 const evaluate = (code) =>
   instance.rdp.evaluate(
-    `const win=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml');const d=win?.document;let qa=Zotero.__sidebarQA;\n${code}`,
+    `const shell=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml');const win=shell?.document.getElementById('confucius-window-frame')?.contentWindow??shell;const d=win?.document;let qa=Zotero.__sidebarQA;\n${code}`,
     30000,
   );
 const waitFor = (code) => until(() => evaluate(code), 15000, 50);
@@ -322,7 +322,7 @@ try {
 
   // Exercise the same navigation while the sidebar is a narrow overlay.
   for (const width of [1200, 400, 220]) {
-    await evaluate(`win.resizeTo(${width},760);return true;`);
+    await evaluate(`shell.resizeTo(${width},760);return true;`);
     await waitFor(`return win.innerWidth===${width};`);
     for (let n = 0; n < 12; n++) {
       const geometry = await evaluate(
@@ -343,7 +343,7 @@ try {
     );
   }
   await evaluate(
-    `win.resizeTo(1200,760);const toggle=d.getElementById('confucius-toggle-sessions');if(toggle.getAttribute('aria-expanded')!=='true')toggle.click();d.getElementById('confucius-tasks-articles').click();for(const button of d.querySelectorAll('.confucius-article-toggle'))if(button.getAttribute('aria-expanded')==='false')button.click();d.getElementById('confucius-session-pane').scrollTop=0;return true;`,
+    `shell.resizeTo(1200,760);const toggle=d.getElementById('confucius-toggle-sessions');if(toggle.getAttribute('aria-expanded')!=='true')toggle.click();d.getElementById('confucius-tasks-articles').click();for(const button of d.querySelectorAll('.confucius-article-toggle'))if(button.getAttribute('aria-expanded')==='false')button.click();d.getElementById('confucius-session-pane').scrollTop=0;return true;`,
   );
   await screenshot("articles-light");
   await evaluate(
@@ -508,7 +508,7 @@ try {
   const errors = await evaluate(`return qa.errors;`);
   assert.deepEqual(errors, []);
   check("no unhandled UI errors across the interaction suite");
-  await evaluate(`win.close();return true;`);
+  await evaluate(`shell.close();return true;`);
   await waitFor(`return !win;`);
   await evaluate(
     `Zotero.getMainWindow().document.getElementById('confucius-toolbar-button').dispatchEvent(new (Zotero.getMainWindow().Event)('command'));return true;`,

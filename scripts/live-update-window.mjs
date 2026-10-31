@@ -54,7 +54,7 @@ await appendFile(
 const result = { checks: [], candidateSha256: release.digest, version };
 const evaluate = (code) =>
   instance.rdp.evaluate(
-    `const w=Zotero.__updateWindow;const d=w&&!w.closed?w.document:undefined;const h=Zotero.Confucius?.hooks.host;${code}`,
+    `const w=Zotero.__updateWindow;const d=w&&!Components.utils.isDeadWrapper(w)&&!w.closed?w.document:undefined;const h=Zotero.Confucius?.hooks.host;${code}`,
   );
 const waitFor = (code) => until(() => evaluate(code), 20000, 100);
 const check = (name) => {
@@ -63,7 +63,7 @@ const check = (name) => {
 };
 const findWorkspace = (layout = "window") =>
   waitFor(
-    `Zotero.__updateWindow=${layout === "sidebar" ? "Zotero.getMainWindow()" : "[...Services.wm.getEnumerator(null)].find(win=>win.location.href==='chrome://confucius/content/workspace.xhtml')"};const next=Zotero.__updateWindow?.document;return !!next?.getElementById('confucius-settings')&&!!next.querySelector('[data-entry-id^="overview:"]')&&next.getElementById('confucius-root')!==Zotero.__oldRoot;`,
+    `Zotero.__updateShell=${layout === "sidebar" ? "Zotero.getMainWindow()" : "[...Services.wm.getEnumerator(null)].find(win=>win.location.href==='chrome://confucius/content/workspace.xhtml')"};const shell=Zotero.__updateShell;Zotero.__updateWindow=(shell?.document.getElementById('confucius-window-frame')??shell?.document.getElementById('confucius-sidebar-frame'))?.contentWindow??shell;const next=Zotero.__updateWindow?.document;return !!next?.getElementById('confucius-settings')&&!!next.querySelector('[data-entry-id^="overview:"]')&&next.getElementById('confucius-root')!==Zotero.__oldRoot;`,
   );
 const open = async () => {
   await evaluate(
@@ -131,7 +131,7 @@ const verifyRestored = async (taskId, draft, layout = "window") => {
   if (layout === "window") {
     assert.equal(
       await evaluate(
-        `return Zotero.__oldWindow.closed&&Zotero.Confucius.data.workspaceWindow===w;`,
+        `return Zotero.__oldWindow.closed&&Zotero.Confucius.data.workspaceWindow===Zotero.__updateShell;`,
       ),
       true,
     );
@@ -144,7 +144,7 @@ const verifyRestored = async (taskId, draft, layout = "window") => {
   } else {
     assert.equal(
       await evaluate(
-        `return !Zotero.__oldRoot.isConnected&&d.querySelectorAll('#confucius-sidebar').length===1;`,
+        `return (!Zotero.__oldRoot.isConnected||Zotero.__oldWindow.closed)&&Zotero.getMainWindow().document.querySelectorAll('#confucius-sidebar').length===1;`,
       ),
       true,
     );
@@ -271,14 +271,16 @@ try {
   );
 
   await evaluate(
-    `d.getElementById('confucius-cfg-close').click();d.getElementById('confucius-toolbar-button').dispatchEvent(new w.Event('command'));return true;`,
+    `d.getElementById('confucius-cfg-close').click();Zotero.getMainWindow().document.getElementById('confucius-toolbar-button').dispatchEvent(new (Zotero.getMainWindow().Event)('command'));return true;`,
   );
-  await waitFor(`return !d.getElementById('confucius-root');`);
+  await waitFor(
+    `return !Zotero.getMainWindow().document.getElementById('confucius-sidebar');`,
+  );
   result.closed = await install(false);
   assert.equal(result.closed.restartRequired, false);
   assert.equal(
     await evaluate(
-      `return !Zotero.getMainWindow().document.getElementById('confucius-root')&&![...Services.wm.getEnumerator(null)].some(win=>win.location.href==='chrome://confucius/content/workspace.xhtml');`,
+      `return !Zotero.getMainWindow().document.getElementById('confucius-sidebar')&&![...Services.wm.getEnumerator(null)].some(win=>win.location.href==='chrome://confucius/content/workspace.xhtml');`,
     ),
     true,
   );
@@ -296,7 +298,7 @@ try {
   await waitFor(`return Zotero.Confucius?.data.initialized;`);
   assert.equal(
     await evaluate(
-      `return !Zotero.getMainWindow().document.getElementById('confucius-root')&&![...Services.wm.getEnumerator(null)].some(win=>win.location.href==='chrome://confucius/content/workspace.xhtml');`,
+      `return !Zotero.getMainWindow().document.getElementById('confucius-sidebar')&&![...Services.wm.getEnumerator(null)].some(win=>win.location.href==='chrome://confucius/content/workspace.xhtml');`,
     ),
     true,
   );

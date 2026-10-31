@@ -25,12 +25,12 @@ await appendFile(
 const report = { stages: [] };
 const evaluate = (code) =>
   instance.rdp.evaluate(
-    `const win=Zotero.getMainWindow(),d=win.document;${code}`,
+    `const main=Zotero.getMainWindow(),win=main.document.getElementById('confucius-sidebar-frame')?.contentWindow??main,d=win.document;${code}`,
     30000,
   );
 const open = async () => {
   await evaluate(
-    "await new Promise(done=>win.setTimeout(done,300));d.getElementById('confucius-toolbar-button').dispatchEvent(new win.Event('command'));return true;",
+    "await new Promise(done=>main.setTimeout(done,300));main.document.getElementById('confucius-toolbar-button').dispatchEvent(new main.Event('command'));return true;",
   );
   await until(
     () => evaluate("return !!d.getElementById('confucius-prompt');"),
@@ -77,6 +77,53 @@ const sample = async (label, enabled) => {
 try {
   report.environment = await instance.launch();
   await open();
+  if (process.env.CONFUCIUS_INPUT_UPGRADE_XPI) {
+    const task = await instance.rpc("task/new", {
+      title: "Sidebar upgrade draft",
+      backend: "native",
+      context: { version: 1, capturedAt: Date.now(), items: [] },
+    });
+    await until(() =>
+      evaluate(
+        `return !!d.querySelector('[data-entry-id="overview:${task.id}"]');`,
+      ),
+    );
+    await evaluate(
+      "d.getElementById('confucius-settings').click();return true;",
+    );
+    await until(() =>
+      evaluate("return !!d.getElementById('confucius-cfg-tab-update');"),
+    );
+    await evaluate(
+      "d.getElementById('confucius-cfg-tab-update').click();return true;",
+    );
+    const draft = "Unsaved sidebar upgrade draft · 中文 😀";
+    await evaluate(`
+      const p=d.getElementById('confucius-prompt');p.value=${JSON.stringify(draft)};
+      p.dispatchEvent(new win.Event('input',{bubbles:true}));
+      const {AddonManager}=ChromeUtils.importESModule('resource://gre/modules/AddonManager.sys.mjs');
+      const install=await AddonManager.getInstallForFile(Zotero.File.pathToFile(${JSON.stringify(resolve(process.env.CONFUCIUS_INPUT_UPGRADE_XPI))}));
+      await install.install();return true;
+    `);
+    report.upgrade = await until(() =>
+      evaluate(`
+        const frame=main.document.getElementById('confucius-sidebar-frame');
+        if(!frame||!d.querySelector('[data-entry-id="overview:${task.id}"]')||d.getElementById('confucius-prompt')?.value!==${JSON.stringify(draft)}||d.getElementById('confucius-cfg-tab-update')?.getAttribute('aria-selected')!=='true')return false;
+        const {AddonManager}=ChromeUtils.importESModule('resource://gre/modules/AddonManager.sys.mjs');
+        const addon=await AddonManager.getAddonByID('confucius@zotero.plugin');
+        return {version:addon.version,draft:d.getElementById('confucius-prompt').value,layout:'sidebar',settings:'update',type:frame.getAttribute('type')};
+      `),
+    );
+    assert.equal(report.upgrade.type, "content");
+    assert.notEqual(report.upgrade.version, report.environment.version);
+    assert.equal(
+      (await instance.rpc("task/load", { taskId: task.id })).draft.text,
+      draft,
+    );
+    console.log(
+      "PASS Public-package hot upgrade preserves unsaved draft, task, sidebar and Update settings",
+    );
+  }
   await sample(
     "Initial binding: one write per actual input-modality transition",
     true,
@@ -104,12 +151,12 @@ try {
   for (let cycle = 1; cycle <= 3; cycle++) {
     assert.equal(await menuListeners(), 1);
     await evaluate(
-      "await new Promise(done=>win.setTimeout(done,300));d.getElementById('confucius-toolbar-button').dispatchEvent(new win.Event('command'));return true;",
+      "await new Promise(done=>main.setTimeout(done,300));main.document.getElementById('confucius-toolbar-button').dispatchEvent(new main.Event('command'));return true;",
     );
     await until(
       () =>
         evaluate(
-          "const pane=d.getElementById('confucius-sidebar');return !pane||pane.hidden;",
+          "const pane=main.document.getElementById('confucius-sidebar');return !pane||pane.hidden;",
         ),
       30000,
     );

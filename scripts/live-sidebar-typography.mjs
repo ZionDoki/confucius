@@ -33,7 +33,7 @@ const evaluate = (code) =>
   instance.rdp.evaluate(
     `
   const host=Zotero.Confucius.hooks.host;let qa=Zotero.__sidebarTypography;
-  const win=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml')??Zotero.getMainWindow(),d=win?.document,root=d?.querySelector('.confucius-workspace-root');
+  const shell=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml')??Zotero.getMainWindow(),win=(shell.document.getElementById('confucius-window-frame')??shell.document.getElementById('confucius-sidebar-frame'))?.contentWindow??shell,d=win?.document,root=d?.querySelector('.confucius-workspace-root');
   ${code}`,
     30000,
   );
@@ -128,7 +128,7 @@ try {
     );
     for (const theme of ["light", "dark"]) {
       for (const size of survey ? [14, 28] : [12, 17.5, 24, 28]) {
-        await evaluate("win.resizeTo(1200,900);return true;");
+        await evaluate("shell.resizeTo(1200,900);return true;");
         await wait("return win.innerWidth>=1190;");
         await showSidebar();
         await instance.rpc("config/set", {
@@ -144,7 +144,7 @@ try {
             `return Math.abs(d.getElementById('confucius-session-pane').getBoundingClientRect().width-${Math.min(384, Math.max(248, Math.round(248 + (size - 14) * 10)))})<1;`,
           );
         for (const width of survey ? [1200, 280] : [1200, 800, 280]) {
-          await evaluate(`win.resizeTo(${width},900);return true;`);
+          await evaluate(`shell.resizeTo(${width},900);return true;`);
           await wait(`return Math.abs(win.innerWidth-${width})<6;`);
           await showSidebar();
           for (const mode of ["time", "articles"]) {
@@ -168,7 +168,7 @@ try {
         }
       }
     }
-    await evaluate("win.close();return true;");
+    await evaluate("shell.close();return true;");
     await wait("return !root;");
   }
   if (!survey) {
@@ -176,7 +176,7 @@ try {
       "96 layout cases: both languages/themes, fractional and size-limit typography, both organizations and three window widths",
     );
     await open();
-    await evaluate("win.resizeTo(800,900);return true;");
+    await evaluate("shell.resizeTo(800,900);return true;");
     await instance.rpc("config/set", { uiFontSize: 14 });
     await wait(
       "return parseFloat(win.getComputedStyle(root).fontSize)===14&&win.getComputedStyle(d.getElementById('confucius-session-pane')).position==='static';",
@@ -229,7 +229,7 @@ try {
     await capture("high-contrast-28px");
     check("High-contrast layout remains readable without clipping");
     await evaluate(
-      "win.close();Zotero.Prefs.set('extensions.zotero.confucius.workspaceLayout','sidebar',true);return true;",
+      "shell.close();Zotero.Prefs.set('extensions.zotero.confucius.workspaceLayout','sidebar',true);return true;",
     );
     await wait("return !root;");
     await open();

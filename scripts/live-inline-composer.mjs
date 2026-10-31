@@ -6,6 +6,8 @@ import { join, resolve } from "node:path";
 import { IsolatedZotero, until } from "./lib/zotero-live.mjs";
 
 const root = resolve(import.meta.dirname, "..");
+const layout = process.env.CONFUCIUS_INLINE_LAYOUT ?? "window";
+assert.ok(["sidebar", "window"].includes(layout), "Unknown workspace layout");
 const output = resolve(
   process.env.CONFUCIUS_INLINE_OUTPUT ?? join(root, "output/inline-composer"),
 );
@@ -49,16 +51,16 @@ const instance = await IsolatedZotero.create({
 });
 await appendFile(
   join(instance.profile, "user.js"),
-  '\nuser_pref("extensions.zotero.confucius.workspaceLayout", "window");\nuser_pref("extensions.zotero.confucius.pluginRuntimeHost", false);\nuser_pref("extensions.zotero.confucius.uiLanguage", "zh-CN");\n',
+  `\nuser_pref("extensions.zotero.confucius.workspaceLayout", "${layout}");\nuser_pref("extensions.zotero.confucius.pluginRuntimeHost", false);\nuser_pref("extensions.zotero.confucius.uiLanguage", "zh-CN");\n`,
 );
-const report = { checks: [], styles: [] };
+const report = { layout, checks: [], styles: [] };
 const check = (label) => {
   report.checks.push(label);
   console.log("PASS", label);
 };
 const evaluate = (code) =>
   instance.rdp.evaluate(
-    `const host=Zotero.Confucius.hooks.host,qa=Zotero.__inlineQA;const win=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml'),d=win?.document;${code}`,
+    `const host=Zotero.Confucius.hooks.host,qa=Zotero.__inlineQA;const shell=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml');const win=${layout === "sidebar" ? "Zotero.getMainWindow().document.getElementById('confucius-sidebar-frame')?.contentWindow" : "(shell?.document.getElementById('confucius-window-frame')?.contentWindow ?? shell)"},d=win?.document;${code}`,
     30000,
   );
 const wait = (code) => until(() => evaluate(code), 30000, 150);
@@ -398,7 +400,11 @@ try {
       uiLanguage: language,
       uiFontSize: size,
     });
-    await evaluate(`win.resizeTo(${width},780);return true;`);
+    await evaluate(
+      layout === "sidebar"
+        ? `const pane=Zotero.getMainWindow().document.getElementById('confucius-sidebar');pane.style.width='${Math.min(width, 620)}px';pane.style.flex='0 0 ${Math.min(width, 620)}px';return true;`
+        : `shell.resizeTo(${width},780);return true;`,
+    );
     await wait(`return win.innerWidth<=${width};`);
     await capture(`${theme}-layout`);
     const geometry = await evaluate(

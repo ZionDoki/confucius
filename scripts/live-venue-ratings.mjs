@@ -41,7 +41,7 @@ await appendFile(
 const checks = [];
 const evaluate = (code) =>
   instance.rdp.evaluate(
-    `const host=Zotero.Confucius.hooks.host,qa=Zotero.__venueQA;const win=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml');const d=win?.document;${code}`,
+    `const host=Zotero.Confucius.hooks.host,qa=Zotero.__venueQA;const shell=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml');const win=shell?.document.getElementById('confucius-window-frame')?.contentWindow??shell;const d=win?.document;${code}`,
     30000,
   );
 const wait = (code) => until(() => evaluate(code), 30000, 100);
@@ -232,20 +232,20 @@ try {
     );
   assert.equal((await geometry()).noHorizontalOverflow, true);
   await evaluate(
-    `await host.rpc('config/set',{uiTheme:'dark'});win.resizeTo(420,720);return true;`,
+    `await host.rpc('config/set',{uiTheme:'dark'});shell.resizeTo(420,720);return true;`,
   );
   await wait(
     `return d.documentElement.getAttribute('data-confucius-theme')==='dark' && d.documentElement.clientWidth<=440;`,
   );
   assert.equal((await geometry()).noHorizontalOverflow, true);
   await capture("ratings-list-dark-420");
-  await evaluate(`win.resizeTo(280,720);return true;`);
+  await evaluate(`shell.resizeTo(280,720);return true;`);
   await wait(`return d.documentElement.clientWidth<=300;`);
   assert.equal((await geometry()).noHorizontalOverflow, true);
   assert.equal((await geometry()).badges, true);
   await capture("ratings-list-dark-280");
   await evaluate(
-    `win.resizeTo(420,720);const style=d.createElementNS('http://www.w3.org/1999/xhtml','style');style.id='venue-large-fonts';style.textContent='.confucius-venue-rating,.confucius-venue-rating-details {font-size:18px !important}';d.head.append(style);return true;`,
+    `shell.resizeTo(420,720);const style=d.createElementNS('http://www.w3.org/1999/xhtml','style');style.id='venue-large-fonts';style.textContent='.confucius-venue-rating,.confucius-venue-rating-details {font-size:18px !important}';d.head.append(style);return true;`,
   );
   assert.equal((await geometry()).noHorizontalOverflow, true);
   await capture("ratings-list-large-fonts");
@@ -259,7 +259,7 @@ try {
     "Cards and lists wrap in light, dark, 420/280-pixel widths, larger fonts and native high-contrast media",
   );
   await evaluate(
-    `Services.prefs.clearUserPref('ui.useAccessibilityTheme');await host.rpc('config/set',{uiLanguage:'en-US',uiTheme:'light'});win.close();return true;`,
+    `Services.prefs.clearUserPref('ui.useAccessibilityTheme');await host.rpc('config/set',{uiLanguage:'en-US',uiTheme:'light'});shell.close();return true;`,
   );
   await evaluate(
     `const main=Zotero.getMainWindow();main.document.getElementById('confucius-toolbar-button').dispatchEvent(new main.Event('command'));return true;`,

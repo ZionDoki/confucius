@@ -5,6 +5,8 @@ import { join, resolve } from "node:path";
 import { IsolatedZotero, until } from "./lib/zotero-live.mjs";
 
 const root = resolve(import.meta.dirname, "..");
+const layout = process.env.CONFUCIUS_SELECTION_LAYOUT ?? "window";
+assert.ok(["sidebar", "window"].includes(layout), "Unknown workspace layout");
 const output = resolve(
   process.env.CONFUCIUS_SELECTION_OUTPUT ?? "output/composer-selection",
 );
@@ -20,12 +22,12 @@ const instance = await IsolatedZotero.create({
 });
 await appendFile(
   join(instance.profile, "user.js"),
-  '\nuser_pref("extensions.zotero.confucius.workspaceLayout", "window");\nuser_pref("extensions.zotero.confucius.pluginRuntimeHost", false);\n',
+  `\nuser_pref("extensions.zotero.confucius.workspaceLayout", "${layout}");\nuser_pref("extensions.zotero.confucius.pluginRuntimeHost", false);\n`,
 );
-const report = { checks: [], snapshots: [] };
+const report = { layout, checks: [], snapshots: [] };
 const evaluate = (code) =>
   instance.rdp.evaluate(
-    `if(PathUtils.profileDir!==${JSON.stringify(instance.profile)})throw new Error('Wrong isolated profile');const host=Zotero.Confucius.hooks.host;const win=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml'),d=win?.document,p=d?.getElementById('confucius-prompt');${code}`,
+    `if(PathUtils.profileDir!==${JSON.stringify(instance.profile)})throw new Error('Wrong isolated profile');const host=Zotero.Confucius.hooks.host;const shell=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml');const win=${layout === "sidebar" ? "(Zotero.getMainWindow().document.getElementById('confucius-sidebar-frame')?.contentWindow ?? Zotero.getMainWindow())" : "(shell?.document.getElementById('confucius-window-frame')?.contentWindow ?? shell)"},d=win?.document,p=d?.getElementById('confucius-prompt');${code}`,
     30000,
   );
 const wait = (code) => until(() => evaluate(code), 30000, 100);
@@ -79,6 +81,23 @@ try {
     text.slice(0, 22) + "插入" + text.slice(22),
   );
   check("Typing after idle polling inserts at the retained caret");
+
+  const beforeRender = await snapshot();
+  await evaluate(`
+    const label=d.createElementNS('http://www.w3.org/1999/xhtml','span');
+    label.textContent='Original activity';d.getElementById('confucius-root').appendChild(label);
+    label.textContent='Updated activity';label.remove();return true;
+  `);
+  assert.deepEqual(await snapshot(), beforeRender);
+  check("Unrelated workspace text replacement preserves the editor selection");
+  await evaluate(`
+    const main=Zotero.getMainWindow().document;
+    const label=main.createElementNS('http://www.w3.org/1999/xhtml','span');
+    label.textContent='Original Zotero status';main.documentElement.appendChild(label);
+    label.textContent='Updated Zotero status';label.remove();return true;
+  `);
+  assert.deepEqual(await snapshot(), beforeRender);
+  check("Zotero chrome mutations cannot reset the composer selection");
 
   await evaluate(
     `p.setSelectionRange(11,25);const s=d.getSelection(),r=s.getRangeAt(0);s.setBaseAndExtent(r.endContainer,r.endOffset,r.startContainer,r.startOffset);return true;`,

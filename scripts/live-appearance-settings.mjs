@@ -30,7 +30,7 @@ const check = (label) => {
 };
 const evaluate = (code) =>
   instance.rdp.evaluate(
-    `const host=Zotero.Confucius.hooks.host;const win=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml');const d=win?.document;const root=d?.querySelector('.confucius-workspace-root');${code}`,
+    `const host=Zotero.Confucius.hooks.host;const shell=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml');const win=shell?.document.getElementById('confucius-window-frame')?.contentWindow??shell;const d=win?.document;const root=d?.querySelector('.confucius-workspace-root');${code}`,
     30000,
   );
 const wait = (code) => until(() => evaluate(code), 20000, 100);
@@ -412,7 +412,7 @@ try {
     `d.querySelector('#confucius-cfg-annotation-mode [data-value=custom]').click();return true;`,
   );
   await wait(`return win.getComputedStyle(root).fontSize==='28px';`);
-  await evaluate(`win.resizeTo(420,760);return true;`);
+  await evaluate(`shell.resizeTo(420,760);return true;`);
   await wait(`return win.innerWidth<=420;`);
   assert.equal(
     (await geometry()).noOverflow,
@@ -422,7 +422,7 @@ try {
   assert.equal((await geometry()).columns, 1);
   await capture("appearance-large-narrow");
   await instance.rpc("config/set", { uiFontSize: 17.5, uiLanguage: "zh-CN" });
-  await evaluate(`win.resizeTo(1000,820);return true;`);
+  await evaluate(`shell.resizeTo(1000,820);return true;`);
   await evaluate(
     `Services.prefs.setIntPref('ui.useAccessibilityTheme',1);return true;`,
   );
@@ -929,7 +929,7 @@ try {
     await wait(
       `return win.getComputedStyle(root).fontSize===${JSON.stringify(scenario.size + "px")};`,
     );
-    await evaluate(`win.resizeTo(${scenario.width},820);return true;`);
+    await evaluate(`shell.resizeTo(${scenario.width},820);return true;`);
     await appearance();
     await evaluate(
       `d.getElementById('confucius-cfg-font').closest('details').open=true;return true;`,
@@ -1048,7 +1048,7 @@ try {
     "Light/dark warm, neutral and custom palettes render consistent Appearance and expanded Runtime editors at 12–28px, in English/Chinese and regular/compact/very narrow windows",
   );
   await evaluate(
-    `d.getElementById('confucius-cfg-cancel')?.click();win.resizeTo(1000,820);return true;`,
+    `d.getElementById('confucius-cfg-cancel')?.click();shell.resizeTo(1000,820);return true;`,
   );
   await instance.rpc("config/set", {
     uiFont: "custom",

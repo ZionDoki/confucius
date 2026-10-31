@@ -43,7 +43,7 @@ await appendFile(
 const checks = [];
 const evaluate = (code) =>
   instance.rdp.evaluate(
-    `const host=Zotero.Confucius.hooks.host,qa=Zotero.__literatureQA;const win=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml');const d=win?.document;${code}`,
+    `const host=Zotero.Confucius.hooks.host,qa=Zotero.__literatureQA;const shell=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml');const win=shell?.document.getElementById('confucius-window-frame')?.contentWindow??shell;const d=win?.document;${code}`,
     30000,
   );
 const wait = (code) => until(() => evaluate(code), 30000, 150);
@@ -788,7 +788,7 @@ try {
   );
   await capture("literature-continue-partial");
   for (const width of [420, 280]) {
-    await evaluate(`win.resizeTo(${width},720);return true;`);
+    await evaluate(`shell.resizeTo(${width},720);return true;`);
     await wait(`return win.innerWidth<=${width};`);
     // Window resizing and container styles settle after the native size changes.
     await evaluate(
@@ -804,7 +804,7 @@ try {
     );
     checks.push({ continueGeometry: geometry });
   }
-  await evaluate(`win.resizeTo(1120,820);return true;`);
+  await evaluate(`shell.resizeTo(1120,820);return true;`);
   // Continue remains enabled even when a row's abstract lookup is in flight.
   await evaluate(`const p=await host.literature.load(qa.partialTask);delete p.works[1].abstract;const item=Zotero.Items.getByLibraryAndKey(p.works[1].acquisition.item.libraryID,p.works[1].acquisition.item.key);item.setField('abstractNote','');await item.saveTx();await host.literature.save(p);
     host.openAlex.transport=async(url,...args)=>url.includes('/works/W900001')?new Promise(resolve=>{qa.finishAbstract=resolve;}):qa.baseTransport(url,...args);return true;`);
@@ -873,14 +873,14 @@ try {
     `return d.getElementById('confucius-literature-capsule').textContent.includes('2 / 100');`,
   );
   await evaluate(
-    `await host.rpc('config/set',{uiTheme:'dark',uiLanguage:'en-US'});win.close();return true;`,
+    `await host.rpc('config/set',{uiTheme:'dark',uiLanguage:'en-US'});shell.close();return true;`,
   );
   await evaluate(
     `const main=Zotero.getMainWindow();main.document.getElementById('confucius-toolbar-button').dispatchEvent(new main.Event('command'));return true;`,
   );
   await wait(`return !!d?.querySelector('.confucius-literature-review');`);
   await evaluate(
-    `win.resizeTo(420,720);const timeline=d.querySelector('.confucius-timeline-pane');timeline.scrollTop=0;timeline.dispatchEvent(new win.Event('scroll'));return true;`,
+    `shell.resizeTo(420,720);const timeline=d.querySelector('.confucius-timeline-pane');timeline.scrollTop=0;timeline.dispatchEvent(new win.Event('scroll'));return true;`,
   );
   await new Promise((resolve) => setTimeout(resolve, 1000));
   await wait(
@@ -925,7 +925,7 @@ try {
     JSON.stringify(narrowDock),
   );
   checks.push({ narrowDock });
-  await evaluate(`win.resizeTo(280,720);return true;`);
+  await evaluate(`shell.resizeTo(280,720);return true;`);
   await wait(`return d.documentElement.clientWidth<=300;`);
   const smallestDock = await dockGeometry();
   assert.ok(

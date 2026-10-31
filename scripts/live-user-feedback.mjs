@@ -46,7 +46,7 @@ function check(name, value) {
 const evaluate = (s) => instance.rdp.evaluate(s, 60000);
 const ui = (code) =>
   evaluate(`
-  const win=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml'),d=win?.document;
+  const shell=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml');const win=shell?.document.getElementById('confucius-window-frame')?.contentWindow??shell,d=win?.document;
   ${code}
 `);
 const wait = (code) => until(() => ui(code), 30000);
@@ -195,7 +195,7 @@ try {
     [560, "dark"],
   ]) {
     await ui(
-      `win.resizeTo(${width},760);d.documentElement.setAttribute('data-confucius-theme',${JSON.stringify(theme)});return true;`,
+      `shell.resizeTo(${width},760);d.documentElement.setAttribute('data-confucius-theme',${JSON.stringify(theme)});return true;`,
     );
     await menu("annotation-pass", "mouse");
     await input(" \n/annotation-pass");

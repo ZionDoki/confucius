@@ -34,7 +34,7 @@ const check = (name, value = true) => {
 const evaluate = (source) => instance.rdp.evaluate(source, 60000);
 const ui = (source) =>
   evaluate(
-    `const win=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml'),d=win?.document;${source}`,
+    `const shell=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml');const win=shell?.document.getElementById('confucius-window-frame')?.contentWindow??shell,d=win?.document;${source}`,
   );
 const capture = async (name) => {
   const png = await ui(
@@ -127,7 +127,7 @@ try {
     ),
   );
   await ui(
-    `win.resizeTo(1100,900);const card=d.querySelector('.confucius-organizer-review-card');card.scrollIntoView();const row=card.querySelector('[data-key="${fixture.keys[0]}"]');[...row.querySelectorAll('button')].find(b=>b.textContent==='✗ 拒绝').click();globalThis.organizerCardQA=card;return true;`,
+    `shell.resizeTo(1100,900);const card=d.querySelector('.confucius-organizer-review-card');card.scrollIntoView();const row=card.querySelector('[data-key="${fixture.keys[0]}"]');[...row.querySelectorAll('button')].find(b=>b.textContent==='✗ 拒绝').click();globalThis.organizerCardQA=card;return true;`,
   );
   // Polling, unrelated activity and layout changes must not recreate decisions.
   await evaluate(
@@ -167,7 +167,7 @@ try {
     [300, "dark", 24],
   ]) {
     await instance.rpc("config/set", { uiTheme: theme, uiFontSize: font });
-    await ui(`win.resizeTo(${width},900);return true;`);
+    await ui(`shell.resizeTo(${width},900);return true;`);
     const value = await until(() =>
       ui(
         `const c=d.querySelector('.confucius-organizer-review-card');if(!c||win.innerWidth!==${width}||d.documentElement.getAttribute('data-confucius-theme')!==${JSON.stringify(theme)})return false;const buttons=[...c.querySelectorAll('button')].filter(b=>b.getClientRects().length);return {width:win.innerWidth,theme:d.documentElement.getAttribute('data-confucius-theme'),overflow:Math.max(c.scrollWidth-c.clientWidth,...[...c.querySelectorAll('[data-heading-scroll]')].map(n=>n.scrollWidth-n.clientWidth)),short:buttons.filter(b=>b.getBoundingClientRect().height<33).map(b=>b.textContent)};`,
@@ -183,7 +183,7 @@ try {
   }
   await instance.rpc("config/set", { uiFontSize: 16 });
   await ui(
-    "win.resizeTo(1100,900);Services.prefs.setIntPref('ui.useAccessibilityTheme',1);return true;",
+    "shell.resizeTo(1100,900);Services.prefs.setIntPref('ui.useAccessibilityTheme',1);return true;",
   );
   await until(() =>
     ui("return win.matchMedia('(prefers-contrast: more)').matches;"),
@@ -203,7 +203,7 @@ try {
     "Services.prefs.setIntPref('ui.useAccessibilityTheme',0);return true;",
   );
   await ui(
-    `win.resizeTo(1100,900);const c=d.querySelector('.confucius-organizer-review-card');[...c.querySelectorAll('button')].find(b=>b.textContent.includes('应用')).click();return true;`,
+    `shell.resizeTo(1100,900);const c=d.querySelector('.confucius-organizer-review-card');[...c.querySelectorAll('button')].find(b=>b.textContent.includes('应用')).click();return true;`,
   );
   const applied = await until(() =>
     evaluate("return globalThis.organizerQA.done;"),

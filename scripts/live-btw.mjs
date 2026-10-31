@@ -26,7 +26,7 @@ const evaluate = (code) =>
   instance.rdp.evaluate(
     `
  const host=Zotero.Confucius.hooks.host, qa=Zotero.__btwQA;
- const win=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml');
+ const shell=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml');const win=shell?.document.getElementById('confucius-window-frame')?.contentWindow??shell;
  const d=win?.document;
  const ad=d?.querySelector('.confucius-artifact-host')?.contentDocument, aw=ad?.defaultView;
  ${code}`,

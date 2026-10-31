@@ -67,7 +67,7 @@ const evaluate = (code) =>
   instance.rdp.evaluate(
     `
   const host=Zotero.Confucius.hooks.host,qa=Zotero.__attachmentQA;
-  const win=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml'),d=win?.document;
+  const shell=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml');const win=shell?.document.getElementById('confucius-window-frame')?.contentWindow??shell,d=win?.document;
   ${code}`,
     30000,
   );
@@ -351,7 +351,7 @@ try {
         report.styleSamples.push({ theme, font, size, ...sample });
       }
     }
-    await evaluate("win.resizeTo(380,780);return true;");
+    await evaluate("shell.resizeTo(380,780);return true;");
     await wait("return win.innerWidth<=400;");
     const layout = await evaluate(
       `const pane=d.querySelector('.confucius-timeline-pane'),chips=[...pane.querySelectorAll('.confucius-user-attachments .confucius-attachment-chip')];return {noOverflow:pane.scrollWidth<=pane.clientWidth+1,chips:chips.every(chip=>chip.scrollWidth<=chip.clientWidth+1),wrap:chips.every(chip=>win.getComputedStyle(chip.querySelector('.confucius-attachment-name')).whiteSpace==='normal'),safeText:!pane.querySelector('.confucius-user-attachments script')};`,
@@ -363,7 +363,7 @@ try {
       safeText: true,
     });
     await capture("attachments-" + theme + "-28px-narrow");
-    await evaluate("win.resizeTo(1020,800);return true;");
+    await evaluate("shell.resizeTo(1020,800);return true;");
   }
   check(
     "SVG icon geometry is stable across four font presets, both size limits and light/dark themes",

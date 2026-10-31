@@ -78,7 +78,7 @@ const evaluate = (code) =>
   instance.rdp.evaluate(
     `
   const host=Zotero.Confucius.hooks.host;
-  const win=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml');
+  const shell=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml');const win=shell?.document.getElementById('confucius-window-frame')?.contentWindow??shell;
   const d=win?.document;
   const ad=d?.querySelector('iframe.confucius-artifact-host')?.contentDocument;
   const aw=ad?.defaultView;
@@ -401,7 +401,7 @@ try {
 
   await instance.rpc("config/set", { uiTheme: "dark", uiLanguage: "en-US" });
   await evaluate(
-    `d.getElementById('confucius-knowledge-overlay')?.dispatchEvent(new win.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));win.resizeTo(520,760);return true;`,
+    `d.getElementById('confucius-knowledge-overlay')?.dispatchEvent(new win.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));shell.resizeTo(520,760);return true;`,
   );
   await wait(`return win.innerWidth<620;`);
   if (

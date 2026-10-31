@@ -52,7 +52,7 @@ const check = (label) => {
 };
 const evaluate = (code) =>
   instance.rdp.evaluate(
-    `const host=Zotero.Confucius.hooks.host;const win=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml');const d=win?.document;const q=d?.getElementById('confucius-cfg-catalog-query');const list=d?.getElementById('confucius-cfg-catalog-result');${code}`,
+    `const host=Zotero.Confucius.hooks.host;const shell=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml');const win=shell?.document.getElementById('confucius-window-frame')?.contentWindow??shell;const d=win?.document;const q=d?.getElementById('confucius-cfg-catalog-query');const list=d?.getElementById('confucius-cfg-catalog-result');${code}`,
     30000,
   );
 const wait = (code) => until(() => evaluate(code), 20000, 100);
@@ -258,7 +258,7 @@ try {
   await instance.launch();
   assert.equal((await instance.rpc("config/get")).reasoningEffort, "ultra");
   await open();
-  await evaluate(`win.resizeTo(540,800);return true;`);
+  await evaluate(`shell.resizeTo(540,800);return true;`);
   await wait(`return win.innerWidth<620;`);
   await filter("deepseek");
   const narrow = await geometry();

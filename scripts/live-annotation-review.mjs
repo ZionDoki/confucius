@@ -63,7 +63,7 @@ try {
   );
   const ui = (code) =>
     evaluate(
-      `const win=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml'),d=win?.document;${code}`,
+      `const shell=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml');const win=shell?.document.getElementById('confucius-window-frame')?.contentWindow??shell,d=win?.document;${code}`,
     );
   await evaluate(
     `Zotero.Prefs.set('extensions.zotero.confucius.workspaceLayout','window',true);const main=Zotero.getMainWindow();main.document.getElementById('confucius-toolbar-button').dispatchEvent(new main.Event('command'));return true;`,
@@ -383,7 +383,7 @@ try {
     ),
   );
   await ui(
-    `win.resizeTo(560,700);d.documentElement.setAttribute('data-confucius-theme','dark');await new Promise(resolve=>win.setTimeout(resolve,200));return true;`,
+    `shell.resizeTo(560,700);d.documentElement.setAttribute('data-confucius-theme','dark');await new Promise(resolve=>win.setTimeout(resolve,200));return true;`,
   );
   const compact = await ui(
     `const r=d.querySelector('.confucius-annotation-review'),p=r.querySelector('.ar-popup'),box=p.getBoundingClientRect(),draft=d.querySelector('#confucius-prompt').getBoundingClientRect();return {width:box.width,inside:box.top>=0&&box.left>=0&&box.right<=win.innerWidth&&box.bottom<=draft.top,overflow:p.scrollWidth>p.clientWidth,background:win.getComputedStyle(p).backgroundColor};`,

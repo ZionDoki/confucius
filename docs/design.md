@@ -95,6 +95,10 @@ Width means the available workspace or reader-window width.
 
 ## Inline sources and PDF binding
 
+- Verify native typing, selection, arrows, Backspace/Delete and undo in both the
+  sidebar and detached window. Background activity, usage and Zotero updates
+  must preserve the editor's caret, focus and composition; scripted ranges and
+  synthetic keyboard events alone do not establish this behavior.
 - The current PDF is a prefilled, atomic text reference at the beginning of the
   composer. Materials inserted with `@`, including conversation references, use
   the same inline text style at the insertion point. Do not add source cards,

@@ -77,6 +77,7 @@ function fixture() {
     },
     "./workspaceToggle": { isWorkspaceSidebarVisible: () => false },
     "./workspaceReload": {},
+    "./workspaceSurface": { ensurePaletteStyles() {} },
   };
   const context = {
     exports: {},
@@ -120,7 +121,10 @@ test("closing a different library or a nested document preserves the workspace",
   f.api.closeWorkspaceForMainWindow(f.second);
   f.second.close();
   f.first.emit("unload", { documentURI: "about:blank" });
+  // The embedded editor uses the same URL as the owning chrome window.
+  win.emit("unload", { documentURI: workspaceUrl });
   assert.equal(win.closed, false);
+  assert.equal(f.addon.data.workspaceWindow, win);
   assert.equal(f.addon.data.workspaceOwnerWindow, f.first);
 });
 

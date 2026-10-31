@@ -26,7 +26,7 @@ await appendFile(
 const checks = [];
 const evaluate = (code) =>
   instance.rdp.evaluate(
-    `const host=Zotero.Confucius.hooks.host,qa=Zotero.__subagentQA;const win=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml');const d=win?.document;${code}`,
+    `const host=Zotero.Confucius.hooks.host,qa=Zotero.__subagentQA;const shell=[...Services.wm.getEnumerator(null)].find(w=>w.location.href==='chrome://confucius/content/workspace.xhtml');const win=shell?.document.getElementById('confucius-window-frame')?.contentWindow??shell;const d=win?.document;${code}`,
     30000,
   );
 const wait = (code) => until(() => evaluate(code), 20000, 150);
@@ -59,7 +59,7 @@ try {
     const main=Zotero.getMainWindow();main.document.getElementById('confucius-toolbar-button').dispatchEvent(new main.Event('command'));return true;`);
   await wait(`return !!d?.getElementById('confucius-prompt');`);
   await evaluate(
-    `win.resizeTo(1120,850);win.addEventListener('error',e=>qa.errors.push(e.message));win.addEventListener('unhandledrejection',e=>qa.errors.push(String(e.reason)));const p=d.getElementById('confucius-prompt');p.value='分配四个研究子任务，等待它们完成并汇总。';p.dispatchEvent(new win.Event('input',{bubbles:true}));d.getElementById('confucius-send').click();return true;`,
+    `shell.resizeTo(1120,850);win.addEventListener('error',e=>qa.errors.push(e.message));win.addEventListener('unhandledrejection',e=>qa.errors.push(String(e.reason)));const p=d.getElementById('confucius-prompt');p.value='分配四个研究子任务，等待它们完成并汇总。';p.dispatchEvent(new win.Event('input',{bubbles:true}));d.getElementById('confucius-send').click();return true;`,
   );
   await wait(
     `return qa.pending.length===3 && d.querySelectorAll('.confucius-subagent-entry').length===4 && host.sessions.get(qa.taskId).events.some(e=>e.type==='tool_requested'&&e.payload.toolName==='subagent_wait');`,
@@ -533,7 +533,7 @@ try {
     [420, "dark", 460],
   ]) {
     await evaluate(
-      `await host.rpc('config/set',{uiTheme:${JSON.stringify(theme)}});win.resizeTo(${width},${height});return true;`,
+      `await host.rpc('config/set',{uiTheme:${JSON.stringify(theme)}});shell.resizeTo(${width},${height});return true;`,
     );
     await wait(
       `return d.documentElement.clientWidth<=${width} && win.outerHeight===${height};`,
@@ -579,14 +579,14 @@ try {
   );
   checks.push({ outsideClickKeepsFocus: true });
   await evaluate(
-    `await host.rpc('config/set',{uiLanguage:'en-US'});win.close();return true;`,
+    `await host.rpc('config/set',{uiLanguage:'en-US'});shell.close();return true;`,
   );
   await evaluate(
     `const main=Zotero.getMainWindow();main.document.getElementById('confucius-toolbar-button').dispatchEvent(new main.Event('command'));return true;`,
   );
   await wait(`return !!d?.querySelector('.confucius-subagent-entry');`);
   await evaluate(
-    `win.resizeTo(420,850);d.querySelector('.confucius-subagent-entry').click();return true;`,
+    `shell.resizeTo(420,850);d.querySelector('.confucius-subagent-entry').click();return true;`,
   );
   await wait(
     `return d.querySelector('.confucius-subagent-filter input')?.placeholder==='Filter activity, tools or content';`,

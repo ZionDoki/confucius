@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Fixed
+
+- The sidebar no longer shares its native editing selection with Zotero's XUL
+  library document. Background status, usage and activity updates no longer
+  move the caret to the beginning or leave Backspace deleting nothing.
+- Both workspace layouts isolate native editing commands so arrow keys retain
+  composer focus. Inline PDF and @ references remain removable with Backspace,
+  and undo restores their source bindings. Hot updates preserve the current
+  task, unsaved draft, layout and open settings page without a data migration.
+
 ## 0.6.4-beta.4 - 2026-10-31
 
 ### Fixed
