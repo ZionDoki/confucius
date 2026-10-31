@@ -2,15 +2,78 @@
 
 ## Unreleased
 
+## 0.6.4 - 2026-10-31
+
+### Added
+
+- Native endpoints can select OpenAI Chat Completions, OpenAI Responses,
+  Anthropic Messages, Gemini Generate Content, or Ollama independently of the
+  model name. Protocol-specific streaming, authentication, model catalogs,
+  images, tool calls and reasoning replay are supported. Importing models.dev
+  settings preserves the chosen protocol and gateway URL.
+- Chat text is selectable and copyable. User messages offer Copy and Edit;
+  Confirm and resend truncates that message and the later conversation, then
+  executes the revised prompt with the retained history and saved attachments.
+  Editing rejects stale or running conversations and prevents duplicate sends.
+
+### Changed
+
+- New conversations bind the PDF currently being read. Its title appears as a
+  quiet inline reference at the start of the composer. Materials and conversations
+  added with `@` use the same style. Click to switch, Backspace/Delete to remove,
+  and undo/redo to restore the text and source identities.
+- A completed reading report ends the requested work without an automatic
+  second model revision. Review arrivals accumulate during generation and show
+  together afterward; a decision needed to continue still opens immediately.
+  Annotation suggestions require review before writing to the PDF.
+
 ### Fixed
 
-- The sidebar no longer shares its native editing selection with Zotero's XUL
-  library document. Background status, usage and activity updates no longer
-  move the caret to the beginning or leave Backspace deleting nothing.
-- Both workspace layouts isolate native editing commands so arrow keys retain
-  composer focus. Inline PDF and @ references remain removable with Backspace,
-  and undo restores their source bindings. Hot updates preserve the current
-  task, unsaved draft, layout and open settings page without a data migration.
+- Background updates preserve the composer's caret, selection and scroll.
+  Both layouts isolate native editing from Zotero chrome, fixing caret jumps,
+  ineffective Backspace and arrow keys taking focus away from the input.
+- Explicit PDF unbinding persists across polling and restart. Sending refreshes
+  the bound PDF without following an unrelated reader tab; drafts retain inline
+  references across task switches. Source changes wait during active responses.
+- Zotero preferences can open the workspace Update page in either layout, and
+  PDF context-menu actions focus the embedded composer. Narrow literature review
+  panels keep Continue actions visible while their content scrolls.
+- Responses-only gateways no longer require Chat Completions routing. OpenAI
+  reasoning models use the completion-token limit field; structured quota errors
+  fail without transient retries and Retry-After is honored.
+
+### Upgrade notes
+
+- This is the stable release after 0.6.3 and the 0.6.4 Betas. It is eligible with
+  Include prereleases either off or on. Explicit channel and automatic-check
+  choices are preserved. Follow Zotero's restart prompt if installation is staged;
+  completed hot updates do not require restarting.
+- No manual library migration is required. Tasks, drafts, notes, annotations,
+  research state and write receipts are retained. Existing generic gateway URLs
+  retain Chat Completions under Auto; select Responses explicitly when required.
+- Confirmed message edits permanently discard the later chat history; already
+  saved library changes are not rolled back. Removing an inline reference does
+  not delete the underlying material. Undo history lasts for the composer session.
+
+### Validation and known limits
+
+- All 1,689 automated tests, type checking, lint, production build, workspace
+  versions, skill synchronization and pinned catalog checks passed on Node.js 22.
+- Isolated Zotero 10.0.7 on macOS passed OS-level typing, Backspace, Delete,
+  arrows, selection, paste, reference deletion and undo in both layouts. Native
+  suites covered 16 editing groups and 17 inline-source groups per layout,
+  7 chat-edit groups, 8 protocol groups, 27 settings groups, 37 literature checks,
+  142 annotation-review checks, attachments and responsive typography.
+- Ordinary-package upgrade checks passed from unchanged public 0.6.3 and
+  0.6.4-beta.4 packages. Eight hot-update checks covered immediate unsaved drafts,
+  task/layout/settings retention, repeated updates and a closed workspace.
+  See the [release acceptance record](https://github.com/ZionDoki/confucius/blob/v0.6.4/.github/maintainers/acceptance/release-0.6.4.md).
+- Model requests used deterministic local fixtures; live provider accounts were
+  not retested. Native tests used isolated synthetic libraries and automated input.
+  Human-operated IMEs, screen readers, Windows, Linux and other Zotero versions
+  were not retested. Cloud-specific OAuth/signing and provider-hosted tools remain
+  outside the supported native protocol scope. Public discovery, downloads and
+  old-client online upgrades are verified separately after publication.
 
 ## 0.6.4-beta.4 - 2026-10-31
 
