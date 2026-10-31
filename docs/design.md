@@ -241,6 +241,8 @@ Cap width at 420px. Narrow windows retain at least 8px on both sides. Position w
 - Keep concise coverage labels, fixed header/footer, and list scrolling. Allow labels and right-aligned button groups to wrap in narrow windows.
 - Reserve at least 48px for a scrollable list. Narrow candidate footers prioritize
   action buttons; fulltext/abstract coverage stays reachable in the footer.
+  Keep the candidate action footer visible while a short overlay scrolls;
+  compact footers show actions before explanatory text.
   Below 340px, detailed Continue help remains in its tooltip and accessible
   description. If controls exceed a short overlay, scroll inside the overlay
   instead of clipping them.

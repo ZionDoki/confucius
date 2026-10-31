@@ -94,9 +94,32 @@ const settingsStyles = (run, selectors) =>
     `const properties=['font-family','font-size','font-weight','line-height','min-height','margin','padding','border-radius','background-color','color'];return Object.fromEntries(${JSON.stringify(selectors)}.map(selector=>{const n=d.querySelector(selector);if(!n)throw new Error('Missing style sample '+selector);const style=win.getComputedStyle(n);return [selector,Object.fromEntries(properties.filter(key=>key!=='padding'||!selector.startsWith('.confucius-settings-tabs')).map(key=>[key,style.getPropertyValue(key)]))];}));`,
   );
 // Top-tab padding follows workspace density; content controls share one geometry.
-const compareSettingsStyles = async (prefRun, selectors) => {
+const compareSettingsStyles = async (
+  prefRun,
+  selectors,
+  systemColors = false,
+) => {
   const workspace = await settingsStyles(evaluate, selectors);
   const preferences = await settingsStyles(prefRun, selectors);
+  if (systemColors) {
+    // Gecko resolves native system colors differently in chrome and content
+    // documents. Compare shared tokens and geometry; check contrast separately.
+    for (const controls of [workspace, preferences])
+      for (const style of Object.values(controls)) {
+        delete style["background-color"];
+        delete style.color;
+      }
+    const tokens = `const s=win.getComputedStyle(d.querySelector('.confucius-appearance-settings'));return ['--confucius-surface','--confucius-ink','--confucius-primary','--confucius-primary-ink','--confucius-focus'].map(key=>s.getPropertyValue(key).trim());`;
+    const expected = [
+      "ButtonFace",
+      "CanvasText",
+      "Highlight",
+      "HighlightText",
+      "Highlight",
+    ];
+    assert.deepEqual(await evaluate(tokens), expected);
+    assert.deepEqual(await prefRun(tokens), expected);
+  }
   assert.deepEqual(preferences, workspace, "Shared settings styles");
 };
 const assertButtonInteraction = async (run, selector) => {
@@ -721,6 +744,56 @@ try {
   check(
     "Repeated Update-page opening shares one pending request and cannot toggle the settings dialog closed",
   );
+  await until(
+    () =>
+      prefEvaluate(
+        `return !pd.getElementById('confucius-pref-updates-open').disabled;`,
+      ),
+    10000,
+    100,
+  );
+  await evaluate(
+    `d.getElementById('confucius-cfg-cancel').click();d.getElementById('confucius-layout').click();return true;`,
+  );
+  const sidebarEvaluate = (code) =>
+    instance.rdp.evaluate(
+      `const d=Zotero.getMainWindow().document.getElementById('confucius-sidebar-frame')?.contentDocument;${code}`,
+    );
+  await until(
+    () => sidebarEvaluate(`return !!d?.getElementById('confucius-settings');`),
+    20000,
+    100,
+  );
+  await prefEvaluate(
+    `pd.getElementById('confucius-pref-updates-open').click();return true;`,
+  );
+  await until(
+    () =>
+      sidebarEvaluate(
+        `return d?.getElementById('confucius-cfg-tab-update')?.getAttribute('aria-selected')==='true';`,
+      ),
+    20000,
+    100,
+  );
+  check("The preferences Update shortcut also reaches the embedded sidebar");
+  await until(
+    () =>
+      prefEvaluate(
+        `return !pd.getElementById('confucius-pref-updates-open').disabled;`,
+      ),
+    10000,
+    100,
+  );
+  await sidebarEvaluate(
+    `d.getElementById('confucius-cfg-cancel').click();d.getElementById('confucius-layout').click();return true;`,
+  );
+  await wait(`return !!d?.getElementById('confucius-settings');`);
+  await prefEvaluate(
+    `pd.getElementById('confucius-pref-updates-open').click();return true;`,
+  );
+  await wait(
+    `return d.getElementById('confucius-cfg-tab-update')?.getAttribute('aria-selected')==='true';`,
+  );
   await prefEvaluate(`pw.close();return true;`);
   await instance.rpc("config/set", { uiFontSize: 17.5, uiLanguage: "zh-CN" });
   check(
@@ -1007,7 +1080,11 @@ try {
         20000,
         100,
       );
-      await compareSettingsStyles(prefStyleEvaluate, appearanceStyleSelectors);
+      await compareSettingsStyles(
+        prefStyleEvaluate,
+        appearanceStyleSelectors,
+        true,
+      );
       report.contrastPrimary = {
         workspace: await assertContrastPrimary(evaluate, "#confucius-cfg-save"),
         preferences: await assertContrastPrimary(
@@ -1080,6 +1157,9 @@ try {
   );
 } catch (error) {
   report.error = String(error);
+  report.failureState = await evaluate(
+    `return {layout:Zotero.Prefs.get('extensions.zotero.confucius.workspaceLayout',true),windows:[...Services.wm.getEnumerator(null)].map(w=>({url:w.location.href,closed:w.closed,frame:!!w.document.getElementById('confucius-window-frame'),update:w.document.getElementById('confucius-window-frame')?.contentDocument?.getElementById('confucius-cfg-tab-update')?.getAttribute('aria-selected'),openDisabled:w.document.getElementById('confucius-pref-updates-open')?.disabled})),settings:!!d?.getElementById('confucius-settings-overlay'),rpcHeld:Zotero.__settingsRace?.pending.length};`,
+  ).catch(() => null);
   throw error;
 } finally {
   await writeFile(join(output, "result.json"), JSON.stringify(report, null, 2));

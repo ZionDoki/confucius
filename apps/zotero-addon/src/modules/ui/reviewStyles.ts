@@ -110,7 +110,7 @@ export const REVIEW_CSS = `
 .confucius-review .ar-domain-footer { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; width:100%; }
 .confucius-review .ar-domain-footer > :first-child { flex:1 1 180px; min-width:0; }
 .confucius-review .ar-domain-footer > :last-child { margin-left:auto; justify-content:flex-end; }
-.confucius-review .ar-popup-footer:has(.ar-domain-footer) { flex-wrap:wrap; flex-shrink:1; min-height:0; max-height:55%; overflow:auto; overscroll-behavior:contain; }
+.confucius-review .ar-popup-footer:has(.ar-domain-footer) { position:sticky; bottom:0; z-index:2; flex-wrap:wrap; flex-shrink:0; align-items:flex-start; min-height:0; max-height:55%; overflow:auto; overscroll-behavior:contain; background:var(--confucius-elevated); }
 .confucius-review .ar-entry-extra { overflow-wrap:anywhere; }
 .confucius-review .ar-entry-extra details { margin:8px 0; }
 .confucius-review .ar-entry-extra summary { cursor:pointer; color:var(--confucius-secondary); }
@@ -131,13 +131,13 @@ export const REVIEW_CSS = `
  .confucius-review .ar-list { padding:0 12px; }
  .confucius-review .ar-popup-footer { flex-wrap:wrap; min-height:76px; padding:10px 12px; gap:4px; justify-content:flex-end; }
  .confucius-review .ar-popup-footer > .ar-muted { flex-basis:100%; }
+ .confucius-review .ar-domain-footer { flex-direction:column-reverse; flex-wrap:nowrap; align-items:stretch; }
+ .confucius-review .ar-domain-footer > :first-child { flex:0 0 auto; }
  .confucius-review .ar-meta { gap:4px; flex-wrap:wrap; }
 }
 @container (max-width:339px) {
  .confucius-review .ar-domain-help { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
  .confucius-review .ar-popup-footer:has(.ar-domain-footer) { min-height:104px; }
- .confucius-review .ar-domain-footer { flex-direction:column-reverse; flex-wrap:nowrap; align-items:stretch; }
- .confucius-review .ar-domain-footer > :first-child { flex:0 0 auto; }
  .confucius-review .ar-card-footer { flex-wrap:wrap; }
  .confucius-review .ar-range { flex:1; }
  .confucius-review .ar-card-footer .ar-actions { width:100%; justify-content:flex-end; }

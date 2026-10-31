@@ -1,6 +1,6 @@
 import { config } from "../../../package.json";
 import { getString } from "../../utils/locale";
-import { openWorkspace } from "./workspaceWindow";
+import { openWorkspace, workspaceDocument } from "./workspaceWindow";
 import type {
   LaunchIntent,
   LockedContextSnapshot,
@@ -71,7 +71,8 @@ function focusWorkspacePrompt(
   }
   const deadline = Date.now() + 3000;
   const tryFocus = () => {
-    const prompt = win.document.getElementById(PROMPT_ID) as
+    if (win.closed) return;
+    const prompt = workspaceDocument(win.document).getElementById(PROMPT_ID) as
       (HTMLElement & { focus: () => void }) | null;
     if (prompt) {
       prompt.focus();

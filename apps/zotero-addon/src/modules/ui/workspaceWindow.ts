@@ -144,11 +144,16 @@ function captureOpenWorkspace(): WorkspaceReload | null {
   return null;
 }
 
-function workspaceRoot(doc: Document): HTMLElement | null {
+/** Resolve controls inside either layout's isolated editing document. */
+export function workspaceDocument(doc: Document): Document {
   const frame = (doc.getElementById(FRAME_ID) ??
     doc.getElementById(WINDOW_FRAME_ID)) as WorkspaceFrame | null;
+  return frame?.contentDocument ?? doc;
+}
+
+function workspaceRoot(doc: Document): HTMLElement | null {
   // Retain the fallback for a workspace left by an older installed version.
-  return (frame?.contentDocument?.getElementById(ROOT_ID) ??
+  return (workspaceDocument(doc).getElementById(ROOT_ID) ??
     doc.getElementById(ROOT_ID)) as HTMLElement | null;
 }
 

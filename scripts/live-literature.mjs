@@ -481,22 +481,23 @@ try {
   );
   checks.push({ cancelledFileDrags: cancellations });
   await evaluate(
-    `qa.savedInput=d.getElementById('confucius-prompt').value;d.getElementById('confucius-prompt').value='Preserved drag draft';qa.dragFile(d.getElementById('confucius-prompt'),'dragenter');qa.dragFile(d.getElementById('confucius-prompt'),'dragover');qa.dragFile(d.getElementById('confucius-prompt'),'drop');return true;`,
+    `const prompt=d.getElementById('confucius-prompt');qa.savedInput=prompt.value;prompt.focus();prompt.setSelectionRange(prompt.value.length,prompt.value.length);d.execCommand('insertText',false,'Preserved drag draft');qa.dragDraft=prompt.value;qa.dragSources=[...prompt.querySelectorAll('[data-composer-source]')].map(n=>n.dataset.composerSource);qa.dragFile(prompt,'dragenter');qa.dragFile(prompt,'dragover');qa.dragFile(prompt,'drop');return true;`,
   );
   await wait(
     `return !!d.querySelector('#confucius-attachment-tray .confucius-attachment-chip[data-status="ready"]');`,
   );
   const composerAttachment = await evaluate(
-    `return {prepares:qa.attachmentPrepareCalls,hintHidden:d.getElementById('confucius-drop-hint').getAttribute('aria-hidden')==='true',draftPreserved:d.getElementById('confucius-prompt').value==='Preserved drag draft',ready:!!d.querySelector('#confucius-attachment-tray .confucius-attachment-chip[data-status="ready"]')};`,
+    `const prompt=d.getElementById('confucius-prompt');return {prepares:qa.attachmentPrepareCalls,hintHidden:d.getElementById('confucius-drop-hint').getAttribute('aria-hidden')==='true',draftPreserved:prompt.value===qa.dragDraft&&prompt.value.endsWith('Preserved drag draft'),sourcesPreserved:JSON.stringify([...prompt.querySelectorAll('[data-composer-source]')].map(n=>n.dataset.composerSource))===JSON.stringify(qa.dragSources),ready:!!d.querySelector('#confucius-attachment-tray .confucius-attachment-chip[data-status="ready"]')};`,
   );
   assert.deepEqual(composerAttachment, {
     prepares: 1,
     hintHidden: true,
     draftPreserved: true,
+    sourcesPreserved: true,
     ready: true,
   });
   await evaluate(
-    `d.querySelector('#confucius-attachment-tray .confucius-attachment-remove').click();d.getElementById('confucius-prompt').value=qa.savedInput;return true;`,
+    `d.querySelector('#confucius-attachment-tray .confucius-attachment-remove').click();const prompt=d.getElementById('confucius-prompt');prompt.value=qa.savedInput;prompt.dispatchEvent(new win.Event('input',{bubbles:true}));return true;`,
   );
   await wait(
     `return !d.querySelector('#confucius-attachment-tray .confucius-attachment-chip');`,

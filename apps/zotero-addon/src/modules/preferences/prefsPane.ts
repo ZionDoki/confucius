@@ -13,7 +13,7 @@ import {
   createWorkspaceButton,
   bindTabNavigation,
 } from "../ui/workspaceControls";
-import { openWorkspace } from "../ui/workspaceWindow";
+import { openWorkspace, workspaceDocument } from "../ui/workspaceWindow";
 import { config } from "../../../package.json";
 import {
   clampMaxIterations,
@@ -301,14 +301,15 @@ export function bindPrefsWindow(win: Window): void {
           finish();
           return;
         }
-        const button = workspace?.document.getElementById(
+        const workspaceDoc = workspaceDocument(workspace.document);
+        const button = workspaceDoc.getElementById(
           "confucius-settings",
         ) as HTMLElement | null;
         if (!button && attempts++ < 50) {
           win.setTimeout(show, 100);
           return;
         }
-        const updateTab = workspace?.document.getElementById(
+        const updateTab = workspaceDoc.getElementById(
           "confucius-cfg-tab-update",
         ) as HTMLElement | null;
         if (!updateTab) {
