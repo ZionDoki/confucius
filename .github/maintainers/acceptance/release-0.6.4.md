@@ -106,3 +106,53 @@ This tagged record captures candidate acceptance. Publication, anonymous release
 discovery, public asset digests and unchanged-old-client online upgrades are
 recorded afterward without moving the release tag or replacing its packages.
 Raw traces, screenshots and synthetic profiles remain in ignored output.
+
+## Public release acceptance — 2026-10-31 UTC
+
+This section was appended after publication; the tag and published artifacts
+were not changed. Tag `v0.6.4` remains at release commit `1bd25f6`.
+[CI run 41181342457](https://github.com/ZionDoki/confucius/actions/runs/41181342457)
+passed all verification jobs on Node.js 22 and 24 and the release job.
+
+[Confucius v0.6.4](https://github.com/ZionDoki/confucius/releases/tag/v0.6.4)
+was published at **07:40:58 UTC**, with `draft: false`, `prerelease: false`,
+and stable **Latest**. The title, tag and body match the CHANGELOG-generated
+notes. Release ID: `429791385`.
+
+The original public XPI is **887,882 bytes**, SHA-256:
+
+`ae8f482148e3b9b5214bdb796ef1f85eb71b6fa5145160d51e8558fc37d5d66b`
+
+The public archive and the locally tested candidate have the same 25 entries,
+with identical uncompressed content in every entry. Only archive metadata
+differs. Both update files contain the actual public XPI's SHA-512 and the
+versioned stable URL. No artifacts were rebuilt or substituted for acceptance.
+
+Both CI and a separate local recheck passed three consecutive anonymous reads
+of the release list used by older clients. The uploaded asset sizes and digests
+matched. Downloads through the asset API and browser URL delivered the same
+verified public XPI.
+
+Ordinary, unchanged public old packages then passed their own online discovery,
+download, verification and installation flows against real GitHub endpoints:
+
+| Starting package | Scenario                                     | Result    |
+| ---------------- | -------------------------------------------- | --------- |
+| 0.6.3            | Stable channel, original updater and restart | 13 checks |
+| 0.6.4-beta.4     | Stable channel, original updater and restart | 13 checks |
+| 0.6.3            | Prereleases enabled, complete research data  | 29 checks |
+| 0.6.4-beta.4     | Prereleases enabled, complete research data  | 35 checks |
+
+Installed bytes matched the public XPI after restart. Chinese drafts, source
+identities, tasks, notes, annotations, research state, budgets, history and
+explicit update preferences survived. Existing writes were not repeated. Both
+channel settings found the stable target; the current version was not offered
+again, and disabling prereleases did not cause a downgrade or reinstall.
+
+Independent automatic-check acceptance also passed **5 checks each** on
+unchanged public 0.6.3 and 0.6.4 installations. With Zotero global addon updates
+disabled and Confucius automatic checks enabled, startup status was idle and
+the normal timer fetched GitHub without a manual check. The old package offered
+0.6.4; the current package reported up to date. Neither automatic check installed
+anything or changed package bytes. All public upgrade and timer tests used
+isolated synthetic libraries, with no live model-provider calls.
