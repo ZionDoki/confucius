@@ -85,6 +85,13 @@ export interface WorkflowState {
 
 /** Schema-v3 task with a durable history and replaceable context windows. */
 export interface ResearchTaskRecord extends SessionRecord {
+  /** Durable cleanup intent: a confirmed edit must not revive discarded model history. */
+  pendingPromptEdit?: { before: number; removedTurnIds: string[] };
+  pendingPromptResend?: {
+    text: string;
+    attachments?: import("./research").TaskAttachment[];
+    attachmentText?: string;
+  };
   /** Real user requests used as language evidence across retries and windows. */
   responseLanguageContext?: { request: string; priorRequests: string[] };
   subagentIds?: string[];

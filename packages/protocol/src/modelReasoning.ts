@@ -1,4 +1,5 @@
 import { isReasoningEffort, type ReasoningEffort } from "./rpc";
+import { resolveModelProtocol, type ModelApiProtocol } from "./modelProtocol";
 
 /** An explicit wire format and option list, scoped to one endpoint/model ID. */
 export interface ModelReasoningOverride {
@@ -59,6 +60,7 @@ export function modelReasoning(
   model: string,
   baseUrl = "",
   override?: ModelReasoningOverride,
+  apiProtocol?: ModelApiProtocol,
 ): ModelReasoning {
   if (isModelReasoningOverride(override))
     return {
@@ -75,7 +77,40 @@ export function modelReasoning(
     transport,
     efforts: ["auto", ...efforts],
   });
-  if (/\/api\/chat\/?$/.test(baseUrl)) {
+  const protocol = resolveModelProtocol(baseUrl, apiProtocol);
+  if (protocol === "anthropic") {
+    if (
+      /^claude-(?:(?:opus|sonnet|haiku|fable|mythos)-5(?:[.-][15])?|opus-4[.-][78])(?:-|$)/.test(
+        id,
+      )
+    )
+      return profile("openai", "low", "medium", "high", "xhigh", "max");
+    if (/^claude-(?:(?:opus|sonnet)-4[.-]6|mythos-preview)(?:-|$)/.test(id))
+      return profile("openai", "low", "medium", "high", "max");
+    if (/^claude-(?:3[.-]7|(?:opus|sonnet)-4)/.test(id))
+      return profile("openai", "off", "on");
+    return { source: "unknown", transport: "none", efforts: ["auto"] };
+  }
+  if (protocol === "gemini") {
+    if (/^gemini-3(?:\.1)?-pro/.test(id))
+      return profile("openai", "low", "high");
+    if (/^gemini-(?:3\.8-flash|4-argon)(?:-|$)/.test(id))
+      return profile("openai", "low", "medium", "high");
+    if (/^gemini-3\.1-flash-lite-image(?:-|$)/.test(id))
+      return profile("openai", "minimal", "high");
+    if (
+      /^gemini-(?:3(?:\.6)?-flash|3\.[15]-flash-lite|robotics-er-2)(?:-|$)/.test(
+        id,
+      )
+    )
+      return profile("openai", "minimal", "low", "medium", "high");
+    if (/^gemini-2\.5-flash/.test(id))
+      return profile("openai", "off", "on", "low", "medium", "high");
+    if (/^gemini-2\.5-pro/.test(id))
+      return profile("openai", "on", "low", "medium", "high");
+    return { source: "unknown", transport: "none", efforts: ["auto"] };
+  }
+  if (protocol === "ollama") {
     if (/^gpt-oss(?:[:\-]|$)/.test(id))
       return profile("ollama", "low", "medium", "high");
     if (/^(qwen3|deepseek-r1|deepseek-v3\.1)(?::|$)/.test(id))
@@ -99,6 +134,8 @@ export function modelReasoning(
     return profile("thinking", "low", "high", "max");
   if (/^gpt-6-astra(?:-\d{4}-\d{2}-\d{2})?$/.test(id))
     return profile("openai", "low", "medium", "high", "xhigh", "max");
+  if (/^gpt-6(?:\.1)?-(?:sol|terra|luna)(?:-\d{4}-\d{2}-\d{2})?$/.test(id))
+    return profile("openai", "low", "medium", "high", "xhigh", "max");
   if (/^gpt-5\.6(?:-(sol|terra|luna))?(?:-\d{4}-\d{2}-\d{2})?$/.test(id))
     return profile("openai", "off", "low", "medium", "high", "xhigh", "max");
   if (/^gpt-5\.(?:[25]|4(?:-(?:mini|nano))?)(?:-\d{4}-\d{2}-\d{2})?$/.test(id))
@@ -117,8 +154,9 @@ export function normalizeModelEffort(
   baseUrl: string,
   effort: unknown,
   override?: ModelReasoningOverride,
+  apiProtocol?: ModelApiProtocol,
 ): ReasoningEffort {
-  return modelReasoning(model, baseUrl, override).efforts.includes(
+  return modelReasoning(model, baseUrl, override, apiProtocol).efforts.includes(
     effort as ReasoningEffort,
   )
     ? (effort as ReasoningEffort)

@@ -72,6 +72,8 @@ export type {
 } from "./ModelAdapter";
 export { DEFAULT_MODEL_TIMEOUTS } from "./ModelDeadline";
 export type { ModelTimers, ModelTimeouts } from "./ModelDeadline";
+export { createNativeModelAdapter } from "./NativeModelAdapter";
+export type { NativeModelConfig } from "./NativeModelAdapter";
 export { PermissionGate } from "./PermissionGate";
 export { normalizeResult, normalizeThrown } from "./ResultNormalizer";
 export {

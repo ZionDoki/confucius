@@ -166,6 +166,7 @@ import type {
   MemoryProposal,
   ModelConfigView,
   PromptContextOptions,
+  TaskAttachment,
   SessionContext,
   SessionContextStats,
   SessionMode,
@@ -229,7 +230,7 @@ import {
   HookedToolProvider,
   historyBudgetChars,
   MemoryEventLog,
-  OpenAICompatibleAdapter,
+  createNativeModelAdapter,
   PermissionGate,
   TurnLoop,
   validateArgs,
@@ -239,7 +240,7 @@ import {
   ModelCatalog,
   type ModelAdapter,
   type ModelMessage,
-  type OpenAICompatibleConfig,
+  type NativeModelConfig,
   type ToolCallHookInfo,
   type ToolProvider,
   type TurnCheckpoint,
@@ -325,6 +326,7 @@ import {
   repairPersistedCapabilities,
 } from "./TaskCapabilities";
 import { createTaskBranchSnapshot, forkBranchArtifacts } from "./TaskBranch";
+import { preparePromptEdit, attachmentReplayText } from "./TaskEdit";
 import {
   TaskAttachmentStore,
   buildTaskAttachmentUserText,
@@ -616,6 +618,8 @@ interface SessionState {
   /** The current locked snapshot has emitted at most one drift notice. */
   driftReportedForLockedFingerprint?: string;
   promptSubmission?: number;
+  editingPrompt?: boolean;
+  promptSetups?: number;
   runBudget?: BudgetAccountant;
   nativeExecutionConfig?: import("@confucius/protocol").SubagentRecord["nativeConfig"];
   /** Runtime-only MCP tool projection for the active request. */
@@ -1289,6 +1293,7 @@ export class AgentHost {
   /** One-shot queue for entry points (item menu); consumed by the poll. */
   private pendingLaunch: LaunchIntent | null = null;
   private readonly postProcessingRuns = new Set<string>();
+  private promptEditRecovery?: Promise<void>;
   private maintenanceQueue: Promise<void> = Promise.resolve();
   private readonly memoryProposals = new Map<string, MemoryProposal>();
   private readonly memoryApprovals = new MemoryApprovals({
@@ -2166,6 +2171,29 @@ export class AgentHost {
     method: string,
     params: Record<string, unknown> = {},
   ): Promise<unknown> {
+    // Resume a confirmed edit after restart before any history retrieval or model work.
+    if (
+      !this.promptEditRecovery &&
+      this.sessions?.size &&
+      [...this.sessions.values()].some(
+        (state) => state.record.pendingPromptEdit && !state.editingPrompt,
+      )
+    ) {
+      this.promptEditRecovery = (async () => {
+        for (const state of this.sessions.values()) {
+          if (!state.record.pendingPromptEdit || state.editingPrompt) continue;
+          state.editingPrompt = true;
+          try {
+            await this.finishPromptEdit(state);
+          } finally {
+            state.editingPrompt = false;
+          }
+        }
+      })().finally(() => {
+        this.promptEditRecovery = undefined;
+      });
+    }
+    if (this.promptEditRecovery) await this.promptEditRecovery;
     switch (method) {
       case RPC_METHODS.annotationReviewList: {
         const taskId = String(params.taskId ?? "");
@@ -2253,6 +2281,8 @@ export class AgentHost {
           },
           attachmentIds(params.attachmentIds),
         );
+      case RPC_METHODS.taskEditPrompt:
+        return this.taskEditPrompt(params);
       case RPC_METHODS.taskAbort:
         return this.sessionAbort(
           String(params.taskId ?? params.sessionId ?? ""),
@@ -2863,6 +2893,7 @@ export class AgentHost {
     const memoryConsent = configuredMemoryConsent === "off" ? "off" : "review";
     return {
       baseUrl: active?.baseUrl ?? "",
+      protocol: active?.protocol ?? "auto",
       apiKey: active?.apiKey ?? "",
       model: active?.model ?? "",
       maxTokens: active?.maxTokens ?? 0,
@@ -2961,6 +2992,7 @@ export class AgentHost {
     const state = this.requireSession(sessionId);
     if (
       state.activeTurnId ||
+      state.promptSetups ||
       state.record.recoverableTurn?.unknownToolCallIds.length ||
       [...this.pendingApprovals.values()].some(
         (pending) => pending.sessionId === sessionId,
@@ -3681,6 +3713,185 @@ export class AgentHost {
     }
   }
 
+  private async taskEditPrompt(
+    params: Record<string, unknown>,
+  ): Promise<unknown> {
+    const state = this.requireSession(String(params.taskId ?? ""));
+    if (params.confirmed !== true)
+      throw new Error("Confirm the message edit before resending");
+    if (
+      state.activeTurnId ||
+      state.promptSetups ||
+      state.editingPrompt ||
+      state.contextCleanup ||
+      this.postProcessingRuns.has(state.record.id)
+    )
+      throw new Error("Wait for the task to stop before editing a message");
+    const text = String(params.text ?? "").trim();
+    if (!text) throw new Error("Empty prompt");
+    if (state.record.backend === "native") this.requireEndpoint();
+    const template = taskTemplate(state.record.templateId);
+    if (
+      template &&
+      !validateTemplateContext(template, state.record.lockedContext).ok
+    )
+      throw new Error("The task sources no longer satisfy its preset");
+    if (params.afterId !== state.events.at(-1)?.id)
+      throw new Error(
+        "The conversation changed. Reload it before confirming this edit.",
+      );
+    const taskId = state.record.id;
+    let edit = preparePromptEdit(
+      state.events,
+      String(params.eventId ?? ""),
+      String(params.originalText ?? ""),
+      String(params.turnId ?? ""),
+    );
+    state.editingPrompt = true;
+    try {
+      await this.persistNow();
+      if (this.historyFailure) throw this.historyFailure;
+      await this.subagentManager?.cancel(taskId);
+      if (state.record.literature) await this.literature.cancel(taskId);
+      edit = preparePromptEdit(
+        state.events,
+        edit.target.id,
+        edit.target.payload.userText,
+        edit.target.turnId,
+      );
+      const attachments = edit.target.payload.attachments ?? [];
+      const replay = attachments.length
+        ? {
+            records: attachments,
+            text: attachmentReplayText(
+              await this.history.userInputs(taskId, edit.target.turnId!),
+            ),
+          }
+        : undefined;
+      await this.backendFor(state.record.backend).dispose(taskId);
+      const previous = {
+        record: state.record,
+        events: state.events,
+        messages: state.messages,
+        latestCheckpoint: state.latestCheckpoint,
+        safeCheckpoint: state.safeCheckpoint,
+        loadedSkills: state.loadedSkills,
+        sessionGrants: state.sessionGrants,
+      };
+      const removed = new Set(edit.removedTurnIds);
+      state.events = edit.events;
+      state.messages = edit.messages;
+      state.latestCheckpoint = undefined;
+      state.safeCheckpoint = undefined;
+      state.loadedSkills = new Set();
+      state.sessionGrants = new Set();
+      state.record = {
+        ...state.record,
+        status: "ready",
+        updatedAt: Date.now(),
+        run: undefined,
+        workflow: undefined,
+        externalSessionId: undefined,
+        externalTurnId: undefined,
+        recoverableTurn: undefined,
+        contextHandoff: undefined,
+        contextSwitch: undefined,
+        contextResetRequested: undefined,
+        maintenanceBudget: undefined,
+        historyCleanupBatch: undefined,
+        historyRetention: undefined,
+        contextWindow: {
+          ...initialContextWindow(taskId, state.record.backend),
+          id: `ctx_${this.ids()}`,
+          number: (state.record.contextWindow?.number ?? 0) + 1,
+        },
+        artifactIds: edit.artifactIds,
+        postProcessing: state.record.postProcessing?.filter(
+          (job) => !removed.has(job.turnId),
+        ),
+        responseLanguageContext: responseLanguageContext(
+          edit.messages
+            .filter((message) => message.role === "user")
+            .map((message) => message.content),
+        ),
+        draft: { text, references: state.record.references ?? [] },
+        pendingPromptEdit: {
+          before: edit.target.ts,
+          removedTurnIds: edit.removedTurnIds,
+        },
+        pendingPromptResend: {
+          text,
+          attachments: replay?.records,
+          attachmentText: replay?.text,
+        },
+      };
+      try {
+        await this.persistNow();
+      } catch (error) {
+        Object.assign(state, previous);
+        throw error;
+      }
+      await this.finishPromptEdit(state);
+      state.editingPrompt = false;
+      const result = await this.sessionPrompt(
+        taskId,
+        text,
+        undefined,
+        [],
+        false,
+        true,
+        replay,
+      );
+      if (state.record.draft?.text === text) {
+        state.record.draft = previous.record.draft ?? {
+          text: "",
+          references: state.record.draft.references,
+        };
+        this.persistSoon();
+      }
+      return result;
+    } finally {
+      state.editingPrompt = false;
+    }
+  }
+
+  /** Durable intent keeps a crash/storage failure from exposing a discarded suffix to the model. */
+  private async finishPromptEdit(state: SessionState): Promise<void> {
+    const pending = state.record.pendingPromptEdit;
+    if (!pending) return;
+    const taskId = state.record.id;
+    await this.history.truncateConversation(
+      taskId,
+      pending.before,
+      pending.removedTurnIds,
+    );
+    await this.logs.truncateConversation(
+      taskId,
+      pending.before,
+      pending.removedTurnIds,
+    );
+    const removed = new Set(pending.removedTurnIds);
+    for (const [id, proposal] of this.memoryProposals)
+      if (
+        proposal.taskId === taskId &&
+        proposal.turnId &&
+        removed.has(proposal.turnId) &&
+        proposal.status === "pending"
+      )
+        this.memoryProposals.delete(id);
+    this.taskTraceBuffer.clear(taskId);
+    this.pendingHistory = this.pendingHistory.filter(
+      (entry) => entry.taskId !== taskId,
+    );
+    state.record.pendingPromptEdit = undefined;
+    try {
+      await this.persistNow();
+    } catch (error) {
+      state.record.pendingPromptEdit = pending;
+      throw error;
+    }
+  }
+
   private sessionLoad(
     sessionId: string,
   ): SessionRecord & { skillSlug: string | null; loadedSkills: string[] } {
@@ -3918,6 +4129,8 @@ export class AgentHost {
   }
 
   private async sessionAbort(sessionId: string) {
+    if (this.requireSession(sessionId).editingPrompt)
+      throw new Error("A message edit is being saved");
     if (this.sessions.get(sessionId)?.record.subagentIds?.length)
       await this.subagentManager?.cancel(sessionId);
     if (this.sessions.get(sessionId)?.record.literature)
@@ -3934,6 +4147,8 @@ export class AgentHost {
   }
 
   private async sessionDelete(sessionId: string) {
+    if (this.requireSession(sessionId).editingPrompt)
+      throw new Error("A message edit is being saved");
     if (this.sessions.get(sessionId)?.record.subagentIds?.length)
       await this.subagents().remove(sessionId);
     if (this.sessions.get(sessionId)?.record.literature)
@@ -4267,6 +4482,7 @@ export class AgentHost {
           id: endpoint.id,
           model: endpoint.model,
           baseUrl: endpoint.baseUrl,
+          protocol: endpoint.protocol ?? "auto",
           contextWindowTokens: endpoint.contextWindowTokens,
           maxTokens: endpoint.maxTokens,
           reasoningEffort: endpoint.reasoningEffort,
@@ -7228,19 +7444,55 @@ export class AgentHost {
       );
   }
 
-  private async sessionPrompt(
+  private sessionPrompt(
     sessionId: string,
     text: string,
     promptContext?: PromptContextOptions,
     requestedAttachmentIds: string[] = [],
     resuming = false,
     renewPromptBudget = !resuming,
+    replayAttachments?: { records: TaskAttachment[]; text: string },
+  ): Promise<unknown> {
+    const state = this.requireSession(sessionId);
+    state.promptSetups = (state.promptSetups ?? 0) + 1;
+    return this.startSessionPrompt(
+      sessionId,
+      text,
+      promptContext,
+      requestedAttachmentIds,
+      resuming,
+      renewPromptBudget,
+      replayAttachments,
+    ).finally(() => {
+      state.promptSetups!--;
+    });
+  }
+
+  private async startSessionPrompt(
+    sessionId: string,
+    text: string,
+    promptContext?: PromptContextOptions,
+    requestedAttachmentIds: string[] = [],
+    resuming = false,
+    renewPromptBudget = !resuming,
+    replayAttachments?: { records: TaskAttachment[]; text: string },
   ): Promise<unknown> {
     if (this.shuttingDown)
       throw new Error(
         "Confucius is shutting down; restart the workspace before submitting a task",
       );
     const state = this.requireSession(sessionId);
+    if (state.editingPrompt) throw new Error("A message edit is being saved");
+    if (state.record.pendingPromptEdit) await this.finishPromptEdit(state);
+    if (
+      !replayAttachments &&
+      state.record.pendingPromptResend?.text === text.trim() &&
+      state.record.pendingPromptResend.attachmentText
+    )
+      replayAttachments = {
+        records: state.record.pendingPromptResend.attachments ?? [],
+        text: state.record.pendingPromptResend.attachmentText,
+      };
     // Reject cheaply invalid prompts before they can claim a submission. A
     // second invalid prompt must not cancel a valid prompt that is waiting for
     // context cleanup; only prompts that can actually run claim a submission.
@@ -7565,12 +7817,13 @@ export class AgentHost {
           ...ARTIFACT_TOOL_NAMES,
           SKILL_TOOL_NAME,
         ]);
-      const modelPrompt = buildTaskAttachmentUserText(
-        run.skillInvocation
-          ? `${run.request}\n\n${formatInvokedUserText(run.skillInvocation.slug, run.skillInvocation.rest)}`
-          : run.request,
-        preparedAttachments,
-      );
+      const modelPrompt =
+        buildTaskAttachmentUserText(
+          run.skillInvocation
+            ? `${run.request}\n\n${formatInvokedUserText(run.skillInvocation.slug, run.skillInvocation.rest)}`
+            : run.request,
+          preparedAttachments,
+        ) + (replayAttachments?.text ?? "");
       if (state.record.titleState === "pending") {
         state.record.title = temporaryTaskTitle(
           trimmed,
@@ -7582,11 +7835,13 @@ export class AgentHost {
       }
       this.emitSessionEvent(state, turnId, "turn_started", {
         userText: trimmed,
-        ...(preparedAttachments.length
+        ...(preparedAttachments.length || replayAttachments?.records.length
           ? {
-              attachments: preparedAttachments.map(({ record }) => ({
-                ...record,
-              })),
+              attachments:
+                replayAttachments?.records ??
+                preparedAttachments.map(({ record }) => ({
+                  ...record,
+                })),
             }
           : {}),
       });
@@ -7696,6 +7951,7 @@ export class AgentHost {
         },
       });
       this.attachments.consume(requestedAttachmentIds);
+      state.record.pendingPromptResend = undefined;
       void coordinator
         .execute(modelPrompt, abort.signal)
         .then((outcome) =>
@@ -8579,6 +8835,7 @@ export class AgentHost {
                       this.requireEndpoint().reasoning?.[
                         this.requireEndpoint().model
                       ],
+                      this.requireEndpoint().protocol,
                     ).efforts.find((e) => e !== "auto") ?? "auto",
                   timeouts: {
                     firstByteMs: 60_000,
@@ -10035,13 +10292,14 @@ export class AgentHost {
   }
 
   private openaiAdapter(
-    extras: Partial<OpenAICompatibleConfig> = {},
+    extras: Partial<NativeModelConfig> = {},
     selectedEndpoint?: ModelEndpoint,
-  ): OpenAICompatibleAdapter {
+  ): ModelAdapter {
     const endpoint = selectedEndpoint ?? this.requireEndpoint();
-    return new OpenAICompatibleAdapter({
+    return createNativeModelAdapter({
       apiKey: endpoint.apiKey,
       baseUrl: endpoint.baseUrl || "https://api.openai.com/v1",
+      protocol: endpoint.protocol,
       model: endpoint.model,
       maxTokens: endpoint.maxTokens || undefined,
       reasoningEffort: endpoint.reasoningEffort,

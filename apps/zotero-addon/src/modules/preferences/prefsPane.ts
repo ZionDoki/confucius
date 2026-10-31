@@ -8,6 +8,7 @@ import {
 import { readAppearancePrefs } from "../../utils/appearancePrefs";
 import { createAppearanceSettings } from "../ui/appearanceSettings";
 import { createRuntimeSettings } from "../ui/runtimeSettings";
+import { createProtocolSettings } from "../ui/modelSettings";
 import {
   createWorkspaceButton,
   bindTabNavigation,
@@ -18,12 +19,14 @@ import {
   clampMaxIterations,
   clampMaxToolCalls,
   isMemoryConsent,
+  isModelApiProtocol,
   type ModelConfigView,
 } from "@confucius/protocol";
 import { bindPreferenceScrollbars } from "../ui/workspaceScrollbars";
 import { ensureMcpToken } from "../bridge/pairingToken";
 
-export type EndpointModelField = "baseUrl" | "apiKey" | "model" | "maxTokens";
+export type EndpointModelField =
+  "baseUrl" | "apiKey" | "model" | "maxTokens" | "protocol";
 
 /** Change one field of a known endpoint instead of mixing legacy prefs. */
 export function endpointModelPatch(
@@ -358,6 +361,17 @@ export function bindPrefsWindow(win: Window): void {
     key: EndpointModelField;
     numeric: boolean;
   }> = [];
+  const protocolInput = doc.createElementNS(
+    "http://www.w3.org/1999/xhtml",
+    "input",
+  ) as HTMLInputElement;
+  protocolInput.type = "hidden";
+  const protocolSettings = createProtocolSettings(doc, (value) => {
+    protocolInput.value = value;
+    protocolInput.dispatchEvent(new win.Event("change", { bubbles: true }));
+  });
+  const baseField = doc.getElementById("confucius-pref-baseUrl");
+  baseField?.after(protocolSettings.node, protocolInput);
   for (const [id, key, numeric] of [
     ["confucius-pref-baseUrl", "baseUrl", false],
     ["confucius-pref-apiKey", "apiKey", false],
@@ -367,8 +381,10 @@ export function bindPrefsWindow(win: Window): void {
     const input = doc.getElementById(id) as HTMLInputElement | null;
     if (input) modelFields.push({ el: input, key, numeric });
   }
+  modelFields.push({ el: protocolInput, key: "protocol", numeric: false });
   for (const field of modelFields)
-    field.el.value = String(getPref(field.key) ?? "");
+    field.el.value =
+      field.key === "protocol" ? "auto" : String(getPref(field.key) ?? "");
   let activeEndpointId = "";
   let modelLoadGeneration = 0;
   let modelSaveGeneration = 0;
@@ -417,6 +433,10 @@ export function bindPrefsWindow(win: Window): void {
             !pendingModelEdits.has(field.key)
           )
             field.el.value = serverValue;
+          if (field.key === "protocol")
+            protocolSettings.setValue(
+              isModelApiProtocol(field.el.value) ? field.el.value : "auto",
+            );
           delete modelStatus.dataset.state;
           modelStatus.textContent = "";
         } catch (error) {
@@ -484,6 +504,10 @@ export function bindPrefsWindow(win: Window): void {
         )
           continue;
         field.el.value = serverValue;
+        if (field.key === "protocol")
+          protocolSettings.setValue(
+            isModelApiProtocol(serverValue) ? serverValue : "auto",
+          );
         lastModelValues.set(field.key, serverValue);
         if (!endpointChanged) dirtyModelFields.delete(field.key);
       }

@@ -208,7 +208,11 @@ export function createConversationRenderer(
     if (block.kind === "user") {
       const row = el(targetDoc, "div");
       row.className = "confucius-user-message";
-      row.textContent = block.text;
+      const body = el(targetDoc, "div");
+      body.className = "confucius-user-text";
+      body.textContent = block.text;
+      row.append(body);
+      if (block.eventId) row.dataset.messageId = block.eventId;
       if (block.attachments?.length) {
         const attachments = el(targetDoc, "div");
         attachments.className = "confucius-user-attachments";

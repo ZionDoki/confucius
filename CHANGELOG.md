@@ -2,6 +2,71 @@
 
 ## Unreleased
 
+## 0.6.4-beta.2 - 2026-10-31
+
+### Added
+
+- Chat text can be selected and copied. User messages offer Copy and Edit;
+  confirming an edit truncates that message and everything after it, then runs
+  the revised prompt with the retained conversation and saved attachments.
+- Message edits reject stale or running conversations, clear discarded context
+  and history search entries, and retain a retry draft if startup fails after
+  saving. Notes, annotations and other changes already saved outside the chat
+  are not rolled back.
+- Native endpoints can select OpenAI Chat Completions, OpenAI Responses,
+  Anthropic Messages, Gemini Generate Content, or Ollama in workspace settings
+  and Zotero preferences. Each protocol handles its own authentication, model
+  list, streaming, page images, tool calls, and reasoning replay data.
+
+### Fixed
+
+- Responses-only gateways can use their existing Base URL without being sent
+  Chat Completions requests. Importing models.dev settings preserves the API
+  protocol; model metadata does not determine gateway routing.
+- OpenAI reasoning models use the completion-token limit field. Structured
+  quota errors fail without transient retries, and Retry-After is honored
+  instead of being shortened to 30 seconds.
+
+### Upgrade notes
+
+- This is a Beta. Enable **Include prereleases** in Confucius Settings → Update
+  to receive it. The stable Latest release remains 0.6.3. Follow Zotero's restart
+  prompt if installation is staged; a completed hot update needs no restart.
+- Existing endpoints default to URL-based protocol detection; generic gateway
+  URLs retain Chat Completions. Choose Responses explicitly for a gateway that
+  only exposes that API. No library migration is required.
+- Existing conversations, sources and explicit update-channel choices are
+  preserved. Confirmed message edits permanently remove the discarded chat
+  suffix; export any conversation you need to keep before editing it.
+
+### Validation and known limits
+
+- All 1,681 automated tests, type checking, lint, and the production build passed. Native
+  protocol fixtures cover streaming, cancellation, truncated responses, tools,
+  signed reasoning replay, model catalogs, and endpoint configuration.
+- Chat editing checks cover confirmation, stale and duplicate submissions,
+  history cleanup after storage failures, legacy event IDs, and attachment
+  recovery. Isolated Zotero 10.0.7 on macOS verified pointer selection, Cmd+C,
+  message copying, inline cancellation and confirmation, actual model request
+  history, selection during stream updates, restart persistence, and Chinese/light
+  and English/dark layouts at narrow widths and larger font sizes. The editor
+  also passed Zotero's native high-contrast preference check.
+- A live Responses gateway completed streaming text and a two-step synthetic
+  tool exchange with `gpt-6.1-sol`, `max` effort, and a 128,000-token output limit.
+- Isolated Zotero 10.0.7 checks on macOS verified both settings entry points,
+  restart persistence, catalog imports, keyboard navigation, and Chinese/light
+  and English/dark layouts, including a 540px window with 20px text. The Zotero
+  network layer also completed synthetic Responses, Anthropic, and Gemini tool
+  exchanges. Manual pointer interaction, Windows, Linux, other Zotero versions
+  and high-contrast protocol settings were not retested.
+- An ordinary-package upgrade from public 0.6.4-beta.1 passed 27 checks for
+  preserved tasks, drafts, notes, annotations, reports, memory, research state,
+  execution receipts and explicit update preferences. See the
+  [release acceptance record](https://github.com/ZionDoki/confucius/blob/v0.6.4-beta.2/.github/maintainers/acceptance/release-0.6.4-beta.2.md).
+- Anthropic and Gemini were tested with protocol fixtures, not live provider
+  accounts. Provider-hosted tools, audio/video generation, Gemini Interactions,
+  and cloud-specific OAuth or AWS request signing are outside this change.
+
 ## 0.6.4-beta.1 - 2026-10-30
 
 ### Changed

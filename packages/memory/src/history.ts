@@ -502,6 +502,80 @@ export class HistoryStore {
     );
     this.tasks.delete(taskId);
   }
+
+  async userInputs(taskId: string, turnId: string): Promise<string[]> {
+    await this.queue;
+    const index = await this.load(taskId);
+    return Promise.all(
+      index.items
+        .filter((item) => item.turnId === turnId && item.role === "user")
+        .map((item) => this.body(item)),
+    );
+  }
+
+  /** A confirmed conversation edit invalidates later evidence and derived notes.
+   * Publish the new index before deleting bodies; retries are idempotent. */
+  async truncateConversation(
+    taskId: string,
+    before: number,
+    removedTurnIds: string[],
+  ): Promise<void> {
+    await this.serial(async () => {
+      if (this.isPinned(taskId))
+        throw new Error(
+          "History is being read; retry the edit after the read finishes",
+        );
+      const index = await this.load(taskId);
+      const removed = new Set(removedTurnIds);
+      const items = index.items.filter(
+        (item) =>
+          item.purpose !== "diagnostic" &&
+          !removed.has(item.turnId ?? "") &&
+          item.createdAt <= before,
+      );
+      const windows = index.windows.filter((window) =>
+        items.some((item) => item.windowId === window.id),
+      );
+      const cleanupFiles = await this.enumeratePending(taskId);
+      const next: Manifest = {
+        ...index,
+        items,
+        windows,
+        notes: [],
+        sourceProgress: [],
+        migrated: true,
+        retention: { version: 1, tier: "hot" },
+        cleanupPending: true,
+        cleanupFiles,
+        retainedBytes: 0,
+      };
+      await this.commit(taskId, next);
+      await this.deletePending(taskId, next);
+      // Rebuild retained indexes too: no discarded passages remain searchable.
+      const shardBytes: Record<string, number> = {};
+      let retainedBytes = 0;
+      for (const window of windows) {
+        const shard: TermShard = {};
+        for (const item of items.filter(
+          (item) => item.windowId === window.id,
+        )) {
+          const content = await this.body(item);
+          retainedBytes += new TextEncoder().encode(content).length;
+          shard[item.itemId] = indexPassages(content);
+        }
+        shardBytes[window.id] = await this.writeShard(taskId, window.id, shard);
+      }
+      await this.commit(taskId, {
+        ...next,
+        retainedBytes,
+        shardBytes,
+        passageShards: windows.map((w) => w.id),
+        cleanupPending: false,
+        cleanupFiles: undefined,
+        backupBytes: 0,
+      });
+    });
+  }
   async addWindow(taskId: string, window: ContextWindowState): Promise<void> {
     await this.serial(async () => {
       const current = await this.load(taskId);

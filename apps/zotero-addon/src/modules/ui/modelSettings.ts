@@ -4,6 +4,9 @@ import {
   type ModelReasoningOverride,
   type ModelCatalogEntry,
   type ModelCatalogResult,
+  MODEL_API_PROTOCOLS,
+  resolveModelProtocol,
+  type ModelApiProtocol,
 } from "@confucius/protocol";
 import { getString } from "../../utils/locale";
 import { createWorkspaceButton } from "./workspaceControls";
@@ -38,9 +41,92 @@ function hint(doc: Document, label: string) {
   return p;
 }
 
+/** Shared by workspace settings and Zotero preferences; no native popup. */
+export function createProtocolSettings(
+  doc: Document,
+  changed: (protocol: ModelApiProtocol) => void,
+) {
+  const group = node(doc, "div");
+  group.id = "confucius-cfg-protocol";
+  group.className = "confucius-reasoning-transports";
+  group.setAttribute("role", "radiogroup");
+  group.setAttribute("aria-label", text("protocol"));
+  let value: ModelApiProtocol = "auto";
+  const labels: Record<ModelApiProtocol, string> = {
+    auto: text("protocol-auto"),
+    openai: "OpenAI Chat Completions",
+    responses: "OpenAI Responses",
+    anthropic: "Anthropic Messages",
+    gemini: "Gemini Generate Content",
+    ollama: "Ollama",
+  };
+  const buttons = MODEL_API_PROTOCOLS.map((protocol) => {
+    const button = createWorkspaceButton(doc, "", labels[protocol]);
+    button.dataset.protocol = protocol;
+    button.setAttribute("role", "radio");
+    button.addEventListener("click", () => {
+      value = protocol;
+      paint();
+      changed(value);
+    });
+    button.addEventListener("keydown", (raw) => {
+      const event = raw as KeyboardEvent;
+      if (event.isComposing || event.keyCode === 229) return;
+      if (
+        ![
+          "ArrowLeft",
+          "ArrowRight",
+          "ArrowUp",
+          "ArrowDown",
+          "Home",
+          "End",
+        ].includes(event.key)
+      )
+        return;
+      event.preventDefault();
+      const index = MODEL_API_PROTOCOLS.indexOf(protocol);
+      const next =
+        event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? buttons.length - 1
+            : (index +
+                (["ArrowRight", "ArrowDown"].includes(event.key)
+                  ? 1
+                  : buttons.length - 1)) %
+              buttons.length;
+      buttons[next].click();
+      buttons[next].focus();
+    });
+    group.append(button);
+    return button;
+  });
+  const paint = () =>
+    buttons.forEach((button) => {
+      const selected = button.dataset.protocol === value;
+      button.setAttribute("aria-checked", String(selected));
+      button.tabIndex = selected ? 0 : -1;
+    });
+  paint();
+  const section = node(doc, "div");
+  section.append(
+    field(doc, text("protocol"), group),
+    hint(doc, text("protocol-help")),
+  );
+  return {
+    node: section,
+    getValue: () => value,
+    setValue: (next: ModelApiProtocol = "auto") => {
+      value = next;
+      paint();
+    },
+  };
+}
+
 export function createReasoningSettings(
   doc: Document,
   changed: (override?: ModelReasoningOverride) => void,
+  protocol: () => ModelApiProtocol = () => "auto",
 ) {
   const section = node(doc, "div");
   const label = node(doc, "label");
@@ -158,7 +244,13 @@ export function createReasoningSettings(
     baseUrl: string,
     override?: ModelReasoningOverride,
   ) => {
-    const capability = modelReasoning(model, baseUrl, override);
+    const capability = modelReasoning(model, baseUrl, override, protocol());
+    const api = resolveModelProtocol(baseUrl, protocol());
+    (transport.parentElement as HTMLElement).hidden = [
+      "responses",
+      "anthropic",
+      "gemini",
+    ].includes(api);
     enabled.checked = Boolean(override);
     transportValue =
       capability.transport === "none"

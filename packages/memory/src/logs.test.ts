@@ -21,6 +21,36 @@ function makeEngine() {
 }
 
 describe("ConversationLogEngine", () => {
+  it("truncates edited turns and cached excerpts durably without losing the prefix", async () => {
+    const { engine, fs } = makeEngine();
+    for (const [turnId, ts, userText] of [
+      ["first", 10, "retainedprefix"],
+      ["second", 20, "discardedsuffix"],
+      ["third", 30, "discardedsuffix again"],
+    ] as const)
+      await engine.appendTurn({
+        sessionId: "edit",
+        title: "Chat",
+        turnId,
+        ts,
+        userText,
+        assistantText: "Reply",
+      });
+    const hits = await engine.recordHits(
+      await engine.search("discardedsuffix"),
+      "discardedsuffix",
+    );
+    assert.equal(hits.length, 1);
+    await engine.truncateConversation("edit", 20, ["second", "third"]);
+    assert.equal(engine.getExcerpt(hits[0].hash), undefined);
+    const restored = new ConversationLogEngine({ fs, root: "/logs" });
+    assert.equal((await restored.search("discardedsuffix")).length, 0);
+    assert.equal((await restored.search("retainedprefix")).length, 1);
+    assert.equal((await restored.list())[0].turnCount, 1);
+    assert.doesNotMatch(JSON.stringify(fs.snapshot()), /discardedsuffix/);
+    await restored.truncateConversation("edit", 10, ["first"]);
+    assert.equal((await restored.list())[0].turnCount, 0);
+  });
   it("appends turns as searchable markdown files and keeps them after many writes", async () => {
     const { engine, fs } = makeEngine();
     await engine.appendTurn({

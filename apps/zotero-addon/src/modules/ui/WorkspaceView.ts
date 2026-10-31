@@ -12,6 +12,7 @@ import { ordinaryTimelineCalls, subagentWaitProgress } from "./subagentTrace";
 import {
   createModelCatalogLookup,
   createReasoningSettings,
+  createProtocolSettings,
 } from "./modelSettings";
 import { createLiteraturePanel } from "./literaturePanel";
 import { reviewArrivals } from "./reviewArrivals";
@@ -648,7 +649,7 @@ function workspaceKnowledgeIcon(doc: Document): Element {
 
 function replyActionIcon(
   doc: Document,
-  kind: "copy" | "branch" | "note" | "check",
+  kind: "copy" | "branch" | "note" | "check" | "edit",
 ): Element {
   const svg = doc.createElementNS(SVG_NS, "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
@@ -665,15 +666,17 @@ function replyActionIcon(
           "M8 8h10a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2z",
           "M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h1",
         ]
-      : kind === "note"
-        ? ["M6 3.5h8l4 4v13H6z", "M14 3.5v4h4", "M9 12h6", "M9 16h4"]
-        : kind === "check"
-          ? ["m5 12.5 4.2 4.2L19 7"]
-          : [
-              "M7.5 6h2.25A4.25 4.25 0 0 1 14 10.25V12",
-              "M7.5 18h2.25A4.25 4.25 0 0 0 14 13.75V12",
-              "M14 12h2.5",
-            ];
+      : kind === "edit"
+        ? ["m16 3 5 5-12 12-6 1 1-6Z", "m14 5 5 5"]
+        : kind === "note"
+          ? ["M6 3.5h8l4 4v13H6z", "M14 3.5v4h4", "M9 12h6", "M9 16h4"]
+          : kind === "check"
+            ? ["m5 12.5 4.2 4.2L19 7"]
+            : [
+                "M7.5 6h2.25A4.25 4.25 0 0 1 14 10.25V12",
+                "M7.5 18h2.25A4.25 4.25 0 0 0 14 13.75V12",
+                "M14 12h2.5",
+              ];
   for (const data of paths) {
     const path = doc.createElementNS(SVG_NS, "path");
     path.setAttribute("d", data);
@@ -724,6 +727,7 @@ function effortPicker(doc: Document, id: string, value: string) {
   let model = "";
   let baseUrl = "";
   let override: ModelReasoningOverride | undefined;
+  let protocol: import("@confucius/protocol").ModelApiProtocol | undefined;
   const node = el(
     doc,
     "div",
@@ -732,7 +736,7 @@ function effortPicker(doc: Document, id: string, value: string) {
   );
   const paint = () => {
     node.textContent = "";
-    const options = modelReasoning(model, baseUrl, override).efforts;
+    const options = modelReasoning(model, baseUrl, override, protocol).efforts;
     for (const effort of options) {
       const btn = el(
         doc,
@@ -784,7 +788,7 @@ function effortPicker(doc: Document, id: string, value: string) {
     }
   };
   const setValue = (value: string) => {
-    current = normalizeModelEffort(model, baseUrl, value, override);
+    current = normalizeModelEffort(model, baseUrl, value, override, protocol);
     paint();
   };
   setValue(value);
@@ -797,10 +801,12 @@ function effortPicker(doc: Document, id: string, value: string) {
       nextBaseUrl: string,
       effort: string = current,
       nextOverride?: ModelReasoningOverride,
+      nextProtocol?: import("@confucius/protocol").ModelApiProtocol,
     ) => {
       model = nextModel;
       baseUrl = nextBaseUrl;
       override = nextOverride;
+      protocol = nextProtocol;
       setValue(effort);
     },
   };
@@ -1918,6 +1924,8 @@ function bindWorkspace(
     win?.removeEventListener("resize", onWindowResize);
     win?.removeEventListener("unload", onWindowUnload);
     doc.removeEventListener("mousedown", onWorkspacePointerDown);
+    doc.removeEventListener("keydown", onConversationCopy, true);
+    doc.removeEventListener("selectionchange", onConversationSelection);
     root.removeEventListener("dragenter", onAttachmentDragEnter, true);
     root.removeEventListener("dragover", onAttachmentDragOver, true);
     root.removeEventListener("dragleave", onAttachmentDragLeave, true);
@@ -2226,6 +2234,174 @@ function bindWorkspace(
     }, 1_200);
   }
 
+  function addUserActions(
+    row: HTMLElement,
+    block: Extract<TimelineBlock, { kind: "user" }>,
+  ): void {
+    const taskId = state.sessionId;
+    if (!taskId || !block.eventId) return;
+    const actions = el(doc, "div");
+    actions.className = "confucius-user-actions";
+    actions.setAttribute("role", "group");
+    actions.setAttribute("aria-label", getString("workspace-user-actions"));
+    const action = (kind: "copy" | "edit", label: string) => {
+      const btn = el(doc, "button", undefined, {
+        type: "button",
+        title: label,
+        "aria-label": label,
+        "data-action": kind,
+      }) as HTMLButtonElement;
+      btn.className = "confucius-icon-button";
+      btn.append(replyActionIcon(doc, kind));
+      actions.append(btn);
+      return btn;
+    };
+    const copyLabel = getString("workspace-reply-copy");
+    const copy = action("copy", copyLabel);
+    copy.addEventListener("click", () => {
+      copy.disabled = true;
+      void copyAnswerText(doc, block.text)
+        .then(() => flashReplyAction(copy, "copy", copyLabel))
+        .catch((error) => {
+          state.sendError = String(error);
+          renderLists();
+        })
+        .finally(() => {
+          copy.disabled = false;
+        });
+    });
+    const canEdit = () =>
+      state.sessionId === taskId && !state.running && !state.sending;
+    const edit = action(
+      "edit",
+      getString(canEdit() ? "workspace-user-edit" : "workspace-user-edit-wait"),
+    );
+    edit.disabled = !canEdit();
+    edit.addEventListener("click", () => {
+      if (!canEdit() || row.dataset.userEditing) return;
+      const afterId = state.events.at(-1)?.id;
+      row.dataset.userEditing = "true";
+      actions.hidden = true;
+      const body = row.querySelector<HTMLElement>(".confucius-user-text")!;
+      body.hidden = true;
+      const editor = el(doc, "div");
+      editor.className = "confucius-user-editor";
+      const input = el(doc, "textarea", undefined, {
+        "aria-label": getString("workspace-user-edit"),
+      }) as HTMLTextAreaElement;
+      input.value = block.text;
+      const help = el(doc, "p");
+      help.textContent = getString("workspace-user-edit-help");
+      const error = el(doc, "p", undefined, { role: "alert" });
+      const buttons = el(doc, "div");
+      buttons.className = "confucius-user-editor-actions";
+      const cancel = button(doc, "", getString("workspace-user-edit-cancel"));
+      const confirm = button(doc, "", getString("workspace-user-edit-confirm"));
+      cancel.dataset.action = "cancel-edit";
+      confirm.dataset.action = "confirm-edit";
+      confirm.dataset.variant = "primary";
+      let busy = false;
+      const close = () => {
+        if (busy) return;
+        delete row.dataset.userEditing;
+        editor.remove();
+        body.hidden = false;
+        actions.hidden = false;
+        edit.focus();
+      };
+      cancel.addEventListener("click", close);
+      input.addEventListener("input", () => {
+        confirm.disabled = !input.value.trim();
+        confirm.title = confirm.disabled
+          ? getString("workspace-user-edit-empty")
+          : "";
+      });
+      editor.addEventListener("keydown", (raw) => {
+        const key = raw as KeyboardEvent;
+        if (key.isComposing || key.keyCode === 229) return;
+        if (key.key === "Escape") {
+          key.preventDefault();
+          key.stopPropagation();
+          close();
+        }
+      });
+      confirm.addEventListener("click", () => {
+        if (busy || !input.value.trim()) return;
+        if (!canEdit()) {
+          error.textContent = getString("workspace-user-edit-wait");
+          return;
+        }
+        busy = true;
+        input.disabled = true;
+        confirm.disabled = true;
+        cancel.disabled = true;
+        state.sending = true;
+        state.sendError = "";
+        updateRunningUI();
+        void (async () => {
+          try {
+            const draftSave = draftSaves.get(taskId);
+            if (draftSave) {
+              win?.clearTimeout(draftSave.timer);
+              draftSave.save();
+            }
+            await pendingDraftSave;
+            await rpc("task/editPrompt", {
+              taskId,
+              eventId: block.eventId,
+              turnId: block.turnId,
+              originalText: block.text,
+              text: input.value,
+              afterId,
+              confirmed: true,
+            });
+            if (state.sessionId === taskId) {
+              await refreshSessions();
+              await loadTask(taskId, true);
+            }
+          } catch (cause) {
+            const message =
+              cause instanceof Error ? cause.message : String(cause);
+            error.textContent = message;
+            if (state.sessionId === taskId) {
+              // A storage or startup failure may occur after the edit is saved.
+              // Reload its durable draft and keep the error visible after polling.
+              try {
+                await refreshSessions();
+                await loadTask(taskId, true);
+                if (
+                  state.sessionId === taskId &&
+                  currentTask()?.pendingPromptResend
+                ) {
+                  const text = currentTask()!.draft?.text ?? input.value;
+                  composerDrafts.set(taskId, text);
+                  prompt.value = text;
+                }
+              } catch {
+                /* Keep the original error. */
+              }
+              if (state.sessionId === taskId) state.sendError = message;
+            }
+          } finally {
+            busy = false;
+            input.disabled = false;
+            cancel.disabled = false;
+            confirm.disabled = !input.value.trim();
+            state.sending = false;
+            updateRunningUI();
+            renderLists();
+          }
+        })();
+      });
+      buttons.append(cancel, confirm);
+      editor.append(input, help, error, buttons);
+      row.append(editor);
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    });
+    row.append(actions);
+  }
+
   function renderAnswer(
     targetDoc: Document,
     text: string,
@@ -2495,6 +2671,7 @@ function bindWorkspace(
         : null;
     if (block.kind === "user") {
       const row = conversation.render(targetDoc, block, key)!;
+      addUserActions(row, block);
       if (state.sessionId)
         row.dataset.btwSource = JSON.stringify({
           kind: "conversation",
@@ -3973,6 +4150,7 @@ function bindWorkspace(
       ? timelineViewports.get(timelineTaskId)
       : undefined;
     const followTimeline =
+      !conversationSelection() &&
       !annotationReview.floating &&
       !literaturePanel.floating &&
       !isSubagentPopupOpen(doc) &&
@@ -5009,6 +5187,18 @@ function bindWorkspace(
       "confucius-cfg-baseUrl",
       "",
     );
+    const protocolSettings = createProtocolSettings(doc, () => {
+      try {
+        reasoningSettings.setModel(
+          modelInput.value,
+          baseUrlInput.value,
+          reasoningSettings.getOverride(),
+        );
+      } catch {
+        /* Preserve invalid reasoning drafts for correction. */
+      }
+    });
+    modelTab.append(protocolSettings.node);
     const apiKeyInput = field(
       getString("workspace-api-key"),
       "confucius-cfg-apiKey",
@@ -5060,14 +5250,19 @@ function bindWorkspace(
     effortLabel.textContent = getString("workspace-thinking");
     const effort = effortPicker(doc, "confucius-cfg-effort", "auto");
     let reasoningOverrides: ModelReasoningOverrides = {};
-    const reasoningSettings = createReasoningSettings(doc, (override) => {
-      effort.setModel(
-        modelInput.value,
-        baseUrlInput.value,
-        effort.getValue(),
-        override,
-      );
-    });
+    const reasoningSettings = createReasoningSettings(
+      doc,
+      (override) => {
+        effort.setModel(
+          modelInput.value,
+          baseUrlInput.value,
+          effort.getValue(),
+          override,
+          protocolSettings.getValue(),
+        );
+      },
+      () => protocolSettings.getValue(),
+    );
     effortRow.appendChild(effortLabel);
     effortRow.appendChild(effort.node);
     effortRow.appendChild(reasoningSettings.node);
@@ -5694,6 +5889,7 @@ function bindWorkspace(
       catalog.reset(modelInput.value);
     });
     const fillForm = (ep?: ModelEndpoint) => {
+      protocolSettings.setValue(ep?.protocol ?? "auto");
       nameInput.value = ep?.name ?? "";
       baseUrlInput.value = ep?.baseUrl ?? "";
       apiKeyInput.value = ep?.apiKey ?? "";
@@ -5706,6 +5902,7 @@ function bindWorkspace(
         ep?.baseUrl ?? "",
         ep?.reasoningEffort ?? "auto",
         ep?.reasoning?.[ep.model],
+        ep?.protocol,
       );
       reasoningSettings.setModel(
         modelInput.value,
@@ -5914,6 +6111,7 @@ function bindWorkspace(
           const endpoint: Record<string, unknown> = {
             name: nameInput.value,
             baseUrl: baseUrlInput.value,
+            protocol: protocolSettings.getValue(),
             apiKey: apiKeyInput.value,
             model: modelInput.value,
             maxTokens: Number(maxTokensInput.value) || 0,
@@ -7098,6 +7296,7 @@ function bindWorkspace(
             id,
             endpoint.baseUrl,
             endpoint.reasoning?.[id],
+            endpoint.protocol,
           );
           choices.push({
             backend: "native",
@@ -7942,6 +8141,42 @@ function bindWorkspace(
     }
   });
 
+  function conversationSelection(): string {
+    const selection = doc.getSelection();
+    return selection &&
+      timelinePane.contains(selection.anchorNode) &&
+      timelinePane.contains(selection.focusNode)
+      ? selection.toString()
+      : "";
+  }
+  function onConversationCopy(raw: Event): void {
+    const key = raw as KeyboardEvent;
+    const target = key.target as HTMLElement | null;
+    if (
+      key.isComposing ||
+      key.altKey ||
+      !(key.ctrlKey || key.metaKey) ||
+      key.key.toLowerCase() !== "c" ||
+      target?.closest?.("input,textarea,[contenteditable=true]")
+    )
+      return;
+    const text = conversationSelection();
+    if (!text) return;
+    key.preventDefault();
+    key.stopPropagation();
+    void copyAnswerText(doc, text).catch((error) => {
+      state.sendError = String(error);
+      renderLists();
+    });
+  }
+  let selectedConversation = false;
+  function onConversationSelection(): void {
+    const selected = Boolean(conversationSelection());
+    if (selectedConversation && !selected && !disposed) renderLists();
+    selectedConversation = selected;
+  }
+  doc.addEventListener("keydown", onConversationCopy, true);
+  doc.addEventListener("selectionchange", onConversationSelection);
   renderLists();
   syncEndpointButton();
   if (host) {

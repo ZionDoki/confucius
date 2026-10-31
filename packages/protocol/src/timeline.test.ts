@@ -72,13 +72,31 @@ describe("coalesceTimeline", () => {
     assert.deepEqual(
       coalesceTimeline(restored).filter((block) => block.kind === "user"),
       [
-        { kind: "user", text: "Read these", attachments },
-        { kind: "user", text: "Follow up" },
+        {
+          kind: "user",
+          eventId: "turn_started",
+          turnId: "t",
+          text: "Read these",
+          attachments,
+        },
+        {
+          kind: "user",
+          eventId: "turn_started",
+          turnId: "next",
+          text: "Follow up",
+        },
       ],
     );
     assert.deepEqual(
       coalesceTimeline([event("turn_started", { userText: "Legacy message" })]),
-      [{ kind: "user", text: "Legacy message" }],
+      [
+        {
+          kind: "user",
+          eventId: "turn_started",
+          turnId: "t",
+          text: "Legacy message",
+        },
+      ],
     );
   });
 
@@ -201,10 +219,20 @@ describe("coalesceTimeline", () => {
         );
       }
       assert.deepEqual(coalesceTimeline(events), [
-        { kind: "user", text: "你好" },
+        {
+          kind: "user",
+          eventId: "turn_started",
+          turnId: "first",
+          text: "你好",
+        },
         { kind: "reasoning", text: "Public summary." },
         { kind: "text", text: "你好！有什么可以帮你？", turnId: "first" },
-        { kind: "user", text: "读论文" },
+        {
+          kind: "user",
+          eventId: "turn_started",
+          turnId: "second",
+          text: "读论文",
+        },
         { kind: "text", text: "请选一篇论文。", turnId: "second" },
       ]);
       assert.deepEqual(
@@ -240,7 +268,12 @@ describe("coalesceTimeline", () => {
         event("text_delta", { text: "codex: ready 表示引擎已就绪。" }),
       ]),
       [
-        { kind: "user", text: "为什么会显示 kimi: ready？" },
+        {
+          kind: "user",
+          eventId: "turn_started",
+          turnId: "t",
+          text: "为什么会显示 kimi: ready？",
+        },
         { kind: "text", text: "codex: ready 表示引擎已就绪。", turnId: "t" },
       ],
     );

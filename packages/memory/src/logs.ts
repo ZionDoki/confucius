@@ -230,6 +230,43 @@ export class ConversationLogEngine {
     });
   }
 
+  async truncateConversation(
+    sessionId: string,
+    before: number,
+    removedTurnIds: string[],
+  ): Promise<void> {
+    await this.ensureLoaded();
+    await this.serialize(async () => {
+      const old = this.sessions.get(sessionId);
+      if (!old) return;
+      const removed = new Set(removedTurnIds);
+      const sections = old.body
+        .split(/\n(?=## \d{4}-\d\d-\d\dT)/)
+        .filter((section) => {
+          const match = section.match(/^## (\S+) (\S+)\n/);
+          return (
+            match && Date.parse(match[1]) <= before && !removed.has(match[2])
+          );
+        });
+      const next = {
+        ...old,
+        body: sections.join("\n"),
+        turnCount: sections.length,
+        updatedAt: this.now(),
+      };
+      await this.options.fs.writeFile(
+        this.sessionPath(sessionId),
+        serializeLog(next),
+      );
+      this.sessions.set(sessionId, next);
+      for (const [key, hit] of Object.entries(this.hits.excerpts))
+        if (hit.sessionId === sessionId) delete this.hits.excerpts[key];
+      await this.options.fs.writeFile(this.hitsPath, JSON.stringify(this.hits));
+      await this.rebuildIndex();
+      this.reindex();
+    });
+  }
+
   async retainedBytes(sessionId: string): Promise<number> {
     await this.ensureLoaded();
     await this.writeQueue;

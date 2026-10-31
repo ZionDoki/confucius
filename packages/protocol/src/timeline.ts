@@ -17,7 +17,13 @@ export interface TimelineToolCall {
 }
 
 export type TimelineBlock =
-  | { kind: "user"; text: string; attachments?: TaskAttachment[] }
+  | {
+      kind: "user";
+      text: string;
+      eventId?: string;
+      turnId?: string;
+      attachments?: TaskAttachment[];
+    }
   | { kind: "reasoning"; text: string }
   | { kind: "commentary"; text: string }
   | { kind: "text"; text: string; turnId?: string }
@@ -238,6 +244,8 @@ export function coalesceTimeline(events: ConfuciusEvent[]): TimelineBlock[] {
       callsByTurn.set(currentTurn, new Map());
       blocks.push({
         kind: "user",
+        eventId: event.id,
+        turnId: event.turnId,
         text: event.payload.userText,
         ...(event.payload.attachments?.length
           ? { attachments: event.payload.attachments }

@@ -6,6 +6,7 @@ import type {
   SessionRecord,
 } from "./session";
 import type { ModelEndpoint } from "./endpoints";
+import type { ModelApiProtocol } from "./modelProtocol";
 import type {
   AgentBackendKind,
   ArtifactRecord,
@@ -132,6 +133,7 @@ export const RPC_METHODS = {
   taskLoad: "task/load",
   taskList: "task/list",
   taskPrompt: "task/prompt",
+  taskEditPrompt: "task/editPrompt",
   taskAbort: "task/abort",
   taskDelete: "task/delete",
   taskRetryPostProcessing: "task/retryPostProcessing",
@@ -770,6 +772,7 @@ export interface AnnotationTypography {
 }
 
 export interface ModelConfigView extends AnnotationTypography {
+  protocol?: ModelApiProtocol;
   runtimeStoragePath?: string;
   storageStatus?: "ready" | "unsaved";
   baseUrl: string;

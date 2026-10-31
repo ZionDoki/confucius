@@ -18,6 +18,83 @@ async function setup(fs = new InMemoryFileSystem()) {
   await store.addWindow("task_a", initialContextWindow("task_a", "native", 1));
   return { fs, store };
 }
+test("confirmed edits remove later bodies, diagnostics, derived notes and search hits across restart", async () => {
+  const { fs, store } = await setup();
+  for (const [itemId, turnId, createdAt, content, purpose] of [
+    ["keep", "first", 10, "retainedprefix 中文", undefined],
+    ["edit", "second", 20, "discardedsuffix", undefined],
+    ["later", "third", 30, "discardedsuffix later", undefined],
+    ["mixed", "first", 12, "diagnostic with discardedsuffix", "diagnostic"],
+  ] as const)
+    await store.append({
+      taskId: "task_a",
+      windowId: "ctx_task_a_1",
+      itemId,
+      turnId,
+      createdAt,
+      content,
+      purpose,
+      role: "user",
+      sourceIds: [],
+    });
+  await store.writeNote("task_a", "progress", "derived discardedsuffix");
+  assert.deepEqual(await store.userInputs("task_a", "second"), [
+    "discardedsuffix",
+  ]);
+  await store.truncateConversation("task_a", 20, ["second", "third"]);
+  const restored = new HistoryStore(fs, "/history");
+  restored.register(task());
+  assert.equal((await restored.search({ query: "retainedprefix" })).total, 1);
+  assert.equal((await restored.search({ query: "discardedsuffix" })).total, 0);
+  await assert.rejects(
+    restored.read({
+      taskId: "task_a",
+      windowId: "ctx_task_a_1",
+      itemId: "edit",
+    }),
+  );
+  assert.doesNotMatch(
+    JSON.stringify(await restored.exportTask("task_a")),
+    /discardedsuffix/,
+  );
+  assert.doesNotMatch(JSON.stringify(fs.snapshot()), /discardedsuffix/);
+  await restored.truncateConversation("task_a", 20, ["second", "third"]);
+  assert.deepEqual(await restored.userInputs("task_a", "first"), [
+    "retainedprefix 中文",
+  ]);
+});
+
+test("an interrupted edit cleanup hides discarded evidence before retrying file deletion", async () => {
+  class FailingDelete extends InMemoryFileSystem {
+    fail = true;
+    override async deleteFile(path: string) {
+      if (this.fail) throw new Error("disk busy");
+      return super.deleteFile(path);
+    }
+  }
+  const fs = new FailingDelete();
+  const { store } = await setup(fs);
+  await store.append({
+    taskId: "task_a",
+    windowId: "ctx_task_a_1",
+    itemId: "removed",
+    turnId: "second",
+    role: "user",
+    content: "discardedsuffix",
+    sourceIds: [],
+    createdAt: 20,
+  });
+  await assert.rejects(
+    store.truncateConversation("task_a", 20, ["second"]),
+    /disk busy/,
+  );
+  assert.equal((await store.search({ query: "discardedsuffix" })).total, 0);
+  fs.fail = false;
+  const restored = new HistoryStore(fs, "/history");
+  restored.register(task());
+  await restored.truncateConversation("task_a", 20, ["second"]);
+  assert.doesNotMatch(JSON.stringify(fs.snapshot()), /discardedsuffix/);
+});
 test("complete evidence survives pagination, rollover and restart without duplicate items", async () => {
   const { fs, store } = await setup();
   const content = "早期论文证据" + "x".repeat(50000) + "最终页码 87";

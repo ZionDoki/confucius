@@ -269,11 +269,16 @@ export function reconcileActivity(
       } else if (waiting && nextWaiting) {
         updateWaitingIndicator(waiting, nextWaiting.dataset.waitingText ?? "");
         chosen = previous;
+      } else if (previous.dataset.userEditing === "true") {
+        chosen = previous;
       } else if (
         activitySignatures.get(previous) === signature ||
         (preserveSelection &&
           selection?.toString() &&
-          previous.contains(selection.anchorNode)) ||
+          (previous.contains(selection.anchorNode) ||
+            previous.contains(selection.focusNode) ||
+            (selection.rangeCount > 0 &&
+              selection.getRangeAt(0).intersectsNode(previous)))) ||
         (!conversationControl &&
           previous.contains(focused) &&
           previous.dataset.proposalStatus === fresh.dataset.proposalStatus)

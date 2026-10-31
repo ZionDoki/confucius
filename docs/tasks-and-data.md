@@ -30,6 +30,27 @@ it. Tasks and input drafts are saved; closing a workspace does not stop running
 tasks. Reopen Zotero's library window and use the Confucius toolbar button to
 return to your work.
 
+## Copy or edit a message
+
+Available from 0.6.4-beta.2.
+
+Select text in the conversation and use **Ctrl+C** (Windows/Linux) or **Cmd+C**
+(macOS). Each user message also has **Copy** and **Edit message** buttons. Copy
+copies the original message text. Selecting a streaming reply keeps that passage
+stable until you clear the selection.
+
+Edit opens the message in place. **Cancel** or **Escape** leaves the history
+unchanged; Enter adds a line break. **Confirm and resend** replaces that message,
+removes all later conversation messages, and runs the edited prompt with the
+retained earlier conversation. This cannot be undone in the chat. Stop a running
+task before editing. Original attachments are reused if their saved text is
+still available; otherwise send a new message with the files attached.
+
+The discarded conversation is removed from task history retrieval. Notes,
+annotations, accepted memories and other changes already saved outside the chat
+are not rolled back. If resending fails after the edit is saved, the edited text
+remains as a draft for retrying.
+
 ## Continue an interrupted task
 
 1. Reopen the task and check its saved report and progress.

@@ -170,7 +170,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
     );
     this.baseUrl =
       this.style === "ollama"
-        ? config.baseUrl.replace(/\/+$/, "")
+        ? joinEndpointUrl(config.baseUrl, "")
         : normalizeOpenAICompatibleBaseUrl(config.baseUrl);
   }
 
@@ -405,7 +405,7 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       body,
       modelReasoningBody(
         this.config.model,
-        `${this.baseUrl.replace(/\/api\/chat\/?$/, "")}/api/chat`,
+        this.baseUrl,
         this.config.reasoningEffort,
         this.config.reasoning?.[this.config.model],
       ),
@@ -1102,9 +1102,14 @@ export function joinEndpointUrl(base: string, path: string): string {
  * Retry only transient capacity/upstream failures; quota, auth, malformed
  * requests and context overflows fail fast so the turn can compact or stop.
  */
-function providerErrorEnvelope(error: unknown): ModelError | undefined {
+export function providerErrorEnvelope(error: unknown): ModelError | undefined {
   if (!error) return undefined;
-  const record: { message?: unknown; code?: unknown } =
+  const record: {
+    message?: unknown;
+    code?: unknown;
+    type?: unknown;
+    status?: unknown;
+  } =
     typeof error === "string"
       ? { message: error }
       : (error as { message?: unknown; code?: unknown });
@@ -1112,7 +1117,7 @@ function providerErrorEnvelope(error: unknown): ModelError | undefined {
     typeof record?.message === "string" && record.message.trim()
       ? record.message.trim()
       : "Model provider returned an error";
-  const rawCode = record?.code;
+  const rawCode = record?.code ?? record?.type ?? record?.status;
   const code =
     typeof rawCode === "string" || typeof rawCode === "number"
       ? String(rawCode)
@@ -1300,32 +1305,40 @@ function retryDelay(header: string, fallback: number): number {
     header && Number.isFinite(seconds)
       ? seconds * 1000
       : Date.parse(header) - Date.now();
-  return Math.min(
-    30_000,
-    Math.max(0, Number.isFinite(delayMs) ? delayMs : fallback),
-  );
+  return Math.max(0, Number.isFinite(delayMs) ? delayMs : fallback);
 }
-function httpModelError(
+export function httpModelError(
   status: number,
   body: string,
   retryAfter: string,
 ): ModelError {
+  let structured: ModelError | undefined;
+  try {
+    structured = providerErrorEnvelope(JSON.parse(body)?.error);
+  } catch {
+    /* Non-JSON proxy errors still use HTTP status. */
+  }
   const code =
-    status === 401 || status === 403
-      ? "auth"
-      : status === 408
-        ? "timeout"
-        : status === 429
-          ? "rate_limit"
-          : status >= 500
-            ? "server"
-            : /context.{0,30}(length|window|limit)|token.{0,30}(limit|exceed)/i.test(
-                  body,
-                )
-              ? "context_overflow"
-              : "invalid_request";
-  return new ModelError(`Model HTTP ${status}: ${body.slice(0, 500)}`, code, {
-    retryable: ["timeout", "server", "rate_limit"].includes(code),
+    structured && structured.code !== "server"
+      ? structured.code
+      : status === 401 || status === 403
+        ? "auth"
+        : status === 408
+          ? "timeout"
+          : status === 429
+            ? "rate_limit"
+            : status >= 500
+              ? "server"
+              : /context.{0,30}(length|window|limit)|token.{0,30}(limit|exceed)/i.test(
+                    body,
+                  )
+                ? "context_overflow"
+                : "invalid_request";
+  return new ModelError(`Model HTTP ${status}: ${body.slice(0, 4000)}`, code, {
+    retryable:
+      structured && structured.code !== "server"
+        ? structured.options.retryable
+        : ["timeout", "server", "rate_limit"].includes(code),
     ...(retryAfter ? { retryAfterMs: retryDelay(retryAfter, 1000) } : {}),
   });
 }
@@ -1345,6 +1358,9 @@ export function resolveModelProfile(
           ? "reasoning_content"
           : "none",
     ollamaToolCalls: "incremental",
+    ...(/^(?:o[134](?:-|$)|gpt-[5-9](?:[.-]|$))/.test(id)
+      ? { maxOutputField: "max_completion_tokens" as const }
+      : {}),
     ...overrides,
   };
 }

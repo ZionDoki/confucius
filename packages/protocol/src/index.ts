@@ -346,6 +346,7 @@ export type {
 export * from "./history";
 
 export * from "./modelReasoning";
+export * from "./modelProtocol";
 export * from "./modelCatalog";
 
 export * from "./run";

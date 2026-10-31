@@ -78,6 +78,21 @@ Width means the available workspace or reader-window width.
 - In settings and review overlays, pointer interactions do not add an outer focus outline to sliders, checkboxes, radio buttons, color swatches or select menus. Keep visible keyboard focus, checked/selected states, color-swatch boundaries and text-input focus/error feedback.
 - Do not override shared radii, font weights, or state colors in readers. Before adding controls, check [workspaceSurface.ts](../apps/zotero-addon/src/modules/ui/workspaceSurface.ts) and [workspaceTheme.ts](../apps/zotero-addon/src/modules/ui/workspaceTheme.ts).
 
+## Conversation selection and editing
+
+- Conversation text is selectable. Ctrl/Cmd+C copies the selection without
+  interfering with text inputs. Preserve selected passages and reading position
+  during stream updates, including selections across multiple entries; refresh
+  them when the selection ends.
+- Each sent user message offers shared 34px Copy and Edit icon buttons, with
+  titles, accessible labels and keyboard focus. Copy uses only its original text.
+  Disable editing while a task is running and explain that it must be stopped.
+- Edit uses an inline textarea, shared colors, 8px spacing, and wrapping Cancel
+  and Confirm and resend buttons. Explain the truncation and the fact that saved
+  library changes are not undone. Nothing is sent before confirmation; Enter
+  inserts a newline, Escape cancels, and IME composition cannot submit or cancel.
+  Polling and blur preserve the draft. Prevent empty and duplicate submissions.
+
 ## File drop
 
 - Sent attachments belong beneath the text of their user message. Reuse the
@@ -101,7 +116,10 @@ Width means the available workspace or reader-window width.
 - Use an input and a list inside the dialog. Filter by model ID, name, or provider; avoid native `select` popups that overflow Zotero chrome.
 - Reuse settings selection rows, with name and provider/model ID on two lines. Long text wraps. Use `paper`, 8px radius, and a structural border; cap list height at 280px or 36% of the viewport. Scroll inside the list without covering the toolbar, settings footer, or window boundaries.
 - Keep focus in the filter input. Arrow keys browse, Enter selects, and Escape closes the candidate list first. IME composition must not trigger queries or selection. Selection shows a configuration preview; Apply writes to the form.
-- Thinking-parameter formats use a wrapping radio group of shared buttons, not native popups.
+- API protocols and thinking-parameter formats use separate wrapping radio groups
+  of shared buttons, not native popups. Support arrow keys and a single tab stop
+  per group. Hide format overrides for protocols with native reasoning fields;
+  importing model catalog settings preserves the endpoint's protocol choice.
 
 ## Reading surfaces
 

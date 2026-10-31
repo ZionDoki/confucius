@@ -336,6 +336,7 @@ function fixture() {
     memory: new MemoryEngine({ fs, root: "/memory" }),
     memoryProposals: new Map(),
     pendingApprovals: new Map(),
+    pendingHistory: [],
     memoryConsent: () => "off",
     contextWindowTokens: () => 32768,
     memoryContextHints: async () => "",
@@ -357,7 +358,10 @@ function fixture() {
         ts: Date.now(),
       } as ConfuciusEvent);
     },
-    logs: { appendTurn: async () => undefined },
+    logs: {
+      appendTurn: async () => undefined,
+      truncateConversation: async () => undefined,
+    },
     skills,
     workSnapshot: async (): Promise<WorkSnapshot> => ({
       completed: [],
@@ -389,6 +393,206 @@ async function waitFor(predicate: () => boolean) {
   }
   assert.fail("Lifecycle did not reach the expected state");
 }
+
+describe("editing and resending a historical prompt", () => {
+  let previousZotero: unknown;
+  beforeEach(() => {
+    previousZotero = Reflect.get(globalThis, "Zotero");
+    Reflect.set(globalThis, "Zotero", {
+      locale: "en-US",
+      Prefs: { get: () => "en-US" },
+      getMainWindow: () => ({ setTimeout, clearTimeout }),
+    });
+  });
+  afterEach(() => Reflect.set(globalThis, "Zotero", previousZotero));
+
+  function editFixture() {
+    const value = fixture();
+    for (const [turnId, text, ts] of [
+      ["first", "Retained question", 10],
+      ["second", "Old question", 20],
+      ["third", "Discarded question", 30],
+    ] as const) {
+      value.state.events.push(
+        {
+          id: `${turnId}-start`,
+          sessionId: "task-1",
+          turnId,
+          ts,
+          type: "turn_started",
+          payload: { userText: text },
+        },
+        {
+          id: `${turnId}-answer`,
+          sessionId: "task-1",
+          turnId,
+          ts: ts + 1,
+          type: "text_delta",
+          payload: { text: `${text} answer` },
+        },
+        {
+          id: `${turnId}-done`,
+          sessionId: "task-1",
+          turnId,
+          ts: ts + 2,
+          type: "turn_completed",
+          payload: { phase: "done" },
+        },
+      );
+    }
+    value.state.messages = [
+      { role: "assistant", content: "Discarded checkpoint" },
+    ];
+    value.state.record.externalSessionId = "old-runtime";
+    value.backend.startTurn = async (input, callbacks) => {
+      value.starts.push(input);
+      callbacks.stopped?.({ stopReason: "completed", text: "Edited answer" });
+      return {};
+    };
+    const params = {
+      taskId: "task-1",
+      eventId: "second-start",
+      turnId: "second",
+      originalText: "Old question",
+      text: "Edited question",
+      afterId: "third-done",
+      confirmed: true,
+    };
+    return { ...value, params };
+  }
+
+  it("starts a fresh runtime with only the retained prefix and edited prompt, and resets stale polling cursors", async () => {
+    const { host, state, starts, backend, params } = editFixture();
+    let disposed = 0;
+    backend.dispose = async () => {
+      disposed++;
+    };
+    await host.rpc("task/editPrompt", params);
+    await waitFor(() => !state.activeTurnId);
+    assert.equal(disposed, 1);
+    assert.equal(starts.length, 1);
+    assert.equal(starts[0].task.externalSessionId, undefined);
+    assert.match(starts[0].prompt, /Retained question/);
+    assert.match(starts[0].prompt, /Edited question/);
+    assert.doesNotMatch(starts[0].prompt, /Old question|Discarded/);
+    assert.deepEqual(
+      state.events
+        .filter((e) => e.type === "turn_started")
+        .map((e) => e.payload.userText),
+      ["Retained question", "Edited question"],
+    );
+    const page = (await host.rpc("task/events", {
+      taskId: "task-1",
+      afterId: "third-done",
+    })) as { cursorFound: boolean };
+    assert.equal(page.cursorFound, false);
+    await assert.rejects(
+      host.rpc("task/editPrompt", params),
+      /conversation changed/,
+    );
+    assert.equal(starts.length, 1);
+  });
+
+  it("rejects unconfirmed, stale, empty and active edits without changing history", async () => {
+    const { host, state, starts, params } = editFixture();
+    const original = structuredClone(state.events);
+    for (const patch of [
+      { confirmed: false },
+      { afterId: "stale" },
+      { text: "  " },
+      { originalText: "Stale question" },
+    ])
+      await assert.rejects(
+        host.rpc("task/editPrompt", { ...params, ...patch }),
+      );
+    state.activeTurnId = "running";
+    await assert.rejects(host.rpc("task/editPrompt", params), /Wait/);
+    state.activeTurnId = null;
+    Object.assign(state, { promptSetups: 1 });
+    await assert.rejects(host.rpc("task/editPrompt", params), /Wait/);
+    assert.deepEqual(state.events, original);
+    assert.equal(starts.length, 0);
+  });
+
+  it("restores the original attachment body before deleting its history", async () => {
+    const { host, state, starts, params } = editFixture();
+    const target = state.events.find((e) => e.id === "second-start")!;
+    assert.equal(target.type, "turn_started");
+    const attachment: TaskAttachment = {
+      id: "file",
+      name: "notes.txt",
+      kind: "text",
+      mediaType: "text/plain",
+      size: 12,
+      originalCharacters: 12,
+      includedCharacters: 12,
+      truncated: false,
+      preparedAt: 1,
+    };
+    target.payload.attachments = [attachment];
+    await host.history.append({
+      taskId: "task-1",
+      windowId: state.record.contextWindow!.id,
+      itemId: "original-user",
+      turnId: "second",
+      role: "user",
+      content:
+        "Old question\n\n<confucius_read_only_attachments>\nOriginal file content\n</confucius_read_only_attachments>",
+      createdAt: 20,
+      sourceIds: [],
+    });
+    await host.rpc("task/editPrompt", params);
+    await waitFor(() => !state.activeTurnId);
+    assert.match(
+      starts[0].modelPrompt!,
+      /Edited question[\s\S]*Original file content/,
+    );
+    assert.doesNotMatch(starts[0].modelPrompt!, /Old question/);
+    const edited = state.events
+      .filter((e) => e.type === "turn_started")
+      .at(-1)!;
+    assert.deepEqual(edited.payload.attachments, [attachment]);
+    assert.deepEqual(await host.history.userInputs("task-1", "second"), []);
+  });
+
+  it("keeps the original conversation when committing the edit fails", async () => {
+    const { host, state, starts, params } = editFixture();
+    const original = state.events;
+    let writes = 0;
+    host.persistNow = async () => {
+      if (++writes === 2) throw new Error("disk full");
+    };
+    await assert.rejects(host.rpc("task/editPrompt", params), /disk full/);
+    assert.equal(state.events, original);
+    assert.equal(state.record.externalSessionId, "old-runtime");
+    assert.equal(state.record.pendingPromptEdit, undefined);
+    assert.equal(starts.length, 0);
+  });
+
+  it("recovers an interrupted cleanup before accepting the next prompt", async () => {
+    const { host, state, starts, params } = editFixture();
+    const cleanup = host.history.truncateConversation.bind(host.history);
+    host.history.truncateConversation = async () => {
+      throw new Error("cleanup unavailable");
+    };
+    await assert.rejects(
+      host.rpc("task/editPrompt", params),
+      /cleanup unavailable/,
+    );
+    assert.equal(starts.length, 0);
+    assert.ok(state.record.pendingPromptEdit);
+    assert.equal(state.record.draft?.text, "Edited question");
+    host.history.truncateConversation = cleanup;
+    await host.rpc("task/prompt", {
+      taskId: "task-1",
+      text: "Edited question",
+    });
+    await waitFor(() => !state.activeTurnId);
+    assert.equal(starts.length, 1);
+    assert.equal(state.record.pendingPromptEdit, undefined);
+    assert.doesNotMatch(starts[0].prompt, /Old question|Discarded/);
+  });
+});
 
 describe("prompt-scoped execution budgets", () => {
   let previousZotero: unknown;

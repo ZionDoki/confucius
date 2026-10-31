@@ -3,6 +3,7 @@ import {
   normalizeModelEffort,
   type ModelReasoningOverrides,
 } from "./modelReasoning";
+import { isModelApiProtocol, type ModelApiProtocol } from "./modelProtocol";
 import {
   isReasoningEffort,
   validateConfigPatch,
@@ -30,6 +31,8 @@ export interface ModelEndpoint {
   id: string;
   name: string;
   baseUrl: string;
+  /** Missing in old preferences: auto preserves their existing protocol. */
+  protocol?: ModelApiProtocol;
   apiKey: string;
   model: string;
   maxTokens: number;
@@ -120,6 +123,7 @@ function coerceEndpoint(entry: unknown): ModelEndpoint | null {
     id,
     name: String(raw.name ?? "").trim(),
     baseUrl: String(raw.baseUrl ?? "").trim(),
+    ...(isModelApiProtocol(raw.protocol) ? { protocol: raw.protocol } : {}),
     apiKey: String(raw.apiKey ?? ""),
     model: String(raw.model ?? "").trim(),
     maxTokens: Math.max(0, Math.floor(Number(raw.maxTokens) || 0)),
@@ -204,6 +208,7 @@ export function resolveEndpointStore(
     next.id = active.id;
     next.name = active.name || next.name;
     next.profile = active.profile;
+    next.protocol = active.protocol;
     next.reasoning = active.reasoning;
     next.timeouts = active.timeouts;
     endpoints = endpoints.map((entry) =>
@@ -238,6 +243,7 @@ function mergeEndpoint(
   patch: Record<string, unknown>,
 ): ModelEndpoint {
   const next: ModelEndpoint = { ...base };
+  if (isModelApiProtocol(patch.protocol)) next.protocol = patch.protocol;
   if (patch.name !== undefined) {
     next.name = String(patch.name).trim();
   }
@@ -273,6 +279,7 @@ function mergeEndpoint(
     next.baseUrl,
     next.reasoningEffort,
     next.reasoning?.[next.model],
+    next.protocol,
   );
   if (!next.name) {
     next.name = endpointLabel(next.model, next.baseUrl);
@@ -449,6 +456,8 @@ function structuredReasoning(
 /** Fail unsupported provider settings at config/set, before dispatching a model request. */
 function compatibilityErrors(raw: Record<string, unknown>): string[] {
   const errors: string[] = [];
+  if (raw.protocol !== undefined && !isModelApiProtocol(raw.protocol))
+    errors.push("Unsupported model API protocol");
   for (const field of ["profile", "timeouts"] as const) {
     const value = raw[field];
     if (value === undefined) continue;

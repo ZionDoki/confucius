@@ -17,6 +17,38 @@
 在输入框旁选择模型。运行期间需先停止，再切换模型。
 同一运行方式内换模型会保留任务、来源和报告；切换运行方式会清除上一个运行方式的模型选择。
 
+## Native API 协议（从 0.6.4-beta.2 起）
+
+在**设置 → 模型 → API 协议**中选择端点接受的协议。Zotero 的 Confucius
+偏好设置也提供同一选项。工作区设置需要保存端点；Zotero 偏好设置会立即保存选择。
+每个端点独立保存协议。
+
+| 协议                    | Base URL 示例                                      | 鉴权方式          |
+| ----------------------- | -------------------------------------------------- | ----------------- |
+| OpenAI Chat Completions | `https://api.openai.com/v1`                        | Bearer API Key    |
+| OpenAI Responses        | `https://api.openai.com/v1`                        | Bearer API Key    |
+| Anthropic Messages      | `https://api.anthropic.com/v1`                     | Anthropic API Key |
+| Gemini Generate Content | `https://generativelanguage.googleapis.com/v1beta` | Google API Key    |
+| Ollama                  | `http://localhost:11434`                           | 可选 Bearer Key   |
+
+通过网关连接时填写网关提供的 Base URL。网关路径前缀和查询参数会保留。
+也可以填写以 `/responses`、`/messages`、`/chat/completions`、`/api/chat`
+或 Gemini 生成方法结尾的完整 URL，不会重复追加对应路径。
+
+**自动（根据 URL）**识别明确的原生 API 路径以及 Anthropic、Google 的官方 API 域名。
+其他 URL 沿用 Chat Completions，保留已有通用网关配置的行为；不会发送探测请求或试换协议。
+只支持 Responses 的网关应明确选择 **OpenAI Responses**，Base URL 保持网关提供的 `/v1`
+地址即可。能够读取模型列表不代表网关支持 Chat Completions。
+
+这五种协议支持文字、页面图片、流式输出和函数／工具调用。Responses 的推理数据、
+Anthropic 的思考签名和 Gemini 的 thought signature 会与对应工具往返一起保留，
+只回传到相同端点、模型和协议。思考选项仍按模型提供；默认不发送可选思考参数。
+本设置不覆盖服务端托管工具、音视频生成、Gemini Interactions，以及云平台特有的
+OAuth 或 AWS 请求签名。需要这些鉴权流程的 Bedrock、Vertex、Azure 部署需通过兼容网关接入。
+
+models.dev 提供模型 ID、容量和思考档位参考，不会协商网关的 API 协议。
+应用目录配置会保留已选协议，改变协议不需要迁移文献库。
+
 CLI 未识别时看[连接说明](runtime-discovery.zh-CN.md)。检测到程序不代表账号有权使用所有模型。
 
 ## 思考选项
@@ -39,7 +71,8 @@ Codex、Kimi 的可选项来自本机 CLI。Native 使用已知配置或你保�
 
 ## 可选：自定义 Native 思考档位
 
-勾选**自定义此模型的思考选项**，填写逗号分隔的档位，再选择端点接受的参数格式。
+勾选**自定义此模型的思考选项**，填写逗号分隔的档位。Chat Completions 和 Ollama
+还可选择端点接受的参数格式；其他协议由对应适配器生成原生思考参数。
 
 | 格式                          | 行为                                                         |
 | ----------------------------- | ------------------------------------------------------------ |

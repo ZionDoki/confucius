@@ -4,6 +4,17 @@ import { REPORT_STYLE_CSS } from "./reportStyleStyles";
 
 export const TUI_CSS = `
 ${REPORT_STYLE_CSS}
+.confucius-activity-shell, .confucius-user-text, .tui-answer, .tui-answer *, .confucius-reasoning-body, .confucius-reasoning-body *, .confucius-tools pre { -moz-user-select: text; user-select: text; }
+.confucius-user-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:8px; white-space:normal; -moz-user-select:none; user-select:none; }
+.confucius-user-actions svg { width:20px; height:20px; }
+.confucius-user-message [hidden] { display:none !important; }
+.confucius-user-message[data-user-editing="true"] { width:680px; }
+.confucius-user-editor { display:flex; flex-direction:column; gap:8px; white-space:normal; }
+.confucius-user-editor textarea { box-sizing:border-box; width:100%; min-height:120px; resize:vertical; font:inherit; line-height:1.6; padding:8px; border:1px solid var(--confucius-line); border-radius:8px; background:var(--confucius-paper); color:var(--confucius-ink); -moz-user-select:text; user-select:text; }
+.confucius-user-editor textarea:focus-visible { outline:2px solid var(--confucius-focus); outline-offset:2px; }
+.confucius-user-editor p { margin:0; color:var(--confucius-secondary); font-size:.9em; }
+.confucius-user-editor [role="alert"] { color:var(--confucius-danger); }
+.confucius-user-editor-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:8px; }
 .confucius-reasoning-toggle { appearance:none; border:0; background:transparent; color:var(--confucius-muted); font:inherit; font-size:1em; text-align:left; letter-spacing:.04em; margin:0 0 2px; padding:0; cursor:pointer; }
 .confucius-reasoning-body { display:flex; flex-direction:column; justify-content:flex-end; }
 .confucius-tools { min-width:0; margin:0 0 8px; padding:6px 10px; border-radius:8px; background:var(--confucius-hover); color:var(--confucius-muted); font-size:.93em; overflow-wrap:anywhere; }

@@ -27,7 +27,7 @@ export type ModelEnd =
 export interface ModelReplayState {
   provider: string;
   version: 1;
-  data: { reasoning?: string };
+  data: { reasoning?: string; items?: Array<Record<string, unknown>> };
 }
 
 export type ModelErrorCode =

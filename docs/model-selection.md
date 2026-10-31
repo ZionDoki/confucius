@@ -19,6 +19,46 @@ Select the model next to the composer. Stop the current run before changing it.
 Changing models within one runtime keeps the task, sources and reports; changing
 runtimes clears the previous runtime's model selection.
 
+## Native API protocol (from 0.6.4-beta.2)
+
+In **Settings → Model → API protocol**, choose the protocol accepted by your
+endpoint. The same control is available in Zotero's Confucius preferences.
+Save the endpoint in workspace settings; Zotero preferences save the selection
+immediately. Each endpoint keeps its own choice.
+
+| Protocol                | Example Base URL                                   | Authentication      |
+| ----------------------- | -------------------------------------------------- | ------------------- |
+| OpenAI Chat Completions | `https://api.openai.com/v1`                        | Bearer API key      |
+| OpenAI Responses        | `https://api.openai.com/v1`                        | Bearer API key      |
+| Anthropic Messages      | `https://api.anthropic.com/v1`                     | Anthropic API key   |
+| Gemini Generate Content | `https://generativelanguage.googleapis.com/v1beta` | Google API key      |
+| Ollama                  | `http://localhost:11434`                           | Optional Bearer key |
+
+Use the gateway's own Base URL when connecting through a proxy. Gateway path
+prefixes and query parameters are preserved. Full URLs ending in `/responses`,
+`/messages`, `/chat/completions`, `/api/chat`, or a Gemini generation method
+are also accepted; the matching route is not appended twice.
+
+**Auto (from URL)** recognizes explicit native API paths and the Anthropic and
+Google API hosts. Other URLs use Chat Completions, preserving existing generic
+gateway configurations. Auto does not send probe requests or try other protocols.
+For a Responses-only gateway, select **OpenAI Responses** explicitly while
+keeping its `/v1` Base URL. A successful model-list lookup alone does not prove
+that Chat Completions is available.
+
+These five protocols support text, page images, streaming, and function/tool
+calls. Responses reasoning items, Anthropic thinking signatures, and Gemini
+thought signatures stay attached to their tool exchanges and are replayed only
+to the same endpoint, model, and protocol. Reasoning options remain model-specific;
+Default sends no optional reasoning controls. Provider-hosted tools, audio/video
+generation, Gemini Interactions, and cloud-specific OAuth or AWS request signing
+are not covered by this endpoint editor. Bedrock, Vertex, and Azure deployments
+requiring those authentication flows need a compatible gateway.
+
+models.dev supplies model IDs, limits, and reasoning levels; it does not negotiate
+your gateway's API protocol. Importing catalog settings preserves the selected
+protocol. Protocol changes require no library migration.
+
 For CLI problems, see [CLI connections](runtime-discovery.md). A detected
 executable does not prove your account can use every model.
 
@@ -47,8 +87,9 @@ and conversations are not sent to it. Manual configuration still works offline.
 
 ## Optional: custom Native thinking levels
 
-Enable **Customize reasoning options for this model**, enter comma-separated levels,
-then select the parameter format your endpoint accepts.
+Enable **Customize reasoning options for this model** and enter comma-separated
+levels. Chat Completions and Ollama also offer parameter-format overrides; the
+other protocols use their native reasoning parameters.
 
 | Format                        | Behavior                                                                   |
 | ----------------------------- | -------------------------------------------------------------------------- |

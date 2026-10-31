@@ -83,15 +83,11 @@ export async function retryModelRequest(
     } catch (error) {
       const retryable = !options.signal?.aborted && transientModelError(error);
       if (error instanceof ModelError) addUsage(error.options.partial?.usage);
-      const delayMs = Math.min(
-        30_000,
-        Math.max(
-          0,
-          error instanceof ModelError &&
-            error.options.retryAfterMs !== undefined
-            ? error.options.retryAfterMs
-            : 1000 * 2 ** (attempt - 1),
-        ),
+      const delayMs = Math.max(
+        0,
+        error instanceof ModelError && error.options.retryAfterMs !== undefined
+          ? error.options.retryAfterMs
+          : Math.min(30_000, 1000 * 2 ** (attempt - 1)),
       );
       await options.onProgress?.({
         ...progress,

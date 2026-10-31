@@ -1,15 +1,17 @@
+import { describeNonJsonModelBody } from "./OpenAICompatibleAdapter";
 import {
-  describeNonJsonModelBody,
-  detectApiStyle,
-  joinEndpointUrl,
-  normalizeOpenAICompatibleBaseUrl,
-  type ApiStyle,
-} from "./OpenAICompatibleAdapter";
+  modelApiHeaders,
+  modelApiUrl,
+  resolveModelProtocol,
+  type ModelApiProtocol,
+  type ResolvedModelProtocol,
+} from "@confucius/protocol";
 
 export const MAX_LISTED_MODELS = 200;
 
 export interface ListModelsInput {
   baseUrl: string;
+  protocol?: ModelApiProtocol;
   apiKey?: string;
   model?: string;
 }
@@ -20,47 +22,53 @@ export interface ListModelsResult {
 }
 
 /** Resolve the provider catalog URL for an endpoint Base URL. */
-export function modelsListRequest(baseUrl: string): {
+export function modelsListRequest(
+  baseUrl: string,
+  protocol?: ModelApiProtocol,
+): {
   url: string;
-  style: ApiStyle;
+  style: ResolvedModelProtocol;
 } {
-  const trimmed = baseUrl.trim();
-  const style = detectApiStyle(trimmed);
-  if (style === "ollama") {
-    const replaced = trimmed.replace(/\/api\/chat\/?$/, "/api/tags");
-    if (replaced !== trimmed) {
-      return { url: replaced, style };
-    }
-    try {
-      const parsed = new URL(trimmed);
-      parsed.pathname = "/api/tags";
-      parsed.search = "";
-      parsed.hash = "";
-      return { url: parsed.toString(), style };
-    } catch {
-      return { url: joinEndpointUrl(trimmed, "/api/tags"), style };
-    }
+  const style = resolveModelProtocol(baseUrl, protocol);
+  const url = new URL(
+    modelApiUrl(baseUrl, style, style === "ollama" ? "/api/tags" : "/models"),
+  );
+  if (style === "gemini") {
+    url.searchParams.delete("alt");
+    url.searchParams.set("pageSize", String(MAX_LISTED_MODELS));
   }
-  const root = normalizeOpenAICompatibleBaseUrl(trimmed);
-  return { url: joinEndpointUrl(root, "/models"), style };
+  return { url: url.toString(), style };
 }
 
-export function parseModelsList(style: ApiStyle, payload: unknown): string[] {
+export function parseModelsList(
+  style: ResolvedModelProtocol,
+  payload: unknown,
+): string[] {
   if (!payload || typeof payload !== "object") {
     return [];
   }
   const names: string[] = [];
-  if (style === "ollama") {
+  if (style === "ollama" || style === "gemini") {
     const models = (payload as { models?: unknown }).models;
     if (Array.isArray(models)) {
       for (const entry of models) {
         if (!entry || typeof entry !== "object") {
           continue;
         }
-        const row = entry as { name?: unknown; model?: unknown };
+        const row = entry as {
+          name?: unknown;
+          model?: unknown;
+          supportedGenerationMethods?: string[];
+        };
+        if (
+          style === "gemini" &&
+          row.supportedGenerationMethods &&
+          !row.supportedGenerationMethods.includes("generateContent")
+        )
+          continue;
         const name = String(row.name ?? row.model ?? "").trim();
         if (name) {
-          names.push(name);
+          names.push(style === "gemini" ? name.replace(/^models\//, "") : name);
         }
       }
     }
@@ -120,13 +128,14 @@ export async function listEndpointModels(
       error: "Base URL is empty",
     };
   }
-  const { url, style } = modelsListRequest(endpoint.baseUrl);
   try {
+    const { url, style } = modelsListRequest(
+      endpoint.baseUrl,
+      endpoint.protocol,
+    );
     const response = await fetchImpl(url, {
       method: "GET",
-      headers: {
-        Authorization: `Bearer ${endpoint.apiKey ?? ""}`,
-      },
+      headers: modelApiHeaders(style, endpoint.apiKey),
       signal,
     });
     const text = await response.text();
